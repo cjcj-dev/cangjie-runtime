@@ -36,17 +36,20 @@ void WorkerInit(RuntimeParam& param, bool env)
 void CheckParallel(bool env, bool explicitFlag)
 {
     RuntimeParam param = WorkerParams();
-    param.gcParam.parallelGCThreads = 3;
+    OS::InitializeProcessorCount();
+    const uint32_t explicitWorkers = static_cast<uint32_t>(
+        (uint64_t(OS::InitialActiveProcessorCount()) * 60 + 99) / 100 + 1);
+    param.gcParam.parallelGCThreads = explicitWorkers;
     param.gcParam.parallelGCThreadsSet = explicitFlag;
-    if (env && explicitFlag) { setenv("cjParallelGCThreads", "3", 1); }
+    if (env && explicitFlag) { setenv("cjParallelGCThreads", std::to_string(explicitWorkers).c_str(), 1); }
     else { unsetenv("cjParallelGCThreads"); }
     WorkerInit(param, env);
     const uint32_t heuristic = ZHeuristics::nparallel_workers();
-    const uint32_t expected = explicitFlag ? 3 : heuristic;
+    const uint32_t expected = explicitFlag ? explicitWorkers : heuristic;
     const uint32_t actual = ZCollectedHeap::heap()->safepoint_workers()->max_workers();
     std::fprintf(stderr, "PARALLEL_WORKERS_TARGET env=%d explicit=%d heuristic=%u flag=%u actual=%u expected=%u\n",
                  env, explicitFlag, heuristic, ParallelGCThreads, actual, expected);
-    GC_EXPECT_NE(heuristic, 3u);
+    GC_EXPECT_NE(heuristic, explicitWorkers);
     GC_EXPECT_EQ(actual, expected);
     GC_EXPECT_EQ(ZCollectedHeap::heap()->safepoint_workers()->active_workers(), expected);
 }

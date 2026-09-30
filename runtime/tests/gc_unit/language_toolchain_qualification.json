@@ -1,0 +1,24 @@
+{
+  "source": "REPORT-sym_cangjie_runtime_1433_explore_r5911639436.md sha256=a90572bb3cb018b668d4c74f3711acb80b4c19c72ab791ca1c158c1969425add; main 7bae5c94; ThreadLocal.cpp:39 producer, coloured.fastalloc.elf.snippet:2 consumer; direct TLAB top/end; same-SO finalizer N=3 finalized=64",
+  "language": {
+    "cjc": "5827bddde1f08cfb53913890ff40377794341b917700b9a071c772a3cf8473ab",
+    "llc": "333d82a5fc6eece1f8e459e7fef16ee44dc21f7d4e11f53e0974b6397c265ee2",
+    "opt": "333d82a5fc6eece1f8e459e7fef16ee44dc21f7d4e11f53e0974b6397c265ee2",
+    "std": "19644b0fcf1c8a743162826f5dff53a04f5a7cef0238e67ac4b7e2b4eb2e8414",
+    "std_core": "8a620ce35cbf67340414f19b1ced9a0f1e22cc73d909ce8d6bd9b7559ed18512",
+    "runtime": "7459cd39e53b84544b8ec70d987aed108b2c4ad4276290498b1f59dc22fea24d"
+  },
+  "components": {
+    "bin/cjcj-stage1": "728f6d20c063a0e41fbc8a3b10a37b3aeec6a00857ab875e8d1bab6b3f124158",
+    "third_party/llvm/bin/llc-stage1": "8906c6e729eb5bf212bacc6e8ef38da6a0e94e74f5dd29e767b536d60e26a7e9",
+    "third_party/llvm/bin/opt-stage1": "128f0e70895b6fd45765cba5ecddeef40604b4a77d57825a2d39a53b32374577",
+    "third_party/llvm/lib/libLLVM-15.so": "008f5e2d59de08005dceb1649eeeac4b68d91f6678b329a1caeec561bbc36559",
+    "runtime/lib/linux_x86_64_cjnative/libboundscheck.so": "ee91dfded3a821aacd4e9ada770d51cfbb6e8947ab2daef61fb3b0dfe09eb943",
+    "MANIFEST": "bf42a7bc43fc215ed7412671e6623beedb9138c4f9bd12cc209a565fd7053f92",
+    "std-producer.json": "7a17d6b2ec5d38074507ffa7b801cd3869318004cc1f475292955417ad54739d"
+  },
+  "compiler_host": "a656fbc7d16e0fa2c61598fc68a74bb55948834e428c908fed17c945783f3988",
+  "compiler_host_set": "e4ba0f6bd25ac85e325bca26a5f89ef07483377d304f9b4b83a0156250152ed3",
+  "colour_checker": "f790d583d71c0dbd600be8f9bffce4e6cd5db0795e013aecdc78b7786bf6a8a9",
+  "colour_host": "7d1eeecff4d2a8ed012897785d309a221ddb7520e1b268b431812a0645b56cdc"
+}

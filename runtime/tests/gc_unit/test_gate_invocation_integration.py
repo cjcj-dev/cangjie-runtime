@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--lib', type=Path)
     parser.add_argument('--gate', type=Path)
     parser.add_argument('--sdk', type=Path)
+    parser.add_argument('--build-sdk', type=Path)
     parser.add_argument('--mode', choices=('defer', 'only', 'all'), default='defer')
     parser.add_argument('--native', action='store_true')
     parser.add_argument('--calls', type=int, default=2)
@@ -40,8 +41,10 @@ def main():
     if args.lib:
         env['GCV2_RUNTIME_LIB_DIR'] = str(args.lib.resolve())
     if args.sdk:
-        env.update(CANGJIE_HOME=str(args.sdk), CJC=str(args.sdk / 'bin/cjc'),
+        env.update(GC_UNIT_LANGUAGE_SDK=str(args.sdk), CJC=str(args.sdk / 'bin/cjc'),
                    GC_UNIT_CJC_RUNTIME_LIB_DIR=str(args.sdk / 'host/compiler'))
+    if args.build_sdk:
+        env['GC_UNIT_BUILD_SDK'] = str(args.build_sdk)
     command = (['python3', 'build.py', 'build', '--target', 'native', '--build-type', 'release',
                 '-v', '1.3.0-alpha.06'] if args.native else
                ['bash', str(args.gate.resolve() if args.gate else

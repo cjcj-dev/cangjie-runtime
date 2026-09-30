@@ -24,6 +24,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zDriver.hpp"
 #include "RuntimeConfig.h"
+#include "RuntimeStartup.h"
 #include "UnwindStack/MangleNameHelper.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "Loader/ElfUnloadQuiescence.h"
@@ -157,18 +158,25 @@ RTErrorCode SetRuntimeFiniFlag()
     return E_OK;
 }
 
+void NotifyRuntimeSchedulerReady(ScheduleHandle scheduler)
+{
+    if (scheduler != MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler()) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(g_mtx);
+    g_runtimeInited.store(true);
+    g_conditionVariable.notify_all();
+}
+
 static void* StartCJRuntime(void* arg)
 {
     RuntimeParam* p = static_cast<RuntimeParam*>(arg);
     MapleRuntime::CangjieRuntime::CreateAndInit(*p);
-    {
-        // Runtime initializes completely, notify the main thread to continue to run.
-        std::unique_lock<std::mutex> lck(g_mtx);
-        g_runtimeInited.store(true);
-        g_conditionVariable.notify_all();
-    }
     MapleRuntime::ThreadLocal::SetCJProcessorFlag(true);
-    ScheduleStart();
+    int result = ScheduleStart();
+    if (result != 0) {
+        LOG(RTLOG_FATAL, "Failed to start runtime scheduler: %d", result);
+    }
     return nullptr;
 }
 
@@ -297,9 +305,7 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
     // Waiting for runtime initialize completely before continue.
     std::unique_lock<std::mutex> lck(g_mtx);
     g_conditionVariable.wait(lck, [] { return g_runtimeInited.load(); });
-    while (!ScheduleIsRunning(scheduler)) {
-        scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-    }
+    scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     ScheduleSetToCurrentThread(scheduler);
     lck.unlock();
 #ifndef _WIN64
