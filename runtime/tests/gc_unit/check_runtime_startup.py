@@ -10,7 +10,8 @@ def observe():
 
     state = {"bound": 0, "ready": 0, "failed": False, "injected": False,
              "starter_returned": False, "main": None, "destroyed": False,
-             "gated": False, "main_handle": 0}
+             "gated": False, "main_handle": 0, "sub": 0, "notifications": 0,
+             "starter_parked": False}
 
     def target(name, condition, detail):
         state["failed"] |= not condition
@@ -29,10 +30,30 @@ def observe():
     class Publish(gdb.Breakpoint):
         def stop(self):
             running = int(gdb.parse_and_eval("*(int*)scheduler"))
-            state["main_handle"] = int(gdb.parse_and_eval("scheduler"))
+            handle = int(gdb.parse_and_eval("scheduler"))
+            if mode == "isolation" and state["main_handle"] and handle != state["main_handle"]:
+                target("SUB_RUNNING", running == 1 and ready(),
+                       "schedule_state=%d main_ready=%d" % (running, ready()))
+                SubPublished(gdb.newest_frame(), internal=True)
+                return False
+            state["main_handle"] = handle
             target("RUNNING_BEFORE_READY", running == 1 and not ready(),
                    "schedule_state=%d ready=%d" % (running, ready()))
             Published(gdb.newest_frame(), internal=True)
+            return state["failed"]
+
+    class SubPublished(gdb.FinishBreakpoint):
+        def stop(self):
+            state["sub"] += 1
+            target("SUB_CANNOT_PUBLISH_MAIN_READY", ready() and state["notifications"] == 1,
+                   "main_ready=%d global_notifications=%d" % (ready(), state["notifications"]))
+            return False
+
+    class GlobalNotify(gdb.Breakpoint):
+        def stop(self):
+            address = int(gdb.parse_and_eval("&g_conditionVariable"))
+            if int(gdb.parse_and_eval("$rdi")) == address:
+                state["notifications"] += 1
             return False
 
     class Bind(gdb.Breakpoint):
@@ -62,7 +83,8 @@ def observe():
     class Starter(gdb.Breakpoint):
         def stop(self):
             StarterCompleted(gdb.newest_frame(), internal=True)
-            return False
+            state["starter_parked"] = True
+            return mode in ("ordered", "published", "notify")
 
     class InitGate(gdb.Breakpoint):
         def stop(self):
@@ -97,14 +119,19 @@ def observe():
     Bind("CJ_ScheduleSetToCurrentThread", internal=True)
     mode = os.environ["STARTUP_MODE"]
     Starter("StartCJRuntime", internal=True)
+    if mode == "isolation":
+        GlobalNotify("*_ZNSt18condition_variable10notify_allEv", internal=True)
     if mode == "failure":
         Fail("CJ_SchmonStart", internal=True)
     elif mode in ("ordered", "published", "notify"):
         InitGate("InitCJRuntime", internal=True)
         destroy_gate = DestroyGate("pthread_attr_destroy", internal=True)
-        schedule_gate = None if mode == "published" else ScheduleGate("CJ_ScheduleStart", internal=True)
+        schedule_gate = ScheduleGate("CJ_ScheduleStart", internal=True)
     gdb.execute("continue")
     if mode in ("ordered", "published", "notify"):
+        if not state["destroyed"] and state["starter_parked"]:
+            state["main"].switch()
+            gdb.execute("continue")
         if not state["destroyed"]:
             target("ORDERING_GATE", False, "pthread_attr_destroy_not_reached")
             gdb.execute("quit 1")
@@ -117,12 +144,21 @@ def observe():
         if len(starters) != 1:
             gdb.execute("quit 2")
         starters[0].switch()
+        if not state["starter_parked"]:
+            gdb.execute("continue")
+        mutex_rc = int(gdb.parse_and_eval("(int)pthread_mutex_lock((void*)&g_mtx)"))
+        target("CONSUMER_HELD_DURING_CONSTRUCTION", mutex_rc == 0, "mutex_rc=%d" % mutex_rc)
+        gdb.execute("set scheduler-locking off")
         gdb.execute("continue")
-        if state["starter_returned"] or (mode != "published" and not state["gated"]):
+        if state["starter_returned"] or not state["gated"]:
             gdb.execute("kill")
             gdb.execute("quit 1")
-        if schedule_gate is not None:
-            schedule_gate.delete()
+        schedule_gate.delete()
+        gdb.execute("set scheduler-locking on")
+        mutex_rc = int(gdb.parse_and_eval("(int)pthread_mutex_unlock((void*)&g_mtx)"))
+        target("CONSTRUCTION_GATE_RELEASED", mutex_rc == 0, "mutex_rc=%d" % mutex_rc)
+        if mode == "published":
+            gdb.execute("continue")
         if mode == "notify":
             result = int(gdb.parse_and_eval(
                 "(int)pthread_cond_broadcast((void*)&g_conditionVariable)"))
@@ -138,7 +174,12 @@ def observe():
             target("READY_BEFORE_WAIT", ready() and state["bound"] == 1,
                    "ready=%d bindings=%d" % (ready(), state["bound"]))
         else:
-            trace = gdb.execute("bt", to_string=True)
+            for stop_index in range(8):
+                trace = gdb.execute("bt", to_string=True)
+                if state["bound"] or "condition_variable" in trace:
+                    break
+                print("STARTUP_CONTROL prior_futex_stop=%d\n%s" % (stop_index, trace), flush=True)
+                gdb.execute("continue")
             target("CONSUMER_WAITS_FOR_READY", not ready() and state["bound"] == 0
                    and "condition_variable" in trace and "InitCJRuntime" in trace,
                    "ready=%d bindings=%d\n%s" % (ready(), state["bound"], trace))
@@ -148,6 +189,10 @@ def observe():
             gdb.execute("quit 1")
         gdb.execute("set scheduler-locking off")
         gdb.execute("continue")
+    if state["failed"]:
+        if gdb.selected_inferior().threads():
+            gdb.execute("kill")
+        gdb.execute("quit 1")
     if mode == "failure" and state["injected"]:
         gdb.execute("return (int)11")
         gdb.execute("continue")
@@ -160,7 +205,7 @@ def observe():
                "signal=%s bindings=%d publications=%d" %
                (signal, state["bound"], state["ready"]))
         gdb.execute("kill")
-    elif mode in ("success", "ordered", "published", "notify"):
+    elif mode in ("success", "ordered", "published", "notify", "isolation"):
         if state["starter_returned"]:
             gdb.execute("kill")
             gdb.execute("quit 1")
@@ -169,6 +214,10 @@ def observe():
                and state["ready"] == 1,
                "inferior_rc=%d bindings=%d publications=%d" %
                (inferior_rc, state["bound"], state["ready"]))
+        if mode == "isolation":
+            target("SUB_PATH_COMPLETES", state["sub"] == 1 and state["notifications"] == 1,
+                   "sub_returns=%d global_notifications=%d" %
+                   (state["sub"], state["notifications"]))
     else:
         target("INJECTION_REACHED", False, "injected=0")
     gdb.execute("quit %d" % (1 if state["failed"] else 0))
@@ -183,7 +232,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=pathlib.Path)
     parser.add_argument("library_dir", type=pathlib.Path)
-    parser.add_argument("--mode", choices=("success", "failure", "ordered", "published", "notify"),
+    parser.add_argument("--mode", choices=("success", "failure", "ordered", "published", "notify", "isolation"),
                         required=True)
     args = parser.parse_args()
     for artifact in (args.elf, args.library_dir / "libcangjie-runtime.so",
@@ -198,7 +247,9 @@ def main():
     environment["LD_LIBRARY_PATH"] = str(args.library_dir.resolve())
     command = ["gdb", "-q", "-nx", "-batch", "-ex",
                "source " + str(pathlib.Path(__file__).resolve()), "--args",
-               str(args.elf.resolve()), "--gtest_filter=PrecleanWithoutShutdown.WhiteBox"]
+               str(args.elf.resolve()), "--gtest_filter=" +
+               ("RuntimeStartup.SubSchedulerIsolation" if args.mode == "isolation"
+                else "PrecleanWithoutShutdown.WhiteBox")]
     try:
         result = subprocess.run(command, env=environment, timeout=45,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
