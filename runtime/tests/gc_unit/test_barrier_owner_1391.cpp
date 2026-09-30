@@ -110,7 +110,7 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, ManagedOwnerAttachesPublishedMasks)
         tib.tag = SIGN_BIT;
         type->SetGCTib(tib);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-        output.allocated = MCC_NewObject(type, 32);
+        output.allocated = static_cast<BaseObject*>(MCC_NewObject(type, 32));
         return nullptr;
     }, &observation);
     GC_EXPECT_TRUE(task != nullptr);
