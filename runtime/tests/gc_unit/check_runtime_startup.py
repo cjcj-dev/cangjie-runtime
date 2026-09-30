@@ -83,7 +83,7 @@ def observe():
     class Starter(gdb.Breakpoint):
         def stop(self):
             if mode in ("ordered", "published", "notify"):
-                starter_exit.condition = "$_thread == %d" % gdb.selected_thread().global_num
+                starter_exit.condition = "$_gthread == %d" % gdb.selected_thread().global_num
                 starter_exit.enabled = True
             else:
                 StarterCompleted(gdb.newest_frame(), internal=True)
