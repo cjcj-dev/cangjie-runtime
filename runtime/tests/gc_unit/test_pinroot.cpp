@@ -344,6 +344,9 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObj
 
 #if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
 namespace {
+struct FrameRootInput : FrameInfo {
+    using FrameInfo::START_PC_OFFSET_IN_STACK;
+};
 struct FrameRootMapImage {
     int32_t descriptorOffset;
     uint32_t pc[4];
@@ -485,17 +488,18 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
     InitializeFrameRootMap(sret, registerPointer, ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9));
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
+    const uintptr_t frameStartIP = startIP + FrameRootInput::START_PC_OFFSET_IN_STACK;
     uintptr_t younger[8] = {};
     uintptr_t caller[8] = {};
     younger[2] = reinterpret_cast<uintptr_t>(objects[0][0]);
-    younger[3] = startIP + 9;
+    younger[3] = frameStartIP;
     younger[4] = reinterpret_cast<uintptr_t>(&caller[4]);
     younger[5] = startIP + 16;
-    caller[3] = startIP + 9;
+    caller[3] = frameStartIP;
     uintptr_t frames[12][8] = {};
     if (sret || ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9)) {
         for (size_t i = 0; i < 12; ++i) {
-            frames[i][3] = startIP + 9;
+            frames[i][3] = frameStartIP;
             frames[i][4] = i + 1 < 12 ? reinterpret_cast<uintptr_t>(&frames[i + 1][4]) : 0;
             frames[i][5] = startIP + 16;
         }

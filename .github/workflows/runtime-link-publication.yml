@@ -1,18 +1,12 @@
 name: Native runtime link publication
 on:
   workflow_dispatch:
-    inputs:
-      pinroot:
-        description: Run only the ARM frame-root fixture arms
-        type: boolean
-        default: false
   push:
     branches: ['sym/1234-*']
 permissions:
   contents: read
 jobs:
   windows:
-    if: ${{ !inputs.pinroot }}
     runs-on: windows-2025
     timeout-minutes: 40
     strategy:
@@ -71,21 +65,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: ${{ fromJSON(inputs.pinroot && '["default","testable"]' || '["default","testable","gcunit"]') }}
+        profile: [default, testable, gcunit]
         arm: [candidate, cut, restored]
     steps:
       - uses: actions/checkout@v4
       - name: Install native build tools
         run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache gdb libssl-dev libffi-dev
-      - uses: mozilla-actions/sccache-action@v0.0.9
-        if: ${{ inputs.pinroot }}
       - name: Exercise product Copy publication and real unit link
         run: |
           ulimit -c 0
-          uname -m
-          extra=()
-          if [[ '${{ inputs.pinroot }}' == true ]]; then extra+=(--pinroot); fi
-          python3 runtime/tests/test_copy_link_publication.py --profile '${{ matrix.profile }}' --arm '${{ matrix.arm }}' --evidence evidence "${extra[@]}"
+          python3 runtime/tests/test_copy_link_publication.py --profile '${{ matrix.profile }}' --arm '${{ matrix.arm }}' --evidence evidence
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -95,14 +84,11 @@ jobs:
             evidence/*.json
             evidence/*.sha256
             evidence/*.diff
-            evidence/*.txt
-            evidence/standalone/*.tsv
             evidence/standalone/**/*.log
             evidence/standalone/**/*.sha256
           retention-days: 7
 
   arm-copy-baseline:
-    if: ${{ !inputs.pinroot }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
