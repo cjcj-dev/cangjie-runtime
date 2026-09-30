@@ -10,7 +10,8 @@ from check_native_detach import MI, digest, emit, event_field
 def main():
     elf, libdir, output = sys.argv[1:4]
     consume = len(sys.argv) > 4 and sys.argv[4] == 'consume'
-    if consume:
+    reentry = len(sys.argv) > 4 and sys.argv[4] == 'reentry'
+    if consume or reentry:
         os.environ['SHUTDOWN_OBSERVE_EXIT'] = '1'
     library = Path(libdir).resolve() / 'libcangjie-runtime.so'
     os.environ['LD_LIBRARY_PATH'] = str(library.parent)
@@ -19,7 +20,7 @@ def main():
     results = {}
     try:
         for setting in ['pagination off', 'confirm off', 'non-stop on', 'mi-async on',
-                        'print thread-events off', 'args native']:
+                        'print thread-events off', 'args ' + ('reentry' if reentry else 'native')]:
             debugger.console('set ' + setting)
         debugger.console('handle SIGUSR1 nostop noprint pass')
         checkpoint = debugger.breakpoint('ShutdownCheckpoint')
@@ -47,10 +48,34 @@ def main():
                  entered=entered, returned=returned)
         consumed = None
         if consume:
-            consumed = debugger.breakpoint('SignalStack.cpp:72', condition='signal == ' + str(exit_signal))
+            consumed = debugger.breakpoint('SignalStack.cpp:235')
+        blocked = body = None
+        if reentry:
+            blocked = debugger.breakpoint('MapleRuntime::VMExit::WaitIfVMExited')
+            body = debugger.breakpoint('ShutdownCallback')
         debugger.delete(checkpoint)
         debugger.resume(current)
         event = debugger.stop()
+        if reentry:
+            terminal_thread = event_field(event, 'thread-id')
+            at_gate = event_field(event, 'bkptno') == blocked
+            count = debugger.number('*(int*)&shutdownCallbackCount', terminal_thread)
+            exited = debugger.number('*(bool*)&MapleRuntime::VMExit::vmExited', terminal_thread)
+            results['terminal_reentry'] = at_gate and count == 1 and exited == 1
+            emit('SHUTDOWN_TARGET_EXECUTED', target='terminal_reentry',
+                 passed=results['terminal_reentry'], callback_count=count, terminal=exited)
+            if at_gate:
+                debugger.delete(blocked)
+                lock_wait = debugger.breakpoint('MapleRuntime::MutatorManager::MutatorManagementRLock')
+                debugger.resume(terminal_thread)
+                event = debugger.stop()
+                if event_field(event, 'bkptno') != lock_wait:
+                    raise RuntimeError('Terminal gate did not reach retained thread lock')
+                debugger.delete(lock_wait)
+            debugger.expression('shutdownObservationDone = 1', terminal_thread)
+            debugger.delete(body)
+            debugger.resume(terminal_thread)
+            event = debugger.stop()
         if consume:
             if event_field(event, 'bkptno') != consumed:
                 raise RuntimeError('Exit consumer not reached: ' + event)

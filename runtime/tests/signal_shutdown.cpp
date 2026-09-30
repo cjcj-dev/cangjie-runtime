@@ -14,6 +14,7 @@ extern "C" void CJ_MCC_AddSignalHandler(int, SignalAction*);
 
 std::atomic<bool> shutdownCallbackEntered{false};
 std::atomic<bool> shutdownCallbackReturned{false};
+std::atomic<int> shutdownCallbackCount{0};
 std::atomic<bool> shutdownWorkerEntered{false};
 std::mutex shutdownMutex;
 std::condition_variable shutdownCondition;
@@ -56,6 +57,11 @@ extern "C" __attribute__((noinline)) void ShutdownCheckpoint(int result)
 
 static bool ShutdownCallback(int, siginfo_t*, void*)
 {
+    const int count = shutdownCallbackCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (count != 1) {
+        std::fprintf(stderr, "SHUTDOWN_REENTRY_BODY count=%d\n", count);
+        return true;
+    }
     shutdownCallbackEntered.store(true, std::memory_order_release);
     shutdownCondition.notify_all();
     if (shutdownHoldCallback) {
@@ -89,6 +95,7 @@ int main(int argc, char** argv)
     if (argc < 2) { return 2; }
     const bool singleProcessor = std::strcmp(argv[1], "single-p") == 0;
     const bool managed = std::strcmp(argv[1], "managed") == 0;
+    const bool reentry = std::strcmp(argv[1], "reentry") == 0;
     shutdownHoldCallback = !singleProcessor;
     RuntimeParam parameters{};
     parameters.heapParam.heapSize = 64 * 1024;
@@ -122,6 +129,7 @@ int main(int argc, char** argv)
     }
     const int result = FiniCJRuntime();
     ShutdownCheckpoint(result);
+    if (reentry && kill(getpid(), SIGUSR1) != 0) { return 10; }
     const bool inFlight = !shutdownCallbackReturned.load(std::memory_order_acquire);
     std::fprintf(stderr, "SHUTDOWN_RETURN_TARGET fini_rc=%d callback_in_flight=%d expected=%d\n",
                  result, inFlight, !singleProcessor);
