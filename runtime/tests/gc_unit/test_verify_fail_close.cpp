@@ -797,7 +797,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
         return count;
     };
-    GC_EXPECT_EQ(countCarrierRoots(), 1u);
+    const size_t registeredRoots = countCarrierRoots();
+    std::fprintf(stderr, "VERIFY_ARMED_REGISTER_TARGET registered=%zu\n", registeredRoots);
+    GC_EXPECT_EQ(registeredRoots, 1u);
     {
         DriverLocker lock;
         YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
@@ -810,6 +812,8 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
     GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    // Both skip assertions have completed before restoring the registered root.
+    std::fprintf(stderr, "VERIFY_ARMED_ASSERTIONS_COMPLETE value=%p\n", data->obj);
     data->obj = savedObject;
     std::fprintf(stderr, "VERIFY_ARMED_RESTORE_TARGET restored=%d\n", data->obj == savedObject);
     GC_EXPECT_TRUE(data->obj == savedObject);
