@@ -174,21 +174,9 @@ public:
         return GetThreadLocalData()->threadCache = threadCache;
     }
 
-    // When runtime is stop, we need to lock any operation which may access runtime.
     static void DetachForShutdown();
 
-    static bool TryGetRdLock()
-    {
-        return tlEnableLock.TryLockRead();
-    }
-
-    static void UnlockRdLock()
-    {
-        tlEnableLock.UnlockRead();
-    }
-
 private:
-    static RwLock tlEnableLock;
 };
 } // namespace MapleRuntime
 

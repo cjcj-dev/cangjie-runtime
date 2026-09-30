@@ -20,7 +20,6 @@
 #include <mutex>
 
 namespace MapleRuntime {
-RwLock ThreadLocal::tlEnableLock;
 MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeof(uint64_t)] = {
 #if UINTPTR_MAX == UINT64_MAX
     0, 0, 0, 0, 0, 0, ThreadLocalData::DisarmedPollWord
@@ -199,14 +198,6 @@ CleanThreadLocalData::~CleanThreadLocalData()
     void* cache = local->threadCache;
     local->threadCache = nullptr;
 
-    if (!ThreadLocal::TryGetRdLock()) {
-        // ScheduleExitMode's SCHD_STOP has stopped GC before ThreadLocalFini.
-        // Native list readers still need their grace period before TLS dies.
-        RemoveFromList();
-        local->gcData = nullptr;
-        local->nativeGCData = nullptr;
-        return;
-    }
     if (Runtime::CurrentRef() != nullptr) {
         if (!local->isCJProcessor && local->foreignCJThread != nullptr) {
             MRT_StopSubScheduler(local->schedule);
@@ -225,7 +216,6 @@ CleanThreadLocalData::~CleanThreadLocalData()
     if (cache != nullptr) {
         delete reinterpret_cast<ThreadCache*>(cache);
     }
-    ThreadLocal::UnlockRdLock();
 }
 
 extern "C" void MCC_CheckThreadLocalDataOffset()
