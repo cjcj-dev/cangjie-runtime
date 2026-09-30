@@ -1,4 +1,6 @@
 #include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Heap/z/zHeap.hpp"
 #include "SignalManager.h"
 #include <atomic>
 #include <chrono>
@@ -24,13 +26,32 @@ bool shutdownHoldCallback = true;
 int shutdownExitSignal = _NSIG;
 using ShutdownManagedCallback = bool (*)(int, siginfo_t*, void*);
 ShutdownManagedCallback shutdownManagedCallback = nullptr;
+ShutdownManagedCallback shutdownManagedGcCallback = nullptr;
 std::atomic<int> shutdownManagedStage{0};
 std::atomic<bool> shutdownNativeReturning{false};
+std::atomic<long long> shutdownManagedGcDone{0};
+std::atomic<long long> shutdownManagedBad{-1};
 int shutdownObservationDone = 0;
 
 extern "C" void ShutdownInstallCallback(ShutdownManagedCallback callback)
 {
     shutdownManagedCallback = callback;
+}
+
+extern "C" void ShutdownInstallGcCallback(ShutdownManagedCallback callback)
+{
+    shutdownManagedGcCallback = callback;
+}
+
+extern "C" long long ShutdownManagedAwaitGc()
+{
+    return shutdownManagedGcDone.load(std::memory_order_acquire);
+}
+
+extern "C" void ShutdownManagedReport(long long bad)
+{
+    shutdownManagedBad.store(bad, std::memory_order_release);
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_REPORT bad=%d\n", bad);
 }
 
 extern "C" void ShutdownManagedProgress(int stage)
@@ -65,8 +86,22 @@ static bool ShutdownCallback(int, siginfo_t*, void*)
     shutdownCallbackEntered.store(true, std::memory_order_release);
     shutdownCondition.notify_all();
     if (shutdownHoldCallback) {
+        // A native handler that blocks owns its own state: HotSpot's
+        // ThreadToNativeFromVM (interfaceSupport.inline.hpp:186) is what makes a
+        // JavaThread parked in native code count as safepoint-safe
+        // (safepoint.cpp:524-530). The dispatcher does not wrap the call site
+        // (os.cpp:434-441 calls the handler in the state the signal thread
+        // already has), so the blocked handler enters the safe state here, at
+        // its own wait point.
+        MapleRuntime::ScopedEnterSaferegion blockedInNative(false);
         std::unique_lock<std::mutex> lock(shutdownMutex);
         shutdownCondition.wait(lock, [] { return shutdownReleaseCallback; });
+        // Publish the return while still in the native state. Tearing that state
+        // down after the VM has exited is the runtime's business
+        // (VMExit::WaitIfVMExited, MutatorManager.cpp:477), not the handler's.
+        shutdownCallbackReturned.store(true, std::memory_order_release);
+        shutdownCondition.notify_all();
+        return true;
     }
     shutdownCallbackReturned.store(true, std::memory_order_release);
     shutdownCondition.notify_all();
@@ -90,19 +125,59 @@ static bool WaitFor(const std::atomic<bool>& flag)
     });
 }
 
+// Managed handler, live managed frame, one real collection in the middle.
+// os.cpp:434-441 calls the handler in the state the signal thread already has,
+// so this frame is a normal mutator frame while the collection runs.
+static int RunManagedGcArm()
+{
+    SignalAction action{};
+    action.saSignalAction = shutdownManagedGcCallback;
+    action.scFlags = SA_SIGINFO;
+    sigemptyset(&action.scMask);
+    CJ_MCC_AddSignalHandler(SIGUSR1, &action);
+    if (kill(getpid(), SIGUSR1) != 0) { return 5; }
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_GC_SIGNAL_SENT\n");
+    fflush(stderr);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (shutdownManagedStage.load(std::memory_order_acquire) < 1 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool allocated = shutdownManagedStage.load(std::memory_order_acquire) >= 1;
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_GC_ALLOCATED allocated=%d\n", allocated);
+    if (!allocated) { return 11; }
+    // Real collection while the managed handler frame is live and runnable.
+    MapleRuntime::Heap::GetHeap().RequestGC(MapleRuntime::GC_REASON_USER);
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_GC_COLLECTED\n");
+    shutdownManagedGcDone.store(1, std::memory_order_release);
+    while (shutdownManagedBad.load(std::memory_order_acquire) < 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const long long bad = shutdownManagedBad.load(std::memory_order_acquire);
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_GC_TARGET reported=%d bad=%d expected=0\n", bad >= 0, bad);
+    const int fini = FiniCJRuntime();
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_GC_FINI fini_rc=%d\n", fini);
+    return (bad == 0 && fini == E_OK) ? 0 : 12;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 2) { return 2; }
     const bool singleProcessor = std::strcmp(argv[1], "single-p") == 0;
     const bool managed = std::strcmp(argv[1], "managed") == 0;
+    const bool managedGc = std::strcmp(argv[1], "managed-gc") == 0;
     const bool reentry = std::strcmp(argv[1], "reentry") == 0;
     shutdownHoldCallback = !singleProcessor;
     RuntimeParam parameters{};
     parameters.heapParam.heapSize = 64 * 1024;
     parameters.coParam.processorNum = 1;
     if (InitCJRuntime(&parameters) != E_OK) { return 3; }
-    if (managed && (argc != 3 || LoadCJLibraryWithInit(argv[2]) != E_OK ||
-                    shutdownManagedCallback == nullptr)) { return 8; }
+    if ((managed || managedGc) && (argc != 3 || LoadCJLibraryWithInit(argv[2]) != E_OK ||
+                                   shutdownManagedCallback == nullptr || shutdownManagedGcCallback == nullptr)) {
+        return 8;
+    }
+    if (managedGc) { return RunManagedGcArm(); }
     SignalAction action{};
     action.saSignalAction = managed ? shutdownManagedCallback : ShutdownCallback;
     action.scFlags = SA_SIGINFO;

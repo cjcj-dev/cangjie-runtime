@@ -27,7 +27,6 @@
 #include "Base/SysCall.h"
 #include "securec.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Mutator/Mutator.h"
 #include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -227,21 +226,16 @@ void SignalStack::HandlerImpl(int signal)
         if (it->saSignalAction == nullptr) { break; }
         sigset_t previous;
         g_linkedSignalProcmask(SIG_SETMASK, &it->scMask, &previous);
-        // HotSpot interfaceSupport.inline.hpp:186 ThreadToNativeFromVM /
-        // :172 ThreadInVMfromNative: a JavaThread running native code sits in
-        // _thread_in_native, which safepoint.cpp:524-530 safepoint_safe_with
-        // counts as safe, so the final safepoint does not wait for it. The
-        // dispatcher here is a managed thread (os.cpp:492) and a registered
-        // handler is a native function that may block indefinitely, so without
-        // this transition the world-stop would wait for a thread that cannot
-        // reach a saferegion. Leaving the saferegion after the callback runs the
-        // safepoint check, which is the _thread_in_native -> VM side of the pair.
-        Mutator* mutator = Mutator::GetMutator();
-        const bool inSaferegion = mutator != nullptr && mutator->EnterSaferegion(false);
+        // os.cpp:434-441: the signal thread calls the handler in the managed
+        // state it already has; there is no transition wrapped around the call
+        // site. safepoint.cpp:524-530 also requires a walkable stack before it
+        // counts a thread as safe, which a handler holding a managed frame does
+        // not have, so a managed handler must never be entered from a
+        // saferegion. "Safe while blocked" is the blocked party's own state, not
+        // something the dispatcher grants: managed code polls and blocks through
+        // the managed blocking primitives, native code enters the native state
+        // at its own wait point (interfaceSupport.inline.hpp:186 / :172).
         bool handled = it->saSignalAction(signal, nullptr, nullptr);
-        if (inSaferegion) {
-            (void)mutator->LeaveSaferegion();
-        }
         g_linkedSignalProcmask(SIG_SETMASK, &previous, nullptr);
         if (handled) { return; }
     }
