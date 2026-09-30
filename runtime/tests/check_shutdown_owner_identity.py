@@ -38,8 +38,11 @@ def main():
         event = debugger.stop()
         stopped = event_field(event, 'bkptno') == blocked
         terminal = debugger.number('*(bool*)&MapleRuntime::VMExit::vmExited', current)
-        passed = stopped and terminal == 1
+        owner_token = debugger.number('MapleRuntime::VMExit::shutdownThread', current)
+        current_token = debugger.number('MapleRuntime::nativeThreadIdentity', current)
+        passed = stopped and terminal == 1 and owner_token != 0 and current_token == 0
         emit('OWNER_REUSE_TARGET_EXECUTED', passed=passed, terminal=terminal,
+             owner_token=owner_token, current_token=current_token,
              new_owner_creation=event_field(event, 'bkptno') == created)
         Path(output + '.json').write_text(json.dumps(dict(passed=passed, owner=owner,
                                                         reused=reused, terminal=terminal)) + '\n')
