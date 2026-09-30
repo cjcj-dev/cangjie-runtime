@@ -37,6 +37,9 @@ def main():
         debugger.resume(current)
         event = debugger.stop()
         stopped = event_field(event, 'bkptno') == blocked
+        terminal = debugger.number('*(bool*)&MapleRuntime::VMExit::vmExited', current)
+        owner_token = debugger.number('MapleRuntime::VMExit::shutdownThread', current)
+        current_token = debugger.number('MapleRuntime::nativeThreadIdentity', current)
         waiting = False
         if stopped:
             debugger.delete(blocked)
@@ -45,9 +48,6 @@ def main():
             event = debugger.stop()
             frames = debugger.cmd('-stack-list-frames --thread ' + current)
             waiting = event_field(event, 'bkptno') == yielding and 'LockRead' in frames
-        terminal = debugger.number('*(bool*)&MapleRuntime::VMExit::vmExited', current)
-        owner_token = debugger.number('MapleRuntime::VMExit::shutdownThread', current)
-        current_token = debugger.number('MapleRuntime::nativeThreadIdentity', current)
         passed = stopped and waiting and terminal == 1 and owner_token != 0 and current_token == 0
         emit('OWNER_REUSE_TARGET_EXECUTED', passed=passed, terminal=terminal,
              owner_token=owner_token, current_token=current_token, lock_wait=waiting,
