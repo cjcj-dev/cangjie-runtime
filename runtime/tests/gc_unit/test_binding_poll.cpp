@@ -1,9 +1,9 @@
 #include <atomic>
 #include <cstdio>
+#include <dlfcn.h>
 #include <thread>
 
 #include "Cangjie.h"
-#include "CompilerCalls.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -14,13 +14,23 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+namespace MapleRuntime {
+extern "C" ObjRef MCC_NewObject(const TypeInfo* type, MSize size);
+extern "C" ObjectPtr CJ_MCC_ReadRefField(ObjectPtr object, RefField<false>* field);
+}
+
 namespace {
-void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false, bool collect = true)
+void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false, bool collect = true,
+                                 bool resumedEntry = false)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    using Resume = void (*)(Mutator*, ThreadLocalData*);
+    auto resume = reinterpret_cast<Resume>(dlsym(RTLD_DEFAULT,
+        "_ZN12MapleRuntime7Mutator13PreparedToRunEPNS_15ThreadLocalDataE"));
+    GC_EXPECT_TRUE(!resumedEntry || resume != nullptr);
     std::atomic<bool> ready{false};
     std::atomic<bool> collected{false};
     uintptr_t before = 0;
@@ -43,7 +53,9 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
             tls->SetMutator(owner);
         }
         pending = HasPendingSafepoint(tls);
-        if (managedEntry) {
+        if (resumedEntry) {
+            resume(owner, tls);
+        } else if (managedEntry) {
             MRT_PreRunManagedCode(owner, 0, tls);
         } else {
             MRT_LeaveSaferegion();
@@ -72,8 +84,8 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
     collected.store(true, std::memory_order_release);
     thread.join();
     std::fprintf(stderr,
-                 "BINDING_MASK_TARGET executed=1 manager=%d managed=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
-                 managerBinding, managedEntry, before, after, expected, pending, active);
+                 "BINDING_MASK_TARGET executed=1 manager=%d managed=%d resumed=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
+                 managerBinding, managedEntry, resumedEntry, before, after, expected, pending, active);
     const bool target = after == expected;
     const bool setup = (collect ? before != expected : before == expected) && !pending && active;
     GC_EXPECT_TRUE(target);
@@ -101,4 +113,9 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ManagedEntryAfterCollection)
 GC_RUNTIME_OTHER_VM_TEST(BindingPoll, FreshOwnerWithoutCollection)
 {
     CheckBindingAfterCollection(true, false, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ResumedEntryAfterCollection)
+{
+    CheckBindingAfterCollection(false, false, true, true);
 }
