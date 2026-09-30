@@ -121,7 +121,9 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     fixture.PrepareOldSource();
     auto publication = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(publication->find(reinterpret_cast<MAddress>(fixture.obj0), &cursor), MAddress(0));
+    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1), &cursor),
         reinterpret_cast<MAddress>(fixture.obj1));
     auto owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(owner));

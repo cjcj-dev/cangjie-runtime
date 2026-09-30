@@ -40,12 +40,10 @@ namespace MapleRuntime {
 StackGrowConfig CangjieRuntime::stackGrowConfig = StackGrowConfig::UNDEF;
 extern "C" MRT_EXPORT void MRT_LibraryOnLoad(uint64_t address, bool enableGC)
 {
+    (void)enableGC;
     ScopedEntryTrace trace("CJRT_LOAD_LIBRARY");
     if (address == 0) {
         return;
-    }
-    if (!enableGC) {
-        Heap::GetHeap().EnableGC(false);
     }
     LoaderManager* loaderManager = LoaderManager::GetInstance();
     loaderManager->LoadFile(address);

@@ -145,7 +145,7 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
-    BaseObject* relocate_object_inner(ZForwarding* forwarding, BaseObject* obj);
+    BaseObject* relocate_object_inner(ZForwarding* forwarding, BaseObject* obj, ForwardingCursor* cursor);
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
     ZPerWorker<ZRelocationTargets> smallTargets;

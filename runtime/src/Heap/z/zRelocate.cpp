@@ -199,7 +199,7 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
     }
 }
 
-BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject* obj)
+BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject* obj, ForwardingCursor* cursor)
 {
     // ZGC zRelocate.cpp:354-380: allocation, disjoint copy, insert, undo.
     assert(Heap::GetHeap().IsSurvivedObject(obj) && "Should be live");
@@ -216,7 +216,7 @@ BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject
     // Cangjie has no return statepoint; the new copy needs a normal header.
     toObj->SetStateCode(ObjectState::NORMAL);
     BaseObject* result = reinterpret_cast<BaseObject*>(forwarding->insert(
-        reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj)));
+        reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj), cursor));
     if (result != toObj) {
         Heap::GetHeap().undo_alloc_object_for_relocation(reinterpret_cast<MAddress>(toObj), size);
     }
@@ -472,7 +472,8 @@ private:
         const uintptr_t from = reinterpret_cast<uintptr_t>(object);
         const size_t size = object->GetSize();
         ZPage* target = targets->get(partition, forwarding->to_age());
-        if (const uintptr_t hit = forwarding->find(from)) {
+        ForwardingCursor cursor;
+        if (const uintptr_t hit = forwarding->find(from, &cursor)) {
             increase_other_forwarded(size);
             return hit;
         }
@@ -484,8 +485,7 @@ private:
             ZUtils::object_copy_disjoint(to_zaddress(from), to_zaddress(addr), size);
         }
         reinterpret_cast<BaseObject*>(addr)->SetStateCode(ObjectState::NORMAL);
-        std::atomic_thread_fence(std::memory_order_release);
-        const uintptr_t result = forwarding->insert(from, addr);
+        const uintptr_t result = forwarding->insert(from, addr, &cursor);
         if (result != addr) {
             allocator->undo_alloc_object(target, addr, size);
             increase_other_forwarded(size);
@@ -861,12 +861,13 @@ BaseObject* ZRelocate::forward_object(ZForwarding* forwarding, BaseObject* objec
 BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object)
 {
     const MAddress from = reinterpret_cast<MAddress>(object);
-    if (const MAddress to = forwarding->find(from)) {
+    ForwardingCursor cursor;
+    if (const MAddress to = forwarding->find(from, &cursor)) {
         return reinterpret_cast<BaseObject*>(to);
     }
     if (forwarding->retain_page(&relocateQueue)) {
         DCHECK(generation->is_phase_relocate());
-        BaseObject* to = relocate_object_inner(forwarding, object);
+        BaseObject* to = relocate_object_inner(forwarding, object, &cursor);
         forwarding->release_page();
         if (to != nullptr) {
             return to;
