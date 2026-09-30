@@ -9,13 +9,11 @@ MINOR_SRC="$ROOT/runtime/tests/gc_unit/phase_entry_trigger.cj"
 MAJOR_SRC="$ROOT/runtime/tests/gc_unit/phase_entry_major.cj"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
-CJC_BIN="${CJC:-${CANGJIE_HOME:-}/bin/cjc}"
+source "$(dirname "$0")/language_toolchain.sh"
+gc_unit_language_admit
+gc_unit_language_environment
 CXX_BIN="${CXX:-c++}"
 
-if [[ ! -x "$CJC_BIN" ]]; then
-  echo "PHASE_ENTRY_TRIGGER_FAIL: no matching cjc (set CJC or CANGJIE_HOME)" >&2
-  exit 2
-fi
 for library in libcangjie-runtime.so libboundscheck.so; do
   if [[ ! -f "$RUNTIME_LIB_DIR/$library" ]]; then
     echo "PHASE_ENTRY_TRIGGER_FAIL: missing $RUNTIME_LIB_DIR/$library" >&2
