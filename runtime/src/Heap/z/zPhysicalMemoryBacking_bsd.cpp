@@ -15,6 +15,7 @@
 #include <mach/vm_map.h>
 
 #include "Base/Log.h"
+#include "Base/SysCall.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zErrno.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -56,12 +57,11 @@ static ZErrno mremap_mach(uintptr_t from_addr, uintptr_t to_addr, size_t size) {
 ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   : _base(0),
     _initialized(false) {
-  void* const res = mmap(nullptr, max_capacity, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
-  if (res == MAP_FAILED) {
+  _base = reinterpret_cast<uintptr_t>(ReserveMemory(max_capacity));
+  if (_base == 0) {
     ZInitialize::error("Failed to reserve address space for backing memory");
     return;
   }
-  _base = reinterpret_cast<uintptr_t>(res);
   _initialized = true;
 }
 
