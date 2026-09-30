@@ -14,6 +14,7 @@
 #include <mach/mach.h>
 #include <mach/vm_map.h>
 
+#include "Base/Globals.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/SysCall.h"

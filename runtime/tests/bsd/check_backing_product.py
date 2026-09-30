@@ -77,6 +77,12 @@ CUTS = {
                        '  if (res == nullptr) {', 'commit_fail'),
     'uncommit_consume': ('zPhysicalMemoryBacking_bsd.cpp', '    return 0;',
                          '    return length;', 'uncommit_fail'),
+    'commit_diagnostic': ('zPhysicalMemoryBacking_bsd.cpp',
+                          '    LOG(RTLOG_ERROR, "Failed to commit memory (%s)", err.to_string());',
+                          '    (void)0;', 'commit_fail'),
+    'uncommit_diagnostic': ('zPhysicalMemoryBacking_bsd.cpp',
+                            '    LOG(RTLOG_ERROR, "Failed to uncommit memory (%s)", err.to_string());',
+                            '    (void)0;', 'uncommit_fail'),
 }
 if ASSERTIONS:
     for operation in ('commit', 'uncommit'):
@@ -170,11 +176,15 @@ by_name = {record['arm']: record for record in records}
 assert by_name['green']['hashes'] == by_name['restored']['hashes']
 for record in records:
     expected_red = {CUTS[record['arm']][3]} if record['arm'] in CUTS else set()
-    actual_red = {case for case, result in record['results'].items() if result['rc'] != result['expected_rc']}
+    actual_red = {case for case, result in record['results'].items()
+                  if result['rc'] != result['expected_rc'] or not result['observed']}
     assert actual_red == expected_red, (record['arm'], actual_red, expected_red)
-    assert all(result['observed'] for result in record['results'].values()), record['arm']
     if expected_red:
         assert record['hashes']['runtime'] != by_name['green']['hashes']['runtime']
-        assert record['results'][next(iter(expected_red))]['rc'] == 1
+        target = record['results'][next(iter(expected_red))]
+        if record['arm'].endswith('_diagnostic'):
+            assert target['rc'] == 0 and not target['observed']
+        else:
+            assert target['rc'] == 1 and target['observed']
     print(f"PRODUCT_BACKING arm={record['arm']} red={sorted(actual_red)} hashes={record['hashes']}")
 run(['uptime'], OUT / 'uptime-after.txt')
