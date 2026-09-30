@@ -1522,7 +1522,7 @@ void *CJThreadMresched(struct CJThread *reCJThread)
     // reschedule cjthread is added to the local queue. Minimize access to global queues
     // while ensuring fairness. The scheduler searches for cjthreads in the following
     // sequence: local -> lastCJThread -> global
-    if (schedule->schdCJThread.num != 0) {
+    if (ScheduleGlobalQueueCount(schedule) != 0) {
         ScheduleGlobalWrite(&reCJThread, 1);
     } else {
         lastCJThread = reinterpret_cast<struct CJThread *>(atomic_exchange(&schedule->lastCJThread,
