@@ -87,7 +87,8 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     ZStatWorkers stats;
-    ZWorkers pool(ZGenerationId::old, 1, &stats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(1);
+    ZWorkers pool(ZGenerationId::old, &stats);
     FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
@@ -114,7 +115,8 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     ZStatWorkers stats;
-    ZWorkers pool(ZGenerationId::old, 1, &stats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(1);
+    ZWorkers pool(ZGenerationId::old, &stats);
     FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);

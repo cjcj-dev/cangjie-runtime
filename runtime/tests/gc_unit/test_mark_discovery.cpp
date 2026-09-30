@@ -1,4 +1,5 @@
 #include "Heap/z/zRootsIterator.hpp"
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Common/Runtime.h"
@@ -56,8 +57,8 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE)
         .StoreColoured(cycle ? StoreGoodPointer(fx.obj0) : zpointer::null);
     auto& heap = Heap::GetHeap();
-    heap.young().InitializeWorkers(workers);
-    heap.old().InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), workers);
     heap.old().set_phase(ZGenerationPhase::Relocate);
     U64 handle = 0;
     if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);

@@ -445,8 +445,7 @@ void ZGenerationYoung::concurrent_mark()
 
 bool ZGenerationYoung::mark_end()
 {
-    WorkStack& workStack = youngWorkStack;
-    const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack);
+    const bool markEndSucceeded = Mark().End();
     if (markEndSucceeded) {
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
@@ -777,10 +776,10 @@ const char* ZGeneration::phase_to_string() const
 }
 
 namespace MapleRuntime {
-void ZGeneration::InitializeWorkers(uint32_t capacity)
+void ZGeneration::InitializeWorkers()
 {
     CHECK(workers == nullptr);
-    workers = std::make_unique<ZWorkers>(_id, capacity, &statWorkers);
+    workers = std::make_unique<ZWorkers>(_id, &statWorkers);
     mark->BindWorkers(workers.get());
     if (_id == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
@@ -849,7 +848,7 @@ bool ZGenerationOld::mark_end()
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
 
-    const bool ended = Mark().TryEnd();
+    const bool ended = Mark().End();
 
     if (!ended) {
 
@@ -932,7 +931,7 @@ void ZGenerationOld::mark_roots()
 void ZGenerationOld::mark_follow()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentMarkFollowOld);
-    Mark().MarkFollow(false);
+    Mark().MarkFollow();
 }
 
 void ZGenerationOld::concurrent_mark()

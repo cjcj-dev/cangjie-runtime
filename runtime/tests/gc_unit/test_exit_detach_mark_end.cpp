@@ -10,7 +10,7 @@
 //   ZBarrier::mark_and_remember -> ZMark::MarkObject ->
 //   MarkThreadLocalStacks::Push (Create() ... breakpoint ... Push(entry)).
 // Pause side (product): ScopedStopTheWorld + ZGenerationYoung::mark_end ->
-//   ZMark::TryEndYoungMark -> ZMark::TryEnd -> HandshakeFlush (world-stopped
+//   ZMark::End -> ZMark::TryEnd -> HandshakeFlush (world-stopped
 //   branch) -> MarkStripe::PublishStack (CHECK never publish an empty mark
 //   stripe stack).
 //

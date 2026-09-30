@@ -1,4 +1,5 @@
 #include "Heap/z/zRootsIterator.hpp"
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -69,7 +70,8 @@ void CheckEnqueueRelease(int obsolete)
     ZAddress::OnHeapCreated(fx.heapStart);
     ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     ZStatWorkers stats;
-    ZWorkers pool(ZGenerationId::old, 1, &stats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(1);
+    ZWorkers pool(ZGenerationId::old, &stats);
     FinalizerProcessor fp(&pool);
     NativeSlot* stale = nullptr;
     if (obsolete != 0) {

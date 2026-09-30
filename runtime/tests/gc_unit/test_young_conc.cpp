@@ -90,7 +90,7 @@ public:
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
                 auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(generation)));
-                if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
+                if (cycle.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 2);
             }
         }
     }

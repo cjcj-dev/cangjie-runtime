@@ -17,10 +17,10 @@ struct MarkPublicationFixture {
     {
         current = this;
         if ((*ZGeneration::young()).Workers() == nullptr) {
-            (*ZGeneration::young()).InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers((*ZGeneration::young()), 1);
         }
         if ((*ZGeneration::old()).Workers() == nullptr) {
-            (*ZGeneration::old()).InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers((*ZGeneration::old()), 1);
         }
         auto& young = (*ZGeneration::young());
         auto& old = (*ZGeneration::old());
