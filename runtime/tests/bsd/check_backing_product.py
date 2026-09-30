@@ -42,8 +42,7 @@ run(['uptime'], OUT / 'uptime-before.txt')
 entries = json.loads((BUILD / 'compile_commands.json').read_text())
 recipes = {}
 for name in ('zPhysicalMemoryBacking_bsd.cpp', 'SysCall.cpp'):
-    recipe, = [entry for entry in entries if entry['file'].endswith('/' + name)
-               and 'cangjie-runtime.dir' in entry['command']]
+    recipe, = [entry for entry in entries if entry['file'].endswith('/' + name)]
     recipes[name] = recipe
 (OUT / 'compile-commands.json').write_text(json.dumps(recipes, indent=2))
 link_cwd = BUILD / 'src'
@@ -105,16 +104,22 @@ def arm(name):
             fromfile='a/' + str(relative), tofile='b/' + str(relative))))
         compile_cut = shlex.split(recipe['command'])
         object_path = (Path(recipe['directory']) / compile_cut[compile_cut.index('-o') + 1]).resolve()
-        cut_object = directory / (filename + '.o')
+        cut_object = directory / object_path.name
         compile_cut[compile_cut.index('-o') + 1] = str(cut_object)
         compile_cut[compile_cut.index(str(source))] = str(replacement)
+        compile_cut += ['-iquote', str(source.parent)]
         assert run(compile_cut, directory / 'compile.log', Path(recipe['directory'])) == 0
+        archive_name = 'libBase.a' if filename == 'SysCall.cpp' else 'libHeap.a'
+        archive, = list(BUILD.rglob(archive_name))
+        cut_archive = directory / archive_name
+        shutil.copy2(archive, cut_archive)
+        assert run(['xcrun', 'ar', 'rcs', str(cut_archive), str(cut_object)], directory / 'archive.log') == 0
         matched = 0
         for index, token in enumerate(link):
-            if not token.startswith('-') and (link_cwd / token).resolve() == object_path:
-                link[index] = str(cut_object)
+            if not token.startswith('-') and (link_cwd / token).resolve() == archive:
+                link[index] = str(cut_archive)
                 matched += 1
-        assert matched == 1, 'replace exactly the actual linked product object'
+        assert matched == 1, 'replace exactly the actual linked product archive'
         assert run(link, directory / 'link.log', link_cwd) == 0
     else:
         shutil.copy2(product, target)
