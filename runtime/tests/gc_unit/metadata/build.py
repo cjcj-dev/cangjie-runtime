@@ -95,6 +95,19 @@ else:
         shutil.copytree(source, tree)
     product_sources = {str(p.relative_to(tree)): digest(p) for p in (tree / "src").rglob("*") if p.is_file()}
     record["uncut_product_source_sha256"] = hashlib.sha256(json.dumps(product_sources, sort_keys=True).encode()).hexdigest()
+    if args.arm in ("mach-pc", "mach-desc"):
+        assert args.mode == "capability" and mac and args.config == "pac-off"
+        path = tree / "src/Loader/ElfUnloadQuiescence.cpp"
+        before = path.read_text()
+        old, new = (("RegisteredImageForAddress(startPC, true)", "RegisteredImageForAddress(startPC)")
+                    if args.arm == "mach-pc" else
+                    ("return image->Contains(descriptor) ? descriptor : 0;", "return descriptor;"))
+        assert before.count(old) == 1
+        after = before.replace(old, new)
+        path.write_text(after)
+        (out / "cut.diff").write_text("".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True),
+            fromfile="a/runtime/src/Loader/ElfUnloadQuiescence.cpp",
+            tofile="b/runtime/src/Loader/ElfUnloadQuiescence.cpp")))
     if args.arm in cuts:
         relative, condition, index, _ = cuts[args.arm]
         path = tree / relative
@@ -141,8 +154,20 @@ else:
                  "--parallel", str(os.cpu_count())], "code-shape-build")
         record["code_shape_elf"] = digest(testbuild / "metadata-code-shape")
         record["code_shape_runtime"] = digest(libs[0])
-        checked([testbuild / "metadata-code-shape"], "code-shape-run")
-        record["code_shape"] = "PASS: real Mach-O text/data and function map"
+        shape_rc = run([testbuild / "metadata-code-shape"], "code-shape-run")
+        if args.arm in ("mach-pc", "mach-desc"):
+            assert shape_rc == 1, shape_rc
+            output = (out / "code-shape-run.log").read_text()
+            target = "PC" if args.arm == "mach-pc" else "DESC"
+            other = "DESC" if target == "PC" else "PC"
+            assert "METADATA_CODE_SHAPE_" + target + "_OWNER pass=0 executed=1" in output
+            assert "METADATA_CODE_SHAPE_" + other + "_OWNER pass=1 executed=1" in output
+            assert "METADATA_CODE_SHAPE_ABSENT pass=1 executed=1" in output
+            assert output.count("code=1 data=1 value=1 executed=1") == 2
+            record["code_shape"] = "CONTROL_ARM: precise target red " + target
+        else:
+            assert shape_rc == 0, shape_rc
+            record["code_shape"] = "PASS: real Mach-O text/data and function map"
         record["capability_products"] = {str(p.relative_to(build)): digest(p)
             for p in (build / "runtime-staging").rglob("*.dylib")}
         record["behavior"] = "NOT_RUN: PAC metadata ABI/fixtures not supplied; build capability only"

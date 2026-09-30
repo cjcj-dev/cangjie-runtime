@@ -10,6 +10,14 @@ using namespace MapleRuntime;
 struct MetadataShapeValue { uint64_t value; };
 extern "C" { MetadataShapeValue metadataShapeValues[2] {{0x1454}, {0x1455}}; }
 GC_METADATA_CODE(metadataShapeCode, metadataShapeValues, MetadataShapeValue, value, 2)
+#ifdef __APPLE__
+extern "C" unsigned char metadataForeignCode[];
+asm(".section __TEXT,__cjtestcode,regular,pure_instructions\n"
+    ".balign 16\n.globl _metadataForeignCode\n_metadataForeignCode:\n.long 0\n.zero 32\n"
+    ".section __CJ_METADATA,__cjfuncmap,regular\n.balign 8\n"
+    ".quad _metadataForeignCode + 4\n.quad 0x1454\n"
+    ".quad _metadataShapeValues\n.quad _metadataShapeValues\n.text\n");
+#endif
 int main()
 {
     const auto pc = metadataShapeCodePC();
@@ -30,7 +38,14 @@ int main()
     }
     const bool absent = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataShapeCodePC(0, false))) == nullptr;
     std::fprintf(stderr, "METADATA_CODE_SHAPE_ABSENT pass=%d executed=1\n", absent);
-    return passed && absent ? 0 : 1;
+    bool codeOwner = true, descriptorOwner = true;
+#ifdef __APPLE__
+    codeOwner = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataShapeValues)) == nullptr;
+    descriptorOwner = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataForeignCode + 4)) == nullptr;
+    std::fprintf(stderr, "METADATA_CODE_SHAPE_PC_OWNER pass=%d executed=1\n", codeOwner);
+    std::fprintf(stderr, "METADATA_CODE_SHAPE_DESC_OWNER pass=%d executed=1\n", descriptorOwner);
+#endif
+    return passed && absent && codeOwner && descriptorOwner ? 0 : 1;
 }
 #else
 int main()
