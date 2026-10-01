@@ -208,13 +208,15 @@ public:
     void doit() override
     {
         ThreadsListHandle threads;
-        if (threads.length() == 0) { return; }
-        // Establish the complete pending count before any target may run.
-        op_->add_target_count(threads.length() - 1);
+        size_t issued = 0;
         for (size_t i = 0; i < threads.length(); ++i) {
             threads.thread_at(i)->GetHandshakeState().add_operation(op_);
+            ++issued;
         }
         std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (issued == 0) { return; }
+        // handshake.cpp:274-280: count after arming; pending starts at one.
+        op_->add_target_count(issued - 1);
         do {
             for (size_t i = 0; i < threads.length(); ++i) {
                 (void)threads.thread_at(i)->GetHandshakeState().try_process();
