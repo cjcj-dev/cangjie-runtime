@@ -449,3 +449,13 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, ThreadSnapshotCallerConsumesRecords)
     GC_EXPECT_TRUE(result.callerFound);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+extern "C" void MRT_DumpAllStackTrace();
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, DebugStackTraceEntry)
+{
+    VMThreadContainerRuntime container(8);
+    MRT_DumpAllStackTrace();
+    std::fprintf(stderr, "VM1350_STACKTRACE_TARGET executed=1 returned=1\n");
+}
+#endif
