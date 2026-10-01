@@ -143,6 +143,8 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
     GC_EXPECT_TRUE(!prematurelyReturned && completeAtReturn.load());
 }
 
+// The IDE serializer is an OHOS product component (Inspector/CMakeLists.txt).
+#if defined(__OHOS__) && (__OHOS__ == 1)
 namespace {
 // Observe the existing profiler transport, not a test-only product hook.
 struct SnapshotObservation {
@@ -228,3 +230,5 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
                  WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
+
+#endif
