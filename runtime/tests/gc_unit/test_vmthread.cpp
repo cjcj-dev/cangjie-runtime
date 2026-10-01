@@ -268,6 +268,14 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     auto& old = Heap::GetHeap().old();
     InitializeGenerationWorkers(old, 1);
     old.set_phase(ZGenerationPhase::MarkComplete);
+    RegisteredSafeMutator target;
+    const uint64_t beforeEpoch = target.target.GetStackWatermark().GetEpoch();
+    RestoreMarkFlips flips;
+    // Deterministic stale-owner input: the real rendezvous handshake must
+    // process the safe target before GC rendezvous and resurrection unblock.
+    ZGlobalsPointers::flip_old_mark_start();
+    flips.old = true;
+    const uint64_t expectedEpoch = StackWatermark::epoch_id();
     ZResurrection::block();
     std::mutex lock;
     std::condition_variable condition;
@@ -292,9 +300,14 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     }
     old.process_non_strong_references();
     participant.join();
+    const uint64_t afterEpoch = target.target.GetStackWatermark().GetEpoch();
     std::fprintf(stderr, "VM1349_RENDEZVOUS_TARGET blocked_during=%d stopped=%d unblocked_after=%d\n",
                  blockedAtRendezvous, stoppedAtRendezvous, !ZResurrection::is_blocked());
+    std::fprintf(stderr, "VM1349_PHASE_HANDSHAKE_STATE_TARGET before=%llu after=%llu expected=%llu\n",
+                 static_cast<unsigned long long>(beforeEpoch), static_cast<unsigned long long>(afterEpoch),
+                 static_cast<unsigned long long>(expectedEpoch));
     GC_EXPECT_FALSE(stoppedAtRendezvous);
     std::fprintf(stderr, "VM1349_RUNNING_MUTATOR_CONTROL_ASSERT_EXECUTED\n");
     GC_EXPECT_TRUE(blockedAtRendezvous && !ZResurrection::is_blocked());
+    GC_EXPECT_TRUE(beforeEpoch != expectedEpoch && afterEpoch == expectedEpoch);
 }
