@@ -76,16 +76,18 @@ void DumpAllStackTrace0()
     });
 }
 
+// HotSpot vmOperations.hpp:152: the synchronous caller owns the operation.
+class VM_PrintThreads final : public VMOperation {
+public:
+    const char* name() const override { return "dump all stack trace"; }
+    void doit() override { DumpAllStackTrace0(); }
+};
+
 // dump and print StackTraces of all cjthreads
 extern "C" void MRT_DumpAllStackTrace()
 {
-    ScopedEnterSaferegion enterSaferegion(false);
-    if (MutatorManager::Instance().WorldStopped()) {
-        DumpAllStackTrace0();
-    } else {
-        ScopedStopTheWorld stw("dump all stack trace");
-        DumpAllStackTrace0();
-    }
+    VM_PrintThreads operation;
+    VMThread::execute(&operation);
 }
 #ifdef __APPLE__
 extern "C" MRT_EXPORT void CJ_MRT_DumpAllStackTrace();

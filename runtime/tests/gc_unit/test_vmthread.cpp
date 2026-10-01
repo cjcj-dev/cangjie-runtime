@@ -2,6 +2,10 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_unittest.hpp"
 #include "Common/Runtime.h"
+#include "Cangjie.h"
+#include "ObjectModel/MArray.inline.h"
+#include "TypeInfoManager.h"
+#include "Mutator/Mutator.inline.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
@@ -10,6 +14,11 @@
 #include "gc_worker_fixture.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/VMOperation.h"
+#include "Inspector/HeapSnapshotJsonSerializer.h"
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
+#include <sys/stat.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -21,6 +30,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" void CJ_MRT_DumpHeapSnapshot(int fd);
 
 namespace {
 // Container only. The operation itself is the product VMThread::execute path,
@@ -138,3 +148,315 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
     // Target assertion I1: the submitter returned only after the body finished.
     GC_EXPECT_TRUE(!prematurelyReturned && completeAtReturn.load());
 }
+
+// The IDE serializer is an OHOS product component (Inspector/CMakeLists.txt).
+#if defined(__OHOS__) && (__OHOS__ == 1) && !defined(MRT_GC_UNIT_OHOS_HOST)
+namespace {
+// Observe the existing profiler transport, not a test-only product hook.
+struct SnapshotObservation {
+    unsigned messages = 0;
+    bool onVMThread = true;
+    bool stopped = true;
+    std::string output;
+};
+SnapshotObservation snapshotObservation;
+void ObserveSnapshotTransport()
+{
+    snapshotObservation = SnapshotObservation{};
+    auto& stream = HeapProfilerStream::GetInstance();
+    stream.SetMessageID("{\"id\":1350}");
+    stream.SetHandler([](const std::string& message) {
+        ++snapshotObservation.messages;
+        snapshotObservation.onVMThread &= VMThread::is_VM_thread();
+        snapshotObservation.stopped &= MutatorManager::Instance().WorldStopped();
+        snapshotObservation.output += message;
+    });
+}
+void CheckSnapshotTransport()
+{
+    std::fprintf(stderr, "VM1350_IDE_TARGET executed=1 messages=%u vm=%d stopped=%d result=%d\n",
+                 snapshotObservation.messages, snapshotObservation.onVMThread,
+                 snapshotObservation.stopped,
+                 snapshotObservation.output.find("\"id\":1350") != std::string::npos);
+    GC_EXPECT_TRUE(snapshotObservation.messages > 0);
+    GC_EXPECT_TRUE(snapshotObservation.onVMThread && snapshotObservation.stopped);
+    GC_EXPECT_TRUE(snapshotObservation.output.find("\"id\":1350") != std::string::npos);
+}
+class VMNestedSnapshot final : public VMOperation {
+public:
+    explicit VMNestedSnapshot(bool allow) : allowNested(allow) {}
+    bool allow_nested_vm_operations() const override { return allowNested; }
+    const char* name() const override { return "nested profiler request"; }
+    void doit() override
+    {
+        CjHeapDataForIDE data;
+        result = data.Serialize();
+    }
+    bool result = false;
+private:
+    bool allowNested;
+};
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, IDETransportRunsOnVMThread)
+{
+    VMThreadContainerRuntime container(8);
+    ObserveSnapshotTransport();
+    CjHeapDataForIDE data;
+    const bool result = data.Serialize();
+    CheckSnapshotTransport();
+    GC_EXPECT_TRUE(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationAllowsNestedService)
+{
+    VMThreadContainerRuntime container(8);
+    ObserveSnapshotTransport();
+    VMNestedSnapshot operation(true);
+    VMThread::execute(&operation);
+    CheckSnapshotTransport();
+    GC_EXPECT_TRUE(operation.result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
+{
+    // fork before creating a VM thread; the child owns its complete runtime.
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        VMThreadContainerRuntime container(8);
+        ObserveSnapshotTransport();
+        VMNestedSnapshot operation(false);
+        VMThread::execute(&operation);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "VM1350_NESTED_TARGET executed=1 signaled=%d signal=%d\n",
+                 WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+#endif
+
+namespace {
+void CheckBinaryDump(FILE* file, bool result)
+{
+    const off_t size = lseek(fileno(file), 0, SEEK_END);
+    std::fprintf(stderr, "VM1350_BINARY_TARGET executed=1 result=%d bytes=%lld fd_open=%d\n",
+                 result, static_cast<long long>(size), size >= 0);
+    GC_EXPECT_TRUE(result && size > 0);
+}
+class VMNestedBinaryDump final : public VMOperation {
+public:
+    VMNestedBinaryDump(int output, bool allow) : fd(output), allowNested(allow) {}
+    bool allow_nested_vm_operations() const override { return allowNested; }
+    const char* name() const override { return "nested binary dump request"; }
+    void doit() override
+    {
+        CjHeapData data;
+        result = data.DumpHeap(fd);
+    }
+    bool result = false;
+private:
+    int fd;
+    bool allowNested;
+};
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryDescriptorCallerRetainsFile)
+{
+    VMThreadContainerRuntime container(8);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    CjHeapData data;
+    const bool result = data.DumpHeap(fileno(file));
+    CheckBinaryDump(file, result);
+    fclose(file);
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterAllowsBinaryDump)
+{
+    VMThreadContainerRuntime container(8);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    VMNestedBinaryDump operation(fileno(file), true);
+    VMThread::execute(&operation);
+    CheckBinaryDump(file, operation.result);
+    fclose(file);
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterRejectsBinaryDump)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        VMThreadContainerRuntime container(8);
+        FILE* file = tmpfile();
+        if (file == nullptr) { _exit(2); }
+        VMNestedBinaryDump operation(fileno(file), false);
+        VMThread::execute(&operation);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "VM1350_BINARY_NESTED_TARGET executed=1 signaled=%d signal=%d\n",
+                 WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+namespace {
+struct ManagedDumpRequest { int fd; bool hadMutator = false; bool result = false; };
+void* RequestBinaryDumpFromManagedThread(void* context)
+{
+    auto& request = *static_cast<ManagedDumpRequest*>(context);
+    auto* mutator = Mutator::GetMutator();
+    request.hadMutator = mutator != nullptr;
+    // Native C++ task has no compiler-generated stack maps. The mutator
+    // remains registered and must enter a saferegion while execute waits.
+    mutator->SetManagedContext(false);
+    CJ_MRT_DumpHeapSnapshot(request.fd);
+    request.result = lseek(request.fd, 0, SEEK_END) > 0;
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, ManagedRequesterWaitsSafely)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 128 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.staticGCThreads = true;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    ManagedDumpRequest request{fileno(file)};
+    auto task = RunCJTask(RequestBinaryDumpFromManagedThread, &request);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* value = nullptr;
+    const auto rc = GetTaskRet(task, &value);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "VM1350_MANAGED_TARGET executed=1 task_rc=%d registered=%d\n",
+                 rc, request.hadMutator);
+    GC_EXPECT_EQ(rc, E_OK);
+    GC_EXPECT_TRUE(request.hadMutator);
+    CheckBinaryDump(file, request.result);
+    fclose(file);
+    FiniCJRuntime();
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryPathCallerOwnsFile)
+{
+    VMThreadContainerRuntime container(8);
+    const char* root = std::getenv("GC_UNIT_OUT");
+    GC_EXPECT_TRUE(root != nullptr);
+    const std::string directory = std::string(root) + "/dump-path-" + std::to_string(getpid());
+    GC_EXPECT_EQ(mkdir(directory.c_str(), 0700), 0);
+    GC_EXPECT_EQ(chdir(directory.c_str()), 0);
+    CjHeapData data;
+    data.DumpHeap();
+    struct stat info{};
+    const int rc = stat("item_data.dat", &info);
+    std::fprintf(stderr, "VM1350_PATH_TARGET executed=1 stat_rc=%d bytes=%lld\n",
+                 rc, static_cast<long long>(info.st_size));
+    GC_EXPECT_TRUE(rc == 0 && info.st_size > 0);
+    unlink("item_data.dat");
+    GC_EXPECT_EQ(chdir(root), 0);
+    rmdir(directory.c_str());
+}
+
+namespace MapleRuntime {
+extern "C" ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo*, const TypeInfo*, const TypeInfo*);
+extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo*, const TypeInfo*);
+}
+namespace {
+struct ThreadDumpObservation {
+    size_t count = 0;
+    bool callerFound = false;
+    uint64_t caller = 0;
+};
+void* RequestThreadSnapshot(void* context)
+{
+    auto& result = *static_cast<ThreadDumpObservation*>(context);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[6][sizeof(TypeInfo)]{};
+    auto* snapshot = reinterpret_cast<TypeInfo*>(storage[0]);
+    auto* frame = reinterpret_cast<TypeInfo*>(storage[1]);
+    auto* byte = reinterpret_cast<TypeInfo*>(storage[2]);
+    auto* snapshots = reinterpret_cast<TypeInfo*>(storage[3]);
+    auto* frames = reinterpret_cast<TypeInfo*>(storage[4]);
+    auto* bytes = reinterpret_cast<TypeInfo*>(storage[5]);
+    snapshot->SetType(TypeKind::TYPE_KIND_STRUCT);
+    snapshot->SetInstanceSize(sizeof(ThreadSnapshot));
+    snapshot->SetFlagHasRefField();
+    GCTib snapshotTib{};
+    snapshotTib.tag = SIGN_BIT | 5;
+    snapshot->SetGCTib(snapshotTib);
+    frame->SetType(TypeKind::TYPE_KIND_STRUCT);
+    frame->SetInstanceSize(sizeof(StackTraceData));
+    frame->SetFlagHasRefField();
+    GCTib frameTib{};
+    frameTib.tag = SIGN_BIT | 7;
+    frame->SetGCTib(frameTib);
+    byte->SetType(TypeKind::TYPE_KIND_UINT8);
+    byte->SetInstanceSize(1);
+    snapshots->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    snapshots->SetComponentTypeInfo(snapshot);
+    frames->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    frames->SetComponentTypeInfo(frame);
+    bytes->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    bytes->SetComponentTypeInfo(byte);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    result.caller = MCC_GetCurrentThreadSnapshotImpl(frames, bytes).id;
+    auto* output = MCC_GetAllThreadSnapshotImpl(snapshots, frames, bytes);
+    if (output != nullptr) {
+        result.count = output->GetLength();
+        for (size_t i = 0; i < result.count; ++i) {
+            ThreadSnapshot snapshot{};
+            std::memcpy(&snapshot, output->ConvertToCArray() + i * sizeof(snapshot), sizeof(snapshot));
+            result.callerFound |= static_cast<uint64_t>(snapshot.id) == result.caller;
+        }
+    }
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, ThreadSnapshotCallerConsumesRecords)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 128 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.staticGCThreads = true;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    ThreadDumpObservation result;
+    auto task = RunCJTask(RequestThreadSnapshot, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "VM1350_SNAPSHOT_TARGET executed=1 count=%zu caller=%llu caller_found=%d\n",
+                 result.count, static_cast<unsigned long long>(result.caller),
+                 result.callerFound);
+    GC_EXPECT_TRUE(result.callerFound);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+extern "C" void MRT_DumpAllStackTrace();
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, DebugStackTraceEntry)
+{
+    VMThreadContainerRuntime container(8);
+    MRT_DumpAllStackTrace();
+    std::fprintf(stderr, "VM1350_STACKTRACE_TARGET executed=1 returned=1\n");
+}
+#endif
