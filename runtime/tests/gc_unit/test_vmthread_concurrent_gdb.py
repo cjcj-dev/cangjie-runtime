@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import gdb
 
-state = {'entered': False, 'completed': False, 'unblock': False, 'error': None}
+state = {'phase': False, 'handshake': False, 'entered': False, 'completed': False, 'unblock': False, 'error': None}
 expected = (Path(os.environ['GCV2_RUNTIME_LIB_DIR']) / 'libcangjie-runtime.so').resolve()
 
 
@@ -31,12 +31,29 @@ def in_non_strong():
 
 
 class Completion(gdb.FinishBreakpoint):
-    def __init__(self):
+    def __init__(self, key='completed'):
         super().__init__(gdb.newest_frame(), internal=True)
+        self.key = key
 
     def stop(self):
-        state['completed'] = True
-        emit('VM1349_RENDEZVOUS_COMPLETED', completed=True)
+        state[self.key] = True
+        emit('VM1349_OPERATION_COMPLETED', operation=self.key)
+        return False
+
+
+class Phase(gdb.Breakpoint):
+    def stop(self):
+        product()
+        state['phase'] = True
+        return False
+
+
+class Handshake(gdb.Breakpoint):
+    def stop(self):
+        name = gdb.parse_and_eval('op_->cl_->name_').string()
+        if name == 'ZRendezvous' and state['phase']:
+            product()
+            Completion('handshake')
         return False
 
 
@@ -49,8 +66,11 @@ class Rendezvous(gdb.Breakpoint):
             on_vm = int(tls.dereference()['threadType']) == 5
             state['entered'] = True
             emit('VM1349_RENDEZVOUS_THREAD_TARGET', vm=on_vm, sha256=digest)
-            if not on_vm or not in_non_strong():
+            if not on_vm or not state['phase']:
                 raise RuntimeError('Rendezvous executor is not VMThread on the product non-strong entry')
+            emit('VM1349_PHASE_HANDSHAKE_TARGET', completed=state['handshake'])
+            if not state['handshake']:
+                raise RuntimeError('Non-strong phase handshake did not complete before rendezvous')
             Completion()
             return False
         except Exception as error:
@@ -75,6 +95,8 @@ try:
     gdb.execute('set pagination off')
     gdb.execute('set breakpoint pending on')
     gdb.execute('set args --gtest_filter=ConcurrentVM1349.NonStrongRendezvousBeforeUnblock')
+    Phase('MapleRuntime::ZGenerationOld::process_non_strong_references()', internal=True)
+    Handshake('MapleRuntime::(anonymous namespace)::VM_HandshakeAllThreads::doit()', internal=True)
     Rendezvous('MapleRuntime::ZRendezvousGCThreads::doit()', internal=True)
     Unblock('MapleRuntime::ZResurrection::unblock()', internal=True)
     gdb.execute('run')
