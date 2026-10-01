@@ -220,9 +220,11 @@ GC_RUNTIME_TEST(ConcurrentVM1349, FlushPublishesVMAndMutatorWork)
     (void)PublishedOffsets(domain);
     std::fprintf(stderr, "VM1349_FLUSH_TARGET seeded_vm=%d vm=%d mutator=%d submitter_retained=%d flushed=%d\n",
                  seed.vm, vmPublished, mutatorPublished, submitterRetained, flushed);
-    GC_EXPECT_TRUE(vmPublished);
     GC_EXPECT_TRUE(mutatorPublished);
     GC_EXPECT_TRUE(seed.vm && flushed && submitterRetained);
+    std::fprintf(stderr, "VM1349_MUTATOR_AND_REQUESTER_CONTROL_ASSERT_EXECUTED\n");
+    std::fprintf(stderr, "VM1349_VM_FLUSH_TARGET_ASSERT_EXECUTED\n");
+    GC_EXPECT_TRUE(vmPublished);
 }
 
 GC_RUNTIME_TEST(ConcurrentVM1349, EmptyVMFlushHasNoWork)
@@ -292,6 +294,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     participant.join();
     std::fprintf(stderr, "VM1349_RENDEZVOUS_TARGET blocked_during=%d stopped=%d unblocked_after=%d\n",
                  blockedAtRendezvous, stoppedAtRendezvous, !ZResurrection::is_blocked());
-    GC_EXPECT_TRUE(blockedAtRendezvous && !ZResurrection::is_blocked());
     GC_EXPECT_FALSE(stoppedAtRendezvous);
+    std::fprintf(stderr, "VM1349_RUNNING_MUTATOR_CONTROL_ASSERT_EXECUTED\n");
+    GC_EXPECT_TRUE(blockedAtRendezvous && !ZResurrection::is_blocked());
 }
