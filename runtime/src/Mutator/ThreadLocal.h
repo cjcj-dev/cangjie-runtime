@@ -48,6 +48,7 @@ struct ThreadLocalData {
     // Internal thread local var.
     ThreadType threadType;
     bool isCJProcessor;
+    bool isSuspendibleThread;
     void* threadCache;
 #ifndef INTERPRETER_ENABLED
     void* gcDataOffsetPadding;

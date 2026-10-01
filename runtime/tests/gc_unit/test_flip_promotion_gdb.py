@@ -84,11 +84,11 @@ def flip():
 
 
 def handshake():
-    name = gdb.parse_and_eval('cl->name_').string()
+    name = gdb.parse_and_eval('op_->cl_->name_').string()
     emit('HANDSHAKE_OBSERVED', name=name, field=state['field'])
     if state['field'] is not None and name == 'ZRendezvous':
         product_identity()
-        Completed('rendezvous_completed', 'Handshake::execute')
+        Completed('rendezvous_completed', 'VM_HandshakeAllThreads::doit')
     return False
 
 
@@ -194,7 +194,7 @@ try:
     Observe('test_segmented_array_init.cpp:' + str(capture), capture_field)
     Observe('MapleRuntime::ZGenerationYoung::flip_promote', flip)
     Observe('MapleRuntime::ZRelocate::flip_age_pages', flip_batch)
-    Observe('MapleRuntime::Handshake::execute(MapleRuntime::HandshakeClosure*)', handshake)
+    Observe('MapleRuntime::(anonymous namespace)::VM_HandshakeAllThreads::doit()', handshake)
     Observe('zRelocate.cpp:' + str(work), barrier)
     Observe('MapleRuntime::ZGenerationYoung::pause_relocate_start', before_relocate)
     Observe('MapleRuntime::ZRelocateAddRemsetForFlipPromoted::work', remember)

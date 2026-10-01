@@ -7,6 +7,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "gc_heap_fixture.hpp"
+#include "gc_vmthread_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/VMOperation.h"
@@ -23,34 +24,6 @@ using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace {
-// Container only. The operation itself is the product VMThread::execute path,
-// and the phase call below is the product ZGeneration pause entry.
-class VMThreadContainerRuntime final : public Runtime {
-public:
-    explicit VMThreadContainerRuntime(size_t heapUnits)
-    {
-        CreateStandaloneHeap(heapUnits);
-        GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-        runtime = this;
-        mutatorManager = &manager;
-        concurrencyModel = &concurrency;
-        manager.Init();
-        concurrency.Init(ConcurrencyParam{1024, 64, 1});
-        VMThread::create();
-    }
-    ~VMThreadContainerRuntime() override
-    {
-        VMThread::wait_for_vm_thread_exit();
-        runtime = nullptr;
-    }
-    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
-    void SetGCThreshold(uint64_t) override {}
-
-private:
-    MutatorManager manager;
-    Concurrency concurrency;
-};
-
 // Deterministic interleaving device, shaped after HotSpot
 // threadHelper.inline.hpp:53-95: the submitting thread parks until the operation
 // has published that it is executing, so the interleaving is not random.

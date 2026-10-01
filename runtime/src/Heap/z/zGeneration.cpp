@@ -567,14 +567,10 @@ void ZGenerationOld::process_non_strong_references()
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
-    {
-        // ZGC zGeneration.cpp:1323-1327 runs this as a concurrent VM op.
-        // The host VM-operation lock is shared with StopTheWorld, so two
-        // operations cannot simultaneously synchronize the suspendible set.
-        ScopedSTWLock vmOperation;
-        ZRendezvousGCThreads gcRendezvous;
-        gcRendezvous.doit();
-    }
+    // ZGC zGeneration.cpp:1355-1361: synchronize GC threads on VMThread,
+    // leaving mutators running, then unblock resurrection.
+    ZRendezvousGCThreads gcRendezvous;
+    VMThread::execute(&gcRendezvous);
     ZResurrection::unblock();
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
     PostTrace();

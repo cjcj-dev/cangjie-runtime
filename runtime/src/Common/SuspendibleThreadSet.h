@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include "Heap/z/zBarrier.hpp"
+#include "Mutator/VMOperation.h"
 
 namespace MapleRuntime {
 class SuspendibleThreadSet : public AllStatic {
@@ -19,6 +20,7 @@ private:
     static void leave();
     static void yield_slow();
 public:
+    static bool is_suspendible_thread();
     static bool should_yield() { return suspendAll.load(std::memory_order_relaxed); }
     static void yield()
     {
@@ -71,9 +73,13 @@ public:
     }
 };
 
-class ZRendezvousGCThreads {
+class ZRendezvousGCThreads : public VMOperation {
 public:
-    void doit()
+    const char* name() const override { return "ZRendezvousGCThreads"; }
+    bool evaluate_at_safepoint() const override { return false; }
+    bool is_gc_operation() const override { return true; }
+    bool skip_thread_oop_barriers() const override;
+    void doit() override
     {
         SuspendibleThreadSet::synchronize();
         SuspendibleThreadSet::desynchronize();

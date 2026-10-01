@@ -407,11 +407,5 @@ private:
 };
 
 // Scoped lock STW, this prevent other thread STW during the current scope.
-class ScopedSTWLock {
-public:
-    __attribute__((always_inline)) explicit ScopedSTWLock() { MutatorManager::Instance().SyncMutexLock(); }
-
-    __attribute__((always_inline)) ~ScopedSTWLock() { MutatorManager::Instance().SyncMutexUnlock(); }
-};
 } // namespace MapleRuntime
 #endif
