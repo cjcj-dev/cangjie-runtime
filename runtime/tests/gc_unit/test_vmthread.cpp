@@ -409,3 +409,29 @@ GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, IndirectSTSRejectsSynchronousSubmissi
     GC_EXPECT_EQ(unsetenv(scene), 0);
     std::fprintf(stderr, "INDIRECT1349_CONSUMER_TARGET matched_diagnostic=1\n");
 }
+
+GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
+{
+    VMThreadContainerRuntime container(8);
+    bool executed = false;
+    class Inner : public VMOperation {
+        bool& executed;
+    public:
+        explicit Inner(bool& value) : executed(value) {}
+        bool evaluate_at_safepoint() const override { return false; }
+        const char* name() const override { return "1349 nested inner"; }
+        void doit() override { executed = VMThread::is_VM_thread(); }
+    } inner(executed);
+    class Outer : public VMOperation {
+        VMOperation& inner;
+    public:
+        explicit Outer(VMOperation& operation) : inner(operation) {}
+        bool evaluate_at_safepoint() const override { return false; }
+        bool allow_nested_vm_operations() const override { return true; }
+        const char* name() const override { return "1349 nested outer"; }
+        void doit() override { SuspendibleThreadSetJoiner joiner; VMThread::execute(&inner); }
+    } outer(inner);
+    VMThread::execute(&outer);
+    std::fprintf(stderr, "INDIRECT1349_NESTED_CONTROL executed=%d\n", executed);
+    GC_EXPECT_TRUE(executed);
+}
