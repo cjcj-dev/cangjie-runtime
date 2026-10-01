@@ -3,6 +3,8 @@
 #include "gc_unittest.hpp"
 #include "Common/Runtime.h"
 #include "Cangjie.h"
+#include "ObjectModel/MArray.inline.h"
+#include "TypeInfoManager.h"
 #include "Mutator/Mutator.inline.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -363,4 +365,86 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryPathCallerOwnsFile)
     unlink("item_data.dat");
     GC_EXPECT_EQ(chdir(root), 0);
     rmdir(directory.c_str());
+}
+
+namespace MapleRuntime {
+extern "C" ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo*, const TypeInfo*, const TypeInfo*);
+}
+namespace {
+struct ThreadDumpObservation {
+    size_t count = 0;
+    uint64_t id = 0;
+    uint64_t caller = 0;
+};
+void* RequestThreadSnapshot(void* context)
+{
+    auto& result = *static_cast<ThreadDumpObservation*>(context);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    result.caller = mutator->GetCJThreadId();
+    alignas(TypeInfo) static unsigned char storage[6][sizeof(TypeInfo)]{};
+    auto* snapshot = reinterpret_cast<TypeInfo*>(storage[0]);
+    auto* frame = reinterpret_cast<TypeInfo*>(storage[1]);
+    auto* byte = reinterpret_cast<TypeInfo*>(storage[2]);
+    auto* snapshots = reinterpret_cast<TypeInfo*>(storage[3]);
+    auto* frames = reinterpret_cast<TypeInfo*>(storage[4]);
+    auto* bytes = reinterpret_cast<TypeInfo*>(storage[5]);
+    snapshot->SetType(TypeKind::TYPE_KIND_STRUCT);
+    snapshot->SetInstanceSize(sizeof(ThreadSnapshot));
+    snapshot->SetFlagHasRefField();
+    GCTib snapshotTib{};
+    snapshotTib.tag = SIGN_BIT | 5;
+    snapshot->SetGCTib(snapshotTib);
+    frame->SetType(TypeKind::TYPE_KIND_STRUCT);
+    frame->SetInstanceSize(sizeof(StackTraceData));
+    frame->SetFlagHasRefField();
+    GCTib frameTib{};
+    frameTib.tag = SIGN_BIT | 7;
+    frame->SetGCTib(frameTib);
+    byte->SetType(TypeKind::TYPE_KIND_UINT8);
+    byte->SetInstanceSize(1);
+    snapshots->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    snapshots->SetComponentTypeInfo(snapshot);
+    frames->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    frames->SetComponentTypeInfo(frame);
+    bytes->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    bytes->SetComponentTypeInfo(byte);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* output = MCC_GetAllThreadSnapshotImpl(snapshots, frames, bytes);
+    if (output != nullptr) {
+        result.count = output->GetLength();
+        if (result.count != 0) {
+            ThreadSnapshot first{};
+            std::memcpy(&first, output->ConvertToCArray(), sizeof(first));
+            result.id = first.id;
+        }
+    }
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, ThreadSnapshotCallerConsumesRecords)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 128 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.staticGCThreads = true;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    ThreadDumpObservation result;
+    auto task = RunCJTask(RequestThreadSnapshot, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "VM1350_SNAPSHOT_TARGET executed=1 count=%zu caller=%llu id=%llu\n",
+                 result.count, static_cast<unsigned long long>(result.caller),
+                 static_cast<unsigned long long>(result.id));
+    GC_EXPECT_TRUE(result.count == 1 && result.id == result.caller);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
