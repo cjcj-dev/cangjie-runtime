@@ -227,7 +227,6 @@ inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p)
 inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
 {
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
-    Heap& heap = Heap::GetHeap();
     if (ZPointer::is_old_load_good(ptr)) {
         return &(*ZGeneration::young());
     }
@@ -238,9 +237,6 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
         return &(*ZGeneration::old());
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
-    if (address == 0) {
-        return &(*ZGeneration::old());
-    }
     if ((*ZGeneration::young()).forwarding_table().get(address) != nullptr) {
         return &(*ZGeneration::young());
     }
@@ -366,6 +362,8 @@ inline zaddress ZBarrier::barrier(ZBarrierFastPath fast_path, SlowPath slow_path
 
 inline void ZBarrier::remap_young_relocated(volatile zpointer* p, zpointer o)
 {
+    assert(ZPointer::is_old_load_good(o));
+    assert(!ZPointer::is_young_load_good(o));
     const zaddress load_good_addr = make_load_good_no_relocate(o);
     const zpointer good_ptr = ZAddress::load_good(load_good_addr, o);
     // zBarrier.inline.hpp:356: a heal word is never a raw null.
