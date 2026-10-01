@@ -74,8 +74,6 @@ public:
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
     void DumpHeap(const CString& tag);
-    void DumpBeforeGC();
-    void DumpAfterGC();
 #endif
     RegionManager& page_allocator();
     const RegionManager& page_allocator() const;

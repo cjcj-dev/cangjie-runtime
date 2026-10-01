@@ -10,6 +10,10 @@
 #include "gc_worker_fixture.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/VMOperation.h"
+#include "Inspector/HeapSnapshotJsonSerializer.h"
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -137,4 +141,90 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
     GC_EXPECT_TRUE(operation.onVMThread && operation.executor != submitter);
     // Target assertion I1: the submitter returned only after the body finished.
     GC_EXPECT_TRUE(!prematurelyReturned && completeAtReturn.load());
+}
+
+namespace {
+// Observe the existing profiler transport, not a test-only product hook.
+struct SnapshotObservation {
+    unsigned messages = 0;
+    bool onVMThread = true;
+    bool stopped = true;
+    std::string output;
+};
+SnapshotObservation snapshotObservation;
+void ObserveSnapshotTransport()
+{
+    snapshotObservation = SnapshotObservation{};
+    auto& stream = HeapProfilerStream::GetInstance();
+    stream.SetMessageID("{\"id\":1350}");
+    stream.SetHandler([](const std::string& message) {
+        ++snapshotObservation.messages;
+        snapshotObservation.onVMThread &= VMThread::is_VM_thread();
+        snapshotObservation.stopped &= MutatorManager::Instance().WorldStopped();
+        snapshotObservation.output += message;
+    });
+}
+void CheckSnapshotTransport()
+{
+    std::fprintf(stderr, "VM1350_IDE_TARGET executed=1 messages=%u vm=%d stopped=%d result=%d\n",
+                 snapshotObservation.messages, snapshotObservation.onVMThread,
+                 snapshotObservation.stopped,
+                 snapshotObservation.output.find("\"id\":1350") != std::string::npos);
+    GC_EXPECT_TRUE(snapshotObservation.messages > 0);
+    GC_EXPECT_TRUE(snapshotObservation.onVMThread && snapshotObservation.stopped);
+    GC_EXPECT_TRUE(snapshotObservation.output.find("\"id\":1350") != std::string::npos);
+}
+class VMNestedSnapshot final : public VMOperation {
+public:
+    explicit VMNestedSnapshot(bool allow) : allowNested(allow) {}
+    bool allow_nested_vm_operations() const override { return allowNested; }
+    const char* name() const override { return "nested profiler request"; }
+    void doit() override
+    {
+        CjHeapDataForIDE data;
+        result = data.Serialize();
+    }
+    bool result = false;
+private:
+    bool allowNested;
+};
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, IDETransportRunsOnVMThread)
+{
+    VMThreadContainerRuntime container(8);
+    ObserveSnapshotTransport();
+    CjHeapDataForIDE data;
+    const bool result = data.Serialize();
+    CheckSnapshotTransport();
+    GC_EXPECT_TRUE(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationAllowsNestedService)
+{
+    VMThreadContainerRuntime container(8);
+    ObserveSnapshotTransport();
+    VMNestedSnapshot operation(true);
+    VMThread::execute(&operation);
+    CheckSnapshotTransport();
+    GC_EXPECT_TRUE(operation.result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
+{
+    // fork before creating a VM thread; the child owns its complete runtime.
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        VMThreadContainerRuntime container(8);
+        ObserveSnapshotTransport();
+        VMNestedSnapshot operation(false);
+        VMThread::execute(&operation);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "VM1350_NESTED_TARGET executed=1 signaled=%d signal=%d\n",
+                 WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }

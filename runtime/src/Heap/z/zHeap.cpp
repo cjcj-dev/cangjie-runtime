@@ -531,33 +531,7 @@ void Heap::DumpRoots(LogType logType)
 }
 #endif
 
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void Heap::DumpBeforeGC()
-    {
-        if (ENABLE_LOG(FRAGMENT)) {
-            if (MutatorManager::Instance().WorldStopped()) {
-                DumpHeap("before_gc");
-            } else {
-                ScopedStopTheWorld stw("dump before gc");
-                DumpHeap("before_gc");
-            }
-        }
-    }
-#endif
 
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void Heap::DumpAfterGC()
-    {
-        if (ENABLE_LOG(FRAGMENT)) {
-            if (MutatorManager::Instance().WorldStopped()) {
-                DumpHeap("after_gc");
-            } else {
-                ScopedStopTheWorld stw("dump after gc");
-                DumpHeap("after_gc");
-            }
-        }
-    }
-#endif
 }
 
 namespace MapleRuntime {
