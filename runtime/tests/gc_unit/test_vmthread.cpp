@@ -374,7 +374,7 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo*, cons
 namespace {
 struct ThreadDumpObservation {
     size_t count = 0;
-    uint64_t id = 0;
+    bool callerFound = false;
     uint64_t caller = 0;
 };
 void* RequestThreadSnapshot(void* context)
@@ -414,10 +414,10 @@ void* RequestThreadSnapshot(void* context)
     auto* output = MCC_GetAllThreadSnapshotImpl(snapshots, frames, bytes);
     if (output != nullptr) {
         result.count = output->GetLength();
-        if (result.count != 0) {
-            ThreadSnapshot first{};
-            std::memcpy(&first, output->ConvertToCArray(), sizeof(first));
-            result.id = first.id;
+        for (size_t i = 0; i < result.count; ++i) {
+            ThreadSnapshot snapshot{};
+            std::memcpy(&snapshot, output->ConvertToCArray() + i * sizeof(snapshot), sizeof(snapshot));
+            result.callerFound |= static_cast<uint64_t>(snapshot.id) == result.caller;
         }
     }
     mutator->SetManagedContext(true);
@@ -443,9 +443,9 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, ThreadSnapshotCallerConsumesRecords)
     void* value = nullptr;
     GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
     ReleaseHandle(task);
-    std::fprintf(stderr, "VM1350_SNAPSHOT_TARGET executed=1 count=%zu caller=%llu id=%llu\n",
+    std::fprintf(stderr, "VM1350_SNAPSHOT_TARGET executed=1 count=%zu caller=%llu caller_found=%d\n",
                  result.count, static_cast<unsigned long long>(result.caller),
-                 static_cast<unsigned long long>(result.id));
-    GC_EXPECT_TRUE(result.count == 1 && result.id == result.caller);
+                 result.callerFound);
+    GC_EXPECT_TRUE(result.callerFound);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

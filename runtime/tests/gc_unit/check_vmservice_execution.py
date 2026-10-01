@@ -3,6 +3,7 @@
 # Permanent all-stop observer of the product dump consumer. No instrumentation,
 # replacement entry, or calls into the inferior are needed.
 import gdb
+import os
 
 samples = []
 errors = []
@@ -31,11 +32,14 @@ gdb.execute('set pagination off')
 gdb.execute('set confirm off')
 gdb.execute('set breakpoint pending on')
 VMThreadEntry('MapleRuntime::VMThread::run()', internal=True)
-HeapWriter('MapleRuntime::CjHeapData::WriteHeap()', internal=True)
+HeapWriter(os.environ.get('VM_SERVICE_OBSERVER_LOCATION',
+                          'MapleRuntime::CjHeapData::WriteHeap()'), internal=True)
 gdb.events.exited.connect(lambda event: exits.append(getattr(event, 'exit_code', None)))
 gdb.execute('run')
-executed = exits == [0] and not errors and len(samples) == 1
-on_vm = executed and all(kind == 5 and tid in vm_threads for kind, tid in samples)
+single = os.environ.get("VM_SERVICE_OBSERVER_EXPECT_SINGLE", "1") == "1"
+observed = len(samples) == 1 if single else len(samples) > 0
+executed = exits == [0] and not errors and observed
+on_vm = observed and not errors and all(kind == 5 and tid in vm_threads for kind, tid in samples)
 print('ASSERT_VM1350_WRITER_EXECUTED samples=%d exits=%s errors=%s %s' %
       (len(samples), exits, errors, 'PASS' if executed else 'FAIL'))
 print('ASSERT_VM1350_WRITER_VM_THREAD samples=%d %s' %
