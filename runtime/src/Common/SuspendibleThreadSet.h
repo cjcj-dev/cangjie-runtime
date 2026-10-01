@@ -79,11 +79,7 @@ public:
     bool evaluate_at_safepoint() const override { return false; }
     bool is_gc_operation() const override { return true; }
     bool skip_thread_oop_barriers() const override;
-    void doit() override
-    {
-        SuspendibleThreadSet::synchronize();
-        SuspendibleThreadSet::desynchronize();
-    }
+    void doit() override;
 };
 } // namespace MapleRuntime
 #endif

@@ -99,6 +99,12 @@ void SuspendibleThreadSet::desynchronize()
     suspendAll.store(false, std::memory_order_relaxed);
     stsWait.notify_all();
 }
+void ZRendezvousGCThreads::doit()
+{
+    SuspendibleThreadSet::synchronize();
+    SuspendibleThreadSet::desynchronize();
+}
+
 bool ZRendezvousGCThreads::skip_thread_oop_barriers() const
 {
     CHECK_DETAIL(false, "Concurrent VMOps should not call skip_thread_oop_barriers");
