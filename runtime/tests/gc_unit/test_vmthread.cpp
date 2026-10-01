@@ -6,6 +6,9 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zStat.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_vmthread_fixture.hpp"
 #include "gc_worker_fixture.hpp"
@@ -434,4 +437,44 @@ GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
     VMThread::execute(&outer);
     std::fprintf(stderr, "INDIRECT1349_NESTED_CONTROL executed=%d\n", executed);
     GC_EXPECT_TRUE(executed);
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
+{
+    VMThreadContainerRuntime container(8);
+    WorkerBudgetFixture budget(2);
+    ZStatWorkers stats;
+    ZWorkers workers(ZGenerationId::young, &stats);
+    workers.set_active();
+    class Restart : public ZRestartableTask {
+        ZWorkers& workers;
+    public:
+        std::atomic<unsigned> matched{0};
+        unsigned phase = 0;
+        explicit Restart(ZWorkers& w) : ZRestartableTask("1349 restart indirect"), workers(w) {}
+        void work() override
+        {
+            auto* tls = ThreadLocal::GetThreadLocalData();
+            if (tls->isIndirectlySuspendibleThread && !tls->isIndirectlySafepointThread) { ++matched; }
+            if (phase == 0 && WorkerThread::worker_id() == 0) { workers.request_resize_workers(1); }
+        }
+        void resize_workers(uint32_t) override { ++phase; }
+    } task(workers);
+    { SuspendibleThreadSetJoiner joiner; workers.run(&task); }
+    std::fprintf(stderr, "INDIRECT1349_RESTART_TARGET phase=%u matched=%u expected=3\n",
+                 task.phase, task.matched.load());
+    GC_EXPECT_EQ(task.phase, 1u);
+    GC_EXPECT_EQ(task.matched.load(), 3u);
+    class Cleared : public ZTask {
+    public:
+        bool clean = false;
+        Cleared() : ZTask("1349 restart cleared") {}
+        void work() override
+        {
+            auto* tls = ThreadLocal::GetThreadLocalData();
+            clean = !tls->isIndirectlySuspendibleThread && !tls->isIndirectlySafepointThread;
+        }
+    } cleared;
+    workers.run(&cleared);
+    GC_EXPECT_TRUE(cleared.clean);
 }
