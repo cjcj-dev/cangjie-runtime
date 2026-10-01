@@ -404,6 +404,7 @@ MAIN_SOURCES=(
   "$SRC/test_exit_detach_mark_end.cpp"
   "$SRC/test_native_thread_detach.cpp"
   "$SRC/test_barrier_owner_1391.cpp"
+  "$SRC/test_shutdown_1459.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_package_init.cpp"
