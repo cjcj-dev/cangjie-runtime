@@ -7,6 +7,7 @@ Run with gdb -batch -x this-file --args cj_gc_unit. Set PROMOTION_SOURCE_ROOT
 all breakpoints observe product state, never call product functions.
 """
 import gdb
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,20 @@ def product_identity():
     expected = (Path(os.environ['GCV2_RUNTIME_LIB_DIR']) / 'libcangjie-runtime.so').resolve()
     if actual != expected:
         raise RuntimeError('Unexpected product SO: ' + str(actual))
+    if not state.get('identity_observed'):
+        libraries = {}
+        for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
+            wanted = (expected.parent / name).resolve()
+            loaded = {Path(obj.filename).resolve() for obj in gdb.objfiles()
+                      if Path(obj.filename).name == name}
+            if loaded != {wanted}:
+                raise RuntimeError('Unexpected loaded libraries: ' + repr(loaded))
+            libraries[name] = {'path': str(wanted),
+                               'sha256': hashlib.sha256(wanted.read_bytes()).hexdigest()}
+        emit('PROMOTION_LOADED_IDENTITY', libraries=libraries,
+             pid=gdb.selected_inferior().pid,
+             mappings=gdb.execute('info proc mappings', to_string=True))
+        state['identity_observed'] = True
     return str(actual)
 
 
