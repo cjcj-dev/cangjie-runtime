@@ -50,7 +50,7 @@ class Phase(gdb.Breakpoint):
 
 class Handshake(gdb.Breakpoint):
     def stop(self):
-        name = gdb.parse_and_eval('op_->cl_->name_').string()
+        name = gdb.parse_and_eval('this->op_->cl_->name_').string()
         if name == 'ZRendezvous' and state['phase']:
             product()
             Completion('handshake')
@@ -96,7 +96,11 @@ try:
     gdb.execute('set breakpoint pending on')
     gdb.execute('set args --gtest_filter=ConcurrentVM1349.NonStrongRendezvousBeforeUnblock')
     Phase('MapleRuntime::ZGenerationOld::process_non_strong_references()', internal=True)
-    Handshake('MapleRuntime::(anonymous namespace)::VM_HandshakeAllThreads::doit()', internal=True)
+    source = Path(os.environ['VM1349_SOURCE_ROOT']) / 'src/Mutator/Handshake.cpp'
+    lines = source.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if 'class VM_HandshakeAllThreads' in line)
+    entry = next(i + 1 for i in range(start, len(lines)) if 'ThreadsListHandle threads;' in lines[i])
+    Handshake('Handshake.cpp:' + str(entry), internal=True)
     Rendezvous('MapleRuntime::ZRendezvousGCThreads::doit()', internal=True)
     Unblock('MapleRuntime::ZResurrection::unblock()', internal=True)
     gdb.execute('run')
@@ -105,5 +109,5 @@ try:
     emit('VM1349_GDB_TARGET_PASS', **state)
     gdb.execute('quit 0')
 except Exception as error:
-    emit('VM1349_GDB_TARGET_FAIL', error=str(error), **state)
+    emit('VM1349_GDB_TARGET_FAIL', failure=str(error), **state)
     gdb.execute('quit 1')

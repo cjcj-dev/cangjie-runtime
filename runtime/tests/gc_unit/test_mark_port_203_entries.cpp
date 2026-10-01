@@ -1,3 +1,4 @@
+#include "gc_vm_producer.hpp"
 #include "LoaderManager.h"
 #include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
@@ -152,6 +153,7 @@ struct MarkPort203TestAccess {
             YoungTypeSetter type(collector.young(), ZYoungType::minor);
             collector.young().pause_mark_start();
         }
+        GcUnit::ProduceOnVMThread([&] {
         if (duplicateRootOrder != 0) {
             if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
             ZBarrier::Mark<false, false, false, false>(from_object(array));
@@ -160,6 +162,7 @@ struct MarkPort203TestAccess {
             array->SetInvisibleObject(true);
             ZBarrier::Mark<false, false, false, false>(from_object(array));
         }
+        });
         if (major) { collector.old().concurrent_mark(); }
         else { collector.young().concurrent_mark(); }
     }

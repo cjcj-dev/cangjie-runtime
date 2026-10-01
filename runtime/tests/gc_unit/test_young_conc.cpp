@@ -1,3 +1,4 @@
+#include "gc_vm_producer.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -125,9 +126,15 @@ public:
         manager.Init();
         const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
         concurrency.Init(concurrencyParam);
+        VMThread::create();
     }
 
-    ~YoungConcTestRuntime() override { runtime = nullptr; }
+    ~YoungConcTestRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
 
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}
@@ -484,8 +491,10 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::Mark);
+    ProduceOnVMThread([&] {
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
+    });
     Heap::GetHeap().young().mark_follow();
     std::fprintf(stderr, "P1_CONSUMER_ASSERT live=%zu marked=%d\n",
                  static_cast<size_t>(fx.region0()->live_bytes()),

@@ -1,3 +1,4 @@
+#include "gc_vm_producer.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -554,7 +555,7 @@ void CheckYoungClosureAccounting(uint32_t workers)
         .StoreColoured(zpointer::null);
     const size_t expected = heap.obj0->GetSize();
     const uint64_t before = heap.region0()->live_bytes();
-    ZBarrier::MarkSlowPath(from_object(heap.obj0));
+    ProduceOnVMThread([&] { ZBarrier::MarkSlowPath(from_object(heap.obj0)); });
     young.Mark().MarkFollow();
     const uint64_t after = heap.region0()->live_bytes();
     const bool marked = heap.region0()->is_object_strongly_live(from_object(heap.obj0));
@@ -712,10 +713,10 @@ void CheckLateNativeRoot(bool abortRequested, bool checkFree = false)
     HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
     const uint64_t before = fixture.region0()->live_bytes();
     const size_t expected = fixture.obj0->GetSize();
-    // The product native-root producer leaves this root in the caller's
-    // local stack. The remset worker cannot consume it before the caller's
-    // terminate flush; the subsequent MarkFollow must close that work.
-    ZBarrier::Mark<false, false, true, false>(from_object(fixture.obj0));
+    // ZGC zMark.cpp:587-595: native VM work is owned by VMThread.
+    // The remset worker cannot consume it until the concurrent VM flush;
+    // the subsequent MarkFollow must close that work.
+    ProduceOnVMThread([&] { ZBarrier::Mark<false, false, true, false>(from_object(fixture.obj0)); });
     if (abortRequested) { ZAbort::abort(); }
     young.mark_follow();
     const uint64_t live = fixture.region0()->live_bytes() - before;
@@ -818,7 +819,7 @@ void CheckOtherGenerationPublication(bool remembered)
     if (remembered) {
         heap.remembered().scan_and_follow(&young.Mark());
     } else {
-        young.MarkObject<false, false, true, false>(from_object(fixture.obj1));
+        ProduceOnVMThread([&] { young.MarkObject<false, false, true, false>(from_object(fixture.obj1)); });
         young.Mark().MarkFollow();
     }
     bool localEmpty = true;
