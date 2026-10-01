@@ -18,6 +18,8 @@ gate_thread=0
 gate_used=False
 shutdown_started=False
 hold_target=os.environ.get("SHUTDOWN1459_HOLD_TARGET", "")
+boundary_mode=os.environ.get("SHUTDOWN1459_BOUNDARY", "")
+boundary_qualified=False
 published=0
 selected=gdb.execute("show environment GC_UNIT_OTHER_VM_CHILD",to_string=True).split(" = ",1)[1].strip().replace(".", "_")
 blocked_mode="UnreturnedNativeCallRetainsStorage" in selected
@@ -256,6 +258,18 @@ class Teardown(gdb.Breakpoint):
             check(False,"unreturned_native_storage_retained")
             print("EVENT BLOCKED_TEARDOWN_RED",flush=True)
             return True
+        if boundary_mode == "producer":
+            global boundary_qualified
+            owners=[r for r in records.values() if r["tid"]==bootstrap_tid]
+            incomplete=bool(owners) and bootstrap_tid not in tls_completed and bootstrap_tid not in joined and all(not r["destroyed"] for r in owners)
+            completed=[r for r in records.values() if r["tid"] in tls_completed]
+            others_ok=all(r["destroyed"] and (not r["attached"] or r["detached"]) for r in completed)
+            boundary_qualified=shutdown_started and bool(carriers) and bool(owners) and others_ok
+            check(not incomplete,"bootstrap_completed_before_runtime_delete",tid=bootstrap_tid,owners=len(owners))
+            print("BOUNDARY_STATE",boundary_qualified,incomplete,others_ok,flush=True)
+            if incomplete:
+                print("EVENT PRODUCER_BOUNDARY_RED",flush=True)
+                return True
         before_failures=len(failures)
         for handle,tid in carriers.items():
             owners=[r for r in records.values() if r["tid"]==tid]
@@ -294,8 +308,16 @@ for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",gdb.execute
     FiniReturned("*"+address,internal=True)
 class ConsumerReturn(gdb.Breakpoint):
     def stop(self):
+        global boundary_qualified
         caller=gdb.newest_frame().older()
-        check(False,"native_exit_context_restored",caller=caller.name() if caller else None)
+        tid=gdb.selected_thread().ptid[1]
+        owners=[r for r in records.values() if r["tid"]==tid]
+        incomplete=bool(owners) and tid not in tls_completed and all(not r["destroyed"] for r in owners)
+        completed=[r for r in records.values() if r["tid"] in tls_completed]
+        others_ok=all(r["destroyed"] and (not r["attached"] or r["detached"]) for r in completed)
+        boundary_qualified=shutdown_started and tid in carriers.values() and incomplete and others_ok
+        check(False,"native_exit_context_restored",tid=tid,owners=len(owners),caller=caller.name() if caller else None)
+        print("BOUNDARY_STATE",boundary_qualified,incomplete,others_ok,flush=True)
         print("EVENT CONSUMER_RESTORE_RED",flush=True)
         return True
 # In the valid product the restoration transfers control; it never returns to
