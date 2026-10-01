@@ -2,6 +2,8 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_unittest.hpp"
 #include "Common/Runtime.h"
+#include "Cangjie.h"
+#include "Mutator/Mutator.inline.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
@@ -144,7 +146,7 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
 }
 
 // The IDE serializer is an OHOS product component (Inspector/CMakeLists.txt).
-#if defined(__OHOS__) && (__OHOS__ == 1)
+#if defined(__OHOS__) && (__OHOS__ == 1) && !defined(MRT_GC_UNIT_OHOS_HOST)
 namespace {
 // Observe the existing profiler transport, not a test-only product hook.
 struct SnapshotObservation {
@@ -232,3 +234,112 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
 }
 
 #endif
+
+namespace {
+void CheckBinaryDump(FILE* file, bool result)
+{
+    const off_t size = lseek(fileno(file), 0, SEEK_END);
+    std::fprintf(stderr, "VM1350_BINARY_TARGET executed=1 result=%d bytes=%lld fd_open=%d\n",
+                 result, static_cast<long long>(size), size >= 0);
+    GC_EXPECT_TRUE(result && size > 0);
+}
+class VMNestedBinaryDump final : public VMOperation {
+public:
+    VMNestedBinaryDump(int output, bool allow) : fd(output), allowNested(allow) {}
+    bool allow_nested_vm_operations() const override { return allowNested; }
+    const char* name() const override { return "nested binary dump request"; }
+    void doit() override
+    {
+        CjHeapData data;
+        result = data.DumpHeap(fd);
+    }
+    bool result = false;
+private:
+    int fd;
+    bool allowNested;
+};
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryDescriptorCallerRetainsFile)
+{
+    VMThreadContainerRuntime container(8);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    CjHeapData data;
+    const bool result = data.DumpHeap(fileno(file));
+    CheckBinaryDump(file, result);
+    fclose(file);
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterAllowsBinaryDump)
+{
+    VMThreadContainerRuntime container(8);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    VMNestedBinaryDump operation(fileno(file), true);
+    VMThread::execute(&operation);
+    CheckBinaryDump(file, operation.result);
+    fclose(file);
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterRejectsBinaryDump)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        VMThreadContainerRuntime container(8);
+        FILE* file = tmpfile();
+        if (file == nullptr) { _exit(2); }
+        VMNestedBinaryDump operation(fileno(file), false);
+        VMThread::execute(&operation);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "VM1350_BINARY_NESTED_TARGET executed=1 signaled=%d signal=%d\n",
+                 WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+namespace {
+struct ManagedDumpRequest { int fd; bool hadMutator = false; bool result = false; };
+void* RequestBinaryDumpFromManagedThread(void* context)
+{
+    auto& request = *static_cast<ManagedDumpRequest*>(context);
+    auto* mutator = Mutator::GetMutator();
+    request.hadMutator = mutator != nullptr;
+    // Native C++ task has no compiler-generated stack maps. The mutator
+    // remains registered and must enter a saferegion while execute waits.
+    mutator->SetManagedContext(false);
+    CjHeapData data;
+    request.result = data.DumpHeap(request.fd);
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, ManagedRequesterWaitsSafely)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 128 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.staticGCThreads = true;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    FILE* file = tmpfile();
+    GC_EXPECT_TRUE(file != nullptr);
+    ManagedDumpRequest request{fileno(file)};
+    auto task = RunCJTask(RequestBinaryDumpFromManagedThread, &request);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* value = nullptr;
+    const auto rc = GetTaskRet(task, &value);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "VM1350_MANAGED_TARGET executed=1 task_rc=%d registered=%d\n",
+                 rc, request.hadMutator);
+    GC_EXPECT_EQ(rc, E_OK);
+    GC_EXPECT_TRUE(request.hadMutator);
+    CheckBinaryDump(file, request.result);
+    fclose(file);
+    FiniCJRuntime();
+}
