@@ -30,6 +30,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" void CJ_MRT_DumpHeapSnapshot(int fd);
 
 namespace {
 // Container only. The operation itself is the product VMThread::execute path,
@@ -311,8 +312,8 @@ void* RequestBinaryDumpFromManagedThread(void* context)
     // Native C++ task has no compiler-generated stack maps. The mutator
     // remains registered and must enter a saferegion while execute waits.
     mutator->SetManagedContext(false);
-    CjHeapData data;
-    request.result = data.DumpHeap(request.fd);
+    CJ_MRT_DumpHeapSnapshot(request.fd);
+    request.result = lseek(request.fd, 0, SEEK_END) > 0;
     mutator->SetManagedContext(true);
     return nullptr;
 }
