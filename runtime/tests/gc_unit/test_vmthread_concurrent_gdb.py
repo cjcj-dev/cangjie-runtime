@@ -30,9 +30,15 @@ def in_non_strong():
     return False
 
 
-class Completion(gdb.FinishBreakpoint):
+class Completion(gdb.Breakpoint):
     def __init__(self, key='completed'):
-        super().__init__(gdb.newest_frame(), internal=True)
+        # As in test_flip_promotion_gdb.py, use the caller return PC:
+        # the product rendezvous tail-calls desynchronize in Release.
+        caller = gdb.newest_frame().older()
+        if caller is None:
+            raise RuntimeError('Missing product return boundary')
+        super().__init__('*' + hex(caller.pc()), temporary=True, internal=True)
+        self.thread = gdb.selected_thread().global_num
         self.key = key
 
     def stop(self):
@@ -50,7 +56,7 @@ class Phase(gdb.Breakpoint):
 
 class Handshake(gdb.Breakpoint):
     def stop(self):
-        name = gdb.parse_and_eval('this->op_->cl_->name_').string()
+        name = gdb.parse_and_eval('cl->name_').string()
         if name == 'ZRendezvous' and state['phase']:
             product()
             Completion('handshake')
@@ -95,15 +101,12 @@ try:
     gdb.execute('set pagination off')
     gdb.execute('set breakpoint pending on')
     gdb.execute('set args --gtest_filter=ConcurrentVM1349.NonStrongRendezvousBeforeUnblock')
+    gdb.execute('start')
     Phase('MapleRuntime::ZGenerationOld::process_non_strong_references()', internal=True)
-    source = Path(os.environ['VM1349_SOURCE_ROOT']) / 'src/Mutator/Handshake.cpp'
-    lines = source.read_text().splitlines()
-    start = next(i for i, line in enumerate(lines) if 'class VM_HandshakeAllThreads' in line)
-    entry = next(i + 1 for i in range(start, len(lines)) if 'ThreadsListHandle threads;' in lines[i])
-    Handshake('Handshake.cpp:' + str(entry), internal=True)
+    Handshake('MapleRuntime::Handshake::execute(MapleRuntime::HandshakeClosure*)', internal=True)
     Rendezvous('MapleRuntime::ZRendezvousGCThreads::doit()', internal=True)
     Unblock('MapleRuntime::ZResurrection::unblock()', internal=True)
-    gdb.execute('run')
+    gdb.execute('continue')
     if state['error'] or not state['unblock']:
         raise RuntimeError(state['error'] or 'Non-strong unblock was not observed')
     emit('VM1349_GDB_TARGET_PASS', **state)

@@ -1,6 +1,7 @@
 #pragma once
 #include "gc_unittest.hpp"
 #include "Common/Runtime.h"
+#include "Heap/z/zHeap.hpp"
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/VMOperation.h"
@@ -23,6 +24,7 @@ public:
     }
     ~VMThreadContainerRuntime() override
     {
+        Heap::GetHeap().StopGCWork();
         VMThread::wait_for_vm_thread_exit();
         runtime = nullptr;
     }
