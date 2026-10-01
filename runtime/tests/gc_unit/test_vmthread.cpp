@@ -369,6 +369,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryPathCallerOwnsFile)
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo*, const TypeInfo*, const TypeInfo*);
+extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo*, const TypeInfo*);
 }
 namespace {
 struct ThreadDumpObservation {
@@ -381,7 +382,6 @@ void* RequestThreadSnapshot(void* context)
     auto& result = *static_cast<ThreadDumpObservation*>(context);
     auto* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    result.caller = mutator->GetCJThreadId();
     alignas(TypeInfo) static unsigned char storage[6][sizeof(TypeInfo)]{};
     auto* snapshot = reinterpret_cast<TypeInfo*>(storage[0]);
     auto* frame = reinterpret_cast<TypeInfo*>(storage[1]);
@@ -410,6 +410,7 @@ void* RequestThreadSnapshot(void* context)
     bytes->SetType(TypeKind::TYPE_KIND_RAWARRAY);
     bytes->SetComponentTypeInfo(byte);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    result.caller = MCC_GetCurrentThreadSnapshotImpl(frames, bytes).id;
     auto* output = MCC_GetAllThreadSnapshotImpl(snapshots, frames, bytes);
     if (output != nullptr) {
         result.count = output->GetLength();

@@ -436,8 +436,8 @@ bool Heap::is_old(MAddress addr)
     return !is_young(addr);
 }
 
-// heapDumper.cpp: VM_HeapDumper::doit. The requesting thread executes the
-// safepoint operation; neither generation driver consumes inspector work.
+// heapDumper.cpp:2882-2883: the requesting thread submits a synchronous
+// VM_HeapDumper; neither generation driver consumes inspector work.
 void Heap::DumpHeap(HeapDumpKind kind)
 {
     switch (kind) {
