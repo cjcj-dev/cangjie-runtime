@@ -470,7 +470,7 @@ void ZStackWatermark::OnStackGrow(intptr_t offset)
 // HotSpot runtime/stackWatermarkSet.cpp:163-171.
 void StackWatermarkSet::safepoint_synchronize_begin()
 {
-    if (VMThread::vm_operation()->skip_thread_oop_barriers()) { return; }
+    if (VMThread::is_VM_thread() && VMThread::vm_operation()->skip_thread_oop_barriers()) { return; }
     ThreadsListHandle threads;
     for (size_t i = 0; i < threads.length(); ++i) {
         start_processing(*threads.thread_at(i));

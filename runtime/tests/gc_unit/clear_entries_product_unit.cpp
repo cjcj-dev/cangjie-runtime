@@ -52,6 +52,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
+#include "Mutator/VMOperation.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/RefField.inline.h"
 #include "ObjectModel/MArray.inline.h"
@@ -359,8 +360,20 @@ class LoadHealDeliveryRuntime final : public Runtime {
 public:
     static void Ensure()
     {
-        static LoadHealDeliveryRuntime runtimeContainer;
+        static LoadHealDeliveryRuntime* runtimeContainer = new LoadHealDeliveryRuntime();
         (void)runtimeContainer;
+    }
+
+    // threads.cpp:991-993: the VM thread is terminated with the runtime it
+    // served. This stand-in is installed for the whole process, so it is torn
+    // down in the process exit section, in the same order as every other
+    // stand-in destructor: VM thread first, then the managers.
+    static void Shutdown()
+    {
+        if (installed == nullptr) { return; }
+        VMThread::wait_for_vm_thread_exit();
+        Runtime::runtime = nullptr;
+        installed = nullptr;
     }
 
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
@@ -375,11 +388,17 @@ private:
         manager.Init();
         const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
         concurrency.Init(concurrencyParam);
+        installed = this;
+        VMThread::create();
     }
 
     MutatorManager manager;
     Concurrency concurrency;
+    static LoadHealDeliveryRuntime* installed;
 };
+
+LoadHealDeliveryRuntime* LoadHealDeliveryRuntime::installed = nullptr;
+
 
 void EnsureDeliveryRuntime()
 {
@@ -678,6 +697,13 @@ void CompleteValueRootCoverage()
 }
 
 } // namespace
+
+namespace MapleRuntime::GcUnit {
+void ShutdownDeliveryRuntime()
+{
+    LoadHealDeliveryRuntime::Shutdown();
+}
+} // namespace MapleRuntime::GcUnit
 
 
 
@@ -1771,3 +1797,4 @@ GC_TEST(RelocateMiss782, AllocationFailureWaitsForWorkerPublication)
 {
     ExerciseRelocationWait782(false);
 }
+

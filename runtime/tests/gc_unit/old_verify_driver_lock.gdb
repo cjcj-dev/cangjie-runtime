@@ -39,14 +39,14 @@ def young_collections():
 
 # Enumerate threads only after GDB has completed its all-stop transition;
 # Breakpoint.stop() runs before that transition and cannot inspect other threads.
-gdb.Breakpoint('MapleRuntime::VM_ZVerifyOld::name() const')
+gdb.Breakpoint('MapleRuntime::VM_ZVerifyOld::doit()')
 gdb.Breakpoint('MapleRuntime::ZGenerationYoung::concurrent_mark()')
 gdb.Breakpoint('MapleRuntime::ZGenerationYoung::concurrent_relocate()')
 gdb.execute('run')
 while gdb.selected_inferior().threads():
     name = gdb.newest_frame().name() or ''
     active = young_collections()
-    if name == 'MapleRuntime::VM_ZVerifyOld::name':
+    if name == 'MapleRuntime::VM_ZVerifyOld::doit':
         samples.append(bool(active))
         print('OLD_VERIFY_TARGET sample=%d young_active=%d frames=%s' %
               (len(samples), bool(active), active))

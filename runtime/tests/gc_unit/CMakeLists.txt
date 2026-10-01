@@ -9,6 +9,7 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    test_vmthread.cpp
     gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_colour_address.cpp
@@ -60,6 +61,7 @@ set(GC_UNIT_SOURCES
     test_concurrency_root_color.cpp
     test_relocation_set_selector.cpp
     test_relocation_request_queue.cpp
+    test_barrier_remap_no_relocate.cpp
     test_store_barrier_buffer.cpp
     test_old_to_young_1102.cpp
     test_barrier_old_atomic.cpp
@@ -102,6 +104,7 @@ set(GC_UNIT_SOURCES
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
     test_barrier_owner_1391.cpp
+    test_shutdown_1459.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp

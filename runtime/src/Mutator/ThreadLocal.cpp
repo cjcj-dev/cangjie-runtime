@@ -165,10 +165,6 @@ void CleanThreadLocalData::RemoveFromList()
     if (!registered) { return; }
     auto& list = TheList();
     {
-        // ZGC zMark.cpp:910-917 keeps native final publication inside STS.
-        // Our workers return and have TLS cleanup after the task's joiner.
-        // Join before the list lock, and leave before waiting for readers.
-        SuspendibleThreadSetJoiner sts;
         std::lock_guard<std::mutex> lock(list.mutex);
         BarrierSet::barrier_set()->on_thread_detach(nativeData);
         auto* link = &list.head;

@@ -152,6 +152,11 @@ inline void Fail(const char* file, int line, const char* expr)
 #define GC_COMPONENT_TEST(suite, name) GC_RUNTIME_TEST(suite, name)
 #define GC_COMPONENT_OTHER_VM_TEST(suite, name) GC_RUNTIME_OTHER_VM_TEST(suite, name)
 
+// Process-level runtime stand-ins are installed once and torn down in the
+// process exit section, in the same order as every other stand-in destructor.
+// Weak: only the image that installs such a stand-in carries the teardown.
+__attribute__((weak)) void ShutdownDeliveryRuntime();
+
 inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortDiagnostic = nullptr)
 {
 #if defined(__linux__)

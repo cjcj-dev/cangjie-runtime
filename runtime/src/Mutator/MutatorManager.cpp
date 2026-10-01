@@ -465,21 +465,9 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
     return pending;
 }
 
-VMOperation* VMThread::currentOperation = nullptr;
-
-void MutatorManager::StopTheWorld(VMOperation* operation)
+void MutatorManager::StopTheWorld()
 {
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool saferegionEntered = false;
-    if (!IsGcThread()) {
-        Mutator* mutator = Mutator::GetMutator();
-        if (mutator != nullptr) {
-            saferegionEntered = mutator->EnterSaferegion(true);
-        }
-    }
-#endif
     syncMutex.lock();
-    VMThread::currentOperation = operation;
     // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
     // list, since concurrent root workers can still be visiting that list.
     if (ZCollectedHeap::heap() != nullptr) {
@@ -488,10 +476,6 @@ void MutatorManager::StopTheWorld(VMOperation* operation)
     syncTriggered.store(true);
 
     AcquireMutatorManagementWLock();
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    saferegionStateChanged = saferegionEntered;
-#endif
 
     size_t mutatorCount = GetMutatorCount();
     if (UNLIKELY(mutatorCount == 0)) {
@@ -507,9 +491,6 @@ void MutatorManager::StopTheWorld(VMOperation* operation)
 
 void MutatorManager::StartTheWorld() noexcept
 {
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool shouldLeaveSaferegion = saferegionStateChanged;
-#endif
     syncTriggered.store(false);
     worldStopped.store(false, std::memory_order_release);
 
@@ -528,18 +509,8 @@ void MutatorManager::StartTheWorld() noexcept
     if (ZCollectedHeap::heap() != nullptr) {
         ZCollectedHeap::heap()->safepoint_synchronize_end();
     }
-    VMThread::currentOperation = nullptr;
     // Release syncMutex to allow other thread call STW.
     syncMutex.unlock();
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    // Restore saferegion state if the state is changed when mutator calls StopTheWorld().
-    if (!IsGcThread()) {
-        Mutator* mutator = Mutator::GetMutator();
-        if (mutator != nullptr && shouldLeaveSaferegion) {
-            (void)mutator->LeaveSaferegion();
-        }
-    }
-#endif
 }
 
 void MutatorManager::StartLightSync()

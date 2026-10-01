@@ -310,6 +310,7 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
+  "$SRC/test_vmthread.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
@@ -345,6 +346,7 @@ MAIN_SOURCES=(
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_relocation_request_queue.cpp"
+  "$SRC/test_barrier_remap_no_relocate.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
@@ -402,6 +404,7 @@ MAIN_SOURCES=(
   "$SRC/test_exit_detach_mark_end.cpp"
   "$SRC/test_native_thread_detach.cpp"
   "$SRC/test_barrier_owner_1391.cpp"
+  "$SRC/test_shutdown_1459.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_package_init.cpp"

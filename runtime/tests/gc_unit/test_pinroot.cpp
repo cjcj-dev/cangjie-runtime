@@ -168,12 +168,20 @@ namespace {
 // Runtime container only; pause and relocation execute the product methods.
 class InPlaceRemsetRuntime final : public Runtime {
 public:
-    explicit InPlaceRemsetRuntime(MutatorManager& manager)
+    explicit InPlaceRemsetRuntime(MutatorManager& manager, size_t heapUnits)
     {
+        CreateStandaloneHeap(heapUnits);
         mutatorManager = &manager;
         runtime = this;
+        manager.Init();
+        VMThread::create();
     }
-    ~InPlaceRemsetRuntime() override { runtime = nullptr; }
+    ~InPlaceRemsetRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 };
@@ -183,9 +191,8 @@ static void CheckInPlaceRemset()
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutators;
-    InPlaceRemsetRuntime runtime(mutators);
+    InPlaceRemsetRuntime runtime(mutators, 2);
     const bool medium=false, promote=false; const uint32_t workers=1;
-    CreateStandaloneHeap(medium ? 4 : 2);
     if (medium) {
         ZHeuristics::set_max_heap_size(128 * 1024 * 1024);
         ZHeuristics::set_medium_page_size();
@@ -272,8 +279,7 @@ static void CheckMutatorRelocation(bool stopped)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutators;
-    InPlaceRemsetRuntime runtime(mutators);
-    CreateStandaloneHeap(8);
+    InPlaceRemsetRuntime runtime(mutators, 8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
@@ -433,13 +439,34 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
 }
 #endif
 
+// threads.cpp:935-942: the VM thread is terminated only after the other threads
+// are gone, so the owner leaves the mutator set before the stand-in is torn
+// down. End the mutator this body created the way a normal thread end does --
+// leave the state it entered, then leave the manager. Teardown only; the
+// sequence under test runs above it.
+static void EndOwnerMutator(Mutator* owner)
+{
+    (void)owner->DoLeaveSaferegion();
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
+class ScopedOwnerMutator final {
+public:
+    explicit ScopedOwnerMutator(Mutator* owner) : owner(owner) {}
+    ~ScopedOwnerMutator() { EndOwnerMutator(owner); }
+    ScopedOwnerMutator(const ScopedOwnerMutator&) = delete;
+    ScopedOwnerMutator& operator=(const ScopedOwnerMutator&) = delete;
+
+private:
+    Mutator* owner;
+};
+
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
 static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
                                                 bool registerPointer = false, bool inplaceSret = false, int requestEntry = 0)
 {
-    B09RuntimeFixture runtime;
-    CreateStandaloneHeap(inplaceSret ? 2 : 8);
+    B09RuntimeFixture runtime(inplaceSret ? 2 : 8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
@@ -527,6 +554,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         }
     }
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
     parked->SetManagedContext(true);
     (void)parked->EnterSaferegion(false);
@@ -717,7 +745,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     CangjieRuntime::stackGrowConfig = savedGrow;
 #else
     (void)owner;
@@ -888,15 +915,22 @@ static void GrowCopyBody()
 
 class GrowCopyRuntime final : public Runtime {
 public:
-    GrowCopyRuntime()
+    explicit GrowCopyRuntime(size_t heapUnits)
     {
+        CreateStandaloneHeap(heapUnits);
         runtime = this;
         mutatorManager = &manager;
         concurrencyModel = &concurrency;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 1024, 1});
+        VMThread::create();
     }
-    ~GrowCopyRuntime() override { runtime = nullptr; }
+    ~GrowCopyRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:
@@ -906,8 +940,7 @@ private:
 
 static void CheckGrowCopiesHealedFrameRoot()
 {
-    GrowCopyRuntime runtime;
-    CreateStandaloneHeap(8);
+    GrowCopyRuntime runtime(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
@@ -954,6 +987,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
     if (parked->GetGCData().storeGoodMask == 0) {
         parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
@@ -1005,7 +1039,6 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 #else
 static void CheckGrowCopiesHealedFrameRoot() {}
@@ -1029,8 +1062,7 @@ void RunRelocateLiveness(bool worker, bool marked)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutators;
-    InPlaceRemsetRuntime runtime(mutators);
-    CreateStandaloneHeap(8);
+    InPlaceRemsetRuntime runtime(mutators, 8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
