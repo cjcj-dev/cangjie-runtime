@@ -111,3 +111,187 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
     // Target assertion I1: the submitter returned only after the body finished.
     GC_EXPECT_TRUE(!prematurelyReturned && completeAtReturn.load());
 }
+
+#include "Common/SuspendibleThreadSet.h"
+#include "Mutator/Handshake.h"
+#include "Mutator/ThreadSMR.h"
+#include "Heap/z/zMarkStack.inline.hpp"
+#include "Heap/z/zResurrection.hpp"
+
+namespace {
+class RegisteredSafeMutator {
+public:
+    Mutator target;
+    RegisteredSafeMutator() { ThreadsSMRSupport::add_thread(&target); }
+    ~RegisteredSafeMutator() { ThreadsSMRSupport::remove_thread(&target); }
+};
+
+class VMIdentityClosure final : public HandshakeClosure {
+public:
+    VMIdentityClosure() : HandshakeClosure("VM1349Identity") {}
+    bool vm = false;
+    bool stopped = true;
+    Mutator* observed = nullptr;
+    std::thread::id executor;
+    void do_thread(Mutator* target) override
+    {
+        vm = VMThread::is_VM_thread();
+        stopped = MutatorManager::Instance().WorldStopped();
+        observed = target;
+        executor = std::this_thread::get_id();
+    }
+};
+
+class VMSeedMarkWork final : public VMOperation {
+public:
+    explicit VMSeedMarkWork(ZMark& domain) : domain(domain) {}
+    bool vm = false;
+    bool evaluate_at_safepoint() const override { return false; }
+    const char* name() const override { return "VM1349SeedMarkWork"; }
+    void doit() override
+    {
+        vm = VMThread::is_VM_thread();
+        ThreadLocal::GetNativeGCData().markStacks[0].Push(
+            domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(size_t{17}, size_t{1}, false), false);
+    }
+private:
+    ZMark& domain;
+};
+
+std::vector<size_t> PublishedOffsets(ZMark& domain)
+{
+    std::vector<size_t> values;
+    for (size_t i = 0; i < domain.Stripes().NStripes(); ++i) {
+        while (auto* stack = domain.Stripes().At(i)->StealStack(domain.Smr(), 0)) {
+            while (!stack->IsEmpty()) { values.push_back(stack->Pop().partial_array_offset()); }
+            MarkStripeStack::Destroy(stack);
+        }
+    }
+    std::sort(values.begin(), values.end());
+    return values;
+}
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, GlobalHandshakeUsesVMThread)
+{
+    VMThreadContainerRuntime container(8);
+    RegisteredSafeMutator target;
+    VMIdentityClosure closure;
+    const auto submitter = std::this_thread::get_id();
+    Handshake::execute(&closure);
+    std::fprintf(stderr, "VM1349_GLOBAL_TARGET vm=%d stopped=%d observed=%d separate=%d\n",
+                 closure.vm, closure.stopped, closure.observed == &target.target, closure.executor != submitter);
+    GC_EXPECT_TRUE(closure.vm && closure.observed == &target.target && closure.executor != submitter);
+    GC_EXPECT_FALSE(closure.stopped);
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, SingleTargetUsesRequester)
+{
+    VMThreadContainerRuntime container(8);
+    RegisteredSafeMutator target;
+    VMIdentityClosure closure;
+    const auto submitter = std::this_thread::get_id();
+    Handshake::execute(&closure, &target.target);
+    std::fprintf(stderr, "VM1349_SINGLE_TARGET vm=%d stopped=%d observed=%d requester=%d\n",
+                 closure.vm, closure.stopped, closure.observed == &target.target, closure.executor == submitter);
+    GC_EXPECT_TRUE(!closure.vm && closure.observed == &target.target && closure.executor == submitter);
+    GC_EXPECT_FALSE(closure.stopped);
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, FlushPublishesVMAndMutatorWork)
+{
+    VMThreadContainerRuntime container(8);
+    WorkerFixture worker;
+    ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
+    RegisteredSafeMutator target;
+    VMSeedMarkWork seed(domain);
+    VMThread::execute(&seed);
+    target.target.GetGCData().markStacks[0].Push(
+        domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(size_t{23}, size_t{1}, false), false);
+    ThreadLocal::GetNativeGCData().markStacks[0].Push(
+        domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(size_t{31}, size_t{1}, false), false);
+    const bool flushed = domain.Flush();
+    const auto offsets = PublishedOffsets(domain);
+    const bool vmPublished = std::find(offsets.begin(), offsets.end(), 17) != offsets.end();
+    const bool mutatorPublished = std::find(offsets.begin(), offsets.end(), 23) != offsets.end();
+    const bool submitterRetained = !ThreadLocal::GetNativeGCData().markStacks[0].IsEmpty();
+    // Clean the submitter's controlled input without making it part of the result.
+    domain.Flush(ThreadLocal::GetNativeGCData());
+    (void)PublishedOffsets(domain);
+    std::fprintf(stderr, "VM1349_FLUSH_TARGET seeded_vm=%d vm=%d mutator=%d submitter_retained=%d flushed=%d\n",
+                 seed.vm, vmPublished, mutatorPublished, submitterRetained, flushed);
+    GC_EXPECT_TRUE(vmPublished);
+    GC_EXPECT_TRUE(mutatorPublished);
+    GC_EXPECT_TRUE(seed.vm && flushed && submitterRetained);
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, EmptyVMFlushHasNoWork)
+{
+    VMThreadContainerRuntime container(8);
+    ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
+    const bool flushed = domain.Flush();
+    std::fprintf(stderr, "VM1349_EMPTY_FLUSH_TARGET flushed=%d stopped=%d\n",
+                 flushed, MutatorManager::Instance().WorldStopped());
+    GC_EXPECT_FALSE(flushed);
+    GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
+{
+    VMThreadContainerRuntime container(8);
+    auto& young = Heap::GetHeap().young();
+    InitializeGenerationWorkers(young, 1);
+    young.Mark().MarkFollow();
+    std::fprintf(stderr, "VM1349_PROACTIVE_TARGET completed=1 sts=%d stopped=%d\n",
+                 SuspendibleThreadSet::is_suspendible_thread(), MutatorManager::Instance().WorldStopped());
+    GC_EXPECT_FALSE(SuspendibleThreadSet::is_suspendible_thread());
+    GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
+{
+    VMThreadContainerRuntime container(8);
+    ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
+    const bool flushed = domain.TryTerminateFlush();
+    std::fprintf(stderr, "VM1349_TERMINATE_TARGET completed=1 flushed=%d sts=%d stopped=%d\n",
+                 flushed, SuspendibleThreadSet::is_suspendible_thread(), MutatorManager::Instance().WorldStopped());
+    GC_EXPECT_FALSE(flushed);
+    GC_EXPECT_FALSE(SuspendibleThreadSet::is_suspendible_thread());
+    GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
+{
+    VMThreadContainerRuntime container(8);
+    auto& old = Heap::GetHeap().old();
+    InitializeGenerationWorkers(old, 1);
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    ZResurrection::block();
+    std::mutex lock;
+    std::condition_variable condition;
+    bool joined = false;
+    bool blockedAtRendezvous = false;
+    bool stoppedAtRendezvous = true;
+    std::thread participant([&] {
+        SuspendibleThreadSetJoiner joiner;
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            joined = true;
+            condition.notify_all();
+        }
+        while (!SuspendibleThreadSet::should_yield()) { std::this_thread::yield(); }
+        blockedAtRendezvous = ZResurrection::is_blocked();
+        stoppedAtRendezvous = MutatorManager::Instance().WorldStopped();
+        joiner.yield();
+    });
+    {
+        std::unique_lock<std::mutex> guard(lock);
+        condition.wait(guard, [&] { return joined; });
+    }
+    old.process_non_strong_references();
+    participant.join();
+    std::fprintf(stderr, "VM1349_RENDEZVOUS_TARGET blocked_during=%d stopped=%d unblocked_after=%d\n",
+                 blockedAtRendezvous, stoppedAtRendezvous, !ZResurrection::is_blocked());
+    GC_EXPECT_TRUE(blockedAtRendezvous && !ZResurrection::is_blocked());
+    GC_EXPECT_FALSE(stoppedAtRendezvous);
+}
