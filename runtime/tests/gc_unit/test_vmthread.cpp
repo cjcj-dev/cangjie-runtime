@@ -311,3 +311,101 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     GC_EXPECT_TRUE(blockedAtRendezvous && !ZResurrection::is_blocked());
     GC_EXPECT_TRUE(beforeEpoch != expectedEpoch && afterEpoch == expectedEpoch);
 }
+
+namespace {
+class IndirectStateTask1349 : public WorkerTask {
+public:
+    bool expectedSTS;
+    bool expectedSafepoint;
+    std::atomic<unsigned> matched{0};
+    IndirectStateTask1349(bool sts, bool safepoint)
+        : WorkerTask("1349 indirect state"), expectedSTS(sts), expectedSafepoint(safepoint) {}
+    void work(uint32_t) override
+    {
+        auto* tls = ThreadLocal::GetThreadLocalData();
+        const bool match = tls->isIndirectlySuspendibleThread == expectedSTS &&
+                           tls->isIndirectlySafepointThread == expectedSafepoint;
+        if (match) { matched.fetch_add(1); }
+        std::fprintf(stderr, "INDIRECT1349_STATE sts=%d safepoint=%d match=%d\n",
+                     tls->isIndirectlySuspendibleThread, tls->isIndirectlySafepointThread, match);
+    }
+};
+class IndirectSubmitTask1349 : public WorkerTask {
+public:
+    IndirectSubmitTask1349() : WorkerTask("1349 indirect synchronous submission") {}
+    void work(uint32_t) override
+    {
+        class Operation : public VMOperation {
+        public:
+            bool evaluate_at_safepoint() const override { return false; }
+            const char* name() const override { return "1349 indirect prohibited operation"; }
+            void doit() override { std::fprintf(stderr, "INDIRECT1349_UNEXPECTED_SUBMISSION_EXECUTED\n"); }
+        } operation;
+        std::fprintf(stderr, "INDIRECT1349_TARGET_EXECUTE sts=%d\n",
+                     ThreadLocal::GetThreadLocalData()->isIndirectlySuspendibleThread);
+        VMThread::execute(&operation);
+    }
+};
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, IndirectStatesFollowCoordinatorAndClear)
+{
+    VMThreadContainerRuntime container(8);
+    WorkerThreads workers("1349 indirect", 2);
+    workers.initialize_workers();
+    IndirectStateTask1349 joined(true, false);
+    { SuspendibleThreadSetJoiner joiner; workers.run_task(&joined); }
+    std::fprintf(stderr, "INDIRECT1349_PRODUCER_TARGET matched=%u expected=2\n", joined.matched.load());
+    GC_EXPECT_EQ(joined.matched.load(), 2u);
+    IndirectStateTask1349 unjoined(false, false);
+    workers.run_task(&unjoined);
+    GC_EXPECT_EQ(unjoined.matched.load(), 2u);
+    workers.stop();
+    workers.initialize_workers();
+    IndirectStateTask1349 restarted(false, false);
+    workers.run_task(&restarted);
+    GC_EXPECT_EQ(restarted.matched.load(), 2u);
+}
+
+GC_RUNTIME_TEST(ConcurrentVM1349, IndirectSafepointStateFromVMCoordinator)
+{
+    VMThreadContainerRuntime container(8);
+    WorkerThreads workers("1349 safepoint", 2);
+    workers.initialize_workers();
+    IndirectStateTask1349 safepointed(false, true);
+    class Operation : public VMOperation {
+        WorkerThreads& workers;
+        WorkerTask& task;
+    public:
+        Operation(WorkerThreads& w, WorkerTask& t) : workers(w), task(t) {}
+        const char* name() const override { return "1349 safepointed coordinator"; }
+        void doit() override { workers.run_task(&task); }
+    } operation(workers, safepointed);
+    VMThread::execute(&operation);
+    std::fprintf(stderr, "INDIRECT1349_SAFEPOINT_TARGET matched=%u expected=2\n", safepointed.matched.load());
+    GC_EXPECT_EQ(safepointed.matched.load(), 2u);
+    IndirectStateTask1349 cleared(false, false);
+    workers.run_task(&cleared);
+    GC_EXPECT_EQ(cleared.matched.load(), 2u);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, IndirectSTSRejectsSynchronousSubmission)
+{
+    const char* scene = "GC_UNIT_1349_INDIRECT_SCENE";
+    if (std::getenv(scene)) {
+        VMThreadContainerRuntime container(8);
+        WorkerThreads workers("1349 rejected", 1);
+        workers.initialize_workers();
+        IndirectSubmitTask1349 task;
+        SuspendibleThreadSetJoiner joiner;
+        workers.run_task(&task);
+        _exit(0); // Expected-abort target must reject a returned submission.
+    }
+    GC_EXPECT_EQ(setenv(scene, "1", 1), 0);
+    try {
+        RunInOtherVm("ConcurrentVM1349.IndirectSTSRejectsSynchronousSubmission",
+                     "VM operation submitter must not indirectly belong to STS");
+    } catch (...) { unsetenv(scene); throw; }
+    GC_EXPECT_EQ(unsetenv(scene), 0);
+    std::fprintf(stderr, "INDIRECT1349_CONSUMER_TARGET matched_diagnostic=1\n");
+}

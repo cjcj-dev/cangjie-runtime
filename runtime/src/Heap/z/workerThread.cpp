@@ -18,6 +18,9 @@
 #include "Base/LogFile.h"
 #include "Base/Panic.h"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/VMOperation.h"
+#include "Common/SuspendibleThreadSet.h"
+#include "Mutator/MutatorManager.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -137,6 +140,8 @@ WorkerThread* WorkerThreads::create_worker(uint32_t name_suffix)
         return nullptr;
     }
 
+    // The TLS carrier must exist before the coordinator publishes task states.
+    worker->_initialized.wait();
     on_create_worker(worker);
 
     return worker;
@@ -177,11 +182,34 @@ void WorkerThreads::threads_do(const std::function<void(WorkerThread*)>& tc) con
     }
 }
 
-// gc/shared/workerThread.cpp:200-209. set_indirect_states/clear_indirect_states
-// are ASSERT-only HotSpot Thread flags (no Thread object here, I17).
+// HotSpot gc/shared/workerThread.cpp:173-204. The same two coordinator
+// states are carried on each worker's native TLS, available before publication.
+void WorkerThreads::set_indirect_states()
+{
+    const bool is_suspendible = SuspendibleThreadSet::is_suspendible_thread();
+    const bool is_safepointed = VMThread::is_VM_thread() && MutatorManager::Instance().WorldStopped();
+    threads_do([&](WorkerThread* worker) {
+        auto* data = worker->_thread_local_data;
+        CHECK_DETAIL(!data->isIndirectlySuspendibleThread, "Unexpected indirect STS state");
+        CHECK_DETAIL(!data->isIndirectlySafepointThread, "Unexpected indirect safepoint state");
+        if (is_suspendible) { data->isIndirectlySuspendibleThread = true; }
+        if (is_safepointed) { data->isIndirectlySafepointThread = true; }
+    });
+}
+
+void WorkerThreads::clear_indirect_states()
+{
+    threads_do([](WorkerThread* worker) {
+        worker->_thread_local_data->isIndirectlySuspendibleThread = false;
+        worker->_thread_local_data->isIndirectlySafepointThread = false;
+    });
+}
+
 void WorkerThreads::run_task(WorkerTask* task)
 {
+    set_indirect_states();
     _dispatcher.coordinator_distribute_task(task, _active_workers);
+    clear_indirect_states();
 }
 
 void WorkerThreads::run_task(WorkerTask* task, uint32_t num_workers)
@@ -208,6 +236,8 @@ void* WorkerThread::entry(void* arg)
     WorkerThread* const worker = static_cast<WorkerThread*>(arg);
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
     worker->_gc_data.store(&ThreadLocal::GetGCData(), std::memory_order_release);
+    worker->_thread_local_data = ThreadLocal::GetThreadLocalData();
+    worker->_initialized.signal();
 #ifdef __APPLE__
     CHECK_PTHREAD_CALL(pthread_setname_np, (worker->_name), "WorkerThread");
 #elif defined(__linux__) || defined(hongmeng)

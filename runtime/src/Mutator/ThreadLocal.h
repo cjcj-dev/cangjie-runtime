@@ -49,6 +49,8 @@ struct ThreadLocalData {
     ThreadType threadType;
     bool isCJProcessor;
     bool isSuspendibleThread;
+    bool isIndirectlySuspendibleThread;
+    bool isIndirectlySafepointThread;
     void* threadCache;
 #ifndef INTERPRETER_ENABLED
     void* gcDataOffsetPadding;

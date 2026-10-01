@@ -95,6 +95,8 @@ void VMThread::execute(VMOperation* operation)
     }
     // HotSpot vmThread.cpp:525-530: synchronous wait must not pin STS.
     CHECK_DETAIL(!SuspendibleThreadSet::is_suspendible_thread(), "VM operation submitter must not belong to STS");
+    CHECK_DETAIL(!ThreadLocal::GetThreadLocalData()->isIndirectlySuspendibleThread,
+                 "VM operation submitter must not indirectly belong to STS");
     CHECK_DETAIL(is_running(), "VM thread must be ready before operation submission");
     if (!operation->doit_prologue()) { return; }
     operation->set_calling_thread(ThreadLocal::GetThreadLocalData());
