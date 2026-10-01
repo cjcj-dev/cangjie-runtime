@@ -16,6 +16,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <csignal>
+#include <sys/stat.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -342,4 +343,24 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, ManagedRequesterWaitsSafely)
     CheckBinaryDump(file, request.result);
     fclose(file);
     FiniCJRuntime();
+}
+
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryPathCallerOwnsFile)
+{
+    VMThreadContainerRuntime container(8);
+    const char* root = std::getenv("GC_UNIT_OUT");
+    GC_EXPECT_TRUE(root != nullptr);
+    const std::string directory = std::string(root) + "/dump-path-" + std::to_string(getpid());
+    GC_EXPECT_EQ(mkdir(directory.c_str(), 0700), 0);
+    GC_EXPECT_EQ(chdir(directory.c_str()), 0);
+    CjHeapData data;
+    data.DumpHeap();
+    struct stat info{};
+    const int rc = stat("item_data.dat", &info);
+    std::fprintf(stderr, "VM1350_PATH_TARGET executed=1 stat_rc=%d bytes=%lld\n",
+                 rc, static_cast<long long>(info.st_size));
+    GC_EXPECT_TRUE(rc == 0 && info.st_size > 0);
+    unlink("item_data.dat");
+    GC_EXPECT_EQ(chdir(root), 0);
+    rmdir(directory.c_str());
 }
