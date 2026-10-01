@@ -72,7 +72,10 @@ def capture_field():
     state['field'] = int(gdb.parse_and_eval('fields'))
     state['object'] = int(gdb.parse_and_eval('address'))
     state['field_offset'] = state['field'] - state['object']
-    emit('PROMOTION_INPUT', field=state['field'], raw=int(gdb.parse_and_eval('*(unsigned long*)fields')))
+    emit('PROMOTION_INPUT', field=state['field'], object=state['object'],
+         field_offset=state['field_offset'],
+         raw=int(gdb.parse_and_eval('*(unsigned long*)fields')),
+         copied_self=int(gdb.parse_and_eval('*(unsigned long*)(fields + 1)')))
     return False
 
 
@@ -217,7 +220,7 @@ try:
     Observe('MapleRuntime::ZGenerationYoung::pause_relocate_start', before_relocate)
     Observe('MapleRuntime::RemapAndMaybeAddRemset', remember)
     if fixture.startswith('RelocatePromotion.'):
-        Observe('MapleRuntime::ZRelocateWork::UpdateRemsetPromotedFilterAndRemapPerField', relocated_remember)
+        Observe('UpdateRemsetPromotedFilterAndRemapPerField', relocated_remember)
     gdb.execute('continue')
     if state['error'] or 'consumer_observed' not in state:
         raise RuntimeError(state['error'] or 'Product relocate-start boundary not reached')
