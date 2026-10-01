@@ -9,6 +9,7 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    test_vmthread.cpp
     gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_colour_address.cpp

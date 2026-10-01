@@ -112,6 +112,7 @@ void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
     CHECK_DETAIL(cjRuntime != nullptr, "new CangjieRuntime failed");
     Runtime::runtime = cjRuntime;
     cjRuntime->Init();
+    VMThread::create();
     g_initialized.store(true, std::memory_order_release);
     ConcurrentGCThread::NotifyRuntimeInitialized();
 }
@@ -124,6 +125,7 @@ void CangjieRuntime::FiniAndDelete()
         return;
     }
     auto cjRuntime = reinterpret_cast<CangjieRuntime*>(Runtime::runtime);
+    VMThread::wait_for_vm_thread_exit();
     Runtime::runtime = nullptr;
     cjRuntime->Fini();
     delete cjRuntime;

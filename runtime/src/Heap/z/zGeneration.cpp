@@ -62,6 +62,7 @@
 #include "Heap/z/zRelocate.hpp"
 
 #include "Heap/z/z_globals.hpp"
+#include "Heap/z/zGCIdPrinter.hpp"
 namespace MapleRuntime {
 // ZGC zGeneration.cpp:161-163.
 void ZGeneration::mark_flush(ThreadGCData& data)
@@ -183,25 +184,30 @@ bool ZGenerationOld::active_remset_is_current() const
 
 
 class VM_ZOperation : public VMOperation {
+private:
+    const uint64_t gcId;
+    const GCReason gcCause;
+    bool success = false;
 public:
+    explicit VM_ZOperation(GCReason cause) : gcId(GCIdMark::Current()), gcCause(cause) {}
     virtual ~VM_ZOperation() = default;
     virtual bool do_operation() = 0;
     virtual const char* name() const = 0;
     virtual bool block_jni_critical() const { return false; }
     bool skip_thread_oop_barriers() const override { return true; }
+    bool is_gc_operation() const override { return true; }
+    void doit() override
+    {
+        GCIdMark gcIdMark(gcId);
+        ZVerify::BeforeZOperation();
+        success = do_operation();
+    }
     bool pause()
     {
         if (block_jni_critical()) {
             ZJNICritical::block();
         }
-        bool success = false;
-        {
-            ScopedStopTheWorld stw(name(), false, 0, this);
-            // zGeneration.cpp:432-452: skip_thread_oop_barriers, then verify.
-            // Frame slots are healed on safepoint exit (Mutator.h:175), not here.
-            ZVerify::BeforeZOperation();
-            success = do_operation();
-        }
+        VMThread::execute(this);
         if (block_jni_critical()) {
             ZJNICritical::unblock();
         }
@@ -209,7 +215,18 @@ public:
     }
 };
 
-class VM_ZMarkStartYoung : public VM_ZOperation {
+class VM_ZYoungOperation : public VM_ZOperation {
+private:
+    static ZDriver* driver()
+    {
+        return ZGeneration::young()->YoungType() == ZYoungType::minor ?
+            static_cast<ZDriver*>(ZDriver::minor()) : static_cast<ZDriver*>(ZDriver::major());
+    }
+public:
+    VM_ZYoungOperation() : VM_ZOperation(driver()->gc_cause()) {}
+};
+
+class VM_ZMarkStartYoung : public VM_ZYoungOperation {
 public:
     const char* name() const override { return ZPhasePauseMarkStartYoung.Name(); }
     bool do_operation() override
@@ -224,6 +241,7 @@ public:
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
 public:
+    VM_ZMarkStartYoungAndOld() : VM_ZOperation(ZDriver::major()->gc_cause()) {}
     const char* name() const override { return ZPhasePauseMarkStartYoungAndOld.Name(); }
     bool do_operation() override
     {
@@ -236,7 +254,7 @@ public:
     bool block_jni_critical() const override { return true; }
 };
 
-class VM_ZMarkEndYoung : public VM_ZOperation {
+class VM_ZMarkEndYoung : public VM_ZYoungOperation {
 public:
     const char* name() const override { return ZPhasePauseMarkEndYoung.Name(); }
     bool do_operation() override
@@ -246,7 +264,7 @@ public:
     }
 };
 
-class VM_ZRelocateStartYoung : public VM_ZOperation {
+class VM_ZRelocateStartYoung : public VM_ZYoungOperation {
 public:
     const char* name() const override { return ZPhasePauseRelocateStartYoung.Name(); }
     bool do_operation() override
@@ -260,6 +278,7 @@ public:
 
 class VM_ZMarkEndOld : public VM_ZOperation {
 public:
+    VM_ZMarkEndOld() : VM_ZOperation(ZDriver::major()->gc_cause()) {}
     const char* name() const override { return ZPhasePauseMarkEndOld.Name(); }
     bool do_operation() override
     {
@@ -270,6 +289,7 @@ public:
 
 class VM_ZRelocateStartOld : public VM_ZOperation {
 public:
+    VM_ZRelocateStartOld() : VM_ZOperation(ZDriver::major()->gc_cause()) {}
     const char* name() const override { return ZPhasePauseRelocateStartOld.Name(); }
     bool do_operation() override
     {
@@ -283,12 +303,11 @@ public:
 class VM_ZVerifyOld : public VMOperation {
 public:
     bool skip_thread_oop_barriers() const override { return true; }
-    void doit() { ZVerify::AfterWeakProcessing(); }
+    const char* name() const override { return "Verify Old"; }
+    void doit() override { ZVerify::AfterWeakProcessing(); }
     void pause()
     {
-        // ZGC zGeneration.cpp:1136-1153: a plain VM operation.
-        ScopedStopTheWorld stw("Verify Old", false, 0, this);
-        doit();
+        VMThread::execute(this);
     }
 };
 
