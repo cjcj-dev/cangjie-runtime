@@ -79,6 +79,8 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
 
     bl   _\funcName
     str  x0,  [sp, #.Lmrt_a64_callee_x28]
+    // This slot now holds the result, not the saved TLS register.
+    cfi_restore (x28)
 
     bl   _MRT_GetThreadLocalData
     mov  x28, x0
