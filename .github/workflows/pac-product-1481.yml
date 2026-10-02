@@ -27,24 +27,128 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Install object readers
+      - name: Initialize preparation receipt
         run: |
           ulimit -c 0
-          brew list llvm >/dev/null 2>&1 || brew install llvm
-          printf 'PAC1481_LLVM_BIN=%s/bin\n' "$(brew --prefix llvm)" >> "$GITHUB_ENV"
-          test -n "$SCCACHE_PATH"
-          printf 'SCCACHE_PATH=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          {
+            date -u '+%Y-%m-%dT%H:%M:%SZ'
+            printf 'head=%s\nrun_id=%s\nattempt=%s\ndeadline=%s\n' '${{ github.event.pull_request.head.sha }}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PAC1481_DEADLINE"
+            printf 'sccache/readers/preflight/product=NOT_RUN (preparation not completed)\n'
+          } > "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation/initial.txt"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+        id: sccache
+      - name: Install object readers
+        id: readers
+        run: |
+          ulimit -c 0
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          set +e
+          (
+            set -e
+            printf 'command: brew list llvm\n'
+            if brew list llvm; then
+              printf 'brew-list-rc=0\n'
+            else
+              list_rc=$?
+              printf 'brew-list-rc=%s; command: brew install llvm\n' "$list_rc"
+              set +e
+              brew install llvm
+              install_rc=$?
+              printf 'brew-install-rc=%s\n' "$install_rc"
+              test "$install_rc" -eq 0 || exit "$install_rc"
+              set -e
+            fi
+            printf 'command: brew --prefix llvm\n'
+            set +e
+            llvm_prefix=$(brew --prefix llvm)
+            prefix_rc=$?
+            printf 'brew-prefix-rc=%s prefix=%s\n' "$prefix_rc" "$llvm_prefix"
+            test "$prefix_rc" -eq 0 || exit "$prefix_rc"
+            test -n "$llvm_prefix" || exit 20
+            test -n "$SCCACHE_PATH" || exit 20
+            printf 'PAC1481_LLVM_BIN=%s/bin\nSCCACHE_PATH=%s\n' "$llvm_prefix" "$SCCACHE_PATH" >> "$GITHUB_ENV"
+          ) > "$prep/readers.log" 2>&1
+          readers_rc=$?
+          printf '%s\n' "$readers_rc" > "$prep/readers.rc"
+          exit "$readers_rc"
+      - name: Qualify actual preparation entities
+        id: preflight
+        run: |
+          ulimit -c 0
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          set +e
+          python3 - "$prep" > "$prep/preflight.log" 2>&1 <<'PYTHON'
+          import hashlib, inspect, io, json, os, platform, subprocess, sys, tarfile, tempfile
+          from pathlib import Path
+          sys.path.insert(0, str(Path("runtime/tests/pac_strip_darwin").resolve()))
+          from recipe import bind_tools, entity
+          print(json.dumps({"python_version": sys.version, "python": entity(sys.executable, "actual preparation interpreter"),
+                            "system": platform.system(), "machine": platform.machine()}, indent=2), flush=True)
+          if platform.system() != "Darwin" or platform.machine() != "arm64":
+              raise RuntimeError("ordinary macos arm64 required before product")
+          if not callable(getattr(hashlib, "file_digest", None)) or "filter" not in inspect.signature(tarfile.TarFile.extractall).parameters:
+              raise RuntimeError("required actual Python APIs unavailable")
+          if hashlib.file_digest(io.BytesIO(b"pac1481"), "sha256").hexdigest() != hashlib.sha256(b"pac1481").hexdigest():
+              raise RuntimeError("file_digest capability mismatch")
+          archive = io.BytesIO()
+          with tarfile.open(fileobj=archive, mode="w") as bundle:
+              info = tarfile.TarInfo("capability.txt")
+              info.size = 7
+              bundle.addfile(info, io.BytesIO(b"pac1481"))
+          archive.seek(0)
+          with tempfile.TemporaryDirectory(dir=sys.argv[1]) as target:
+              with tarfile.open(fileobj=archive) as bundle:
+                  bundle.extractall(target, filter="data")
+              if (Path(target) / "capability.txt").read_bytes() != b"pac1481":
+                  raise RuntimeError("tar data filter capability mismatch")
+          print("actual Python file_digest/filter capability established", flush=True)
+          def command(argv):
+              print("command: " + json.dumps(argv), flush=True)
+              result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              print(result.stdout, end="", flush=True)
+              print("rc=" + str(result.returncode), flush=True)
+              if result.returncode:
+                  raise RuntimeError("preparation command failed")
+              return result.stdout.strip()
+          xcode = command(["xcodebuild", "-version"])
+          if not xcode.startswith("Xcode 16.4\n"):
+              raise RuntimeError("Xcode16.4 required before product")
+          sdk = Path(command(["xcrun", "--sdk", "macosx", "--show-sdk-path"])).resolve(strict=True)
+          if not sdk.is_dir():
+              raise RuntimeError("actual sysroot is not a directory")
+          version = command(["xcrun", "--sdk", "macosx", "--show-sdk-version"])
+          if not version:
+              raise RuntimeError("actual SDK version missing")
+          tools = bind_tools(os.environ)
+          print(json.dumps({"sdk_path": str(sdk), "sdk_version": version, "tools": tools}, indent=2), flush=True)
+          for tool in tools.values():
+              command([tool["path"], "--version"])
+          PYTHON
+          preflight_rc=$?
+          printf '%s\n' "$preflight_rc" > "$prep/preflight.rc"
+          exit "$preflight_rc"
       - name: Frozen product batch
+        id: product
         env:
           PAC1481_HEAD: ${{ github.event.pull_request.head.sha }}
           PAC1481_LABEL: ${{ github.event.label.name }}
         run: |
           ulimit -c 0
           python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819"
+      - name: Record preparation outcomes
+        if: always()
+        run: |
+          ulimit -c 0
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          if test -d "$prep"; then
+            printf 'sccache-action=%s\nreaders=%s\npreflight=%s\nproduct=%s\n' '${{ steps.sccache.outcome }}' '${{ steps.readers.outcome }}' '${{ steps.preflight.outcome }}' '${{ steps.product.outcome }}' > "$prep/outcomes.txt"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pac-product-1481-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819
+          path: |
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819-preparation
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819
           if-no-files-found: error
