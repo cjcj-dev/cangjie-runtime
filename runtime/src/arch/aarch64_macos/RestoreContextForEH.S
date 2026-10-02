@@ -62,6 +62,14 @@ _RestoreContextForEH:
     ldr     x1,       [sp, #160]
     mov     sp,  x1
 
+    // EHFrameInfo signs the landing pad separately from this stub's entry RA.
+    // Authenticate with the restored caller SP, as on aarch64_linux.
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    mov     x16, sp
+    mov     x17, x9
+    autia1716
+    mov     x9, x17
+#endif
     // jump to landingpad.
     mov     x0, xzr
     mov     x1, xzr
