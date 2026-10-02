@@ -1,0 +1,46 @@
+name: Apple PAC 1481 frozen complete product
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: pac-product-1481-single-batch
+  cancel-in-progress: false
+jobs:
+  product:
+    if: >-
+      github.repository == 'cjcj-dev/cangjie-runtime' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.number == 1482 &&
+      github.event.pull_request.head.ref == 'sym/1481-implement-r5946918200' &&
+      github.event.action == 'labeled' && github.run_attempt == '1' &&
+      github.event.label.name == format('p1481-{0}', github.event.pull_request.head.sha)
+    runs-on: macos-15
+    timeout-minutes: 65
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install object readers
+        run: |
+          ulimit -c 0
+          brew list llvm >/dev/null 2>&1 || brew install llvm
+      - name: Frozen product batch
+        env:
+          PAC1481_HEAD: ${{ github.event.pull_request.head.sha }}
+          PAC1481_LABEL: ${{ github.event.label.name }}
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5947853219"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pac-product-1481-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5947853219
+          if-no-files-found: error

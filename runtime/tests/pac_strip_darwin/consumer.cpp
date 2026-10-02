@@ -2,6 +2,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include "Common/StackType.h"
 
 #if !defined(__APPLE__) || !defined(__aarch64__) || !defined(ENABLE_BACKWARD_PTRAUTH_CFI)
@@ -21,6 +22,8 @@ static bool Belongs(uintptr_t pc)
 
 int main()
 {
+    for (uint32_t i = 0; i < _dyld_image_count(); ++i)
+        std::printf("MAPPING %s\n", _dyld_get_image_name(i));
     // Integer addresses come from two independent linker relocations, before signing.
     const uintptr_t inputs[] = {reinterpret_cast<uintptr_t>(&unwindPCForN2CStub),
                                 reinterpret_cast<uintptr_t>(&pac1481_outside)};
@@ -38,6 +41,8 @@ int main()
     bool distinguishable = false;
     for (unsigned i = 0; i < 2; ++i) {
         Sample sample{};
+        std::printf("RAW_TRUTH target=%u address=%" PRIxPTR " key=IA modifier=0\n", i, inputs[i]);
+        std::fflush(stdout);
         pac1481_produce(inputs[i], &sample); // Separate assembly TU; no sign/auth fold.
         const bool rawResult = Belongs(sample.raw);
         const bool signedResult = Belongs(sample.signedPc);

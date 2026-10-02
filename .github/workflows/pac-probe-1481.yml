@@ -22,6 +22,7 @@ jobs:
       github.event.pull_request.head.ref == 'sym/1481-implement-r5946918200' &&
       github.event.action == 'labeled' &&
       github.run_attempt == '1' &&
+      github.event.pull_request.head.sha == '257b82716117b581e9a3f57976d4d03d46c07bb8' &&
       github.event.label.name == format('pac1481-{0}', github.event.pull_request.head.sha)
     runs-on: macos-15
     timeout-minutes: 40

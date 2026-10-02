@@ -1,8 +1,10 @@
-# Source-only Apple strip fixture (#1481)
+# Frozen Apple strip product batch (#1481)
 
-No execution admission is attached to these files. Do not connect this fixture to
-CI, activate the old probe label, or build/run it until the controller binds a
-fixed candidate/toolchain/recipe and a separate execution budget.
+The product workflow is prepared, not activated by the implementation lane.
+Only control may activate the unique `p1481-<full head>` label on PR1482 after
+checking the full frozen head, inputs, and recipe. The label is 46 characters.
+Never activate the old `pac1481-` compile probe, dispatch, or rerun this batch.
+The product workflow checks the PR head rather than a merge ref, and attempt 1.
 
 ## Fixed producer → consumer plan
 
@@ -19,9 +21,9 @@ an executed N2C frame. The producer never branches to a signed PC, never invokes
 authentication, and does not alter runtime state. PACIA1716 is encoded as a hint
 for ordinary arm64, as XPACLRI is; CPU/OS effectiveness still needs runtime evidence.
 
-## Pending qualified recipe
+## Fixed recipe awaiting control activation
 
-Use the approved ordinary arm64-apple-macos12 compiler/SDK and the complete
+Use macos-15 ordinary arm64, Xcode16.4 and its recorded actual macOS SDK, and the complete
 backward-PAC runtime, with the exact runtime compile definitions and generated
 include paths for this C++ TU. Compile producer.S separately, without LTO. Link
 consumer.cpp and producer.o against the complete runtime/bounds dylibs; no
@@ -38,7 +40,29 @@ indistinguishable from raw and cut sensitivity is NOT_RUN. rc=0 alone is not PAC
 qualification: disassembly, executed instruction and image identity evidence
 remain required. A raw/control failure invalidates attribution of a cut run.
 
-Single proposed cut (not applied or built): in the baseline-existing
+`run.py` configures two independent full product trees concurrently, using the
+native `runtime/build.py` CMake platform recipe with explicit PAC-off/PAC-on,
+`BUILD_CJTHREAD=ON`, product C++ sccache, and real ncpu parallel builds. CJThread
+uses the existing platform configure entry and its own ncpu build; its compiler
+cache recipe is recorded rather than assumed to use the parent launcher.
+The default layout is only a build control. PAC-on consumer definitions, includes
+and ABI flags come from the actual MachineFrame compile command. No product
+implementation is compiled into the fixture. A producer object and consumer TU
+are separately built without LTO, then linked once against both full dylibs.
+The two cast prerequisites remain in all trees; a failed build is attributed to
+the complete candidate, never strip alone. Any first error stops later stages.
+Both already-started independent builds finish and retain their first errors.
+
+The batch records compile/cache/link commands, rc and wall, source/object/dylib/
+ELF hashes, real exports, relocations, product and producer disassembly, mappings
+and readable dependency hashes. Libraries resident only in dyld shared cache are
+explicitly recorded as such, with OS/SDK identity, never given invented hashes.
+No missing export is repaired. Before behavior, the product opcode and caller LR
+save/restore evidence must pass the fixed instruction checks. Each execution is
+bounded by 120 seconds. Normal, cut and restored each use the same executable
+and producer object; the only changed loaded artifact is the runtime dylib.
+
+Single frozen cut in `consumer-strip.diff` (not applied to this candidate): in the baseline-existing
 `runtime/src/UnwindStack/MachineFrame.cpp:41`, replace only
 `PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip))` with
 `reinterpret_cast<Uptr>(ip)`. Keep both comparisons and every other consumer.
@@ -46,8 +70,13 @@ For a distinguishable owned sample, only its signed-result assertion should fail
 owned raw and outside raw/signed must retain their results. Keep the fixture ELF
 and producer object byte-identical for green/cut/restored. Restore the original
 green dylibs by copying retained files, then execute the same fixed input once.
-All of this, including entry_cut_check and disassembly validation of the compiler's
-x30 save/restore, is NOT_RUN in the source stage.
+`run.py` builds that third full PAC-on product only after the green identity,
+controls and distinguishable owned signed value pass. It keeps the green bounds
+dependency, checks only the signed owned result is red, copies retained green
+dylibs for restoration, and never resamples a nondistinguishable input. Independent
+processes may change raw addresses due to ASLR; the invariant columns, IA/0 scheme
+and relocated symbol inputs remain fixed. Numeric addresses are not equalized.
+Execution and generated-code validation remain NOT_RUN until activation.
 
 ## Holds
 
