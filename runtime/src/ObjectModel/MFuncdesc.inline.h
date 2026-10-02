@@ -60,15 +60,17 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    if (!ElfUnloadQuiescence::IsLinkedAddress(startPC)) {
-        return nullptr;
-    }
 #ifdef __APPLE__
     return reinterpret_cast<FuncDescRef>(ElfUnloadQuiescence::FindFunctionDescriptor(startPC));
 #else
+    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
+    if (image == nullptr) { return nullptr; }
+    if (startPC < START_PC_OFFSET || !image->Contains(startPC - START_PC_OFFSET) ||
+        !image->Contains(startPC - 1)) { return nullptr; }
     DataRefOffset32<MFuncDesc>* offset =
         reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
-    return offset->GetDataRef();
+    FuncDescRef desc = offset->GetDataRef();
+    return image->Contains(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 #endif
 }
 } // namespace MapleRuntime

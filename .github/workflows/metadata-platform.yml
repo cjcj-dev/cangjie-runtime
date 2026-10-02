@@ -123,7 +123,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [pac-off, pac-on]
+        include:
+          - {config: pac-off, arm: candidate}
+          - {config: pac-off, arm: mach-pc}
+          - {config: pac-off, arm: mach-desc}
+          - {config: pac-off, arm: restored}
+          - {config: pac-on, arm: candidate}
     env:
       GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
       SCCACHE_GHA_ENABLED: 'true'
@@ -133,11 +138,12 @@ jobs:
       - shell: bash
         run: |
           ulimit -c 0
-          python3 runtime/tests/gc_unit/metadata/build.py capability --config ${{ matrix.config }}
+          python3 runtime/tests/gc_unit/metadata/build.py capability --config ${{ matrix.config }} --arm ${{ matrix.arm }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: capability-${{ matrix.config }}
+          name: capability-${{ matrix.config }}-${{ matrix.arm }}
           path: |
             ${{ runner.temp }}/metadata/*.log
             ${{ runner.temp }}/metadata/*.json
+            ${{ runner.temp }}/metadata/*.diff
