@@ -46,6 +46,7 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
     .cfi_startproc
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     paciasp
+    .cfi_negate_ra_state
 #endif
     stp  x29, x30, [sp,  #-StubFrameContextSize]!
     cfi_adjust_cfa_offset (StubFrameContextSize)
@@ -107,76 +108,11 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     // ExceptionHandling::ChangeEHStackInfoLR signs with FA + frame size.
     autiasp
+    .cfi_negate_ra_state
 #endif
     ret
     .cfi_endproc
 .endm
-
-.macro CalleeSavedRegistersStubNew, funcName
-    .cfi_startproc
-    ldp  x29, x30, [sp], #16
-    stp  x29, x30, [sp,  #-StubFrameContextSize]!
-    cfi_adjust_cfa_offset (StubFrameContextSize)
-    cfi_rel_offset (x29, 0)
-    cfi_rel_offset (x30, 8)
-
-    mov  x29, sp
-    cfi_def_cfa_register (sp)
-
-    // save all used callee-saved registers.
-    stp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
-    cfi_rel_offset (x19, .Lmrt_a64_callee_x19)
-    cfi_rel_offset (x20, .Lmrt_a64_callee_x20)
-
-    stp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
-    cfi_rel_offset (x21, .Lmrt_a64_callee_x21)
-    cfi_rel_offset (x22, .Lmrt_a64_callee_x22)
-
-    stp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
-    cfi_rel_offset (x23, .Lmrt_a64_callee_x23)
-    cfi_rel_offset (x24, .Lmrt_a64_callee_x24)
-
-    stp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
-    cfi_rel_offset (x25, .Lmrt_a64_callee_x25)
-    cfi_rel_offset (x26, .Lmrt_a64_callee_x26)
-
-    stp  x27, x28, [sp, #.Lmrt_a64_callee_x27]
-    cfi_rel_offset (x27, .Lmrt_a64_callee_x27)
-    cfi_rel_offset (x28, .Lmrt_a64_callee_x28)
-
-    bl   _\funcName
-    str  x0,  [sp, #.Lmrt_a64_callee_x28]
-
-    bl   _MRT_GetThreadLocalData
-    mov  x28, x0
-
-    // restore all used callee-saved registers.
-    ldp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
-    cfi_restore (x19)
-    cfi_restore (x20)
-    ldp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
-    cfi_restore (x21)
-    cfi_restore (x22)
-    ldp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
-    cfi_restore (x23)
-    cfi_restore (x24)
-    ldp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
-    cfi_restore (x25)
-    cfi_restore (x26)
-    ldr  x27, [sp, #.Lmrt_a64_callee_x27]
-    cfi_restore (x27)
-    ldr  x0,  [sp, #.Lmrt_a64_callee_x28]
-    cfi_restore (x0)
-
-    ldp  x29, x30, [sp], #StubFrameContextSize
-    cfi_adjust_cfa_offset (-StubFrameContextSize)
-    cfi_restore (x29)
-    cfi_restore (x30)
-    ret
-    .cfi_endproc
-.endm
-
-
 
     .global _unwindPCForC2RStubStart
 _unwindPCForC2RStubStart:
@@ -209,7 +145,8 @@ _CJ_MCC_PackageInitAbort:
     .align 2
     .global _CJ_MCC_NewObject
 _CJ_MCC_NewObject:
-    CalleeSavedRegistersStubNew MCC_NewObject
+    // B/BL callers pass the current FP/LR; this stub owns its frame.
+    CalleeSavedRegistersStub MCC_NewObject
 
     .text
     .align 2
@@ -221,7 +158,7 @@ _CJ_MCC_NewWeakRefObject:
     .align 2
     .global _CJ_MCC_NewFinalizer
 _CJ_MCC_NewFinalizer:
-    CalleeSavedRegistersStubNew MCC_NewFinalizer
+    CalleeSavedRegistersStub MCC_NewFinalizer
 
     .text
     .align 2
