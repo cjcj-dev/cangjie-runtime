@@ -15,7 +15,7 @@ import time
 import run as supervisor
 
 parser = argparse.ArgumentParser()
-parser.add_argument("mode", choices=["prepare", "arm", "capability", "a2"])
+parser.add_argument("mode", choices=["prepare", "arm", "capability", "a2", "a2-resume"])
 parser.add_argument("--config", choices=["default", "testable", "pac-off", "pac-on"], default="testable")
 parser.add_argument("--arm", default="candidate")
 args = parser.parse_args()
@@ -112,6 +112,22 @@ def a2_run_bundle(runtime_hash=None):
     assert rc == (1 if expected_cross or expected_data else 0), (rc, output)
     record["behavior"] = "PRECISE_RED" if expected_cross or expected_data else "PASS"
     save()
+
+if args.mode == "a2-resume":
+    metadata = bundle / ("metadata.exe" if windows else "metadata")
+    metadata.chmod(metadata.stat().st_mode | 0o111)
+    before = dict(env)
+    env["PATH"] = str(bundle) + os.pathsep + env.get("PATH", "")
+    env["LD_LIBRARY_PATH"] = str(bundle)
+    record["regression_elf_sha256"] = digest(metadata)
+    rc = run(["python3", source / "tests/gc_unit/metadata/run.py", metadata,
+              out / "metadata.json"], "metadata-regression", timeout=120)
+    env.clear(); env.update(before)
+    assert rc == 0, rc
+    executable = bundle / ("metadata-code-shape.exe" if windows else "metadata-code-shape")
+    executable.chmod(executable.stat().st_mode | 0o111)
+    a2_run_bundle()
+    raise SystemExit(0)
 
 if args.mode == "a2" and args.arm == "restored":
     a2_run_bundle()

@@ -1,6 +1,11 @@
 name: Managed metadata platform checks
 on:
   workflow_dispatch:
+    inputs:
+      resume_run:
+        description: 'Completed run with unexecuted Linux/Windows testable targets'
+        type: string
+        default: ''
   push:
     branches: ['sym/1284-implement-*', 'sym/1478-implement-*']
 permissions:
@@ -151,7 +156,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.diff
 
   a2-candidate:
-    if: ${{ startsWith(github.ref_name, 'sym/1478-') }}
+    if: ${{ startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -204,7 +209,7 @@ jobs:
           # Build trees are excluded below; only immutable bundle and evidence.
           compression-level: 6
   a2-arms:
-    if: ${{ always() && !cancelled() && startsWith(github.ref_name, 'sym/1478-') }}
+    if: ${{ always() && !cancelled() && startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' }}
     needs: a2-candidate
     strategy:
       fail-fast: false
@@ -260,3 +265,51 @@ jobs:
             ${{ runner.temp }}/metadata/*.log
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
+
+  a2-resume:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.resume_run != '' && startsWith(github.ref_name, 'sym/1478-') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm}
+          - {platform: windows-x64, runner: windows-2025}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-python
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.resume_run }}
+          name: a2-candidate-${{ matrix.platform }}-testable
+          path: ${{ runner.temp }}/metadata/input
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -c 0
+          cp -a "$RUNNER_TEMP/metadata/input/bundle" "$RUNNER_TEMP/metadata/bundle"
+          python3 runtime/tests/gc_unit/metadata/build.py a2-resume
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          cp -a "$RUNNER_TEMP/metadata/input/bundle" "$RUNNER_TEMP/metadata/bundle"
+          python3 runtime/tests/gc_unit/metadata/build.py a2-resume
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-resume-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+          retention-days: 3
