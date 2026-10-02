@@ -1,9 +1,7 @@
 name: Managed metadata platform checks
 on:
   workflow_dispatch:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
   push:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
     branches: ['sym/1284-implement-*', 'sym/1478-implement-*']
 permissions:
   contents: read
