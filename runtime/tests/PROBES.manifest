@@ -121,3 +121,5 @@ check_signal_fatal_watermark.sh           manual     SIGNAL_TEST_OUTPUT with bui
 signal_fatal_watermark_gdb.py             manual     gdb batch script used by check_signal_fatal_watermark.sh; breakpoints at SignalWatermarkWork and ZStackWatermark::start_processing_impl, delivers SIGABRT via gdb `signal`
 check_signal_platform.sh                 manual     Product signal platform/order acceptance; needs one ELF from run_signal_fatal_watermark.sh, ARM_LIB_DIR and gdb; kkk2 only.
 signal_exception_gdb.py                  manual     Invoked by check_signal_platform.sh; observes first ThrowException pending state and invokes second compiler ABI entry.
+
+pac_strip_darwin                         manual     runtime/tests/pac_strip_darwin/run.py via .github/workflows/pac-product-1481.yml; official Apple arm64 complete default PAC-off and backward PAC-on runtime/CJThread products, independently qualified fixed owned marker/outside inputs, controller-frozen unique activation

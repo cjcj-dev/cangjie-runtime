@@ -3,7 +3,7 @@
   "pr": 1482,
   "baseline": "1a5e4c20fd3e8db9bd1d37b8b4bb07cb287aed75",
   "starting_head": "39f1cfd57462baf9b9e39b33a46de3f0b5149df6",
-  "deadline_utc": "2026-10-02T09:33:41.524+00:00",
+  "deadline_utc": "2026-10-02T10:37:17+00:00",
   "archive_reserve_seconds": 120,
   "activation": "control-only unique labeled event p1481-<full candidate head>; no merge ref, dispatch or rerun",
   "platform": "macos-15 ordinary arm64 / Xcode16.4 / actual macosx SDK recorded",

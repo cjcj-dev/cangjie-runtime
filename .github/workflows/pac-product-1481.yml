@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 65
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-      PAC1481_DEADLINE: '2026-10-02T09:33:41.524+00:00'
+      PAC1481_DEADLINE: '2026-10-02T10:37:17+00:00'
     steps:
       - uses: actions/checkout@v4
         with:
