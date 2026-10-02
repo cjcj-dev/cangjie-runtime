@@ -23,7 +23,9 @@ SECTIONS {
   .rela.plt : { *(.rela.plt .rela.iplt) } :ro
   . = ALIGN(0x1000);
   .init : { *(.init) } :text
-  .plt : { *(.plt) *(.plt.*) } :text
+  .plt : { *(.plt .iplt) } :text
+  .plt.got : { *(.plt.got) } :text
+  .plt.sec : { *(.plt.sec) } :text
   .text : { *(.text .text.*) } :text
   .fini : { *(.fini) } :text
   .gc_unit_metadata : { *(.gc_unit_metadata) } :text

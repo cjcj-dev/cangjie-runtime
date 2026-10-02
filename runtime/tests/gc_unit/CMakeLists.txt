@@ -214,6 +214,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
     target_compile_definitions(cj_metadata_contiguous PRIVATE
         GC_METADATA_OWNER_IMAGE=1 GC_METADATA_CONTIGUOUS_IMAGE=1)
+    # Preserve the explicit TU and driver commands; use the same link recorder as standalone.
+    target_compile_options(cj_metadata_contiguous PRIVATE -v -save-temps=obj)
+    set_property(TARGET cj_metadata_contiguous PROPERTY RULE_LAUNCH_LINK
+        "bash \"${CMAKE_CURRENT_SOURCE_DIR}/a2_fixture_link.sh\" \"${CMAKE_CURRENT_BINARY_DIR}/contiguous-evidence\"")
     set_property(TARGET cj_metadata_contiguous APPEND_STRING PROPERTY LINK_FLAGS
         " -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld")
     set_property(TARGET cj_metadata_contiguous APPEND PROPERTY LINK_DEPENDS

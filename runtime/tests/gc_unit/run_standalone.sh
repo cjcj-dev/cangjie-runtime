@@ -316,8 +316,20 @@ PACKAGE_INIT_UNRELATED_PID=$!
     -Wl,--section-start=.a2_boundary=0x400000 \
     "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_owner.so" &
   owner_pid=$!
-  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 -DGC_METADATA_CONTIGUOUS_IMAGE=1 \
-    -Wl,-T,"$SRC/a2_contiguous.ld" "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_contiguous.so" &
+  (
+    mkdir -p "$OUT/contiguous-evidence"
+    cp "$SRC/package_init_image.cpp" "$SRC/a2_contiguous.ld" "$OUT/contiguous-evidence/"
+    printf '%q ' "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -DGC_METADATA_OWNER_IMAGE=1 \
+      -DGC_METADATA_CONTIGUOUS_IMAGE=1 -v -save-temps=obj -c "$SRC/package_init_image.cpp" \
+      -o "$OUT/contiguous-evidence/package_init_image.o" > "$OUT/contiguous-evidence/compile.argv"
+    "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -DGC_METADATA_OWNER_IMAGE=1 \
+      -DGC_METADATA_CONTIGUOUS_IMAGE=1 -v -save-temps=obj -c "$SRC/package_init_image.cpp" \
+      -o "$OUT/contiguous-evidence/package_init_image.o" > "$OUT/contiguous-evidence/compile.log" 2>&1
+    bash "$SRC/a2_fixture_link.sh" "$OUT/contiguous-evidence" \
+      "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared \
+      -Wl,-T,"$SRC/a2_contiguous.ld" "$OUT/contiguous-evidence/package_init_image.o" \
+      -o "$OUT/libcj_metadata_contiguous.so"
+  ) &
   contiguous_pid=$!
   wait "$contiguous_pid"
   wait "$foreign_pid"
