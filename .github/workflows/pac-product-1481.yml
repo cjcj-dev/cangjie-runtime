@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 65
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-      PAC1481_DEADLINE: '2026-10-02T16:30:32+00:00'
+      PAC1481_DEADLINE: '2026-10-02T21:00:00+00:00'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,19 +30,19 @@ jobs:
       - name: Initialize preparation receipt
         run: |
           ulimit -c 0
-          mkdir "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          mkdir "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093-preparation"
           {
             date -u '+%Y-%m-%dT%H:%M:%SZ'
             printf 'head=%s\nrun_id=%s\nattempt=%s\ndeadline=%s\n' '${{ github.event.pull_request.head.sha }}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PAC1481_DEADLINE"
             printf 'sccache/readers/preflight/product=NOT_RUN (preparation not completed)\n'
-          } > "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation/initial.txt"
+          } > "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093-preparation/initial.txt"
       - uses: mozilla-actions/sccache-action@v0.0.9
         id: sccache
       - name: Install object readers
         id: readers
         run: |
           ulimit -c 0
-          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093-preparation"
           set +e
           (
             set -e
@@ -76,7 +76,7 @@ jobs:
         id: preflight
         run: |
           ulimit -c 0
-          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093-preparation"
           set +e
           python3 - "$prep" > "$prep/preflight.log" 2>&1 <<'PYTHON'
           import hashlib, inspect, io, json, os, platform, subprocess, sys, tarfile, tempfile
@@ -135,12 +135,12 @@ jobs:
           PAC1481_LABEL: ${{ github.event.label.name }}
         run: |
           ulimit -c 0
-          python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819"
+          python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093"
       - name: Record preparation outcomes
         if: always()
         run: |
           ulimit -c 0
-          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819-preparation"
+          prep="$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5959689093-preparation"
           if test -d "$prep"; then
             printf 'sccache-action=%s\nreaders=%s\npreflight=%s\nproduct=%s\n' '${{ steps.sccache.outcome }}' '${{ steps.readers.outcome }}' '${{ steps.preflight.outcome }}' '${{ steps.product.outcome }}' > "$prep/outcomes.txt"
           fi
@@ -149,6 +149,6 @@ jobs:
         with:
           name: pac-product-1481-${{ github.event.pull_request.head.sha }}
           path: |
-            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819-preparation
-            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5959689093-preparation
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5959689093
           if-no-files-found: error
