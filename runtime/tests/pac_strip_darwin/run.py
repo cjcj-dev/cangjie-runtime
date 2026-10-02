@@ -16,6 +16,7 @@ import sys
 import tarfile
 import threading
 import time
+from recipe import bind_tools, configure_env, verify_configured, preserve_then_delete
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = Path(sys.argv[1]).resolve()
@@ -25,7 +26,7 @@ RESULT = {"head": os.environ.get("PAC1481_HEAD"), "commands": [],
           "green": "NOT_RUN", "cut": "NOT_RUN", "restored": "NOT_RUN"}
 SAVE_LOCK = threading.Lock()
 PLAN = json.loads(Path(__file__).with_name("PLAN.json").read_text())
-DEADLINE = datetime.fromisoformat(PLAN["deadline_utc"]).timestamp()
+DEADLINE = datetime.fromisoformat(PLAN["deadline_utc"]).timestamp() if PLAN["deadline_utc"] else 0
 RESULT["deadline_utc"] = PLAN["deadline_utc"]
 
 
@@ -97,15 +98,26 @@ def configure(tree, pac):
             "-DCMAKE_AR_PATH=ar", "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath,@loader_path",
             "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath,@loader_path/../../runtime/lib/darwin_aarch64_cjnative",
             "-DBUILD_CJTHREAD=ON", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF", "-DCANGJIE_COMPILER_CACHE=sccache",
-            "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
-            "-DCMAKE_C_COMPILER_LAUNCHER=sccache", "-DRUNTIME_FORWARD_PTRAUTH_CFI=0",
+            "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF", f"-DCANGJIE_COMPILER_CACHE:FILEPATH={RESULT['tools']['sccache']['path']}",
+            f"-DCMAKE_CXX_COMPILER_LAUNCHER={RESULT['tools']['sccache']['path']}",
+            f"-DCMAKE_C_COMPILER_LAUNCHER={RESULT['tools']['sccache']['path']}", "-DRUNTIME_FORWARD_PTRAUTH_CFI=0",
             f"-DRUNTIME_BACKWARD_PTRAUTH_CFI={int(pac)}",
             f"-DCMAKE_OSX_SYSROOT={RESULT['sdk_path']}", "-DCMAKE_OSX_ARCHITECTURES=arm64"]
 
 
 def build(tree, name, pac):
-    require(configure(tree, pac), name + "-configure.log")
+    build_dir = tree / "runtime/CMakebuild"
+    if build_dir.exists():
+        raise RuntimeError("fresh configure directory required")
+    env = configure_env(os.environ, RESULT["tools"])
+    RESULT[name + "_configure_input"] = {"argv": list(map(str, configure(tree, pac))),
+        "env": {k: env[k] for k in ("CMAKE_C_COMPILER_LAUNCHER", "CMAKE_CXX_COMPILER_LAUNCHER")}}
+    save()
+    require([RESULT["tools"]["sccache"]["path"], "--show-stats"], name + "-before-child-cache.log")
+    require(configure(tree, pac), name + "-configure.log", env=env)
+    require([RESULT["tools"]["sccache"]["path"], "--show-stats"], name + "-after-child-cache.log")
+    RESULT[name + "_cache_consumption"] = verify_configured(build_dir, RESULT["tools"])
+    save()
     build_dir = tree / "runtime/CMakebuild"
     require(["cmake", "--build", build_dir, "--target", "cangjie-runtime", "preinstall",
              "--parallel", str(os.cpu_count()), "--verbose"], name + "-build.log")
@@ -113,7 +125,7 @@ def build(tree, name, pac):
         shutil.copy2(build_dir / filename, OUT / (name + "-" + filename))
     shutil.copy2(build_dir / "cjthread-build/CMakeCache.txt", OUT / (name + "-cjthread-CMakeCache.txt"))
     shutil.copy2(build_dir / "src/CMakeFiles/cangjie-runtime.dir/link.txt", OUT / (name + "-product-link.txt"))
-    require(["sccache", "--show-stats"], name + "-sccache.log")
+    require([RESULT["tools"]["sccache"]["path"], "--show-stats"], name + "-sccache.log")
     runtime, = list(build_dir.rglob("libcangjie-runtime.dylib"))
     bounds, = list(build_dir.rglob("libboundscheck.dylib"))
     retained = OUT / (name + "-dylibs")
@@ -160,6 +172,8 @@ def lr_flow(block, require_stripped_return):
     for line in block.splitlines():
         match = instruction.match(line)
         if not match:
+            if re.match(r"^\s*[0-9a-f]+:", line):
+                raise RuntimeError("INVALID: unparsed instruction line")
             continue
         op, operands = match.groups()
         operands = operands.replace("lr", "x30").replace("fp", "x29")
@@ -204,8 +218,12 @@ def lr_flow(block, require_stripped_return):
                 raise RuntimeError("actual return does not restore incoming LR")
             if require_stripped_return and registers.get("x0") != "stripped_pc":
                 raise RuntimeError("strip result dataflow into x0 not established")
-        elif parts and parts[0] == "x30":
-            registers["x30"] = None
+        elif op in ("b", "br", "blr", "cbz", "cbnz", "tbz", "tbnz") or op.startswith("b."):
+            raise RuntimeError("INVALID: unsupported LR control-flow shape")
+        elif op not in ("nop", "cmp", "tst", "cset", "adrp", "adr", "and", "orr", "eor", "ubfx"):
+            raise RuntimeError("INVALID: unsupported instruction " + op)
+        elif parts and parts[0].startswith("x"):
+            registers[parts[0]] = None
     if not returns or (require_stripped_return and not xpac):
         raise RuntimeError("actual strip/return instruction flow not established")
     return xpac
@@ -218,16 +236,17 @@ def instruction_checks():
     assembly = (OUT / "product-disassembly.log").read_text().lower()
     target = function_block(assembly, "isn2cstubframe")
     inline = bool(re.search(r"xpaclri|hint\s+#(?:0x)?7\b", target))
+    (OUT / "actual-n2c-caller.log").write_text(target)
     lr_flow(target, False)
     if not inline:
         if not re.search(r"\bbl\b[^\n]*<[^>]*ptrauthstripinstpointer", target):
             raise RuntimeError("actual caller does not bind real strip callee")
         callee = function_block(assembly, "ptrauthstripinstpointer")
-        lr_flow(callee, True)
         (OUT / "actual-strip-callee.log").write_text(callee)
+        lr_flow(callee, True)
     (OUT / "actual-n2c-caller.log").write_text(target)
     (OUT / "instruction-check.json").write_text(json.dumps({"producer_encoding": "d503211f",
-        "product_strip": "XPACLRI", "caller_lr_saved_restored": True,
+        "product_strip": "XPACLRI", "bounded_lr_text_check": True, "complete_cfg_proof": False,
         "inline": inline, "scope": "actual full-product N2C caller / bound strip callee"}, indent=2))
 
 
@@ -264,6 +283,16 @@ def main():
         raise RuntimeError("admitted event/head mismatch")
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip():
         raise RuntimeError("dirty checkout")
+    if not PLAN["deadline_utc"]:
+        raise RuntimeError("new candidate/deadline/event authorization MISSING")
+    RESULT["tools"] = bind_tools(os.environ)
+    save()
+    require(["cmake", "--version"], "cmake-version.log")
+    version = re.search(r"cmake version (\d+)\.(\d+)", (OUT / "cmake-version.log").read_text())
+    if not version or tuple(map(int, version.groups())) < (3, 17):
+        raise RuntimeError("CMake >=3.17 required for fresh child launcher environment")
+    RESULT["compiler_entities"] = {name: bind for name in ("clang", "clang++")
+        for bind in [__import__("recipe").entity(shutil.which(name) or "", "current runner PATH")]}
     require(["xcodebuild", "-version"], "xcode.log")
     if "Xcode 16.4\n" not in (OUT / "xcode.log").read_text():
         raise RuntimeError("Xcode16.4 required")
@@ -284,7 +313,7 @@ def main():
          ROOT / "runtime/tests/pac_strip_darwin/producer.S",
          ROOT / "runtime/tests/pac_strip_darwin/PLAN.json",
          ROOT / "runtime/tests/pac_strip_darwin/consumer-strip.diff")}
-    require(["sccache", "--show-stats"], "sccache-before.log")
+    require([RESULT["tools"]["sccache"]["path"], "--show-stats"], "sccache-before.log")
     default, pac = snapshot("default-source"), snapshot("pac-source")
     # Trees do not share generated headers, CJThread outputs, or install prefixes.
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -299,9 +328,7 @@ def main():
         if any(isinstance(value, Exception) for value in outcomes):
             raise RuntimeError(str(outcomes))
     libraries = outcomes[1]
-    nm = shutil.which("llvm-nm") or str(Path("/opt/homebrew/opt/llvm/bin/llvm-nm"))
-    objdump = str(Path(nm).with_name("llvm-objdump"))
-    readobj = str(Path(nm).with_name("llvm-readobj"))
+    nm, objdump, readobj = (RESULT["tools"][key]["path"] for key in ("llvm-nm", "llvm-objdump", "llvm-readobj"))
     require([nm, "--defined-only", libraries / "libcangjie-runtime.dylib"], "product-defined.log")
     require(["nm", "-gU", libraries / "libcangjie-runtime.dylib"], "product-exports.log")
     exported = (OUT / "product-exports.log").read_text()
@@ -332,7 +359,11 @@ def main():
             "consumer-build.log", cwd=compile_entry["directory"])
     require([objdump, "--disassemble", OUT / "producer.o"], "producer-disassembly.log")
     require([readobj, "--relocations", OUT / "consumer.o"], "consumer-relocations.log")
-    instruction_checks()
+    try:
+        instruction_checks()
+    except Exception as error:
+        (OUT / "instruction-invalid.json").write_text(json.dumps({"status": "INVALID", "reason": str(error), "behavior": "NOT_RUN"}))
+        raise
     elf = OUT / "consumer"
     require([compiler, "-arch", "arm64", "-isysroot", RESULT["sdk_path"], "-fno-lto",
              OUT / "consumer.o", OUT / "producer.o", "-L" + str(libraries),
@@ -385,10 +416,10 @@ finally:
     for name in ("default-source", "pac-source", "cut-source"):
         tree = OUT / name
         if tree.exists():
-            build_dir = tree / "runtime/CMakebuild"
-            for filename in ("CMakeCache.txt", "compile_commands.json", "cjthread-build/CMakeCache.txt"):
-                path = build_dir / filename
-                if path.is_file():
-                    shutil.copy2(path, OUT / (name + "-" + filename.replace("/", "-")))
-            shutil.rmtree(tree)
+            try:
+                preserve_then_delete(tree, OUT / (name + "-inputs"))
+            except Exception as error:
+                RESULT["preservation_error"] = str(error)
+                save()
+                raise RuntimeError("preservation failed; original tree retained") from error
     save()

@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 65
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      # Historical failed batch only. Future control must bind PLAN + deadline/event
+      # and supply current SCCACHE_PATH / PAC1481_LLVM_BIN; no activation here.
       PAC1481_DEADLINE: '2026-10-02T10:37:17+00:00'
     steps:
       - uses: actions/checkout@v4

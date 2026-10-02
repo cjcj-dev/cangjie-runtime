@@ -2,25 +2,48 @@
   "issue": 1481,
   "pr": 1482,
   "baseline": "1a5e4c20fd3e8db9bd1d37b8b4bb07cb287aed75",
-  "starting_head": "39f1cfd57462baf9b9e39b33a46de3f0b5149df6",
-  "deadline_utc": "2026-10-02T10:37:17+00:00",
+  "starting_head": "e11803b1054849bf05284bf9bb6081a0fcdb4061",
+  "deadline_utc": null,
   "archive_reserve_seconds": 120,
-  "activation": "control-only unique labeled event p1481-<full candidate head>; no merge ref, dispatch or rerun",
+  "activation": "NOT AUTHORIZED: control must separately bind new full candidate, absolute deadline and unique event",
   "platform": "macos-15 ordinary arm64 / Xcode16.4 / actual macosx SDK recorded",
-  "products": ["default PAC-off full runtime + CJThread", "backward PAC-on full runtime + CJThread"],
+  "products": [
+    "default PAC-off full runtime + CJThread",
+    "backward PAC-on full runtime + CJThread"
+  ],
   "conditional_third_product": "one full backward PAC-on consumer-strip.diff build, only after green qualification",
-  "input_symbols": ["unwindPCForN2CStub", "pac1481_outside"],
+  "input_symbols": [
+    "unwindPCForN2CStub",
+    "pac1481_outside"
+  ],
   "producer": "separate no-LTO producer.S PACIA1716 (d503211f), IA/0, one production per input per arm",
   "raw_truth": "independent linker relocations printed and flushed before producer; never inferred by product strip",
   "consumer": "complete product MachineFrame(nullptr, pc).IsN2CStubFrame only",
-  "executions": ["green <=120s", "conditional one cut <=120s", "conditional one restored <=120s"],
+  "executions": [
+    "green <=120s",
+    "conditional one cut <=120s",
+    "conditional one restored <=120s"
+  ],
   "cut": "runtime/src/UnwindStack/MachineFrame.cpp:41 existing strip call only; retain both integer cast prerequisites",
-  "cut_results": {"owned_raw": true, "owned_signed": false, "outside_raw": false, "outside_signed": false},
+  "cut_results": {
+    "owned_raw": true,
+    "owned_signed": false,
+    "outside_raw": false,
+    "outside_signed": false
+  },
   "setup_rc": 20,
   "target_rc": 1,
   "inconclusive_rc": 21,
   "timeout_rc": 124,
   "stop": "first build/link/identity/instruction/control error; owned signed==raw stops causal arms; no resampling or repair",
   "identity": "same executable/producer/green bounds dependency; green runtime equals restored, cut runtime differs; actual dyld mappings and dependency hashes",
-  "holds": ["complete Apple EH", "managed/compiler/std/stub PAC pairing", "iOS/OHOS/Android/Linux PAC qualification", "1478 A1/A2", "135", "Merge"]
+  "holds": [
+    "complete Apple EH",
+    "managed/compiler/std/stub PAC pairing",
+    "iOS/OHOS/Android/Linux PAC qualification",
+    "1478 A1/A2",
+    "135",
+    "Merge"
+  ],
+  "previous_failed_deadline_utc": "2026-10-02T10:37:17+00:00"
 }

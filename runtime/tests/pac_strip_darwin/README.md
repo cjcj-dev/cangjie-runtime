@@ -9,8 +9,8 @@ The pending activation HEAD must not contain GitHub commit skip directives or
 a `skip-checks` trailer: they can suppress this `pull_request` label workflow.
 Freeze the complete candidate HEAD after this prerequisite, then bind its full
 40-digit hash to the control-only product label. A successful label API response
-is not evidence that a product run started. The original absolute deadline and
-first-error stop rules still apply; a suppressed event grants no extra batch or
+is not evidence that a product run started. A new control-bound absolute deadline and
+first-error stop rules must precede activation; a suppressed event grants no extra batch or
 time allowance. Preserve the suppressed HEAD and its label as historical evidence.
 
 ## Fixed producer → consumer plan
@@ -85,12 +85,50 @@ processes may change raw addresses due to ASLR; the invariant columns, IA/0 sche
 and relocated symbol inputs remain fixed. Numeric addresses are not equalized.
 Execution and generated-code validation remain NOT_RUN until activation.
 
-The independent manifest-registration batch deadline is 2026-10-02T10:37:17Z, including preparation,
-control wait, queue time and archive. PLAN and workflow environment bind it;
-the driver reserves 120 seconds for archive and never opens a new time allowance.
-Each stage uses its original timeout capped by remaining time. Zero/negative
-remaining records NOT_RUN. The workflow's timeout is an additional ceiling,
-not permission to cross that absolute deadline.
+## Preparation only: runner inputs still missing
+
+The old manifest-registration deadline 2026-10-02T10:37:17Z and failed run
+36992795432 remain historical evidence. PLAN.deadline_utc is null: this recipe
+cannot execute a new batch until control binds a candidate, absolute deadline
+and unique event. The existing workflow's old deadline is not a new authorization.
+No push, label, dispatch, GHA, compiler/cache, configure or native execution is
+part of this preparation. The preparation allowance is 45 minutes from its run
+created_at; it grants no product allowance.
+
+Before future execution, the runner must supply SCCACHE_PATH from that run's
+sccache-action output and PAC1481_LLVM_BIN from the actual installed LLVM
+collection (e.g. that runner's brew --prefix llvm, never a frozen Homebrew path).
+recipe.bind_tools resolves, stats, checks executability and hashes each actual
+binary separately. Archive digests are not binary digests. It binds llvm-nm,
+llvm-objdump and llvm-readobj individually, rejects a missing member, and does
+not search alternative versions. Compiler entities retain current PATH origins;
+Xcode16.4, SDK and ordinary arm64 checks remain required.
+
+Top configure passes the same resolved sccache to CANGJIE_COMPILER_CACHE:FILEPATH
+and both C/CXX launchers. Before either fresh configure, its inherited process
+environment sets CMAKE_C_COMPILER_LAUNCHER and CMAKE_CXX_COMPILER_LAUNCHER.
+CMake >=3.17 initializes these variables in the fresh CJThread child. The actual
+Apple call runtime/CMakeLists.txt:280 and build/build_cjthread.sh:66 do not
+replace these variables; the child directory is freshly recreated. No ASM
+launcher requirement is added. Input argv/environment is saved before configure.
+After configure, top and child Cache plus generated commands must consume the
+frozen entity; cache statistics bracket configure (which already compiles the
+child). Setting environment alone proves no real consumption. Missing or
+mismatching evidence stops before top build without repair/reconfigure.
+
+Finally, each arm separately copies formed compile/link/response/flags inputs,
+child generated commands/cache, key actual TUs, formed objects and logs to an
+arm-owned retained directory, verifies hashes and records absent outputs as
+MISSING before deleting its private source tree. Copy/hash failure retains the
+original tree and stops. Existing keep directories are never removed. The 120s
+archive reserve remains; no full SDK/source/build copy is required.
+
+LR validation is a bounded straight-line text/dataflow check of the actual
+caller and bound callee, not a complete CFG safety proof. Unsupported branch,
+return or instruction syntax is INVALID and behavior stays NOT_RUN. Complete
+function blocks are retained before checking. An unsupported first actual shape
+must go to independent assessment; do not extend formats and rerun to obtain green.
+Saved probe assembly is historical input, not full-product caller qualification.
 
 ## Holds
 
