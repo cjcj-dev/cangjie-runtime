@@ -533,6 +533,7 @@ static void CheckPrefixQualification(unsigned kind)
     const Uptr start = reinterpret_cast<Uptr>(pc);
     const Uptr prefix = start - sizeof(int32_t);
     bool covered = true, executable = false, descriptorOwned = false;
+    size_t sameBytes = 0;
     size_t firstRange = image->ranges.size(), lastRange = image->ranges.size();
     bool adjacent = false;
     int32_t displacement = 0;
@@ -550,11 +551,15 @@ static void CheckPrefixQualification(unsigned kind)
             const auto owner = ElfUnloadQuiescence::RegisteredImageForAddress(prefix + b);
             const bool same = owner == image && image->Contains(prefix + b);
             covered &= same;
+            sameBytes += same;
             std::fprintf(stderr, "A2_PREFIX_BYTE address=%p same_owner=%d exec=%d\n",
                          reinterpret_cast<void*>(prefix + b), same, image->Contains(prefix + b, true));
         }
         if (covered) {
             std::memcpy(&displacement, reinterpret_cast<void*>(prefix), sizeof(displacement));
+            const auto* bytes = reinterpret_cast<const unsigned char*>(prefix);
+            std::fprintf(stderr, "A2_PREFIX_ACTUAL_BYTES %02x %02x %02x %02x\n",
+                         bytes[0], bytes[1], bytes[2], bytes[3]);
             const Uptr descriptor = prefix + static_cast<intptr_t>(displacement);
             descriptorOwned = displacement != 0 && image->Contains(descriptor);
             std::fprintf(stderr, "A2_PREFIX_BYTES value=%d descriptor=%p owned=%d\n",
@@ -566,7 +571,7 @@ static void CheckPrefixQualification(unsigned kind)
             adjacent = left.start + left.size == right.start && left.executable != right.executable;
         }
     }
-    const bool qualified = executable && (kind == 2 ? !covered : covered && descriptorOwned) &&
+    const bool qualified = executable && (kind == 2 ? sameBytes == 0 : covered && descriptorOwned) &&
                            (kind != 1 || adjacent);
     std::fprintf(stderr, "A2_PREFIX_INPUT kind=%u pc=%p prefix=%p qualified=%d first=%zu last=%zu adjacent=%d\n",
                  kind, pc, reinterpret_cast<void*>(prefix), qualified, firstRange, lastRange, adjacent);
