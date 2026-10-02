@@ -1,0 +1,13 @@
+{
+  "run_id": 37061593934,
+  "artifact_id": 11251007840,
+  "archive_sha256": "4ebba1d82d43e247b208f6ca0fa8ba08ec1e1ef9360abcafec59ca4bdcef75a6",
+  "files": {
+    "producer.o": "c37063c609a32a833b31b98257d7aa1a674d092c95b65ee260e9ec62d20c60e8",
+    "consumer.o": "156592ade3eae76565577d2f462ed6c87b4e67a2ac35f564d18eb0af227ee980",
+    "pac-dylibs/libcangjie-runtime.dylib": "1bdfffc4dd4f638cd987f9d9c828df7460cf0165c0d5a15f6e97e80acbac4a7e",
+    "pac-dylibs/libboundscheck.dylib": "35ca7e1a22c53029085932b4d6e120e99de1b831254315fe8b1a38ae82c4bac7"
+  },
+  "static_review": "REPORT-sym_cangjie_runtime_1481_review_r5961460430.md:75-118",
+  "scope": "fixed library normal LR path only; original reader INVALID unchanged"
+}

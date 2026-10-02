@@ -1,0 +1,66 @@
+name: Apple PAC 1481 fixed artifact continuation
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: pac-retained-1481-single-batch
+  cancel-in-progress: false
+jobs:
+  retained:
+    if: >-
+      github.repository == 'cjcj-dev/cangjie-runtime' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.number == 1482 &&
+      github.event.pull_request.head.ref == 'sym/1481-implement-r5946918200' &&
+      github.run_attempt == '1' &&
+      github.event.pull_request.head.sha == vars.PAC1481_RETAINED_HEAD &&
+      vars.PAC1481_RETAINED_DEADLINE != '' &&
+      github.event.label.name == format('retained1481-{0}', github.event.pull_request.head.sha)
+    runs-on: macos-15
+    timeout-minutes: 80
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      PAC1481_RETAINED_HEAD: ${{ vars.PAC1481_RETAINED_HEAD }}
+      PAC1481_RETAINED_DEADLINE: ${{ vars.PAC1481_RETAINED_DEADLINE }}
+      PAC1481_RETAINED_ACTIVATED_AT: ${{ vars.PAC1481_RETAINED_ACTIVATED_AT }}
+      PAC1481_LABEL: ${{ github.event.label.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Acquire exact original archive
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const crypto = require('crypto');
+            const target = path.join(process.env.RUNNER_TEMP, 'sym_cangjie_runtime_1481_implement_r5961667441-acquisition');
+            fs.mkdirSync(target);
+            const route = '/repos/cjcj-dev/cangjie-runtime/actions/';
+            const artifact = await github.request('GET ' + route + 'artifacts/11251007840');
+            fs.writeFileSync(path.join(target, 'artifact.json'), JSON.stringify(artifact.data, null, 2));
+            if (artifact.data.expired || artifact.data.workflow_run.id !== 37061593934 || artifact.data.digest !== 'sha256:4ebba1d82d43e247b208f6ca0fa8ba08ec1e1ef9360abcafec59ca4bdcef75a6') throw new Error('fixed artifact metadata mismatch');
+            const run = await github.request('GET ' + route + 'runs/37061593934');
+            fs.writeFileSync(path.join(target, 'original-run.json'), JSON.stringify(run.data, null, 2));
+            const archive = await github.request('GET ' + route + 'artifacts/11251007840/zip');
+            const bytes = Buffer.from(archive.data);
+            fs.writeFileSync(path.join(target, 'original.zip'), bytes);
+            fs.writeFileSync(path.join(target, 'download.sha256'), crypto.createHash('sha256').update(bytes).digest('hex') + '\n');
+      - name: One retained link and green
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/pac_strip_darwin/retained.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5961667441" "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5961667441-acquisition/original.zip"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pac-retained-1481-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5961667441-acquisition
+            ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5961667441
+          if-no-files-found: error
