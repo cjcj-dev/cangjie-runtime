@@ -1,0 +1,36 @@
+name: Apple PAC 1481 frozen compile-only probe
+on:
+  workflow_dispatch:
+    inputs:
+      admitted_sha:
+        description: Full candidate SHA explicitly activated by advisor frozen-input check
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pac-probe-1481-single-batch
+  cancel-in-progress: false
+jobs:
+  compile-only:
+    if: github.event.inputs.admitted_sha == github.sha
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Collect fixed compile-only batch
+        env:
+          SCCACHE_DISABLE: '1'
+        run: |
+          ulimit -c 0
+          test "$(uname -m)" = arm64
+          python3 ci/pac-probe-1481/run.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pac-probe-1481-${{ github.sha }}
+          path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5946918200
+          if-no-files-found: error
