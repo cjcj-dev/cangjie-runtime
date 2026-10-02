@@ -14,6 +14,8 @@ OUT = Path(os.environ['RUNNER_TEMP']) / LANE
 OUT.mkdir(parents=True, exist_ok=False)
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 records = []
+matrix = json.loads(Path('ci/pac-probe-1481/argv.json').read_text())
+expected_head = os.environ.get('PAC_PROBE_HEAD_SHA', '')
 
 
 def sha(path):
@@ -39,9 +41,14 @@ def run(name, argv):
 
 def stop(reason):
     (OUT / 'result.json').write_text(json.dumps(dict(status='NOT_RUN', reason=reason,
-        behavior='NOT_RUN', candidate=os.environ.get('PAC_PROBE_HEAD_SHA')), indent=2))
+        behavior='NOT_RUN', candidate=expected_head,
+        compile_items=[dict(id=item['id'], status='not-attempted') for item in matrix]), indent=2))
     raise SystemExit(0)
 
+
+rc, actual_head = run('driver-checkout-head', ['git', 'rev-parse', 'HEAD'])
+if rc or not expected_head or actual_head != expected_head:
+    stop('driver checkout HEAD does not match admitted event head')
 
 # The default active identity is separate; never use it to select the batch compiler.
 run('active-before', ['xcode-select', '-p'])
@@ -52,6 +59,7 @@ identity = {'DEVELOPER_DIR': DEV, 'candidate': os.environ['PAC_PROBE_HEAD_SHA'],
             'ImageOS': os.environ.get('ImageOS'), 'ImageVersion': os.environ.get('ImageVersion')}
 for name, argv in [
     ('sw-vers', ['sw_vers']), ('uname', ['uname', '-a']),
+    ('architecture', ['uname', '-m']),
     ('xcodebuild', ['xcodebuild', '-version']),
     ('clang-path', ['xcrun', '--find', 'clang']),
     ('clang-version', ['xcrun', 'clang', '--version']),
@@ -62,8 +70,13 @@ for name, argv in [
     rc, value = run(name, argv)
     identity[name] = dict(rc=rc, value=value)
 (OUT / 'identity.json').write_text(json.dumps(identity, indent=2))
-if any(identity[x]['rc'] for x in ['xcodebuild', 'clang-path', 'resource-dir', 'sdk-path']):
-    stop('required fixed-toolchain identity command failed')
+required = ['sw-vers', 'uname', 'architecture', 'xcodebuild', 'clang-path',
+            'clang-version', 'resource-dir', 'sdk-path', 'sdk-version', 'sdk-build']
+missing = [name for name in required if identity[name]['rc'] or not identity[name]['value']]
+if missing:
+    stop('required identity failed or empty: ' + ', '.join(missing))
+if identity['architecture']['value'] != 'arm64':
+    stop('fixed arm64 runner architecture does not match')
 clang = str(Path(identity['clang-path']['value']).resolve())
 sdk = identity['sdk-path']['value']
 header = Path(identity['resource-dir']['value']) / 'include/ptrauth.h'
@@ -88,7 +101,6 @@ identity['workflow-sha256'] = sha('.github/workflows/pac-probe-1481.yml')
 os.environ['SCCACHE_DISABLE'] = '1'
 os.environ['SCCACHE_DIR'] = str(OUT / 'sccache')
 run('sccache-version', ['sccache', '--version'])
-matrix = json.loads(Path('ci/pac-probe-1481/argv.json').read_text())
 if len(matrix) != 15:
     stop('frozen matrix does not contain exactly 15 commands')
 for item in matrix:
@@ -98,5 +110,8 @@ run('sccache-stats', ['sccache', '--show-stats'])
 manifest = {str(p.relative_to(OUT)): sha(p) for p in OUT.rglob('*') if p.is_file()}
 (OUT / 'sha256.json').write_text(json.dumps(manifest, indent=2))
 (OUT / 'result.json').write_text(json.dumps(dict(status='compile-batch-collected',
-    behavior='NOT_RUN', candidate=os.environ['PAC_PROBE_HEAD_SHA'], invocations=15,
+    behavior='NOT_RUN', candidate=expected_head, invocations=15,
+    compile_items=[dict(id=record['id'], rc=record['rc'],
+        status='success' if record['rc'] == 0 else 'nonzero')
+        for record in records if record['id'] in {item['id'] for item in matrix}],
     interpretation='Read API expansion and assembly individually; compile success grants no ABI or execution admission.'), indent=2))
