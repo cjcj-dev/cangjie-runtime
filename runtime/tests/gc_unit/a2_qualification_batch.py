@@ -35,8 +35,7 @@ def check(paths):
     if not by_case['roots-zero']['build_entries'] or not by_case['roots-zero']['map_reads']:
         raise ValueError('ROOTS instrument has no Build/map positive')
     if by_case['roots-missing']['build_locations'] != by_case['roots-zero']['build_locations']:
-        # ASLR is disabled by GDB's normal start recipe. If the host cannot
-        # disable it, compare product-relative addresses, never weaken this.
+        # Addresses are normalized to the verified mapped product base.
         raise ValueError('Build probe locations differ; input instrument is not identical')
     return {'status': 'QUALIFIED_INPUTS', 'cases': list(CASES), 'n_per_case': 1,
             'scope': 'green input/instrument qualification only; no cut or product acceptance'}

@@ -252,13 +252,15 @@ try:
     if case.startswith('roots-'):
         # Source is a locator, not evidence of execution. Inline locations must
         # belong to this product SO and expose the actual ROOTS Build chain.
-        build_probe = BuildEntry('StackMap.h:278', internal=True)
+        build_probe = BuildEntry('StackMap.h:277', internal=True)
         locations = [l for l in build_probe.locations if l.address is not None]
         product_locations = []
         for location in locations:
             try:
-                product_at(location.address)
-                product_locations.append(location.address)
+                _, identity = product_at(location.address)
+                base = min(row[0] for row in identity['maps'])
+                product_locations.append({'so_sha256': identity['sha256'],
+                                          'relative_pc': location.address - base})
             except RuntimeError:
                 location.enabled = False
         if not product_locations:
@@ -267,6 +269,9 @@ try:
     Input('A2ObservePrefix' if case.startswith('prefix-') else 'A2ObserveRoots', internal=True)
     gdb.events.exited.connect(finish)
     gdb.execute('continue')
+    record['stopped_program'] = gdb.execute('info program', to_string=True)
+    record['stopped_pc'] = str(gdb.parse_and_eval('$pc'))
+    raise RuntimeError('inferior stopped before normal exit; no abnormal stop is target evidence')
 except Exception as error:
     fail(error)
     if out:
