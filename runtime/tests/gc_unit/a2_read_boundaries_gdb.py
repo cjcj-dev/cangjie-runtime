@@ -215,7 +215,8 @@ class BuildEntry(gdb.Breakpoint):
             while frame is not None:
                 names.append(frame.name() or '')
                 frame = frame.older()
-            if not any('CheckRegisterRoots' in n for n in names) or not any('Build<' in n or '::Build' in n for n in names):
+            if not any('CheckRegisterRoots' in n for n in names) or not any(
+                    'StackMapBuilder::Build<MapleRuntime::HeapReferenceMap>' in n for n in names):
                 raise RuntimeError('Build boundary is not the ROOTS consumer instance')
             record['build_entries'].append({'pc': pc, 'symbol': str(symbol), 'stack': names,
                 'instruction': gdb.newest_frame().architecture().disassemble(pc, count=1), 'so': identity})
@@ -359,9 +360,14 @@ def dispatch():
 def install_build():
     global build_probe, snapshot_generation
     if case.startswith('roots-'):
-        # Source is a locator, not evidence of execution. Inline locations must
-        # belong to this product SO and expose the actual ROOTS Build chain.
-        build_probe = mutate('install Build', lambda: BuildEntry('StackMap.h:277', internal=False))
+        # The retained SO's CheckRegisterRoots call consumes HeapReferenceMap.
+        # Source line 277 selects StackPtrMap in that SO; candidate-tree line
+        # numbers cannot identify a retained artifact's template instance.
+        # Resolve the actual consumer's symbol, then bind every CLI location
+        # to the product SO. Execution still requires the real ROOTS stack.
+        locator = '_ZNK12MapleRuntime15StackMapBuilder5BuildINS_16HeapReferenceMapEEET_b'
+        record['build_locator'] = locator
+        build_probe = mutate('install Build', lambda: BuildEntry(locator, internal=False))
         snapshot_generation = symbol_generation
         text = gdb.execute('info breakpoints %d' % build_probe.number, to_string=True)
         record['build_location_table'] = text

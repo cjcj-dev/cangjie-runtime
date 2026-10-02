@@ -222,3 +222,12 @@ Snapshots bind official script/modules, raw maps, manifest/hash/device/inode,
 consumer thread/frame, normal return and original collector outcomes. DR
 mirror output is not an independent physical DR dump. Old successful diagnostic
 records are design evidence, never new formal-script outcomes.
+
+The retained product's DWARF maps line277 to Build<StackPtrMap>, while the
+CheckRegisterRoots call at SO offset0x522847 calls HeapReferenceMap Build at
+0x523300 (DWARF line314). Resolve the actual HeapReferenceMap template symbol,
+verify product ownership for its complete selected CLI location table, and
+require a captured HeapReferenceMap Build + CheckRegisterRoots stack. These
+offsets are read-only evidence, not hardcoded breakpoint addresses. The final
+bounded failed-case correction may run zero once; missing with the revised
+locator remains NOT_RUN. Earlier missing OBSERVED cannot qualify that window.
