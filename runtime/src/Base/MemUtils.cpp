@@ -49,8 +49,16 @@ const uint64_t PAC_MASK = ((uint64_t)1 << 39) - 1;
 
 __attribute__((always_inline)) uintptr_t PtrauthStripInstPointer(uintptr_t ptr)
 {
-    // simulate xpaci on device which lower than armv8.3a
+#if defined(__APPLE__) && defined(__aarch64__)
+    // HotSpot pauth_linux_aarch64.inline.hpp:43-46: strip, never authenticate.
+    // The read/write x30 operand also tells the compiler that caller LR changes.
+    register uintptr_t result __asm__("x30") = ptr;
+    asm ("hint #0x7" : "+r" (result));
+    return result;
+#else
+    // Preserve the existing OHOS/Android platform contract.
     return ptr & PAC_MASK;
+#endif
 }
 __attribute__((always_inline)) uintptr_t PtrauthAuthWithInstAkey(uintptr_t ptr, uintptr_t mod)
 {

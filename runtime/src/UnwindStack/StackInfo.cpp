@@ -46,8 +46,15 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
                      reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
         const FramePrologue prologue(funcDesc->GetStackMap());
         auto fa = calleeFrameInfo.mFrame.GetFA();
+#if defined(__APPLE__) && defined(__aarch64__)
+        // Darwin places the FP/LR record at the top of the callee-save area.
+        // The caller SP is immediately above it, irrespective of extra saves
+        // or dynamic allocations below FP (AArch64FrameLowering.cpp:1678).
+        callerFrameInfo.mFrame.SetPtrAuthRAMod(stackFrameAlign(reinterpret_cast<uint64_t*>(fa + 1)));
+#else
         const size_t count = prologue.GetSavedRegisterCount();
         callerFrameInfo.mFrame.SetPtrAuthRAMod(stackFrameAlign(reinterpret_cast<uint64_t*>(fa) + count));
+#endif
     } else if (calleeFrameInfo.mFrame.IsC2RStubFrame() || calleeFrameInfo.mFrame.IsC2NExceptionStubFrame()) {
         auto fa = calleeFrameInfo.mFrame.GetFA();
         auto size = GetRuntimeFrameSize((MachineFrame&)calleeFrameInfo.mFrame);

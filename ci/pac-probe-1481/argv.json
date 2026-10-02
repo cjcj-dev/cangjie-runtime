@@ -1,0 +1,294 @@
+[
+  {
+    "id": "arm64-apple-macos12-features-dM",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-dM",
+      "-E",
+      "ci/pac-probe-1481/features.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-features-dM.txt"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-features-P",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-E",
+      "-P",
+      "ci/pac-probe-1481/features.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-features-P.txt"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-api-H",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-H",
+      "-E",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-api-H.i"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-api-S",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-S",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-api-S.s"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-api-c",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-c",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-api-c.o"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-instruction-S",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-S",
+      "ci/pac-probe-1481/instruction.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-instruction-S.s"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-instruction-c",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-c",
+      "ci/pac-probe-1481/instruction.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-instruction-c.o"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-features-dM",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-dM",
+      "-E",
+      "ci/pac-probe-1481/features.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-features-dM.txt"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-features-P",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-E",
+      "-P",
+      "ci/pac-probe-1481/features.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-features-P.txt"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-api-H",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-H",
+      "-E",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-api-H.i"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-api-S",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-S",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-api-S.s"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-api-c",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-c",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-api-c.o"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-instruction-S",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-S",
+      "ci/pac-probe-1481/instruction.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-instruction-S.s"
+    ]
+  },
+  {
+    "id": "arm64e-apple-macos12-instruction-c",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64e-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-c",
+      "ci/pac-probe-1481/instruction.c",
+      "-o",
+      "${OUT}/arm64e-apple-macos12-instruction-c.o"
+    ]
+  },
+  {
+    "id": "arm64-apple-macos12-api-S-b-key",
+    "argv": [
+      "sccache",
+      "${CLANG}",
+      "-target",
+      "arm64-apple-macos12",
+      "-isysroot",
+      "${SDK}",
+      "-mmacosx-version-min=12.0",
+      "-O1",
+      "-x",
+      "c",
+      "-S",
+      "-mbranch-protection=pac-ret+b-key",
+      "ci/pac-probe-1481/api.c",
+      "-o",
+      "${OUT}/arm64-apple-macos12-api-S-b-key.s"
+    ]
+  }
+]
