@@ -159,3 +159,39 @@ coverage, extent and selected deleted/hash/inode changes; required-missing and
 raw-parser malformed inputs remain previously observed only, not revalidated.
 CLI, lifecycle, collector and watch-layout implementation is unchanged; their
 previous 20-recipe facts remain separate, without new execution claims.
+# Legal negative admission (1478, local-only revision)
+
+The frozen input contract is test_package_init.cpp:535-578: valid executable
+PC, four readable registered-owner prefix bytes for positive inputs, or zero
+for the rejection input. `prefix_input` records raw mapping facts after binding
+the PC owner; it does not turn a failed identity/read check into a negative.
+Partial coverage is outside this frozen contract. No prefix bytes are fetched.
+
+Input admission does not prove a no-read observation window. For a rejection
+input the current dispatcher records `observation_missing` and stops before
+constructing a watch or resuming the consumer. This is an explicit missing
+capability, never OBSERVED or product acceptance. GNU12.1's Python WP_READ
+constructor calls rwatch_command_wrapper, which calls watch_command_1 with
+just_location=0. CLI -location is not exposed by that constructor; its separate
+path still calls fetch_subexp_value, and update_watchpoint calls it again with
+false. The saved sources do not establish a no-memory-fetch installation and
+revalidation contract for this inaccessible address. Do not infer safety from
+the word "location" or from a hardware watchpoint's existence.
+
+Source anchors in the saved GNU12.1 bundle at
+/root/cj_build/agent_scratch/sym_cangjie_runtime_1478_implement_r5950661308/docs/:
+doc-gdb.texinfo:4900, python-py-breakpoint.c:881, breakpoint.c:10305, :1893,
+:10660. These are debugger infrastructure anchors, not ZGC product anchors.
+Missing: a version-supported mechanism with proved zero inaccessible-byte
+fetches through installation, resume/revalidation and hit handling, plus actual
+hardware installation/effectiveness and a positive control bound to that same
+mechanism. Neither an empty read list nor the old readable-prefix positives
+establishes the inaccessible-prefix window. More real API execution is not
+authorized by this source-only revision.
+
+`a2_negative_admission_offline.py` runs actual observer callback/dispatch/finalize
+definitions on synthetic maps and fake events. Its fake BP/CLI receipts cannot
+qualify real GDB or product behavior. Ordinary/continuous source wiring and
+identity failures, absent/invalidated windows and the explicit negative missing
+capability are its scope. Existing five-case collector, product fixtures and
+all prior actual results retain their original meaning. ROOTS is still untested.

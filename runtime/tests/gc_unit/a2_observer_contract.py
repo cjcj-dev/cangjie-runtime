@@ -96,6 +96,37 @@ def required_inputs(executable, rows, manifest):
     return [bind(p, rows, manifest) for p in paths]
 
 
+def prefix_input(rows, pc, owner, manifest):
+    """Classify mapping facts, never a case name or a failed read attempt.
+
+    The frozen fixture requires all four prefix bytes in the readable owner,
+    or zero such bytes for its rejection input. Identity failures propagate;
+    they must never be reclassified as a legitimate negative.
+    """
+    if bind(owner['path'], rows, manifest) != owner:
+        raise ValueError('prefix owner changed')
+    code = contains(rows, pc, executable=True)
+    if code[6] != 'file' or os.path.realpath(code[5]) != owner['path']:
+        raise ValueError('prefix PC outside bound executable owner')
+    if pc < 4:
+        raise ValueError('invalid prefix extent')
+    byte_rows = [[r for r in rows if r[0] <= address < r[1]]
+                 for address in range(pc - 4, pc)]
+    if any(len(rs) > 1 for rs in byte_rows):
+        raise ValueError('ambiguous prefix mapping')
+    same = [bool(rs and rs[0][6] == 'file' and 'r' in rs[0][2] and
+                 os.path.realpath(rs[0][5]) == owner['path']) for rs in byte_rows]
+    count = sum(same)
+    if count not in (0, 4):
+        raise ValueError('partial prefix is outside frozen input contract')
+    if count == 4:
+        read_boundary(rows, pc - 4, 4, owner, manifest)
+    return {'address': pc - 4, 'size': 4, 'readable_owner_bytes': count,
+            'expected_accepted': count == 4,
+            'mappings': [list(rs[0]) if rs else None for rs in byte_rows],
+            'owner': owner}
+
+
 def cli_locations(text, number):
     """Strict CLI info breakpoints table, single or <MULTIPLE> with subrows.
 

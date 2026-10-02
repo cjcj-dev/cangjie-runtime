@@ -11,7 +11,7 @@ import gdb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from a2_observer_contract import (digest, parse_maps, bind, required_inputs,
-                                  contains, read_boundary, locate, Lifecycle, verify_watch, validate_symbols)
+                                  contains, read_boundary, prefix_input, locate, Lifecycle, verify_watch, validate_symbols)
 
 case = os.environ.get('A2_CASE', '')
 out = os.environ.get('A2_OBSERVER_OUT', '')
@@ -78,6 +78,9 @@ def captured(event):
             try:
                 if life.state == 'armed':
                     check_symbols()
+                    if case.startswith('prefix-') and (not record.get('prefix_watch_verified') or
+                            len(watches) != 1 or not watches[0].is_valid() or not watches[0].enabled):
+                        raise RuntimeError('prefix observation window absent or invalidated')
                 identity = method(self)
                 life.capture(event, identity)
             except Exception as error:
@@ -230,8 +233,10 @@ class Input(gdb.Breakpoint):
         record['consumers'].append(input_item)
         input_watch = None
         if case.startswith('prefix-'):
-            read_boundary(rows, pc - 4, 4, owner_identity, manifest)
-            input_watch = (pc - 4, 'prefix', owner_identity)
+            admission = prefix_input(rows, pc, owner_identity, manifest)
+            input_item['prefix_input'] = admission
+            if admission['expected_accepted']:
+                input_watch = (pc - 4, 'prefix', owner_identity)
         else:
             address = int(frame.read_var('map'))
             input_item['map'] = address
@@ -257,6 +262,16 @@ def dispatch():
     action = life.dispatch()
     record.setdefault('dispatch', []).append(action)
     if action == 'install':
+        if case.startswith('prefix-') and not input_item['prefix_input']['expected_accepted']:
+            # Input admission is valid. Observation is a separate obligation:
+            # GDB12's Python WP_READ evaluates the dereference (no -location
+            # option). Do not invoke it on an unreadable/foreign prefix, and
+            # do not resume without a verified observation window.
+            record['observation_missing'] = {
+                'address': input_item['prefix_input']['address'], 'size': 4,
+                'reason': 'GNU12.1 safe no-read window unavailable',
+                'installed': False, 'positive_control': False}
+            raise RuntimeError('valid rejection input; safe read observation missing')
         symbol_objects = list(gdb.objfiles())
         symbol_paths = [o.filename for o in symbol_objects]
         snapshot_generation = symbol_generation
@@ -267,6 +282,8 @@ def dispatch():
             text = gdb.execute('info breakpoints %d' % watch.number, to_string=True)
             record['watch_installation'] = text
             verify_watch(text, watch.number, '*(unsigned int*)0x%x' % watch.address)
+            if watch.kind == 'prefix':
+                record['prefix_watch_verified'] = True
         returns.append(mutate('install Finish', lambda: ConsumerReturn(input_frame, input_item)))
         if build_probe:
             mutate('enable Build', lambda: setattr(build_probe, 'enabled', True))
@@ -317,11 +334,14 @@ def finalize():
     inputs = record['consumers']
     valid = life.exit(record['inferior_rc']) and not record['errors'] and len(inputs) == 1 and inputs[0]['returned']
     if case.startswith('prefix-'):
-        positive = case != 'prefix-invalid'
+        positive = inputs[0]['prefix_input']['expected_accepted'] if inputs else None
         target = inputs and inputs[0].get('accepted') == int(positive) and bool(record['prefix_reads']) == positive
     else:
         positive = case == 'roots-zero'
         target = bool(record['build_entries']) == positive and bool(record['map_reads']) == positive
+    valid = valid and not record.get('observation_missing')
+    if case.startswith('prefix-'):
+        valid = valid and record.get('prefix_watch_verified', False)
     record['status'] = 'OBSERVED' if valid and target else 'INVALID'
     record['target'] = bool(valid and target)
     with open(out, 'w') as stream:
