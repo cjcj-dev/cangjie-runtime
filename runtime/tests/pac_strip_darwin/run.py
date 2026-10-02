@@ -166,6 +166,14 @@ def lr_flow(block, require_stripped_return):
     registers = {"x30": "incoming_lr", "x0": "input_pc"}
     bases = {"sp": 0}
     slots = {}
+    def write(register, value=None, base=None):
+        # W writes zero-extend into the same X register, invalidating 64-bit tags.
+        alias = "x" + register[1:] if re.fullmatch(r"w(?:[0-9]|[12][0-9]|30)", register) else register
+        registers[alias] = value if alias == register else None
+        bases.pop(alias, None)
+        if base is not None and alias == register:
+            bases[alias] = base
+
     xpac = False
     returns = 0
     instruction = re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2,8}\s+)+(\w+)\s*(.*?)\s*$")
@@ -179,39 +187,47 @@ def lr_flow(block, require_stripped_return):
         operands = operands.replace("lr", "x30").replace("fp", "x29")
         parts = [part.strip() for part in operands.split(",")]
         if op == "mov" and len(parts) == 2:
-            registers[parts[0]] = registers.get(parts[1])
-            if parts[1] in bases:
-                bases[parts[0]] = bases[parts[1]]
+            write(parts[0], registers.get(parts[1]), bases.get(parts[1]))
         elif op in ("add", "sub") and len(parts) == 3 and parts[1] in bases and parts[2].startswith("#"):
             offset = int(parts[2][1:], 0) * (-1 if op == "sub" else 1)
-            bases[parts[0]] = bases[parts[1]] + offset
+            write(parts[0], base=bases[parts[1]] + offset)
         elif op in ("stp", "str", "stur", "ldp", "ldr", "ldur"):
             memory = re.search(r"\[(sp|x29)(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?\](!)?(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?", operands)
-            if memory is None or memory[1] not in bases:
+            if memory is None:
+                raise RuntimeError("INVALID: unsupported memory operand")
+            if memory[1] not in bases:
+                if op.startswith("st"):
+                    raise RuntimeError("INVALID: unknown store address")
                 # Ordinary frame/PC loads are unrelated to preserved return state.
                 if op.startswith("ld"):
                     for register in parts[:2 if op == "ldp" else 1]:
-                        registers[register] = None
+                        write(register)
                 continue
             base, offset, pre, post = memory.groups()
+            if (pre or post) and base in parts[:2 if op == "ldp" else 1]:
+                raise RuntimeError("INVALID: writeback overlaps data register")
             address = bases[base] + int(offset or "0", 0)
             count = 2 if op in ("stp", "ldp") else 1
             for index, register in enumerate(parts[:count]):
                 if op.startswith("st"):
+                    if not register.startswith("x"):
+                        raise RuntimeError("INVALID: unsupported load/store register width")
                     slots[address + index * 8] = registers.get(register)
                 else:
-                    registers[register] = slots.get(address + index * 8)
+                    if not register.startswith("x"):
+                        raise RuntimeError("INVALID: unsupported load/store register width")
+                    write(register, slots.get(address + index * 8))
             if pre:
-                bases[base] = address
+                write(base, base=address)
             if post:
-                bases[base] += int(post, 0)
+                write(base, base=bases[base] + int(post, 0))
         elif op == "xpaclri" or (op == "hint" and operands in ("#7", "#0x7")):
             xpac = True
-            registers["x30"] = "stripped_pc"
+            write("x30", "stripped_pc" if registers.get("x30") == "input_pc" else None)
         elif op == "bl":
             for index in range(19):
-                registers["x" + str(index)] = None
-            registers["x30"] = "call_return"
+                write("x" + str(index))
+            write("x30", "call_return")
         elif op == "ret":
             returns += 1
             if registers.get(parts[0] or "x30") != "incoming_lr":
@@ -222,11 +238,11 @@ def lr_flow(block, require_stripped_return):
             raise RuntimeError("INVALID: unsupported LR control-flow shape")
         elif op not in ("nop", "cmp", "tst", "cset", "adrp", "adr", "and", "orr", "eor", "ubfx"):
             raise RuntimeError("INVALID: unsupported instruction " + op)
-        elif parts and parts[0].startswith("x"):
-            registers[parts[0]] = None
+        elif op not in ("nop", "cmp", "tst") and parts:
+            write(parts[0])
     if not returns or (require_stripped_return and not xpac):
         raise RuntimeError("actual strip/return instruction flow not established")
-    return xpac
+    return True
 
 
 def instruction_checks():
@@ -237,13 +253,15 @@ def instruction_checks():
     target = function_block(assembly, "isn2cstubframe")
     inline = bool(re.search(r"xpaclri|hint\s+#(?:0x)?7\b", target))
     (OUT / "actual-n2c-caller.log").write_text(target)
-    lr_flow(target, False)
+    if not lr_flow(target, False):
+        raise RuntimeError("INVALID: caller LR checker rejected")
     if not inline:
         if not re.search(r"\bbl\b[^\n]*<[^>]*ptrauthstripinstpointer", target):
             raise RuntimeError("actual caller does not bind real strip callee")
         callee = function_block(assembly, "ptrauthstripinstpointer")
         (OUT / "actual-strip-callee.log").write_text(callee)
-        lr_flow(callee, True)
+        if not lr_flow(callee, True):
+            raise RuntimeError("INVALID: callee LR checker rejected")
     (OUT / "actual-n2c-caller.log").write_text(target)
     (OUT / "instruction-check.json").write_text(json.dumps({"producer_encoding": "d503211f",
         "product_strip": "XPACLRI", "bounded_lr_text_check": True, "complete_cfg_proof": False,

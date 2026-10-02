@@ -1,5 +1,6 @@
-"""One bounded offline batch. Never launches a compiler/cache/configure/native program."""
+"""Single frozen R1-R3 offline batch: byte mirrors, no external product tools."""
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 import recipe
 
 root = Path(sys.argv[1]).resolve()
@@ -17,7 +19,6 @@ external = []
 def sentinel(*args, **kwargs):
     external.append(str(args))
     raise RuntimeError('FORBIDDEN external invocation')
-
 subprocess.Popen = subprocess.run = subprocess.check_output = sentinel
 os.system = os.popen = sentinel
 
@@ -26,147 +27,167 @@ def audit(event, args):
         sentinel(event, args)
 sys.addaudithook(audit)
 
-# Test only the actual definitions, without importing the product executor.
-source = Path(__file__).with_name('run.py').read_text()
-module = ast.parse(source)
-functions = [n for n in module.body if isinstance(n, ast.FunctionDef) and n.name in ('configure', 'lr_flow')]
-namespace = {'re': re, 'RESULT': {'sdk_path': '/recorded/sdk'}}
-exec(compile(ast.Module(body=functions, type_ignores=[]), 'actual-recipe-definitions', 'exec'), namespace)
+def definitions(path, names, namespace):
+    nodes = [n for n in ast.parse(path.read_text()).body
+             if isinstance(n, ast.FunctionDef) and n.name in names]
+    assert {n.name for n in nodes} == set(names)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
 
-def check(name, action, rejected=False):
+here = Path(__file__).parent
+namespace = {'re': re, 'json': json, 'OUT': root}
+definitions(here / 'run.py', ('function_block', 'lr_flow', 'instruction_checks'), namespace)
+# Pure read-only identity generation from the real producer, not a copied schema.
+producer = {'json': json, 'hashlib': hashlib, 'Path': Path, 're': re,
+            'subprocess': subprocess}
+definitions(here.parents[1] / 'build/publish_runtime_output.py', ('sha', 'canonical_json', 'generated_inputs'), producer)
+
+def check(name, action, expected=None):
     start = time.monotonic()
+    namespace["OUT"] = root / ("instructions-" + name)
+    namespace["OUT"].mkdir()
     try:
-        result = action()
-    except (RuntimeError, FileNotFoundError, KeyError) as error:
-        if not rejected:
+        value = action()
+    except RuntimeError as error:
+        if expected is None or expected not in str(error):
             raise
-        result = {'rejected': str(error)}
+        value = {'target_rejection': str(error)}
     else:
-        if rejected:
+        if expected is not None:
             raise AssertionError('expected target rejection: ' + name)
-    records.append({'name': name, 'result': result, 'wall': time.monotonic() - start})
+    print('ASSERT_EXECUTED ' + name, flush=True)
+    records.append({'name': name, 'result': value, 'wall': time.monotonic() - start})
     (root / 'results.json').write_text(json.dumps(records, indent=2))
 
+def put(tree, relative, data=b'byte mirror; NOT a compiled product'):
+    path = tree / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+def mirror(name):
+    tree = root / name
+    tree.mkdir()
+    build = tree / 'build'
+    staging = build / 'runtime-staging'
+    archive = put(staging, 'lib/libcangjie-thread.a')
+    header = put(staging, 'include/thread.h')
+    rt = put(staging, 'lib/aarch64_release/libcangjie-runtime.dylib')
+    bc = put(staging, 'lib/aarch64_release/libboundscheck.dylib')
+    put(tree, 'install_aarch64/lib/darwin_aarch64_cjnative/libcangjie-thread.a')
+    put(tree, 'install_aarch64/lib/darwin_aarch64_cjnative/libcangjie-aio.a')
+    put(staging, 'ar/aarch64_release/libBase.a')
+    put(staging, 'ar/aarch64_release/libUnwindStack.a')
+    link = put(build, 'src/Base/CMakeFiles/Base.dir/link.txt', b'ar qc libBase.a input.o\n')
+    put(build, 'runtime-link-inputs.txt', (str(link) + '\n').encode())
+    put(build, 'runtime-cjthread-inputs.txt', (str(archive) + '\n' + str(header) + '\n').encode())
+    put(build, 'compile_commands.json', b'[{"file":"input.cpp","command":"recorded -c input.cpp"}]\n')
+    put(build, 'runtime-generated-inputs/Base-CXX.txt', b'definitions=\noptions=\n')
+    put(build, 'compiler/CMakeCXXCompiler.cmake', b'set(CMAKE_CXX_COMPILER recorded)\n')
+    args = SimpleNamespace(build=build, staging=staging, generator='Unix Makefiles',
+        compiler_state=build / 'compiler', toolchain='', runtime=rt, boundscheck=bc)
+    identity, paths = producer['generated_inputs'](args)
+    text = producer['canonical_json'](identity)
+    publication = tree / 'runtime/output/temp/mirror-config'
+    put(publication, 'runtime-build-inputs.txt', text.encode())
+    put(publication, 'runtime-build-config.txt', ('SCHEMA_VERSION=6\nCONFIG_SIGNATURE_SHA256=' +
+        hashlib.sha256(text.encode()).hexdigest() + '\n').encode())
+    put(publication, 'lib/aarch64_release/libcangjie-runtime.dylib', rt.read_bytes())
+    put(publication, 'lib/aarch64_release/libboundscheck.dylib', bc.read_bytes())
+    hashes = {str(p.relative_to(publication)): recipe.digest(p) for p in publication.rglob('*.dylib')}
+    put(publication, 'runtime-product-hashes.json', producer['canonical_json'](hashes).encode())
+    return tree
+
+def preserve(name):
+    tree = mirror(name)
+    before = {str(p.relative_to(tree)): recipe.digest(p) for p in tree.rglob('*') if p.is_file()}
+    retained = root / (name + '-inputs')
+    result = {'first_error': 'recorded failure'}
+    assert recipe.preserve_arms(root, (name,), result)
+    assert result['preservation'][name]['status'] == 'COMPLETED' and not tree.exists()
+    inventory = {r['path']: r['sha256'] for r in result['preservation'][name]['inventory'] if 'path' in r}
+    required = [p for p in before if p.endswith(('.a', '.dylib')) or Path(p).name in
+                ('runtime-build-inputs.txt', 'runtime-build-config.txt', 'runtime-product-hashes.json',
+                 'runtime-cjthread-inputs.txt', 'runtime-link-inputs.txt')]
+    assert all(inventory[p] == before[p] == recipe.digest(retained / p) for p in required)
+    return {'required_hashes': {p: inventory[p] for p in required}, 'receipt': result}
+
+def missing(name, relative):
+    tree = mirror(name)
+    (tree / relative).unlink()
+    result = {'first_error': 'original configure failure'}
+    assert not recipe.preserve_arms(root, (name,), result)
+    assert tree.exists() and result['first_error'] == 'original configure failure'
+    assert 'formed publisher input missing/outside tree:' in result['preservation_errors'][name]
+    return result
+
+def copy_failure():
+    tree = mirror('copy-failure')
+    original = recipe.shutil.copy2
+    def fail(src, dst):
+        if str(src).endswith('libBase.a'):
+            raise RuntimeError('controlled Base archive copy failure')
+        return original(src, dst)
+    recipe.shutil.copy2 = fail
+    result = {'first_error': 'original failure'}
+    try:
+        assert not recipe.preserve_arms(root, ('copy-failure',), result)
+    finally:
+        recipe.shutil.copy2 = original
+    assert tree.exists() and (tree / 'build/runtime-staging/ar/aarch64_release/libBase.a').exists()
+    assert 'controlled Base archive copy failure' in result['preservation_errors']['copy-failure']
+    return result
+
+def multi():
+    for name in ('first', 'second', 'third'):
+        mirror(name)
+    (root / 'first/build/runtime-staging/lib/libcangjie-thread.a').unlink()
+    result = {'first_error': 'original configure failure'}
+    assert not recipe.preserve_arms(root, ('first', 'second', 'third'), result)
+    assert result['first_error'] == 'original configure failure'
+    assert result['preservation']['first']['status'] == 'FAILED_RETAINED'
+    assert all(result['preservation'][n]['status'] == 'COMPLETED' for n in ('second', 'third'))
+    return result
+
+positive = '0: a9bf7bfd stp x29, x30, [sp, #-16]!\n4: aa0003fe mov x30, x0\n8: d50320ff xpaclri\nc: aa1e03e0 mov x0, x30\n10: a8c17bfd ldp x29, x30, [sp], #16\n14: d65f03c0 ret'
+caller = '0: a9bf7bfd stp x29, x30, [sp, #-16]!\n4: 94000000 bl 0 <ptrauthstripinstpointer>\n8: a8c17bfd ldp x29, x30, [sp], #16\nc: d65f03c0 ret'
+
+def instructions(callee=positive, target=caller, false_checker=False):
+    (namespace['OUT'] / 'producer-disassembly.log').write_text('d503211f')
+    (namespace['OUT'] / 'product-disassembly.log').write_text('0000 <isn2cstubframe>:\n' + target +
+        '\n0100 <ptrauthstripinstpointer>:\n' + callee)
+    original = namespace['lr_flow']
+    if false_checker:
+        namespace['lr_flow'] = lambda *args: False
+    try:
+        namespace['instruction_checks']()
+    finally:
+        namespace['lr_flow'] = original
+    return json.loads((namespace['OUT'] / 'instruction-check.json').read_text())
+
 try:
-    tools_dir = root / 'tools'
-    tools_dir.mkdir()
-    for name in ('sccache', 'llvm-nm', 'llvm-objdump', 'llvm-readobj'):
-        p = tools_dir / name
-        p.write_text('#!/bin/sh\necho FORBIDDEN >> "' + str(root / 'external-marker') + '"\nexit 99\n')
-        p.chmod(0o700)
-    env = {'SCCACHE_PATH': str(tools_dir / 'sccache'), 'PAC1481_LLVM_BIN': str(tools_dir)}
-    tools = recipe.bind_tools(env)
-    build = root / 'configured'
-    cache = tools['sccache']['path']
-    recipes = {}
-    for domain, domain_root in [('top', build), ('child', build / 'cjthread-build')]:
-        domain_root.mkdir(parents=True, exist_ok=True)
-        (domain_root / 'CMakeCache.txt').write_text(
-            'CMAKE_C_COMPILER_LAUNCHER:STRING=' + cache + '\n' +
-            'CMAKE_CXX_COMPILER_LAUNCHER:STRING=' + cache + '\n' +
-            'CANGJIE_COMPILER_CACHE:FILEPATH=' + cache + '\n')
-        for lang in ('C', 'CXX'):
-            target = domain_root / 'CMakeFiles' / (lang + '-owner.dir')
-            target.mkdir(parents=True)
-            path = target / 'build.make'
-            path.write_text('\t' + cache + ' /recorded/compiler $(' + lang +
-                '_FLAGS) -o CMakeFiles/' + target.name + '/input.o -c input.' +
-                ('c' if lang == 'C' else 'cpp') + '\n')
-            recipes[domain, lang] = path
-    def consumed():
-        value = recipe.verify_configured(build, tools)
-        assert {r['language'] for r in value['top']['commands']} == {'C', 'CXX'}
-        assert {r['language'] for r in value['child']['commands']} == {'C', 'CXX'}
-        assert all('cjthread-build' not in r['file'] for r in value['top']['commands'])
-        print('ASSERT_EXECUTED independent-domain-language-target')
-        return value
-    check('independent-top-child-positive', consumed)
-    for (domain, lang), path in recipes.items():
-        original = path.read_text()
-        path.write_text(original.replace(cache + ' ', ''))
-        def reject_domain(domain=domain):
-            try:
-                recipe.verify_configured(build, tools)
-            except RuntimeError as error:
-                assert str(error).startswith(domain + ' generated launcher consumption mismatch:')
-                print('ASSERT_EXECUTED target-rejection ' + domain)
-                raise
-        check(domain + '-' + lang + '-single-domain-cut', reject_domain, True)
-        path.write_text(original)
-    check('independent-domain-restored', consumed)
-    def small_tree(name, archive=False):
-        tree = root / name
-        tree.mkdir()
-        (tree / 'flags.make').write_text('formed flags')
-        (tree / 'failed.o').write_bytes(b'saved object bytes')
-        if archive:
-            child = tree / 'staging'
-            child.mkdir()
-            (child / 'libcjthread.a').write_bytes(b'recorded archive bytes; no compiler')
-            (child / 'thread.h').write_text('saved header')
-            (tree / 'runtime-cjthread-inputs.txt').write_text('staging/libcjthread.a\nstaging/thread.h\n')
-            (tree / 'publisher-identity.json').write_text('recorded identity metadata')
-        return tree
-    def preserve_success(name, archive=False):
-        tree = small_tree(name, archive)
-        retained = root / (name + '-retained')
-        value = recipe.preserve_then_delete(tree, retained)
-        assert not tree.exists() and any(r.get('status') == 'MISSING' for r in value)
-        assert (retained / 'failed.o').read_bytes() == b'saved object bytes'
-        if archive:
-            assert (retained / 'staging/libcjthread.a').read_bytes() == b'recorded archive bytes; no compiler'
-            assert (retained / 'publisher-identity.json').read_text() == 'recorded identity metadata'
-            assert (retained / 'runtime-cjthread-inputs.txt').exists()
-        print('ASSERT_EXECUTED complete-preservation-and-MISSING')
-        return value
-    check('r-get-multiple-input-success-MISSING', lambda: preserve_success('minimal'))
-    check('child-archive-identity-input-success', lambda: preserve_success('archive', True))
-    original_copy = recipe.shutil.copy2
-    def failed_copy(src, dst):
-        raise RuntimeError('controlled preservation failure')
-    tree = small_tree('copy-failure', True)
-    recipe.shutil.copy2 = failed_copy
-    check('archive-copy-failure-retains-tree', lambda: recipe.preserve_then_delete(tree, root / 'copy-failure-retained'), True)
-    assert (tree / 'staging/libcjthread.a').exists()
-    recipe.shutil.copy2 = original_copy
-    tree = small_tree('lost-input', True)
-    (tree / 'staging/libcjthread.a').unlink()
-    check('declared-formed-input-loss-rejected', lambda: recipe.preserve_then_delete(tree, root / 'lost-input-retained'), True)
-    assert tree.exists()
-    def multi_arm():
-        out = root / 'arms'
-        out.mkdir()
-        for name in ('first', 'second', 'third'):
-            tree = out / name
-            tree.mkdir()
-            (tree / 'flags.make').write_text(name)
-        def first_only(src, dst):
-            if 'first' in Path(src).parts:
-                raise RuntimeError('controlled first-arm copy failure')
-            return original_copy(src, dst)
-        recipe.shutil.copy2 = first_only
-        result = {'first_error': 'original configure failure'}
-        try:
-            assert not recipe.preserve_arms(out, ('first', 'second', 'third'), result)
-        finally:
-            recipe.shutil.copy2 = original_copy
-        assert result['first_error'] == 'original configure failure'
-        assert result['preservation']['first']['status'] == 'FAILED_RETAINED'
-        assert (out / 'first/flags.make').exists()
-        assert all(result['preservation'][n]['status'] == 'COMPLETED' for n in ('second', 'third'))
-        assert all(not (out / n).exists() for n in ('second', 'third'))
-        print('ASSERT_EXECUTED multi-arm-independent-first-error')
-        return result
-    check('multi-arm-first-fails-others-preserved', multi_arm)
-    positive = '0: a9bf7bfd stp x29, x30, [sp, #-16]!\n4: aa0003fe mov x30, x0\n8: d50320ff xpaclri\nc: aa1e03e0 mov x0, x30\n10: a8c17bfd ldp x29, x30, [sp], #16\n14: d65f03c0 ret'
-    check('supported-reader-transport-only', lambda: namespace['lr_flow'](positive, True))
-    check('broken-lr-restore-target', lambda: namespace['lr_flow'](positive.replace('ldp x29, x30', 'ldp x29, x28'), True), True)
-    check('unsupported-branch-invalid', lambda: namespace['lr_flow'](positive.replace('mov x0, x30', 'b 0x14'), True), True)
-    raw = Path(__file__).with_name('saved-real-lr.s').read_text()
-    check('saved-real-assembly-format-invalid', lambda: namespace['lr_flow'](raw, True), True)
-    assert not external and not (root / 'external-marker').exists()
-    (root / 'summary.json').write_text(json.dumps({'status': 'PASS', 'n': len(records),
-        'external_calls': external, 'external_marker': 'ABSENT', 'scope': 'offline transport only; Apple qualification NOT_RUN'}, indent=2))
+    check('publisher-canonical-json-and-metadata', lambda: preserve('json'))
+    check('install-staging-subtarget-publication-hashes', lambda: preserve('categories'))
+    check('missing-formed-cjthread-retains-tree', lambda: missing('lost-cj', 'build/runtime-staging/lib/libcangjie-thread.a'))
+    check('formed-cjthread-restored', lambda: preserve('restored-cj'))
+    check('missing-formed-link-retains-tree', lambda: missing('lost-link', 'build/src/Base/CMakeFiles/Base.dir/link.txt'))
+    check('formed-link-restored', lambda: preserve('restored-link'))
+    check('formed-archive-copy-failure-retains-tree', copy_failure)
+    check('multiarm-first-fails-others-preserved', multi)
+    check('caller-callee-positive', instructions)
+    check('R3-overwritten-x0-add-rejected', lambda: instructions(positive.replace('10: a8', 'e: 910043e0 add x0, sp, #16\n10: a8')), 'strip result dataflow')
+    check('R3-overwritten-x30-add-rejected', lambda: instructions(target='0: 910043fe add x30, sp, #16\n4: d65f03c0 ret'), 'actual return does not restore')
+    check('w0-write-invalidates-x0', lambda: instructions(positive.replace('10: a8', 'e: 2a1f03e0 mov w0, wzr\n10: a8')), 'strip result dataflow')
+    check('w30-write-invalidates-x30', lambda: instructions(target='0: 2a1f03fe mov w30, wzr\n4: d65f03c0 ret'), 'actual return does not restore')
+    check('mov-invalidates-stale-address-base', lambda: instructions(target='0: a9bf7bfd stp x29, x30, [sp, #-16]!\n4: 910003fd mov x29, sp\n8: aa0003fd mov x29, x0\nc: f94007be ldr x30, [x29, #8]\n10: d65f03c0 ret'), 'actual return does not restore')
+    check('nonwriting-cmp-preserves-tags', lambda: instructions(positive.replace('10: a8', 'e: eb00001f cmp x0, x0\n10: a8')))
+    sp = '0: d10083ff sub sp, sp, #32\n4: a9007bfd stp x29, x30, [sp]\n8: aa0003fe mov x30, x0\nc: d50320ff xpaclri\n10: aa1e03e0 mov x0, x30\n14: a9407bfd ldp x29, x30, [sp]\n18: 910083ff add sp, sp, #32\n1c: d65f03c0 ret'
+    check('legal-SP-sub-add-restores-LR-and-strip', lambda: instructions(sp))
+    check('unsupported-control-flow-INVALID', lambda: instructions(positive.replace('mov x0, x30', 'b 0x14')), 'INVALID: unsupported LR control-flow')
+    check('caller-consumes-checker-false', lambda: instructions(false_checker=True), 'INVALID: caller LR checker rejected')
+    assert len(records) == 18
+    assert not external
+    (root / 'summary.json').write_text(json.dumps({'n': len(records), 'status': 'PASS',
+        'scope': 'offline recipe only; byte mirrors, not product evidence', 'external_calls': external}, indent=2))
 finally:
     (root / 'completed.json').write_text(json.dumps({'n': len(records), 'records': records}, indent=2))
-    (root / 'sentinel.json').write_text(json.dumps({'calls': external, 'marker_exists': (root / 'external-marker').exists()}))
+    (root / 'sentinel.json').write_text(json.dumps({'calls': external, 'scope': 'only hooked paths; no coverage extrapolation'}))

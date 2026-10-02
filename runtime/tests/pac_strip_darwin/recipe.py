@@ -92,18 +92,22 @@ def preserve_then_delete(tree, target):
     target.mkdir(parents=True, exist_ok=False)
     selected = []
     names = {"CMakeCache.txt", "compile_commands.json", "link.txt", "flags.make",
-             "build.make", "build.ninja", "rules.ninja"}
+             "build.make", "build.ninja", "rules.ninja",
+             "runtime-build-inputs.txt", "runtime-build-config.txt",
+             "runtime-product-hashes.json", "runtime-publish-args.txt"}
     for p in tree.rglob("*"):
         if p.is_file() and (p.name in names or p.suffix in (".rsp", ".log", ".rc") or
             "MachineFrame.cpp" in p.name or "MemUtils.cpp" in p.name or
-            p.suffix in (".o", ".obj")):
+            (p.name.startswith("CMake") and p.name.endswith("Compiler.cmake")) or
+            p.suffix in (".o", ".obj", ".a", ".dylib")):
             selected.append(p)
     for rel in ("runtime/src/UnwindStack/MachineFrame.cpp", "runtime/src/Base/MemUtils.cpp"):
         p = tree / rel
         if p.is_file() and p not in selected:
             selected.append(p)
-    # Publisher input lists are authoritative dependencies, including archives/headers.
-    for listing in tree.rglob("runtime-*-inputs.txt"):
+    # Only these generation-time records contain paths (RuntimeOutputLayout:67,84).
+    # runtime-build-inputs.txt is canonical JSON identity (publisher:142).
+    for listing in sorted(tree.rglob("runtime-cjthread-inputs.txt")) + sorted(tree.rglob("runtime-link-inputs.txt")):
         selected.append(listing)
         for line in listing.read_text().splitlines():
             if not line.strip():
@@ -120,9 +124,6 @@ def preserve_then_delete(tree, target):
                 "identity" in path.name or "provenance" in path.name or
                 "publish" in path.name or "publisher" in path.name):
             selected.append(path)
-    for path in tree.rglob("*"):
-        if path.is_file() and path.suffix in (".a", ".dylib") and path not in selected:
-            raise RuntimeError("formed archive/library absent from publisher input lists: " + str(path))
     selected = sorted(set(selected))
     records = []
     for p in selected:
