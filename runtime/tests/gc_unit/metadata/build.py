@@ -43,14 +43,25 @@ def digest(path):
 
 def run(command, label, cwd=None, timeout=None):
     start = time.monotonic()
+    argv = [str(x) for x in command]
+    record[label] = {"status": "STARTED", "argv": argv, "cwd": str(cwd) if cwd else os.getcwd(),
+                     "command_sha256": hashlib.sha256(json.dumps(argv).encode()).hexdigest()}
+    save() # retain command identity even if the outer workflow timeout terminates us
     with (out / (label + ".log")).open("w") as log:
-        argv = [str(x) for x in command]
         log.write(repr(argv) + "\n")
         log.flush()
-        rc = subprocess.run([str(x) for x in command], env=env, cwd=cwd,
-                            stdout=log, stderr=subprocess.STDOUT, timeout=timeout).returncode
-    record[label] = {"rc": rc, "wall": time.monotonic() - start,
-                     "argv": argv, "command_sha256": hashlib.sha256(json.dumps(argv).encode()).hexdigest()}
+        try:
+            rc = subprocess.run(argv, env=env, cwd=cwd, stdout=log,
+                                stderr=subprocess.STDOUT, timeout=timeout).returncode
+        except subprocess.TimeoutExpired as error:
+            rc = 124
+            record[label]["failure"] = str(error)
+            log.write("\nTIMEOUT: " + str(error) + "\n")
+        except OSError as error:
+            rc = 127
+            record[label]["failure"] = str(error)
+            log.write("\nLAUNCH_ERROR: " + str(error) + "\n")
+    record[label].update(rc=rc, wall=time.monotonic() - start, status="FINISHED")
     save()
     print(label, record[label], flush=True)
     if rc:
