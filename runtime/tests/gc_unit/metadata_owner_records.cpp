@@ -49,6 +49,33 @@ asm(".pushsection .gc_unit_metadata,\"ax\",@progbits\n.balign 65536\n"
     ".long 0\n.zero 32\n.zero 65428\n.popsection\n"
     ".pushsection .data\n.globl A2DataCode\nA2DataCode:\n.long A2OwnerDescriptors - .\n.zero 16\n.popsection\n");
 #endif
+#if defined(__linux__) && defined(GC_METADATA_CONTIGUOUS_IMAGE)
+// Reuse a2_contiguous.ld/a2_prefix_hole.py: exact LOAD ownership differs
+// from page readability. The PC records are data inputs, never executed.
+asm(".pushsection .a2_left,\"a\",@progbits\n"
+    ".zero 4094\n.globl A2ContinuousPrefix\nA2ContinuousPrefix:\n.short 0\n.popsection\n"
+    ".pushsection .a2_right,\"ax\",@progbits\n.short 0\n"
+    ".globl A2ContinuousCode\nA2ContinuousCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char A2ContinuousPrefix[], A2ContinuousCode[];
+extern "C" A2_EXPORT const uint32_t* A2GetContinuousPC()
+{
+    const intptr_t delta = reinterpret_cast<intptr_t>(A2OwnerDescriptors) -
+                           reinterpret_cast<intptr_t>(A2ContinuousPrefix);
+    if (delta < INT32_MIN || delta > INT32_MAX) { return nullptr; }
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    if (page != 4096) { return nullptr; } // explicit loader recipe applicability
+    const uintptr_t first = reinterpret_cast<uintptr_t>(A2ContinuousPrefix) & ~(page - 1);
+    const uintptr_t last = reinterpret_cast<uintptr_t>(A2ContinuousCode) & ~(page - 1);
+    if (mprotect(reinterpret_cast<void*>(first), last - first + page, PROT_READ | PROT_WRITE) != 0) {
+        return nullptr;
+    }
+    const int32_t displacement = static_cast<int32_t>(delta);
+    std::memcpy(A2ContinuousPrefix, &displacement, sizeof(displacement));
+    if (mprotect(reinterpret_cast<void*>(first), last - first, PROT_READ) != 0 ||
+        mprotect(reinterpret_cast<void*>(last), page, PROT_READ | PROT_EXEC) != 0) { return nullptr; }
+    return reinterpret_cast<const uint32_t*>(A2ContinuousCode);
+}
+#endif
 extern "C" A2_EXPORT const uint32_t* A2GetOwnerPC(size_t row)
 {
     return reinterpret_cast<const uint32_t*>(A2OwnerCode + row * 36 + 4);

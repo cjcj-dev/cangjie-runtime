@@ -35,3 +35,22 @@ foreach(_image cj_metadata_foreign cj_metadata_owner)
 endforeach()
 target_compile_definitions(cj_metadata_foreign PRIVATE GC_METADATA_FOREIGN_IMAGE=1)
 add_dependencies(metadata-code-shape cj_metadata_foreign cj_metadata_owner)
+
+# Isolated existing metadata entry: no gc_unit aggregate or product source copy.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(cj_metadata_contiguous SHARED ../metadata_owner_records.cpp)
+  set_target_properties(cj_metadata_contiguous PROPERTIES PREFIX "")
+  target_compile_definitions(cj_metadata_contiguous PRIVATE GC_METADATA_CONTIGUOUS_IMAGE=1)
+  target_link_options(cj_metadata_contiguous PRIVATE
+      -Wl,-z,max-page-size=4096
+      -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/../a2_contiguous.ld
+      -Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/contiguous-link.map,--cref,--trace)
+  set_property(TARGET cj_metadata_contiguous APPEND PROPERTY LINK_DEPENDS
+      ${CMAKE_CURRENT_SOURCE_DIR}/../a2_contiguous.ld)
+  add_custom_command(TARGET cj_metadata_contiguous POST_BUILD
+      COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../a2_prefix_hole.py
+          $<TARGET_FILE:cj_metadata_contiguous>
+          $<TARGET_FILE_DIR:cj_metadata_contiguous>/cj_metadata_hole.so
+      VERBATIM)
+  add_dependencies(metadata-code-shape cj_metadata_contiguous)
+endif()

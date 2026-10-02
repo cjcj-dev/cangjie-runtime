@@ -3,6 +3,7 @@
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Common/StackType.h"
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #ifdef _WIN64
 #include <windows.h>
@@ -41,6 +42,48 @@ static bool Resolve(const uint32_t* pc, const void* descriptor)
     frame.mFrame.SetFA(&input.frame);
     frame.mFrame.SetIP(pc + 1);
     return frame.ResolveProcInfo();
+}
+// Existence/layout qualification and the consumer assertion have separate
+// outputs. INVALID inputs never reach the product read or count as target red.
+static int PrefixResult(const char* name, const uint32_t* pc, const void* descriptor,
+                        const std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap>& image,
+                        bool hole, bool continuous)
+{
+    if (!pc || !image) { std::fprintf(stderr, "METADATA_PREFIX_INPUT name=%s qualified=0\n", name); return 67; }
+    ElfUnloadQuiescence::ReadScope reader;
+    const uintptr_t start = reinterpret_cast<uintptr_t>(pc), prefix = start - sizeof(int32_t);
+    size_t sameBytes = 0;
+    for (size_t b = 0; b != sizeof(int32_t); ++b) {
+        const auto owner = ElfUnloadQuiescence::RegisteredImageForAddress(prefix + b);
+        sameBytes += owner == image && image->Contains(prefix + b);
+    }
+    bool adjacent = false;
+    for (size_t i = 1; i < image->ranges.size(); ++i) {
+        const auto& left = image->ranges[i - 1];
+        const auto& right = image->ranges[i];
+        adjacent |= left.start <= prefix && prefix < left.start + left.size &&
+            right.start <= start - 1 && start - 1 < right.start + right.size &&
+            left.start + left.size == right.start && left.executable != right.executable;
+    }
+    const bool layout = hole ? (sameBytes == 2 && image->Contains(prefix) && image->Contains(start - 1) &&
+        !image->Contains(prefix + 1) && !image->Contains(prefix + 2)) : sameBytes == sizeof(int32_t);
+    const bool qualified = layout && image->Contains(start, true) &&
+        image->Contains(reinterpret_cast<uintptr_t>(descriptor)) && (!continuous || adjacent);
+    std::fprintf(stderr, "METADATA_PREFIX_INPUT name=%s qualified=%d bytes=%zu adjacent=%d\n",
+                 name, qualified, sameBytes, adjacent);
+    if (!qualified) { return 67; }
+    // Hole bytes are readable in the existing ELF fixture's mapped pages;
+    // this is an input check, never evidence of registered ownership.
+    int32_t displacement = 0;
+    std::memcpy(&displacement, reinterpret_cast<const void*>(prefix), sizeof(displacement));
+    const bool actualDescriptor = displacement != 0 &&
+        prefix + static_cast<intptr_t>(displacement) == reinterpret_cast<uintptr_t>(descriptor);
+    std::fprintf(stderr, "METADATA_PREFIX_DESCRIPTOR name=%s qualified=%d\n", name, actualDescriptor);
+    if (!actualDescriptor) { return 67; }
+    const bool accepted = Resolve(pc, descriptor);
+    std::fprintf(stderr, "METADATA_PREFIX_TARGET name=%s accepted=%d expected=%d executed=1\n",
+                 name, accepted, !hole);
+    return accepted == !hole ? 0 : 1;
 }
 int main(int argc, char** argv)
 {
@@ -85,6 +128,24 @@ int main(int argc, char** argv)
                  cross, registeredForeign, distinct);
     std::fprintf(stderr, "METADATA_ABSENT_TARGET absent=%d executed=1\n", absent);
     std::fprintf(stderr, "METADATA_CODE_ONLY_TARGET data=%d executed=1\n", data);
+    int prefixRC = 0;
+#ifndef __APPLE__
+    prefixRC = PrefixResult("ordinary", pc(0), descriptor(0), ownerMap, false, false);
+#endif
+#ifdef __linux__
+    for (const auto* name : {"contiguous", "hole"}) {
+        void* fixture = OpenImage(directory / (std::string("cj_metadata_") + name + suffix));
+        auto entry = fixture ? reinterpret_cast<const uint32_t* (*)()>(Symbol(fixture, "A2GetContinuousPC")) : nullptr;
+        auto desc = fixture ? reinterpret_cast<Descriptor>(Symbol(fixture, "A2GetOwnerDescriptor")) : nullptr;
+        if (!entry || !desc) { std::fprintf(stderr, "METADATA_PREFIX_FIXTURE name=%s qualified=0\n", name); return 67; }
+        const auto* input = entry(); // restores fixture page permissions before registration
+        const auto registration = ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(desc(0)));
+        const int result = PrefixResult(name, input, desc(0), registration, std::strcmp(name, "hole") == 0,
+                                        std::strcmp(name, "contiguous") == 0);
+        if (result == 67) { return result; }
+        if (result) { prefixRC = result; }
+    }
+#endif
     bool mapOwner = true;
 #ifdef __APPLE__
     const auto mappedSame = ElfUnloadQuiescence::FindFunctionDescriptor(reinterpret_cast<Uptr>(pc(0)));
@@ -95,5 +156,6 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "METADATA_MAP_SAME_OWNER pass=%d executed=1\n", mappedSame == reinterpret_cast<Uptr>(descriptor(0)));
     mapOwner = mappedData == 0 && mappedCross == 0 && mappedSame == reinterpret_cast<Uptr>(descriptor(0));
 #endif
-    return mapOwner && same && ownsCode && ownsData && !cross && registeredForeign && distinct && !absent && !data ? 0 : 1;
+    if (prefixRC == 67) { return prefixRC; }
+    return prefixRC == 0 && mapOwner && same && ownsCode && ownsData && !cross && registeredForeign && distinct && !absent && !data ? 0 : 1;
 }

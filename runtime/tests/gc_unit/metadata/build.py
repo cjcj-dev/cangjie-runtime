@@ -44,11 +44,13 @@ def digest(path):
 def run(command, label, cwd=None, timeout=None):
     start = time.monotonic()
     with (out / (label + ".log")).open("w") as log:
-        log.write(repr([str(x) for x in command]) + "\n")
+        argv = [str(x) for x in command]
+        log.write(repr(argv) + "\n")
         log.flush()
         rc = subprocess.run([str(x) for x in command], env=env, cwd=cwd,
                             stdout=log, stderr=subprocess.STDOUT, timeout=timeout).returncode
-    record[label] = {"rc": rc, "wall": time.monotonic() - start}
+    record[label] = {"rc": rc, "wall": time.monotonic() - start,
+                     "argv": argv, "command_sha256": hashlib.sha256(json.dumps(argv).encode()).hexdigest()}
     save()
     print(label, record[label], flush=True)
     if rc:
@@ -108,6 +110,14 @@ def a2_run_bundle(runtime_hash=None):
                f"METADATA_CROSS_OWNER_TARGET cross={expected_cross} foreign_registered=1 distinct=1 executed=1",
                "METADATA_ABSENT_TARGET absent=0 executed=1",
                f"METADATA_CODE_ONLY_TARGET data={expected_data} executed=1"]
+    if not mac:
+        prefix_names = ["ordinary"] if windows else ["ordinary", "contiguous", "hole"]
+        for name in prefix_names:
+            assert f"METADATA_PREFIX_INPUT name={name} qualified=1" in output, output
+            assert f"METADATA_PREFIX_DESCRIPTOR name={name} qualified=1" in output, output
+            expected = int(name != "hole")
+            targets.append(f"METADATA_PREFIX_TARGET name={name} accepted={expected} expected={expected} executed=1")
+        record["prefix_targets"] = prefix_names
     assert all(target in output for target in targets), output
     assert rc == (1 if expected_cross or expected_data else 0), (rc, output)
     record["behavior"] = "PRECISE_RED" if expected_cross or expected_data else "PASS"
@@ -278,7 +288,17 @@ else:
                 if path.is_file() and path.name.startswith("cj_metadata_") and path.suffix == extension:
                     shutil.copy2(path, bundle / path.name)
                     fixtures[path.name] = digest(path)
-            assert len(fixtures) == 2
+            assert len(fixtures) == (4 if not windows and not mac else 2)
+            # Preserve exact fixture producer commands, headers and bytes. No
+            # product source is built into the metadata executable or fixtures.
+            checked(["cmake", "--build", testbuild, "--target", "help"], "a2-targets")
+            checked(["ninja", "-C", testbuild, "-t", "commands", *targets], "a2-test-commands")
+            for name in fixtures:
+                inspector = ["llvm-readobj", "--file-headers", "--sections", "--program-headers"] if not windows else ["llvm-readobj", "--file-headers", "--sections"]
+                checked([*inspector, bundle / name], "a2-input-" + name)
+            record["fixture_generator_sha256"] = {name: digest(tree / "tests/gc_unit" / name)
+                for name in ("metadata_owner_records.cpp", "a2_contiguous.ld", "a2_prefix_hole.py")}
+            record["fixture_sha256"] = fixtures
             for path in libdir.iterdir():
                 if path.is_file() and path.suffix in (".dll", ".so", ".dylib"):
                     shutil.copy2(path, bundle / path.name)
