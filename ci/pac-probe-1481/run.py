@@ -39,7 +39,7 @@ def run(name, argv):
 
 def stop(reason):
     (OUT / 'result.json').write_text(json.dumps(dict(status='NOT_RUN', reason=reason,
-        behavior='NOT_RUN', candidate=os.environ.get('GITHUB_SHA')), indent=2))
+        behavior='NOT_RUN', candidate=os.environ.get('PAC_PROBE_HEAD_SHA')), indent=2))
     raise SystemExit(0)
 
 
@@ -48,7 +48,7 @@ run('active-before', ['xcode-select', '-p'])
 if not Path(DEV).is_dir():
     stop('fixed Xcode_16.4 developer directory missing')
 os.environ['DEVELOPER_DIR'] = DEV
-identity = {'DEVELOPER_DIR': DEV, 'candidate': os.environ['GITHUB_SHA'],
+identity = {'DEVELOPER_DIR': DEV, 'candidate': os.environ['PAC_PROBE_HEAD_SHA'],
             'ImageOS': os.environ.get('ImageOS'), 'ImageVersion': os.environ.get('ImageVersion')}
 for name, argv in [
     ('sw-vers', ['sw_vers']), ('uname', ['uname', '-a']),
@@ -98,5 +98,5 @@ run('sccache-stats', ['sccache', '--show-stats'])
 manifest = {str(p.relative_to(OUT)): sha(p) for p in OUT.rglob('*') if p.is_file()}
 (OUT / 'sha256.json').write_text(json.dumps(manifest, indent=2))
 (OUT / 'result.json').write_text(json.dumps(dict(status='compile-batch-collected',
-    behavior='NOT_RUN', candidate=os.environ['GITHUB_SHA'], invocations=15,
+    behavior='NOT_RUN', candidate=os.environ['PAC_PROBE_HEAD_SHA'], invocations=15,
     interpretation='Read API expansion and assembly individually; compile success grants no ABI or execution admission.'), indent=2))

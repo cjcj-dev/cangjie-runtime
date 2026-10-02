@@ -1,29 +1,48 @@
 name: Apple PAC 1481 frozen compile-only probe
 on:
-  workflow_dispatch:
-    inputs:
-      admitted_sha:
-        description: Full candidate SHA explicitly activated by advisor frozen-input check
-        required: true
-        type: string
+  pull_request:
+    branches: [main]
+    types: [labeled]
+    paths:
+      - ci/pac-probe-1481/**
+      - .github/workflows/pac-probe-1481.yml
 permissions:
   contents: read
+  actions: read
 concurrency:
+  # Serialization only. Admission and the unique run ID are frozen by control.
   group: pac-probe-1481-single-batch
   cancel-in-progress: false
 jobs:
   compile-only:
-    if: github.event.inputs.admitted_sha == github.sha
+    if: >-
+      github.repository == 'cjcj-dev/cangjie-runtime' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.number == 1482 &&
+      github.event.pull_request.head.ref == 'sym/1481-implement-r5946918200' &&
+      github.event.action == 'labeled' &&
+      github.run_attempt == '1' &&
+      github.event.label.name == format('pac1481-admitted-{0}', github.event.pull_request.head.sha)
     runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify admitted checkout
+        env:
+          PAC_PROBE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          ulimit -c 0
+          actual_head=$(git rev-parse HEAD)
+          printf 'checkout HEAD=%s admitted=%s\n' "$actual_head" "$PAC_PROBE_HEAD_SHA"
+          test "$actual_head" = "$PAC_PROBE_HEAD_SHA"
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Collect fixed compile-only batch
         env:
           SCCACHE_DISABLE: '1'
+          PAC_PROBE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           ulimit -c 0
           test "$(uname -m)" = arm64
@@ -31,6 +50,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pac-probe-1481-${{ github.sha }}
+          name: pac-probe-1481-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5946918200
           if-no-files-found: error
