@@ -91,7 +91,7 @@ def preserve_then_delete(tree, target):
         records.append({"path": str(p.relative_to(tree)), "sha256": value})
     for expected in ("CMakeCache.txt", "compile_commands.json", "link.txt", "flags.make",
                      ".rsp", "MachineFrame.cpp.o", "MemUtils.cpp.o"):
-        if not any(expected in r["path"] for r in records):
+        if not any(expected in r.get("path", "") for r in records):
             records.append({"expected": expected, "status": "MISSING"})
     (target / "inventory.json").write_text(json.dumps(records, indent=2))
     shutil.rmtree(tree)
