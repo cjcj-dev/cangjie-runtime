@@ -59,7 +59,7 @@ and readable dependency hashes. Libraries resident only in dyld shared cache are
 explicitly recorded as such, with OS/SDK identity, never given invented hashes.
 No missing export is repaired. Before behavior, the product opcode and caller LR
 save/restore evidence must pass the fixed instruction checks. Each execution is
-bounded by 120 seconds. Normal, cut and restored each use the same executable
+bounded by 120 seconds or the remaining original deadline, whichever is less. Normal, cut and restored each use the same executable
 and producer object; the only changed loaded artifact is the runtime dylib.
 
 Single frozen cut in `consumer-strip.diff` (not applied to this candidate): in the baseline-existing
@@ -77,6 +77,13 @@ dylibs for restoration, and never resamples a nondistinguishable input. Independ
 processes may change raw addresses due to ASLR; the invariant columns, IA/0 scheme
 and relocated symbol inputs remain fixed. Numeric addresses are not equalized.
 Execution and generated-code validation remain NOT_RUN until activation.
+
+Original lane deadline is 2026-10-02T09:33:41.524Z, including preparation,
+control wait, queue time and archive. PLAN and workflow environment bind it;
+the driver reserves 120 seconds for archive and never opens a new time allowance.
+Each stage uses its original timeout capped by remaining time. Zero/negative
+remaining records NOT_RUN. The workflow's timeout is an additional ceiling,
+not permission to cross that absolute deadline.
 
 ## Holds
 

@@ -1,5 +1,6 @@
 """One admitted Apple product batch; stop on first error, never retry inputs."""
 import concurrent.futures
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -23,7 +24,9 @@ resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 RESULT = {"head": os.environ.get("PAC1481_HEAD"), "commands": [],
           "green": "NOT_RUN", "cut": "NOT_RUN", "restored": "NOT_RUN"}
 SAVE_LOCK = threading.Lock()
-DEADLINE = time.monotonic() + 55 * 60
+PLAN = json.loads(Path(__file__).with_name("PLAN.json").read_text())
+DEADLINE = datetime.fromisoformat(PLAN["deadline_utc"]).timestamp()
+RESULT["deadline_utc"] = PLAN["deadline_utc"]
 
 
 def save():
@@ -33,13 +36,19 @@ def save():
 
 def run(command, name, cwd=ROOT, env=None, timeout=1800):
     start = time.monotonic()
+    remaining = DEADLINE - time.time() - PLAN["archive_reserve_seconds"]
+    if remaining <= 0:
+        RESULT["commands"].append({"command": list(map(str, command)), "log": name,
+                                   "rc": "NOT_RUN", "reason": "absolute deadline/archive reserve"})
+        save()
+        raise RuntimeError("absolute deadline: subsequent commands NOT_RUN")
     with (OUT / name).open("w") as log:
         log.write(shlex.join(map(str, command)) + "\n")
         log.flush()
         try:
             process = subprocess.Popen(list(map(str, command)), cwd=cwd, env=env,
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            rc = process.wait(timeout=max(1, min(timeout, DEADLINE - start)))
+            rc = process.wait(timeout=min(timeout, remaining))
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
@@ -117,10 +126,11 @@ def build(tree, name, pac):
     return retained
 
 
-def entry(tree, suffix):
+def entry(tree, relative_source, owner):
     entries = json.loads((tree / "runtime/CMakebuild/compile_commands.json").read_text())
-    found, = [e for e in entries if e["file"].endswith(suffix)
-              and "cangjie-runtime.dir" in e["command"]]
+    source = (tree / relative_source).resolve()
+    found, = [e for e in entries if Path(e["file"]).resolve() == source
+              and f"CMakeFiles/{owner}.dir/" in e["command"]]
     return found, shlex.split(found["command"])
 
 
@@ -133,24 +143,92 @@ def observations(log):
     return rows
 
 
+def function_block(text, symbol):
+    blocks = re.split(r"\n[0-9a-f]+ <", text.lower())
+    block, = [block for block in blocks if symbol in block.splitlines()[0]]
+    return block
+
+
+def lr_flow(block, require_stripped_return):
+    # Bounded symbolic check of the actual function block, not an opcode elsewhere.
+    registers = {"x30": "incoming_lr", "x0": "input_pc"}
+    bases = {"sp": 0}
+    slots = {}
+    xpac = False
+    returns = 0
+    instruction = re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2,8}\s+)+(\w+)\s*(.*?)\s*$")
+    for line in block.splitlines():
+        match = instruction.match(line)
+        if not match:
+            continue
+        op, operands = match.groups()
+        operands = operands.replace("lr", "x30").replace("fp", "x29")
+        parts = [part.strip() for part in operands.split(",")]
+        if op == "mov" and len(parts) == 2:
+            registers[parts[0]] = registers.get(parts[1])
+            if parts[1] in bases:
+                bases[parts[0]] = bases[parts[1]]
+        elif op in ("add", "sub") and len(parts) == 3 and parts[1] in bases and parts[2].startswith("#"):
+            offset = int(parts[2][1:], 0) * (-1 if op == "sub" else 1)
+            bases[parts[0]] = bases[parts[1]] + offset
+        elif op in ("stp", "str", "stur", "ldp", "ldr", "ldur"):
+            memory = re.search(r"\[(sp|x29)(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?\](!)?(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?", operands)
+            if memory is None or memory[1] not in bases:
+                # Ordinary frame/PC loads are unrelated to preserved return state.
+                if op.startswith("ld"):
+                    for register in parts[:2 if op == "ldp" else 1]:
+                        registers[register] = None
+                continue
+            base, offset, pre, post = memory.groups()
+            address = bases[base] + int(offset or "0", 0)
+            count = 2 if op in ("stp", "ldp") else 1
+            for index, register in enumerate(parts[:count]):
+                if op.startswith("st"):
+                    slots[address + index * 8] = registers.get(register)
+                else:
+                    registers[register] = slots.get(address + index * 8)
+            if pre:
+                bases[base] = address
+            if post:
+                bases[base] += int(post, 0)
+        elif op == "xpaclri" or (op == "hint" and operands in ("#7", "#0x7")):
+            xpac = True
+            registers["x30"] = "stripped_pc"
+        elif op == "bl":
+            for index in range(19):
+                registers["x" + str(index)] = None
+            registers["x30"] = "call_return"
+        elif op == "ret":
+            returns += 1
+            if registers.get(parts[0] or "x30") != "incoming_lr":
+                raise RuntimeError("actual return does not restore incoming LR")
+            if require_stripped_return and registers.get("x0") != "stripped_pc":
+                raise RuntimeError("strip result dataflow into x0 not established")
+        elif parts and parts[0] == "x30":
+            registers["x30"] = None
+    if not returns or (require_stripped_return and not xpac):
+        raise RuntimeError("actual strip/return instruction flow not established")
+    return xpac
+
+
 def instruction_checks():
     producer = (OUT / "producer-disassembly.log").read_text().lower()
     if not re.search(r"d503211f|1f 21 03 d5", producer):
         raise RuntimeError("producer lacks actual PACIA1716 encoding")
-    # Check actual product code, including compiler-generated caller LR preservation.
-    assembly = (OUT / "machine-frame-disassembly.log").read_text().lower()
-    blocks = re.split(r"\n[0-9a-f]+ <", assembly)
-    target, = [block for block in blocks if "isn2cstubframe" in block.splitlines()[0]]
-    if not re.search(r"xpaclri|hint\s+#(?:0x)?7\b|d50320ff|ff 20 03 d5", target):
-        # Non-inlined strip is permissible only if the called real strip body has XPACLRI.
-        mem = (OUT / "memutils-disassembly.log").read_text().lower()
-        if "ptrauthstripinstpointer" not in target or not re.search(r"xpaclri|hint\s+#(?:0x)?7\b|d50320ff|ff 20 03 d5", mem):
-            raise RuntimeError("product N2C strip instruction not established")
-    if not re.search(r"\b(?:stp|str)\b[^\n]*\b(?:x30|lr)\b", target) or not re.search(r"\b(?:ldp|ldr)\b[^\n]*\b(?:x30|lr)\b", target):
-        raise RuntimeError("caller LR preservation not established in real N2C product code")
+    assembly = (OUT / "product-disassembly.log").read_text().lower()
+    target = function_block(assembly, "isn2cstubframe")
+    inline = bool(re.search(r"xpaclri|hint\s+#(?:0x)?7\b", target))
+    lr_flow(target, False)
+    if not inline:
+        if not re.search(r"\bbl\b[^\n]*<[^>]*ptrauthstripinstpointer", target):
+            raise RuntimeError("actual caller does not bind real strip callee")
+        callee = function_block(assembly, "ptrauthstripinstpointer")
+        lr_flow(callee, True)
+        (OUT / "actual-strip-callee.log").write_text(callee)
+    (OUT / "actual-n2c-caller.log").write_text(target)
     (OUT / "instruction-check.json").write_text(json.dumps({"producer_encoding": "d503211f",
         "product_strip": "XPACLRI", "caller_lr_saved_restored": True,
-        "scope": "actual N2C product object only"}, indent=2))
+        "inline": inline, "scope": "actual full-product N2C caller / bound strip callee"}, indent=2))
 
 
 def arm(name, libraries, elf):
@@ -179,6 +257,8 @@ def arm(name, libraries, elf):
 def main():
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise RuntimeError("ordinary macos arm64 required")
+    if os.environ.get("PAC1481_DEADLINE") != PLAN["deadline_utc"]:
+        raise RuntimeError("frozen absolute deadline mismatch")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if head != RESULT["head"] or os.environ.get("PAC1481_LABEL") != "p1481-" + head:
         raise RuntimeError("admitted event/head mismatch")
@@ -202,6 +282,7 @@ def main():
          ROOT / ".github/workflows/pac-product-1481.yml", Path(__file__),
          ROOT / "runtime/tests/pac_strip_darwin/consumer.cpp",
          ROOT / "runtime/tests/pac_strip_darwin/producer.S",
+         ROOT / "runtime/tests/pac_strip_darwin/PLAN.json",
          ROOT / "runtime/tests/pac_strip_darwin/consumer-strip.diff")}
     require(["sccache", "--show-stats"], "sccache-before.log")
     default, pac = snapshot("default-source"), snapshot("pac-source")
@@ -228,8 +309,8 @@ def main():
         if symbol not in exported:
             raise RuntimeError("missing real product export: " + symbol)
     require([objdump, "--disassemble", libraries / "libcangjie-runtime.dylib"], "product-disassembly.log")
-    compile_entry, args = entry(pac, "/MachineFrame.cpp")
-    mem_entry, mem_args = entry(pac, "/MemUtils.cpp")
+    compile_entry, args = entry(pac, "runtime/src/UnwindStack/MachineFrame.cpp", "UnwindStack")
+    mem_entry, mem_args = entry(pac, "runtime/src/Base/MemUtils.cpp", "Base")
     for label, value, command in (("machine-frame", compile_entry, args), ("memutils", mem_entry, mem_args)):
         object_path = Path(value["directory"]) / command[command.index("-o") + 1]
         shutil.copy2(object_path, OUT / (label + ".o"))
@@ -297,7 +378,10 @@ except Exception as error:
     print(str(error), file=sys.stderr)
     sys.exit(20)
 finally:
-    run(["uptime"], "uptime-after.log", timeout=10)
+    try:
+        run(["uptime"], "uptime-after.log", timeout=10)
+    except RuntimeError:
+        RESULT["uptime_after"] = "NOT_RUN absolute deadline"
     for name in ("default-source", "pac-source", "cut-source"):
         tree = OUT / name
         if tree.exists():
