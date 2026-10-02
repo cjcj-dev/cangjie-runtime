@@ -757,6 +757,13 @@ for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
 done
 echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows groups=4 old_group=marked_old_or_finalizable"
 
+# Explicit fixture/test-ELF construction for a controller-approved bounded
+# batch. Keep all binding/registration guards above; do not run any suite here.
+if [[ "${GC_UNIT_BUILD_ONLY:-0}" == 1 ]]; then
+  echo "GC_UNIT_BUILD_ONLY=1 behavioral_tests=NOT_RUN elf=$OUT/cj_gc_unit"
+  exit 0
+fi
+
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
