@@ -92,13 +92,18 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
     .global _CJ_MCC_C2NStub
 _CJ_MCC_C2NStub:
 
+    .cfi_startproc
+    // The caller-owned call-info pair is popped before signing the RA.
+    .cfi_def_cfa sp, FuncAddrAndCpStacksizeOffset
+
     // x10 = cpStackSize, x9 = calleeAddr
     ldp  x9, x10, [sp]
     add  sp, sp, #FuncAddrAndCpStacksizeOffset
 
-    .cfi_startproc
+    .cfi_def_cfa_offset 0
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     paciasp
+    .cfi_negate_ra_state
 #endif
     stp  x29, x30, [sp, #-StubFrameContextSize]!
     cfi_adjust_cfa_offset (StubFrameContextSize)
@@ -164,6 +169,8 @@ _CJ_MCC_C2NStub:
     add x0, x19, x0
     mov x1, sp
     cmp x1, x0
+    // Preserve the guard edge, not the linear state after the normal RET.
+    .cfi_remember_state
     ble L_stack_check_fail
 
     mov  x2, x28
@@ -292,12 +299,27 @@ L_stack_restore:
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     // The restored SP is the modifier used on entry and by exception return.
     autiasp
+    .cfi_negate_ra_state
 #endif
     ret
 L_stack_check_fail:
+    .cfi_restore_state
     bl  _MCC_ThrowStackOverflowError
     bl  _MRT_GetThreadLocalData
     str x0, [sp, #.Lmrt_a64_callee_x28]
+    // This edge never allocated the variable native argument area. Match the
+    // shared epilogue's CFA and discard caller-clobbered argument rules.
+    .cfi_def_cfa sp, StubFrameContextSize
+    cfi_restore (x8)
+    cfi_restore (x9)
+    cfi_restore (q0)
+    cfi_restore (q1)
+    cfi_restore (q2)
+    cfi_restore (q3)
+    cfi_restore (q4)
+    cfi_restore (q5)
+    cfi_restore (q6)
+    cfi_restore (q7)
     b   L_stack_restore
     .cfi_endproc
 
