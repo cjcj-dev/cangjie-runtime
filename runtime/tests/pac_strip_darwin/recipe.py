@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import shutil
 import json
+import re
+import shlex
 
 
 def digest(path):
@@ -53,9 +55,29 @@ def verify_configured(build, tools):
                 raise RuntimeError(label + " cache launcher mismatch: " + key)
         if label == "top" and ("CANGJIE_COMPILER_CACHE:FILEPATH=" + cache) not in text.splitlines():
             raise RuntimeError("top cache entity mismatch")
-        commands = [p for p in root.rglob("*") if p.is_file() and
-                    p.name in ("build.make", "build.ninja", "compile_commands.json")]
-        consumed = [str(p) for p in commands if cache in p.read_text(errors="replace")]
+        # Make recipes bind launcher, language and owning target in one command.
+        # Never admit child text as evidence for the top build domain.
+        consumed = []
+        for path in root.rglob("build.make"):
+            if label == "top" and (build / "cjthread-build") in path.parents:
+                continue
+            target = path.parent.name
+            if not target.endswith(".dir"):
+                continue
+            for line in path.read_text().splitlines():
+                if not line.startswith("\t") or " -c " not in line:
+                    continue
+                languages = re.findall(r"\$\((C|CXX)_FLAGS\)", line)
+                if not languages and "$(ASM_FLAGS)" in line:
+                    continue
+                if not languages:
+                    raise RuntimeError(label + " unsupported compile recipe: " + str(path))
+                command = line.strip().split("&&")[-1].strip()
+                words = shlex.split(command)
+                if not words or words[0] != cache or "CMakeFiles/" + target + "/" not in line:
+                    raise RuntimeError(label + " generated launcher consumption mismatch: " + str(path))
+                consumed.append({"file": str(path), "target": target,
+                                 "language": languages[0], "command": line.strip()})
         if not consumed:
             raise RuntimeError(label + " generated launcher consumption MISSING")
         records[label] = {"cache": str(root / "CMakeCache.txt"), "commands": consumed}
@@ -80,6 +102,28 @@ def preserve_then_delete(tree, target):
         p = tree / rel
         if p.is_file() and p not in selected:
             selected.append(p)
+    # Publisher input lists are authoritative dependencies, including archives/headers.
+    for listing in tree.rglob("runtime-*-inputs.txt"):
+        selected.append(listing)
+        for line in listing.read_text().splitlines():
+            if not line.strip():
+                continue
+            dependency = Path(line.strip())
+            if not dependency.is_absolute():
+                dependency = listing.parent / dependency
+            dependency = dependency.resolve()
+            if not dependency.is_relative_to(tree.resolve()) or not dependency.is_file():
+                raise RuntimeError("formed publisher input missing/outside tree: " + str(dependency))
+            selected.append(dependency)
+    for path in tree.rglob("*"):
+        if path.is_file() and ("runtime-generated-inputs" in path.parts or
+                "identity" in path.name or "provenance" in path.name or
+                "publish" in path.name or "publisher" in path.name):
+            selected.append(path)
+    for path in tree.rglob("*"):
+        if path.is_file() and path.suffix in (".a", ".dylib") and path not in selected:
+            raise RuntimeError("formed archive/library absent from publisher input lists: " + str(path))
+    selected = sorted(set(selected))
     records = []
     for p in selected:
         dest = target / p.relative_to(tree)
@@ -96,3 +140,22 @@ def preserve_then_delete(tree, target):
     (target / "inventory.json").write_text(json.dumps(records, indent=2))
     shutil.rmtree(tree)
     return records
+
+
+def preserve_arms(out, names, result):
+    """Independent arm receipts; preservation errors never replace first_error."""
+    receipts = {}
+    for name in names:
+        tree = out / name
+        if not tree.exists():
+            receipts[name] = {"status": "NOT_CREATED"}
+            continue
+        try:
+            inventory = preserve_then_delete(tree, out / (name + "-inputs"))
+            receipts[name] = {"status": "COMPLETED", "inventory": inventory}
+        except Exception as error:
+            receipts[name] = {"status": "FAILED_RETAINED", "error": str(error),
+                              "tree_exists": tree.exists()}
+    result["preservation"] = receipts
+    result["preservation_errors"] = {n: r["error"] for n, r in receipts.items() if "error" in r}
+    return not result["preservation_errors"]

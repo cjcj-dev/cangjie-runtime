@@ -135,3 +135,14 @@ Saved probe assembly is historical input, not full-product caller qualification.
 No claim of managed/EH PAC support, full ABI pairing, iOS/OHOS/Android/Linux
 qualification, #1478 A2, whole/A1/#135 or merge admission follows from this fixture.
 Product auth/sign and EH/stub return schemes are outside this change.
+
+C1–C3 offline completion: launcher consumption is collected independently from
+owning-target C/CXX Make recipes, excluding the child subtree from top evidence.
+Unsupported generated formats have no qualification. Preservation follows formed
+publisher input lists (archives and headers included) and retains publisher
+identity/generated metadata before deletion. A missing declared input prevents
+cleanup. Each created arm receives its own preservation receipt; errors remain
+separate from the original first_error and do not skip later arms.
+The LR reader only supports bounded recorded text forms, not a complete CFG proof.
+Actual Apple generated blocks still require separate independent review and an
+explicit future product authorization. PLAN remains NOT_AUTHORIZED with null deadline.

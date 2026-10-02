@@ -16,7 +16,7 @@ import sys
 import tarfile
 import threading
 import time
-from recipe import bind_tools, configure_env, verify_configured, preserve_then_delete
+from recipe import bind_tools, configure_env, verify_configured, preserve_then_delete, preserve_arms
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = Path(sys.argv[1]).resolve()
@@ -413,13 +413,7 @@ finally:
         run(["uptime"], "uptime-after.log", timeout=10)
     except RuntimeError:
         RESULT["uptime_after"] = "NOT_RUN absolute deadline"
-    for name in ("default-source", "pac-source", "cut-source"):
-        tree = OUT / name
-        if tree.exists():
-            try:
-                preserve_then_delete(tree, OUT / (name + "-inputs"))
-            except Exception as error:
-                RESULT["preservation_error"] = str(error)
-                save()
-                raise RuntimeError("preservation failed; original tree retained") from error
+    preserved = preserve_arms(OUT, ("default-source", "pac-source", "cut-source"), RESULT)
     save()
+    if not preserved:
+        sys.exit(20)
