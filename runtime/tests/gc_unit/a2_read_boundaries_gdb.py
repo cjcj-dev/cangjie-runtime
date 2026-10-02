@@ -35,7 +35,9 @@ symbol_paths = []
 
 def mappings():
     with open('/proc/%d/maps' % gdb.selected_inferior().pid) as stream:
-        rows = parse_maps(stream.read())
+        raw = stream.read()
+        rows = parse_maps(raw)
+    record.setdefault('maps_snapshots', []).append(raw)
     record['raw_mappings'] = [list(r) for r in rows]
     return rows
 
@@ -80,6 +82,13 @@ def captured(event):
                     if case.startswith('prefix-') and (not record.get('prefix_watch_verified') or
                             len(watches) != 1 or not watches[0].is_valid() or not watches[0].enabled):
                         raise RuntimeError('prefix observation window absent or invalidated')
+                    if input_watch is not None and (not record.get('watch_verified') or
+                            len(watches) != 1 or not watches[0].is_valid() or not watches[0].enabled):
+                        raise RuntimeError('memory observation window absent or invalidated')
+                    if case.startswith('roots-') and (build_probe is None or
+                            not build_probe.is_valid() or not build_probe.enabled or not record.get('build_locations')):
+                        raise RuntimeError('Build observation window absent or invalidated')
+                    check_policy()
                     check_symbols()
                 identity = method(self)
                 life.capture(event, identity)
@@ -149,7 +158,8 @@ class ReadWatch(gdb.Breakpoint):
                 raise RuntimeError('unclassified hardware watch access: ' + asm)
             if operands[0].startswith('mov') and ('[' not in operands[1].split(',')[-1]):
                 raise RuntimeError('hardware watch saw a store: ' + asm)
-            read_boundary(mappings(), self.address, 4, self.owner, manifest)
+            if self.kind != 'prefix' or input_item['prefix_input']['expected_accepted']:
+                read_boundary(mappings(), self.address, 4, self.owner, manifest)
             contains(mappings(), instruction['addr'], instruction['length'], executable=True)
             self.hits += 1
             record[self.kind + '_reads'].append({'watched_address': self.address,
@@ -157,6 +167,8 @@ class ReadWatch(gdb.Breakpoint):
                 'bytes': bytes(gdb.selected_inferior().read_memory(instruction['addr'], instruction['length'])).hex()})
         except Exception as error:
             fail(error)
+        if self.kind == 'prefix' and not input_item['prefix_input']['expected_accepted']:
+            fail('negative prefix hardware access observed')
         return consumer_identity()
 
 
@@ -235,8 +247,7 @@ class Input(gdb.Breakpoint):
         if case.startswith('prefix-'):
             admission = prefix_input(rows, pc, owner_identity, manifest)
             input_item['prefix_input'] = admission
-            if admission['expected_accepted']:
-                input_watch = (pc - 4, 'prefix', owner_identity)
+            input_watch = (pc - 4, 'prefix', owner_identity)
         else:
             address = int(frame.read_var('map'))
             input_item['map'] = address
@@ -244,6 +255,47 @@ class Input(gdb.Breakpoint):
                 read_boundary(rows, address, 4)
                 input_watch = (address, 'map', None)
         return identity
+
+
+policy_text = None
+
+def policy_snapshot():
+    commands = ['info mem', 'show trust-readonly-sections', 'overlay list-overlays',
+                'show mem inaccessible-by-default', 'maintenance show show-debug-regs',
+                'show debug target', 'info signals SIGSEGV', 'info signals SIGBUS']
+    return {c: gdb.execute(c, to_string=True) for c in commands}
+
+def install_policy(address):
+    global policy_text
+    initial = gdb.execute('info mem', to_string=True)
+    record['initial_mem'] = initial
+    if 'There are no memory regions defined.' not in initial:
+        raise RuntimeError('existing memory regions; stop')
+    for c in ['set trust-readonly-sections off', 'overlay off',
+              'set mem inaccessible-by-default off',
+              'mem 0x%x 0x%x wo nocache' % (address, address + 4),
+              'maintenance set show-debug-regs on', 'set debug target 1']:
+        gdb.write('A2_POLICY_COMMAND ' + c + '\n')
+        gdb.execute(c)
+    policy_text = policy_snapshot()
+    record['policy_installed'] = policy_text
+    rows = [x.split() for x in policy_text['info mem'].splitlines() if 'wo' in x.split()]
+    if len(rows) != 1 or rows[0][1] != 'y' or int(rows[0][2],16) != address or int(rows[0][3],16) != address+4 or rows[0][4:] != ['wo','nocache']:
+        raise RuntimeError('memory region exact range/attributes not verified')
+    gdb.write('A2_POLICY ' + json.dumps(policy_text) + '\n')
+
+def check_policy():
+    if input_watch is None:
+        # ROOTS missing has a Build window, not a memory watch.
+        if policy_text is not None or watches:
+            raise RuntimeError('unexpected memory watch in Build-only window')
+        return
+    if policy_text is None:
+        raise RuntimeError('policy missing')
+    now = policy_snapshot()
+    record.setdefault('policy_checks', []).append(now)
+    if now != policy_text:
+        raise RuntimeError('GDB region/bypass/signal policy changed')
 
 
 def mutate(action, operation):
@@ -262,26 +314,34 @@ def dispatch():
     action = life.dispatch()
     record.setdefault('dispatch', []).append(action)
     if action == 'install':
-        if case.startswith('prefix-') and not input_item['prefix_input']['expected_accepted']:
-            # Input admission is valid. Observation is a separate obligation:
-            # GDB12's Python WP_READ evaluates the dereference (no -location
-            # option). Do not invoke it on an unreadable/foreign prefix, and
-            # do not resume without a verified observation window.
-            record['observation_missing'] = {
-                'address': input_item['prefix_input']['address'], 'size': 4,
-                'reason': 'GNU12.1 safe no-read window unavailable',
-                'installed': False, 'positive_control': False}
-            raise RuntimeError('valid rejection input; safe read observation missing')
         symbol_objects = list(gdb.objfiles())
         symbol_paths = [o.filename for o in symbol_objects]
         snapshot_generation = symbol_generation
         install_build()
+        if input_watch is not None:
+            install_policy(input_watch[0])
         if input_watch:
             watches.append(mutate('install read watch', lambda: ReadWatch(*input_watch)))
         for watch in watches:
-            text = gdb.execute('info breakpoints %d' % watch.number, to_string=True)
+            command = 'info breakpoints %d' % watch.number
+            # Stopped outer dispatch only. GNU watchpoint table prints exp_string,
+            # not the watched value (breakpoint.c:6127-6130,147... ops).
+            record['watch_installation_debug'] = gdb.execute(command, to_string=True)
+            before_debug = gdb.execute('show debug target', to_string=True)
+            if int(gdb.parameter('debug target')) != 1:
+                raise RuntimeError('target debug not enabled before table query')
+            try:
+                gdb.execute('set debug target 0')
+                text = gdb.execute(command, to_string=True)
+            finally:
+                gdb.execute('set debug target 1')
+                after_debug = gdb.execute('show debug target', to_string=True)
+                record['table_debug_restore'] = {'before': before_debug, 'after': after_debug}
+                if int(gdb.parameter('debug target')) != 1 or after_debug != before_debug:
+                    raise RuntimeError('target debug restore unverified')
             record['watch_installation'] = text
             verify_watch(text, watch.number, '*(unsigned int*)0x%x' % watch.address)
+            record['watch_verified'] = True
             if watch.kind == 'prefix':
                 record['prefix_watch_verified'] = True
         returns.append(mutate('install Finish', lambda: ConsumerReturn(input_frame, input_item)))
@@ -340,6 +400,8 @@ def finalize():
         positive = case == 'roots-zero'
         target = bool(record['build_entries']) == positive and bool(record['map_reads']) == positive
     valid = valid and not record.get('observation_missing')
+    if input_watch is not None:
+        valid = valid and record.get('watch_verified', False)
     if case.startswith('prefix-'):
         valid = valid and record.get('prefix_watch_verified', False)
     record['status'] = 'OBSERVED' if valid and target else 'INVALID'
@@ -357,6 +419,13 @@ try:
         manifest = {os.path.realpath(p): h for p, h in json.load(stream).items()}
     if any(not re.fullmatch('[0-9a-f]{64}', h) for h in manifest.values()):
         raise RuntimeError('manifest contains an invalid hash')
+    record['gdb_version'] = gdb.VERSION
+    record['python_version'] = sys.version
+    record['observer_sha256'] = digest(__file__)
+    record['module_files'] = {n: {'path': m.__file__, 'sha256': digest(m.__file__)}
+        for n, m in list(sys.modules.items()) if getattr(m, '__file__', None) and os.path.isfile(m.__file__)}
+    gdb.execute('handle SIGSEGV stop print pass')
+    gdb.execute('handle SIGBUS stop print pass')
     gdb.execute('set pagination off')
     gdb.execute('set disassembly-flavor intel')
     gdb.execute('start')
@@ -372,6 +441,7 @@ try:
         if life.error:
             raise RuntimeError(life.error)
         if life.state == 'armed':
+            check_policy()
             check_symbols()
         mutate('continue', lambda: gdb.execute('continue'))
         life.phase = 'outer'
