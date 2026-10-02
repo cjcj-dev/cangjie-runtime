@@ -277,7 +277,7 @@ else:
                 env["LD_LIBRARY_PATH"] = str(bundle)
                 env["DYLD_LIBRARY_PATH"] = str(bundle)
                 rc = run(["python3", tree / "tests/gc_unit/metadata/run.py", bundle / metadata.name,
-                          "--output", out / "metadata.json"], "metadata-regression", timeout=120)
+                          out / "metadata.json"], "metadata-regression", timeout=120)
                 env.clear(); env.update(before)
                 assert rc == 0, rc
         else:
