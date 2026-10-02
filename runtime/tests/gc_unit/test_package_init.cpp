@@ -500,6 +500,88 @@ static bool ResolveMetadataPC(const uint32_t* pc)
     return frame.ResolveProcInfo();
 }
 
+// Debugger marker belongs to the test ELF, never to the runtime. It provides
+// the real input address before calling the existing product consumer.
+extern "C" __attribute__((noinline)) bool A2ObservePrefix(const uint32_t* pc)
+{
+    return ResolveMetadataPC(pc);
+}
+
+static void CheckPrefixQualification(unsigned kind)
+{
+    Init();
+    const auto directory = MetadataFixtureDirectory();
+    const char* name = kind == 1 ? "libcj_metadata_contiguous.so" : "libcj_metadata_owner.so";
+    void* library = dlopen((directory + "/" + name).c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("prefix-qualification-fixture-loaded", library != nullptr);
+    using Meta = void* (*)();
+    using PC = const uint32_t* (*)();
+    using Row = const uint32_t* (*)(size_t);
+    auto meta = reinterpret_cast<Meta>(dlsym(library, "PackageInitImageMetadata"));
+    auto ordinary = reinterpret_cast<Row>(dlsym(library, "PackageInitOwnerPC"));
+    auto special = reinterpret_cast<PC>(dlsym(library, kind == 1 ? "PackageInitContinuousPC" : "PackageInitBoundaryPC"));
+    Target("prefix-qualification-entries", meta && ordinary && (kind == 0 || special));
+    const auto* pc = kind == 0 ? ordinary(0) : special();
+    Target("prefix-qualification-pc", pc != nullptr);
+    const Uptr metadataAddress = reinterpret_cast<Uptr>(meta());
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* file = new CJFile(CString("prefix-qualification"), metadataAddress);
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(metadataAddress);
+    auto image = ElfUnloadQuiescenceTest::Registered(metadataAddress);
+    Target("prefix-qualification-registered", image != nullptr);
+    const Uptr start = reinterpret_cast<Uptr>(pc);
+    const Uptr prefix = start - sizeof(int32_t);
+    bool covered = true, executable = false, descriptorOwned = false;
+    size_t firstRange = image->ranges.size(), lastRange = image->ranges.size();
+    bool adjacent = false;
+    int32_t displacement = 0;
+    {
+        ElfUnloadQuiescence::ReadScope reader;
+        executable = image->Contains(start, true);
+        for (size_t r = 0; r < image->ranges.size(); ++r) {
+            const auto& range = image->ranges[r];
+            std::fprintf(stderr, "A2_RANGE index=%zu start=%p size=%zu exec=%d\n", r,
+                         reinterpret_cast<void*>(range.start), size_t(range.size), range.executable);
+            if (prefix >= range.start && prefix - range.start < range.size) { firstRange = r; }
+            if (start - 1 >= range.start && start - 1 - range.start < range.size) { lastRange = r; }
+        }
+        for (size_t b = 0; b < sizeof(int32_t); ++b) {
+            const auto owner = ElfUnloadQuiescence::RegisteredImageForAddress(prefix + b);
+            const bool same = owner == image && image->Contains(prefix + b);
+            covered &= same;
+            std::fprintf(stderr, "A2_PREFIX_BYTE address=%p same_owner=%d exec=%d\n",
+                         reinterpret_cast<void*>(prefix + b), same, image->Contains(prefix + b, true));
+        }
+        if (covered) {
+            std::memcpy(&displacement, reinterpret_cast<void*>(prefix), sizeof(displacement));
+            const Uptr descriptor = prefix + static_cast<intptr_t>(displacement);
+            descriptorOwned = displacement != 0 && image->Contains(descriptor);
+            std::fprintf(stderr, "A2_PREFIX_BYTES value=%d descriptor=%p owned=%d\n",
+                         displacement, reinterpret_cast<void*>(descriptor), descriptorOwned);
+        }
+        if (firstRange < image->ranges.size() && lastRange == firstRange + 1) {
+            const auto& left = image->ranges[firstRange];
+            const auto& right = image->ranges[lastRange];
+            adjacent = left.start + left.size == right.start && left.executable != right.executable;
+        }
+    }
+    const bool qualified = executable && (kind == 2 ? !covered : covered && descriptorOwned) &&
+                           (kind != 1 || adjacent);
+    std::fprintf(stderr, "A2_PREFIX_INPUT kind=%u pc=%p prefix=%p qualified=%d first=%zu last=%zu adjacent=%d\n",
+                 kind, pc, reinterpret_cast<void*>(prefix), qualified, firstRange, lastRange, adjacent);
+    Target("prefix-input-qualified", qualified); // failed layout is INVALID, never target-red evidence
+    const bool accepted = A2ObservePrefix(pc);
+    std::fprintf(stderr, "A2_PREFIX_RESULT kind=%u accepted=%d executed=1\n", kind, accepted);
+    Target("prefix-real-consumer-result", accepted == (kind != 2));
+    MRT_LibraryUnLoad(metadataAddress);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    Target("prefix-fixture-close", dlclose(library) == 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixOrdinaryQualification) { CheckPrefixQualification(0); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixContinuousQualification) { CheckPrefixQualification(1); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixInvalidQualification) { CheckPrefixQualification(2); }
+
 static FrameType MetadataPCFrameType(const uint32_t* pc)
 {
     struct Input { ArchUInt start; FrameAddress frame; } input {};

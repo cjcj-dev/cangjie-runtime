@@ -316,6 +316,10 @@ PACKAGE_INIT_UNRELATED_PID=$!
     -Wl,--section-start=.a2_boundary=0x400000 \
     "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_owner.so" &
   owner_pid=$!
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 -DGC_METADATA_CONTIGUOUS_IMAGE=1 \
+    -Wl,-T,"$SRC/a2_contiguous.ld" "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_contiguous.so" &
+  contiguous_pid=$!
+  wait "$contiguous_pid"
   wait "$foreign_pid"
   wait "$owner_pid"
 ) > "$OUT/metadata-owner-images-build.log" 2>&1 &

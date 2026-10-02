@@ -209,7 +209,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Real RX PT_LOAD boundary input, qualified by readelf before acceptance.
     set_property(TARGET cj_metadata_owner APPEND_STRING PROPERTY LINK_FLAGS
         " -Wl,--section-start=.a2_boundary=0x400000")
-    add_dependencies(cj_gc_unit cj_metadata_foreign cj_metadata_owner)
+    add_library(cj_metadata_contiguous SHARED package_init_image.cpp)
+    target_include_directories(cj_metadata_contiguous PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(cj_metadata_contiguous PRIVATE
+        GC_METADATA_OWNER_IMAGE=1 GC_METADATA_CONTIGUOUS_IMAGE=1)
+    set_property(TARGET cj_metadata_contiguous APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld")
+    set_property(TARGET cj_metadata_contiguous APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld)
+    add_dependencies(cj_gc_unit cj_metadata_foreign cj_metadata_owner cj_metadata_contiguous)
 endif()
 
 enable_testing()

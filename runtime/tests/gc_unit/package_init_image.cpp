@@ -80,6 +80,36 @@ extern "C" const uint32_t* PackageInitBoundaryPC()
     return reinterpret_cast<const uint32_t*>(PackageInitBoundaryCode);
 }
 #endif
+#if defined(GC_METADATA_CONTIGUOUS_IMAGE)
+// The script assigns these sections to distinct R and RX PT_LOADs. The
+// four-byte compiler prefix straddles their boundary; no product map is edited.
+asm(".pushsection .a2_left,\"a\",@progbits\n"
+    ".zero 4094\n.globl PackageInitContinuousPrefix\nPackageInitContinuousPrefix:\n.short 0\n.popsection\n"
+    ".pushsection .a2_right,\"ax\",@progbits\n.short 0\n"
+    ".globl PackageInitContinuousCode\nPackageInitContinuousCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char PackageInitContinuousPrefix[], PackageInitContinuousCode[];
+extern "C" const uint32_t* PackageInitContinuousPC()
+{
+    const auto* ordinary = PackageInitOwnerPC(0); // initializes real descriptor/map
+    (void)ordinary;
+    const intptr_t delta = reinterpret_cast<intptr_t>(PackageInitOwnerDescriptor) -
+                           reinterpret_cast<intptr_t>(PackageInitContinuousPrefix);
+    if (delta < INT32_MIN || delta > INT32_MAX) { return nullptr; }
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    const uintptr_t first = reinterpret_cast<uintptr_t>(PackageInitContinuousPrefix) & ~(page - 1);
+    const uintptr_t last = reinterpret_cast<uintptr_t>(PackageInitContinuousCode) & ~(page - 1);
+    // Only fixture bytes change, while neither page is executable. Restore
+    // the actual ELF permissions before registration and product observation.
+    if (mprotect(reinterpret_cast<void*>(first), last - first + page, PROT_READ | PROT_WRITE) != 0) {
+        return nullptr;
+    }
+    const int32_t displacement = static_cast<int32_t>(delta);
+    std::memcpy(PackageInitContinuousPrefix, &displacement, sizeof(displacement));
+    if (mprotect(reinterpret_cast<void*>(first), last - first, PROT_READ) != 0 ||
+        mprotect(reinterpret_cast<void*>(last), page, PROT_READ | PROT_EXEC) != 0) { return nullptr; }
+    return reinterpret_cast<const uint32_t*>(PackageInitContinuousCode);
+}
+#endif
 extern "C" bool PackageInitOwnerSetForeign(const void* descriptor)
 {
     const intptr_t offset = reinterpret_cast<intptr_t>(descriptor) -

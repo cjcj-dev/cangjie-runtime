@@ -276,6 +276,40 @@ GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 // These exercise CheckRegisterRoots, never AnalyseAndSetFrameType. Removing
 // its descriptor guard may hit the downstream lookup's fatal assertion; that
 // alone is not evidence of the guard's read-before-map boundary.
+// These two independent cases stay in the observed process. Existing forked
+// rejection tests remain unchanged; no child result is substituted for a probe.
+extern "C" __attribute__((noinline)) void A2ObserveRoots(StackFrameStream* frames, Uptr pc, Uptr map)
+{
+    std::fprintf(stderr, "A2_ROOTS_INPUT pc=%p map=%p\n", reinterpret_cast<void*>(pc), reinterpret_cast<void*>(map));
+    frames->Start(); // real public recordedFrames -> CheckRegisterRoots
+    std::fprintf(stderr, "A2_ROOTS_RESULT done=%d type=%d executed=1\n",
+                 frames->IsDone(), int(frames->Current().GetFrameType()));
+}
+static void CheckRootsQualification(bool present)
+{
+    auto& image = emptyStackmapMetadata;
+    image.code = emptyStackmapCodePC(0, present);
+    if (present) {
+        image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
+        image.stackmap[1] = 0x10;
+        image.stackmap[2] = 0x11;
+        image.stackmap[3] = 0x11;
+    }
+    const Uptr pc = reinterpret_cast<Uptr>(image.code);
+    ElfUnloadQuiescence::LinkImage(pc);
+    FrameAddress address {};
+    FrameInfo frame(image.code);
+    frame.SetFrameType(FrameType::MANAGED);
+    frame.mFrame.SetFA(&address);
+    frame.mFrame.SetIP(image.code);
+    const std::vector<FrameInfo> recorded {frame};
+    StackFrameStream frames(recorded);
+    A2ObserveRoots(&frames, pc, present ? reinterpret_cast<Uptr>(image.stackmap) : 0);
+    GC_EXPECT_TRUE(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED);
+}
+GC_TEST(ManagedMetadata, RootsMissingQualification) { CheckRootsQualification(false); }
+GC_TEST(ManagedMetadata, RootsZeroQualification) { CheckRootsQualification(true); }
+
 GC_TEST(ManagedMetadata, RootsRecordedDescriptorRejected)
 { CheckMetadata(Entry::ROOTS, false, false, nullptr); }
 GC_TEST(ManagedMetadata, RootsRecordedZeroRoots)
