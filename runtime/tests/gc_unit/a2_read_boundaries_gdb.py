@@ -77,10 +77,10 @@ def captured(event):
             life.phase = 'callback'
             try:
                 if life.state == 'armed':
-                    check_symbols()
                     if case.startswith('prefix-') and (not record.get('prefix_watch_verified') or
                             len(watches) != 1 or not watches[0].is_valid() or not watches[0].enabled):
                         raise RuntimeError('prefix observation window absent or invalidated')
+                    check_symbols()
                 identity = method(self)
                 life.capture(event, identity)
             except Exception as error:
