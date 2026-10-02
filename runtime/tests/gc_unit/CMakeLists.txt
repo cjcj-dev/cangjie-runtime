@@ -196,6 +196,18 @@ target_include_directories(cj_package_init_unrelated PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
 add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(cj_metadata_foreign SHARED package_init_image.cpp)
+    add_library(cj_metadata_owner SHARED package_init_image.cpp)
+    foreach(_image cj_metadata_foreign cj_metadata_owner)
+        target_include_directories(${_image} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+    endforeach()
+    target_compile_definitions(cj_metadata_foreign PRIVATE GC_METADATA_FOREIGN_IMAGE=1)
+    target_compile_definitions(cj_metadata_owner PRIVATE GC_METADATA_OWNER_IMAGE=1)
+    add_dependencies(cj_gc_unit cj_metadata_foreign cj_metadata_owner)
+endif()
+
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
 

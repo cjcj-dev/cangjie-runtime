@@ -307,6 +307,18 @@ PACKAGE_INIT_IMAGE_PID=$!
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
   -o "$OUT/libcj_package_init_unrelated.so" > "$OUT/package-init-unrelated-build.log" 2>&1 &
 PACKAGE_INIT_UNRELATED_PID=$!
+# Real mapped text/data inputs for same-image and foreign-image descriptors.
+(
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_FOREIGN_IMAGE=1 \
+    "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_foreign.so" &
+  foreign_pid=$!
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 \
+    "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_owner.so" &
+  owner_pid=$!
+  wait "$foreign_pid"
+  wait "$owner_pid"
+) > "$OUT/metadata-owner-images-build.log" 2>&1 &
+METADATA_OWNER_IMAGES_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
@@ -511,6 +523,7 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
 fi
 wait "$PACKAGE_INIT_IMAGE_PID"
 wait "$PACKAGE_INIT_UNRELATED_PID"
+wait "$METADATA_OWNER_IMAGES_PID"
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \

@@ -25,6 +25,8 @@
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Loader/PackageInit.h"
+#include "Common/StackType.h"
+#include "UnwindStack/StackInfo.h"
 #include "gc_heap_fixture.hpp"
 #include "loader_access_test.hpp"
 #include "LoaderManager.h"
@@ -70,6 +72,7 @@ extern "C" int dlclose(void* handle) noexcept
 }
 
 using namespace MapleRuntime;
+extern "C" void MRT_LibraryUnLoad(uint64_t);
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 extern "C" bool MRT_NewForeignCJThread();
@@ -469,6 +472,176 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredAddressIndexBoundaries)
     Target("registered-address-membership", membership);
     Target("registered-code-versus-data", executable);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+
+
+static std::string MetadataFixtureDirectory()
+{
+    char executable[4096] {};
+    const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+    Target("metadata-fixture-executable", length > 0);
+    return std::string(executable, length).substr(0, std::string(executable, length).find_last_of('/'));
+}
+
+// Observe the product result through FrameInfo, not a test copy of GetFuncDesc.
+static bool ResolveMetadataPC(const uint32_t* pc)
+{
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+#if defined(__x86_64__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 9;
+#elif defined(__arm__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 12;
+#else
+    input.start = reinterpret_cast<ArchUInt>(pc);
+#endif
+    FrameInfo frame;
+    frame.mFrame.SetFA(&input.frame);
+    frame.mFrame.SetIP(pc + 1);
+    return frame.ResolveProcInfo();
+}
+
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataDescriptorOwner)
+{
+    Init();
+    const std::string directory = MetadataFixtureDirectory();
+    void* foreign = dlopen((directory + "/libcj_metadata_foreign.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+    void* owner = dlopen((directory + "/libcj_metadata_owner.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("owner-fixtures-loaded", foreign && owner);
+    using MetadataEntry = void* (*)();
+    using PCEntry = const uint32_t* (*)(size_t);
+    auto ownerMeta = reinterpret_cast<MetadataEntry>(dlsym(owner, "PackageInitImageMetadata"));
+    auto foreignMeta = reinterpret_cast<MetadataEntry>(dlsym(foreign, "PackageInitImageMetadata"));
+    auto pc = reinterpret_cast<PCEntry>(dlsym(owner, "PackageInitOwnerPC"));
+    Target("owner-fixture-entries", ownerMeta && foreignMeta && pc);
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    for (auto input : {std::make_pair("metadata-foreign", foreignMeta()),
+                       std::make_pair("metadata-owner", ownerMeta())}) {
+        auto* file = new CJFile(CString(input.first), reinterpret_cast<Uptr>(input.second));
+        loader->AddLoadedFiles(file);
+        loader->RegisterLoadFile(file->GetFileMetaAddr());
+    }
+    using ForeignSetter = bool (*)(const void*);
+    auto setForeign = reinterpret_cast<ForeignSetter>(dlsym(owner, "PackageInitOwnerSetForeign"));
+    const void* foreignDescriptor = dlsym(foreign, "PackageInitForeignDescriptor");
+    Target("cross-owner-executable-input", setForeign && foreignDescriptor && setForeign(foreignDescriptor));
+    const bool same = ResolveMetadataPC(pc(0));
+    const bool cross = ResolveMetadataPC(pc(1));
+    const bool absent = ResolveMetadataPC(pc(2));
+    std::fprintf(stderr, "METADATA_DESCRIPTOR_OWNER_TARGET same=%d cross=%d absent=%d executed=1\n",
+                 same, cross, absent);
+    Target("same-owner-descriptor-accepted", same);
+    Target("cross-owner-descriptor-rejected", !cross);
+    Target("absent-owner-descriptor-rejected", !absent);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    Target("owner-fixture-close", dlclose(owner) == 0);
+    Target("foreign-fixture-close", dlclose(foreign) == 0);
+}
+
+static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst)
+{
+    Init();
+    const auto directory = MetadataFixtureDirectory();
+    void* library = dlopen((directory + "/libcj_package_init_fixture.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("index-fixture-loaded", library != nullptr);
+    using MetadataEntry = void* (*)();
+    auto primary = reinterpret_cast<MetadataEntry>(dlsym(library, "PackageInitImageMetadata"));
+    auto secondary = reinterpret_cast<MetadataEntry>(dlsym(library, "PackageInitImageSecondaryMetadata"));
+    const Uptr code = reinterpret_cast<Uptr>(dlsym(library, "PackageInitImagePackage"));
+    Target("index-fixture-entries", primary && secondary && code);
+    const Uptr addresses[] = {reinterpret_cast<Uptr>(primary()), reinterpret_cast<Uptr>(secondary())};
+    const unsigned retired = unloadSecondFirst ? 1 : 0;
+    struct Observation {
+        std::atomic<bool> entered {false}, release {false};
+        bool writerVisible = false;
+        uint64_t writerGeneration = 0, otherGeneration = 0;
+    } observation;
+    class ObservedFile final : public CJFile {
+    public:
+        ObservedFile(Uptr metadata, Uptr code, Observation& out)
+            : CJFile(CString("index-unload-observer"), metadata), code(code), out(out) {}
+        ~ObservedFile() override {
+            // This observes the actual product delete window. Default CJFile's
+            // destructor does not perform this query; no product hook is added.
+            ElfUnloadQuiescence::ReadScope reader;
+            auto image = ElfUnloadQuiescence::RegisteredImageForAddress(code, true);
+            auto other = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(P()), true);
+            out.writerVisible = image != nullptr;
+            out.writerGeneration = image ? image->generation : 0;
+            out.otherGeneration = other ? other->generation : 0;
+            out.entered.store(true, std::memory_order_release);
+            while (!out.release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        }
+    private:
+        Uptr code;
+        Observation& out;
+    };
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    for (unsigned index = 0; index != 2; ++index) {
+        CJFile* file = index == retired ? static_cast<CJFile*>(new ObservedFile(addresses[index], code, observation)) :
+                                         new CJFile(CString("index-overlap-control"), addresses[index]);
+        loader->AddLoadedFiles(file);
+        loader->RegisterLoadFile(addresses[index]);
+    }
+    const auto first = ElfUnloadQuiescenceTest::Registered(addresses[0]);
+    const auto second = ElfUnloadQuiescenceTest::Registered(addresses[1]);
+    const auto other = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(P()), true);
+    Target("distinct-overlapping-generations", first && second && other && first->identity == second->identity &&
+           first->generation != second->generation && first->Contains(code, true) && second->Contains(code, true));
+    const auto retiredGeneration = retired == 0 ? first->generation : second->generation;
+    const auto remainingGeneration = retired == 0 ? second->generation : first->generation;
+    auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
+    std::thread writer([&] { MRT_LibraryUnLoad(addresses[retired]); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescenceTest::UnloadPending() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool reachedDrain = ElfUnloadQuiescenceTest::UnloadPending();
+    const auto oldReaderImage = ElfUnloadQuiescence::RegisteredImageForAddress(code, true);
+    const bool oldReaderVisible = oldReaderImage && oldReaderImage->generation == first->generation;
+    reader.reset();
+    const bool writerReached = Await(observation.entered);
+    std::atomic<bool> readerStarted {false}, readerFinished {false};
+    uint64_t publicGeneration = 0;
+    std::thread nextReader([&] {
+        readerStarted.store(true, std::memory_order_release);
+        ElfUnloadQuiescence::ReadScope next;
+        auto image = ElfUnloadQuiescence::RegisteredImageForAddress(code, true);
+        publicGeneration = image ? image->generation : 0;
+        readerFinished.store(true, std::memory_order_release);
+    });
+    const bool readerAttempted = Await(readerStarted);
+    const bool admittedDuringWriter = readerFinished.load(std::memory_order_acquire);
+    observation.release.store(true, std::memory_order_release);
+    writer.join();
+    nextReader.join();
+    std::fprintf(stderr, "IMAGE_READER_WRITER_TARGET retired=%u drain=%d old=%d writer=%d "
+        "generation=%llu expected=%llu public_generation=%llu remaining=%llu attempted=%d early=%d other=%d executed=1\n",
+        retired, reachedDrain, oldReaderVisible, observation.writerVisible,
+        static_cast<unsigned long long>(observation.writerGeneration),
+        static_cast<unsigned long long>(retiredGeneration), static_cast<unsigned long long>(publicGeneration),
+        static_cast<unsigned long long>(remainingGeneration), readerAttempted, admittedDuringWriter,
+        observation.otherGeneration == other->generation);
+    Target("precut-reader-retains-image", reachedDrain && oldReaderVisible);
+    Target("unload-writer-keeps-own-generation", writerReached && observation.writerVisible &&
+           observation.writerGeneration == retiredGeneration);
+    Target("writer-falls-back-to-other-dso", observation.otherGeneration == other->generation);
+    Target("postcut-reader-cannot-see-retired-generation", readerAttempted && !admittedDuringWriter &&
+           publicGeneration == remainingGeneration && publicGeneration != retiredGeneration);
+    MRT_LibraryUnLoad(addresses[1 - retired]);
+    {
+        ElfUnloadQuiescence::ReadScope finalReader;
+        Target("final-generation-unlinked", !ElfUnloadQuiescence::IsLinkedAddress(code, true));
+    }
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    Target("index-fixture-close", dlclose(library) == 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AddressIndexUnloadFirstGeneration)
+{
+    CheckAddressIndexReaderWriterGenerations(false);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AddressIndexUnloadSecondGeneration)
+{
+    CheckAddressIndexReaderWriterGenerations(true);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)

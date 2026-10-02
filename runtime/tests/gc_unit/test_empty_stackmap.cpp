@@ -220,6 +220,20 @@ GC_TEST(ManagedMetadata, DataAddressIsNotCode)
     const bool registeredData = ElfUnloadQuiescence::IsLinkedAddress(pc);
     const bool code = ElfUnloadQuiescence::IsLinkedAddress(pc, true);
     const auto descriptor = MFuncDesc::GetFuncDesc(pc);
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+#if defined(__x86_64__)
+    input.start = pc + 9;
+#elif defined(__arm__)
+    input.start = pc + 12;
+#else
+    input.start = pc;
+#endif
+    FrameInfo frame;
+    frame.mFrame.SetFA(&input.frame);
+    frame.mFrame.SetIP(data.pc + 1);
+    const bool productAccepted = frame.ResolveProcInfo();
+    std::fprintf(stderr, "METADATA_DATA_PRODUCT_TARGET accepted=%d executed=1\n", productAccepted);
+    GC_EXPECT_TRUE(!productAccepted);
     std::fprintf(stderr, "METADATA_DATA_PC_TARGET registered=%d code=%d descriptor=%p executed=1\n",
                  registeredData, code, descriptor);
     GC_EXPECT_TRUE(registeredData && !code && descriptor == nullptr);

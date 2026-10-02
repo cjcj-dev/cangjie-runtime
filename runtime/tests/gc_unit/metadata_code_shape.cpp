@@ -1,56 +1,99 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
-#include "metadata_code_fixture.hpp"
-#include <cstdio>
-
-#if !defined(_WIN64)
 #include "Loader/ElfUnloadQuiescence.h"
-#include "ObjectModel/MFuncdesc.inline.h"
-using namespace MapleRuntime;
-struct MetadataShapeValue { uint64_t value; };
-extern "C" { MetadataShapeValue metadataShapeValues[2] {{0x1454}, {0x1455}}; }
-GC_METADATA_CODE(metadataShapeCode, metadataShapeValues, MetadataShapeValue, value, 2)
-#ifdef __APPLE__
-extern "C" unsigned char metadataForeignCode[];
-asm(".section __TEXT,__cjtestcode,regular,pure_instructions\n"
-    ".balign 16\n.globl _metadataForeignCode\n_metadataForeignCode:\n.long 0\n.zero 32\n"
-    ".section __CJ_METADATA,__cjfuncmap,regular\n.balign 8\n"
-    ".quad _metadataForeignCode + 4\n.quad 0x1454\n"
-    ".quad _metadataShapeValues\n.quad _metadataShapeValues\n.text\n");
-#endif
-int main()
-{
-    const auto pc = metadataShapeCodePC();
-    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
-    ElfUnloadQuiescence::ReadScope reader;
-    bool passed = true;
-    for (size_t i = 0; i != 2; ++i) {
-        const auto entry = metadataShapeCodePC(i);
-        const auto result = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(entry));
-        const bool ownsCode = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(entry), true);
-        const bool dataIsNotCode = !ElfUnloadQuiescence::IsLinkedAddress(
-            reinterpret_cast<Uptr>(&metadataShapeValues[i]), true);
-        const bool value = result == reinterpret_cast<FuncDescRef>(&metadataShapeValues[i]) &&
-            reinterpret_cast<MetadataShapeValue*>(result)->value == 0x1454 + i;
-        std::fprintf(stderr, "METADATA_CODE_SHAPE_TARGET row=%zu code=%d data=%d value=%d executed=1\n",
-                     i, ownsCode, dataIsNotCode, value);
-        passed &= ownsCode && dataIsNotCode && value;
-    }
-    const bool absent = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataShapeCodePC(0, false))) == nullptr;
-    std::fprintf(stderr, "METADATA_CODE_SHAPE_ABSENT pass=%d executed=1\n", absent);
-    bool codeOwner = true, descriptorOwner = true;
-#ifdef __APPLE__
-    codeOwner = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataShapeValues)) == nullptr;
-    descriptorOwner = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(metadataForeignCode + 4)) == nullptr;
-    std::fprintf(stderr, "METADATA_CODE_SHAPE_PC_OWNER pass=%d executed=1\n", codeOwner);
-    std::fprintf(stderr, "METADATA_CODE_SHAPE_DESC_OWNER pass=%d executed=1\n", descriptorOwner);
-#endif
-    return passed && absent && codeOwner && descriptorOwner ? 0 : 1;
-}
+#include "Common/StackType.h"
+#include <cstdio>
+#include <filesystem>
+#ifdef _WIN64
+#include <windows.h>
 #else
-int main()
-{
-    std::fprintf(stderr, "METADATA_CODE_SHAPE_NOT_RUN real PE inputs are supplied by windows_input.S\n");
-    return 77;
-}
+#include <dlfcn.h>
 #endif
+using namespace MapleRuntime;
+static void* OpenImage(const std::filesystem::path& path)
+{
+#ifdef _WIN64
+    return LoadLibraryW(path.c_str());
+#else
+    return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+static void* Symbol(void* image, const char* name)
+{
+#ifdef _WIN64
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(image), name));
+#else
+    return dlsym(image, name);
+#endif
+}
+static bool Resolve(const uint32_t* pc, const void* descriptor)
+{
+    struct Input { uintptr_t descriptor; ArchUInt start; FrameAddress frame; } input {};
+    input.descriptor = reinterpret_cast<uintptr_t>(descriptor);
+#if defined(__x86_64__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 9;
+#elif defined(__arm__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 12;
+#else
+    input.start = reinterpret_cast<ArchUInt>(pc);
+#endif
+    FrameInfo frame(pc);
+    frame.mFrame.SetFA(&input.frame);
+    frame.mFrame.SetIP(pc + 1);
+    return frame.ResolveProcInfo();
+}
+int main(int argc, char** argv)
+{
+    if (argc != 1) { return 64; }
+    const auto directory = std::filesystem::absolute(argv[0]).parent_path();
+#ifdef _WIN64
+    const char* suffix = ".dll";
+#elif defined(__APPLE__)
+    const char* suffix = ".dylib";
+#else
+    const char* suffix = ".so";
+#endif
+    void* owner = OpenImage(directory / (std::string("cj_metadata_owner") + suffix));
+    void* foreign = OpenImage(directory / (std::string("cj_metadata_foreign") + suffix));
+    if (!owner || !foreign) { std::fprintf(stderr, "METADATA_OWNER_INPUT_MISSING\n"); return 65; }
+    using PC = const uint32_t* (*)(size_t);
+    using DataPC = const uint32_t* (*)();
+    using Descriptor = const void* (*)(size_t);
+    using ForeignDescriptor = const void* (*)();
+    using Setter = bool (*)(const void*);
+    auto pc = reinterpret_cast<PC>(Symbol(owner, "A2GetOwnerPC"));
+    auto dataPC = reinterpret_cast<DataPC>(Symbol(owner, "A2GetDataPC"));
+    auto descriptor = reinterpret_cast<Descriptor>(Symbol(owner, "A2GetOwnerDescriptor"));
+    auto foreignDescriptor = reinterpret_cast<ForeignDescriptor>(Symbol(foreign, "A2GetForeignDescriptor"));
+    auto setter = reinterpret_cast<Setter>(Symbol(owner, "A2SetForeignDescriptor"));
+    if (!pc || !dataPC || !descriptor || !foreignDescriptor || !setter || !setter(foreignDescriptor())) {
+        std::fprintf(stderr, "METADATA_OWNER_INPUT_NOT_ADMITTED\n"); return 66;
+    }
+    const auto ownerMap = ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(descriptor(0)));
+    const auto foreignMap = ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(foreignDescriptor()));
+    ElfUnloadQuiescence::ReadScope reader;
+    const bool same = Resolve(pc(0), descriptor(0));
+    const bool cross = Resolve(pc(1), foreignDescriptor());
+    const bool absent = Resolve(pc(2), nullptr);
+    const bool data = Resolve(dataPC(), descriptor(0));
+    const bool ownsCode = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(pc(0)), true);
+    const bool ownsData = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(dataPC()));
+    const bool registeredForeign = foreignMap->Contains(reinterpret_cast<Uptr>(foreignDescriptor()));
+    const bool distinct = ownerMap->identity != foreignMap->identity;
+    std::fprintf(stderr, "METADATA_SAME_OWNER_TARGET same=%d code=%d data_member=%d executed=1\n", same, ownsCode, ownsData);
+    std::fprintf(stderr, "METADATA_CROSS_OWNER_TARGET cross=%d foreign_registered=%d distinct=%d executed=1\n",
+                 cross, registeredForeign, distinct);
+    std::fprintf(stderr, "METADATA_ABSENT_TARGET absent=%d executed=1\n", absent);
+    std::fprintf(stderr, "METADATA_CODE_ONLY_TARGET data=%d executed=1\n", data);
+    bool mapOwner = true;
+#ifdef __APPLE__
+    const auto mappedSame = ElfUnloadQuiescence::FindFunctionDescriptor(reinterpret_cast<Uptr>(pc(0)));
+    const auto mappedCross = ElfUnloadQuiescence::FindFunctionDescriptor(reinterpret_cast<Uptr>(pc(1)));
+    const auto mappedData = ElfUnloadQuiescence::FindFunctionDescriptor(reinterpret_cast<Uptr>(dataPC()));
+    std::fprintf(stderr, "METADATA_MAP_PC_OWNER pass=%d executed=1\n", mappedData == 0);
+    std::fprintf(stderr, "METADATA_MAP_DESC_OWNER pass=%d executed=1\n", mappedCross == 0);
+    std::fprintf(stderr, "METADATA_MAP_SAME_OWNER pass=%d executed=1\n", mappedSame == reinterpret_cast<Uptr>(descriptor(0)));
+    mapOwner = mappedData == 0 && mappedCross == 0 && mappedSame == reinterpret_cast<Uptr>(descriptor(0));
+#endif
+    return mapOwner && same && ownsCode && ownsData && !cross && registeredForeign && distinct && !absent && !data ? 0 : 1;
+}

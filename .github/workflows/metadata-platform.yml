@@ -1,12 +1,15 @@
 name: Managed metadata platform checks
 on:
   workflow_dispatch:
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
   push:
-    branches: ['sym/1284-implement-*']
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
+    branches: ['sym/1284-implement-*', 'sym/1478-implement-*']
 permissions:
   contents: read
 jobs:
   prepare:
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +61,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
-    if: ${{ always() && !cancelled() }}
+    if: ${{ always() && !cancelled() && !startsWith(github.ref_name, 'sym/1478-') }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -118,6 +121,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
   pac-capability:
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -143,6 +147,117 @@ jobs:
         if: always()
         with:
           name: capability-${{ matrix.config }}-${{ matrix.arm }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+            ${{ runner.temp }}/metadata/*.diff
+
+  a2-candidate:
+    if: ${{ startsWith(github.ref_name, 'sym/1478-') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, config: default}
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, config: testable}
+          - {platform: windows-x64, runner: windows-2025, config: default}
+          - {platform: windows-x64, runner: windows-2025, config: testable}
+          - {platform: macos-arm64, runner: macos-15, config: default}
+          - {platform: macos-arm64, runner: macos-15, config: testable}
+          - {platform: macos-arm64, runner: macos-15, config: pac-on}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py a2 --config ${{ matrix.config }}
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py a2 --config ${{ matrix.config }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-candidate-${{ matrix.platform }}-${{ matrix.config }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+            ${{ runner.temp }}/metadata/bundle/
+          retention-days: 3
+          include-hidden-files: false
+          # Build trees are excluded below; only immutable bundle and evidence.
+          compression-level: 6
+  a2-arms:
+    if: ${{ always() && !cancelled() && startsWith(github.ref_name, 'sym/1478-') }}
+    needs: a2-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-arm64, windows-x64, macos-arm64]
+        arm: [code-only, descriptor-owner, restored]
+        include:
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm}
+          - {platform: windows-x64, runner: windows-2025}
+          - {platform: macos-arm64, runner: macos-15}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/download-artifact@v4
+        with:
+          name: a2-candidate-${{ matrix.platform }}-testable
+          path: ${{ runner.temp }}/metadata/candidate-input
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -c 0
+          mkdir -p "$RUNNER_TEMP/metadata/bundle"
+          cp -a "$RUNNER_TEMP/metadata/candidate-input/bundle/." "$RUNNER_TEMP/metadata/bundle/"
+          chmod +x "$RUNNER_TEMP/metadata/bundle/metadata-code-shape"
+          python3 runtime/tests/gc_unit/metadata/build.py a2 --arm ${{ matrix.arm }}
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          mkdir -p "$RUNNER_TEMP/metadata/bundle"
+          cp -a "$RUNNER_TEMP/metadata/candidate-input/bundle/." "$RUNNER_TEMP/metadata/bundle/"
+          python3 runtime/tests/gc_unit/metadata/build.py a2 --arm ${{ matrix.arm }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-${{ matrix.platform }}-${{ matrix.arm }}
           path: |
             ${{ runner.temp }}/metadata/*.log
             ${{ runner.temp }}/metadata/*.json

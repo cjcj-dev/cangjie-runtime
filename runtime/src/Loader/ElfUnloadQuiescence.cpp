@@ -228,14 +228,13 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
 {
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
-    const auto image = maps.Find(address, codeOnly);
-    if (image != nullptr) { return image; }
-    // The writer owns these exact generations until fini completes. They are
-    // not republished into the public directory after UnlinkImage.
+    // A writer owns the exact retiring registration even if another header
+    // of the same DSO still publishes overlapping addresses.
     if (unloadWriter) {
-        return FindImageInterval(unloadWriterIntervals, address, codeOnly);
+        const auto image = FindImageInterval(unloadWriterIntervals, address, codeOnly);
+        if (image != nullptr) { return image; }
     }
-    return nullptr;
+    return maps.Find(address, codeOnly);
 }
 
 #ifdef __APPLE__
@@ -315,12 +314,13 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
                  reinterpret_cast<void*>(imageAddress));
     U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_acq_rel);
     CHECK_DETAIL((previous & WRITER_BIT) == 0, "ELF unload writers must be serialized");
-    {
-        auto& maps = ImageMaps();
-        std::lock_guard<std::mutex> lock(maps.mutex);
-        for (const auto& interval : maps.intervals) {
-            if (interval.image->identity == imageIdentity) { unloadWriterIntervals.push_back(interval); }
-        }
+    const auto image = RegisteredImage(imageAddress);
+    CHECK_DETAIL(image != nullptr && image->identity == imageIdentity,
+                 "ELF unload must retain its exact registered image");
+    for (const auto& range : image->ranges) {
+        if (range.size == 0) { continue; }
+        const Uptr last = range.start + std::min<Uptr>(range.size - 1, ~Uptr(0) - range.start);
+        unloadWriterIntervals.push_back({range.start, last, image, range.executable});
     }
     unloadWriter = true;
 }

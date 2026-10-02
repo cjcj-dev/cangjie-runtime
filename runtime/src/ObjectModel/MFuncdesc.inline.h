@@ -52,9 +52,12 @@ inline int8_t MFuncDesc::GetStackTraceFormat() const
 inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 {
     ElfUnloadQuiescence::ReadScope reader;
+    const Uptr startPC = reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(fa));
+    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
+    if (image == nullptr) { return nullptr; }
     FuncDescRef desc = reinterpret_cast<FuncDescRef>(
         *reinterpret_cast<U64*>(reinterpret_cast<uintptr_t>(fa) - STACK_OFFSET_IN_APPLE));
-    return ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
+    return image->Contains(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 }
 
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
