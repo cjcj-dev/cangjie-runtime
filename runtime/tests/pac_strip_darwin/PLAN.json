@@ -3,7 +3,7 @@
   "pr": 1482,
   "baseline": "1a5e4c20fd3e8db9bd1d37b8b4bb07cb287aed75",
   "starting_head": "085a6099c982ab3433c62d4e24e29a5dcac9b8bd",
-  "deadline_utc": "2026-10-02T21:00:00+00:00",
+  "deadline_utc": "2026-10-02T22:27:03+00:00",
   "archive_reserve_seconds": 120,
   "activation": "FROZEN ONLY: exact full candidate SHA, deadline and unique p1481-<fullsha> event require control activation",
   "platform": "macos-15 ordinary arm64 / Xcode16.4 / actual macosx SDK recorded",
