@@ -6,6 +6,10 @@ on:
         description: 'Completed run with unexecuted Linux/Windows testable targets'
         type: string
         default: ''
+      pac_resume:
+        description: 'Run the repaired PAC-on configuration once'
+        type: boolean
+        default: false
   push:
     branches: ['sym/1284-implement-*', 'sym/1478-implement-*']
 permissions:
@@ -156,7 +160,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.diff
 
   a2-candidate:
-    if: ${{ startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' }}
+    if: ${{ startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' && !inputs.pac_resume }}
     strategy:
       fail-fast: false
       matrix:
@@ -209,7 +213,7 @@ jobs:
           # Build trees are excluded below; only immutable bundle and evidence.
           compression-level: 6
   a2-arms:
-    if: ${{ always() && !cancelled() && startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' }}
+    if: ${{ always() && !cancelled() && startsWith(github.ref_name, 'sym/1478-') && inputs.resume_run == '' && !inputs.pac_resume }}
     needs: a2-candidate
     strategy:
       fail-fast: false
@@ -312,4 +316,28 @@ jobs:
           path: |
             ${{ runner.temp }}/metadata/*.log
             ${{ runner.temp }}/metadata/*.json
+          retention-days: 3
+
+  a2-pac-resume:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.pac_resume && startsWith(github.ref_name, 'sym/1478-') }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - shell: bash
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py a2 --config pac-on
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-pac-resume
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+            ${{ runner.temp }}/metadata/bundle/
           retention-days: 3
