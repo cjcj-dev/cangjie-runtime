@@ -5,6 +5,13 @@ Only control may activate the unique `p1481-<full head>` label on PR1482 after
 checking the full frozen head, inputs, and recipe. The label is 46 characters.
 Never activate the old `pac1481-` compile probe, dispatch, or rerun this batch.
 The product workflow checks the PR head rather than a merge ref, and attempt 1.
+The pending activation HEAD must not contain GitHub commit skip directives or
+a `skip-checks` trailer: they can suppress this `pull_request` label workflow.
+Freeze the complete candidate HEAD after this prerequisite, then bind its full
+40-digit hash to the control-only product label. A successful label API response
+is not evidence that a product run started. The original absolute deadline and
+first-error stop rules still apply; a suppressed event grants no extra batch or
+time allowance. Preserve the suppressed HEAD and its label as historical evidence.
 
 ## Fixed producer → consumer plan
 
