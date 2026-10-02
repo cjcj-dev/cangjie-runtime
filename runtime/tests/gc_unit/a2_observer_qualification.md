@@ -195,3 +195,30 @@ qualify real GDB or product behavior. Ordinary/continuous source wiring and
 identity failures, absent/invalidated windows and the explicit negative missing
 capability are its scope. Existing five-case collector, product fixtures and
 all prior actual results retain their original meaning. ROOTS is still untested.
+
+## 1002 bounded formal observer integration
+
+The new #1478 issue-body authorization supersedes the earlier prohibition on
+real execution for this batch only: five original cases once, inferior <=120s,
+stop on apparatus failure; at most two additional failed-case launches after
+a substantive recorded source correction, total <=7, within 60 minutes.
+No product builds/cuts, push, GHA, deployment or acceptance waiver.
+
+GNU12.1 target.c:1477/1610 rejects readbuf for exact MEM_WO before target
+transfer. Disable trust-readonly-sections and overlays and verify exact wo
+nocache region, debug and natural signal policies before each armed resume
+and callback. Every prefix admission, including rejection, installs the same
+four-byte watch. ROOTS zero installs the map watch; ROOTS missing has no
+input_watch and instead verifies the identical Build-only window. Build table
+installation precedes enabling target debug. No prefix_input access on map
+branches. Access fallback is evidenced by actual insertion logs and classified
+product instruction, never the WP_READ name alone.
+
+For watch-table queries only, retain the debug-enabled original, then pause
+target logging in stopped outer dispatch and restore in finally with readback.
+GNU breakpoint.c:6127/11838/14814 prints exp_string without evaluating the
+watched value. Other watch construction/resume/hit logs stay enabled.
+Snapshots bind official script/modules, raw maps, manifest/hash/device/inode,
+consumer thread/frame, normal return and original collector outcomes. DR
+mirror output is not an independent physical DR dump. Old successful diagnostic
+records are design evidence, never new formal-script outcomes.

@@ -66,11 +66,28 @@ def run(recipe, root):
             return SimpleNamespace(disassemble=lambda *a, **k:
                 [{'addr': 0x1010, 'length': 3, 'asm': 'movsxd rax,DWORD PTR [r15]'}])
     frame = Frame()
+    debug, region = 0, False
     def execute(command, **kwargs):
+        nonlocal debug, region
         cli.append({'command': command})
         if command.startswith('info breakpoints '):
             return ('Num Type Disp Enb Address What\n%d read watchpoint keep y '
                     '*(unsigned int*)0x1000\n') % int(command.split()[-1])
+        if command == 'info mem':
+            return ('Num Enb Low Addr High Addr Attrs\n1 y 0x1000 0x1004 wo nocache\n'
+                    if region else 'There are no memory regions defined.\n')
+        if command.startswith('mem '):
+            region = True
+            return ''
+        if command.startswith('set debug target '):
+            debug = int(command.split()[-1])
+            return ''
+        if command == 'show debug target':
+            return 'Debug target: %d\n' % debug
+        if command.startswith(('show ', 'overlay list', 'maintenance show', 'info signals')):
+            return 'SYNTHETIC policy ' + command
+        if command.startswith(('set ', 'overlay off', 'maintenance set')):
+            return ''
         raise AssertionError('unexpected synthetic command: ' + command)
     def read_memory(address, size):
         reads.append((address, size))
@@ -82,7 +99,7 @@ def run(recipe, root):
         newest_frame=lambda: frame, execute=execute, objfiles=lambda: [obj],
         block_for_pc=lambda pc: SimpleNamespace(function=True, start=0x1010),
         selected_inferior=lambda: SimpleNamespace(read_memory=read_memory),
-        write=lambda text: writes.append(text))
+        write=lambda text: writes.append(text), parameter=lambda name: debug)
     sys.modules['gdb'] = gdb
     source = Path(__file__).with_name('a2_read_boundaries_gdb.py')
     tree = ast.parse(source.read_text())
@@ -106,29 +123,6 @@ def run(recipe, root):
     assert admission['expected_accepted'] == (not negative), 'TARGET mapping facts misclassified'
     assert admission['readable_owner_bytes'] == (0 if negative else 4)
     ns['life'].phase = 'outer'
-    if negative:
-        try:
-            ns['dispatch']()
-        except RuntimeError as error:
-            assert str(error) == 'valid rejection input; safe read observation missing'
-        else:
-            raise AssertionError('TARGET negative resumed without safe window')
-        assert len(cli) == 1 and not reads, 'TARGET negative installed/evaluated a watch'
-        assert ns['record']['observation_missing']['installed'] is False
-        if recipe == 'forbidden-read':
-            # Counterexample only: synthetic read event is rejected by actual
-            # callback/window gate; it is not a genuine hardware read receipt.
-            ns['ReadWatch'](0x1000, 'prefix', admission['owner']).stop()
-            assert ns['life'].error == 'prefix observation window absent or invalidated'
-            print('TARGET_REJECT forbidden synthetic read event')
-        ns['input_item'].update(returned=True, accepted=0)
-        ns['life'].phase, ns['life'].state = 'outer', 'returned'
-        ns['record']['inferior_rc'] = 0
-        ns['finalize']()
-        assert ns['record']['status'] == 'INVALID' and not ns['record']['target'], \
-            'TARGET missing no-read window became OBSERVED'
-        print('TARGET_REACHED legitimate negative admitted; observation MISSING', recipe)
-        return
     ns['dispatch']()
     assert ns['record']['prefix_watch_verified'] and len(ns['watches']) == 1
     watch = ns['watches'][0]
@@ -138,16 +132,26 @@ def run(recipe, root):
         watch.valid = False
     # Real callback body with synthetic product identity and instruction input.
     ns['product_at'] = lambda pc: ('SYNTHETIC symbol', admission['owner'])
-    watch.stop()
+    if not negative or recipe == 'forbidden-read':
+        watch.stop()
+    if recipe == 'forbidden-read':
+        assert ns['life'].error == 'negative prefix hardware access observed'
+        assert ns['record']['prefix_reads'] and reads == [(0x1010, 3)]
+        print('TARGET_REJECT forbidden synthetic read after verified window')
+        return
     if recipe.startswith('window-'):
         assert ns['life'].error == 'prefix observation window absent or invalidated', \
             'TARGET missing/invalidated window accepted'
         assert not reads and not ns['record']['prefix_reads']
         print('TARGET_REJECT observation window', recipe)
         return
-    assert ns['record']['prefix_reads'] and reads == [(0x1010, 3)], 'TARGET actual ReadWatch body not reached'
-    ns['life'].phase = 'outer'
-    ns['dispatch']()
+    if negative:
+        assert not reads and not ns['record']['prefix_reads']
+        ns['returns'][0].return_value = 0
+    else:
+        assert ns['record']['prefix_reads'] and reads == [(0x1010, 3)], 'TARGET actual ReadWatch body not reached'
+        ns['life'].phase = 'outer'
+        ns['dispatch']()
     # Input frame is still identifiable at normal Return in this synthetic
     # stack; replace newest frame with its caller for consumer_identity(True).
     gdb.newest_frame = lambda: frame.older()
@@ -156,8 +160,8 @@ def run(recipe, root):
     ns['dispatch']()
     ns['record']['inferior_rc'] = 0
     ns['finalize']()
-    assert ns['record']['status'] == 'OBSERVED' and ns['record']['target'], 'TARGET positive wiring changed'
-    print('TARGET_REACHED synthetic positive Input/ReadWatch/Finish/finalize', recipe)
+    assert ns['record']['status'] == 'OBSERVED' and ns['record']['target'], 'TARGET verified window/normal return wiring changed'
+    print('TARGET_REACHED synthetic verified Input/window/Finish/finalize', recipe)
 
 
 if __name__ == '__main__':
