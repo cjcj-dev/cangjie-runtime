@@ -312,7 +312,8 @@ PACKAGE_INIT_UNRELATED_PID=$!
   "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_FOREIGN_IMAGE=1 \
     "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_foreign.so" &
   foreign_pid=$!
-  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 \
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 -DGC_METADATA_BOUNDARY_IMAGE=1 \
+    -Wl,--section-start=.a2_boundary=0x400000 \
     "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_owner.so" &
   owner_pid=$!
   wait "$foreign_pid"

@@ -51,6 +51,9 @@ extern "C" { int32_t PackageInitForeignDescriptor[8] {}; }
 #if defined(GC_METADATA_OWNER_IMAGE)
 extern "C" { __attribute__((visibility("hidden"))) int32_t PackageInitOwnerDescriptor[8] {}; }
 extern "C" unsigned char PackageInitOwnerCode[];
+// A real zero-root row, not a missing descriptor or missing stack map.
+alignas(Uptr) static unsigned char ownerStackMap[64] {};
+
 asm(".pushsection .gc_unit_metadata,\"ax\",@progbits\n"
     ".balign 65536\n.globl PackageInitOwnerCode\nPackageInitOwnerCode:\n"
     ".long PackageInitOwnerDescriptor - .\n.zero 32\n"
@@ -58,8 +61,25 @@ asm(".pushsection .gc_unit_metadata,\"ax\",@progbits\n"
     ".long 0\n.zero 32\n.zero 65428\n.popsection\n");
 extern "C" const uint32_t* PackageInitOwnerPC(size_t row)
 {
+    ownerStackMap[1] = 0x10; // one PC=0 row
+    ownerStackMap[2] = 0x11;
+    ownerStackMap[3] = 0x11; // four zero root/table indices
+    PackageInitOwnerDescriptor[0] = reinterpret_cast<char*>(ownerStackMap) -
+        reinterpret_cast<char*>(PackageInitOwnerDescriptor);
     return reinterpret_cast<const uint32_t*>(PackageInitOwnerCode + 36 * row + 4);
 }
+#if defined(GC_METADATA_BOUNDARY_IMAGE)
+// The dedicated Linux link recipe places this section at the first byte of
+// its own RX PT_LOAD. Before accepting this input, readelf and the actual
+// registered ranges must confirm that the preceding bytes lack owner coverage.
+asm(".pushsection .a2_boundary,\"ax\",@progbits\n"
+    ".globl PackageInitBoundaryCode\nPackageInitBoundaryCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char PackageInitBoundaryCode[];
+extern "C" const uint32_t* PackageInitBoundaryPC()
+{
+    return reinterpret_cast<const uint32_t*>(PackageInitBoundaryCode);
+}
+#endif
 extern "C" bool PackageInitOwnerSetForeign(const void* descriptor)
 {
     const intptr_t offset = reinterpret_cast<intptr_t>(descriptor) -

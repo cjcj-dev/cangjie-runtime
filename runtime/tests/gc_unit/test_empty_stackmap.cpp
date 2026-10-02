@@ -43,7 +43,7 @@ struct Metadata {
 extern "C" { Metadata emptyStackmapMetadata; }
 GC_METADATA_CODE(emptyStackmapCode, emptyStackmapMetadata, Metadata, descriptor, 1)
 
-enum class Entry { HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
+enum class Entry { ROOTS, HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
                    bool zeroRootRow = false, bool miss = false)
@@ -70,6 +70,20 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             image.stackmap[3] = 0x11; // line/derived index widths = 1
         }
         const Uptr pc = reinterpret_cast<Uptr>(image.code);
+        if (entry == Entry::ROOTS) {
+            ElfUnloadQuiescence::LinkImage(pc);
+            FrameAddress address {};
+            FrameInfo frame(image.code);
+            frame.SetFrameType(FrameType::MANAGED);
+            frame.mFrame.SetFA(&address);
+            frame.mFrame.SetIP(image.code);
+            const std::vector<FrameInfo> recorded {frame};
+            StackFrameStream frames(recorded);
+            frames.Start();
+            std::fprintf(stderr, "ROOTS_RECORDED_CONSUMER_TARGET returned=1 done=%d type=%d executed=1\n",
+                         frames.IsDone(), int(frames.Current().GetFrameType()));
+            _exit(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED ? 0 : 3);
+        }
         if (entry == Entry::CALLER_SP) {
             std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
         }
@@ -205,6 +219,23 @@ GC_TEST(ManagedMetadata, ExecutableWithoutDescriptorIsNative)
     GC_EXPECT_TRUE(native);
 }
 
+GC_TEST(ManagedMetadata, UnregisteredPCIsNative)
+{
+    const Uptr pc = 0x10000;
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+    UnwindContext context;
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(pc));
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    const bool registered = ElfUnloadQuiescence::IsLinkedAddress(pc);
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_UNREGISTERED_ROOTS_TARGET pc=%p registered=%d native=%d executed=1\n",
+                 reinterpret_cast<void*>(pc), registered, native);
+    GC_EXPECT_TRUE(!registered && native);
+}
+
 GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 {
     struct DataPC {
@@ -228,16 +259,27 @@ GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 #else
     input.start = pc;
 #endif
-    FrameInfo frame;
-    frame.mFrame.SetFA(&input.frame);
-    frame.mFrame.SetIP(data.pc + 1);
-    const bool productAccepted = frame.ResolveProcInfo();
-    std::fprintf(stderr, "METADATA_DATA_PRODUCT_TARGET accepted=%d executed=1\n", productAccepted);
-    GC_EXPECT_TRUE(!productAccepted);
+    UnwindContext context;
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.frameInfo.mFrame.SetIP(data.pc + 1);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_DATA_ROOTS_TARGET native=%d executed=1\n", native);
+    GC_EXPECT_TRUE(native);
     std::fprintf(stderr, "METADATA_DATA_PC_TARGET registered=%d code=%d descriptor=%p executed=1\n",
                  registeredData, code, descriptor);
     GC_EXPECT_TRUE(registeredData && !code && descriptor == nullptr);
 }
+
+// These exercise CheckRegisterRoots, never AnalyseAndSetFrameType. Removing
+// its descriptor guard may hit the downstream lookup's fatal assertion; that
+// alone is not evidence of the guard's read-before-map boundary.
+GC_TEST(ManagedMetadata, RootsRecordedDescriptorRejected)
+{ CheckMetadata(Entry::ROOTS, false, false, nullptr); }
+GC_TEST(ManagedMetadata, RootsRecordedZeroRoots)
+{ CheckMetadata(Entry::ROOTS, true, true, nullptr, true); }
 
 GC_TEST(ManagedMetadata, HeadAbsentDescriptor) { CheckMetadata(Entry::HEAD, false, false, "managed frame missing funcdesc"); }
 GC_TEST(ManagedMetadata, HeadAbsentStackMap) { CheckMetadata(Entry::HEAD, true, false, "managed frame missing stackmap"); }

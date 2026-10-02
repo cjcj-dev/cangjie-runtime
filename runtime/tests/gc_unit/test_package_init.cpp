@@ -500,7 +500,62 @@ static bool ResolveMetadataPC(const uint32_t* pc)
     return frame.ResolveProcInfo();
 }
 
-GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataDescriptorOwner)
+static FrameType MetadataPCFrameType(const uint32_t* pc)
+{
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+#if defined(__x86_64__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 9;
+#elif defined(__arm__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 12;
+#else
+    input.start = reinterpret_cast<ArchUInt>(pc);
+#endif
+    UnwindContext context;
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.frameInfo.mFrame.SetIP(pc);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    return frames.IsDone() ? FrameType::UNKNOWN : frames.Current().GetFrameType();
+}
+
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AddressIndexPublicPublication)
+{
+    Init();
+    const auto directory = MetadataFixtureDirectory();
+    void* library = dlopen((directory + "/libcj_package_init_fixture.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("publish-fixture-loaded", library != nullptr);
+    using MetadataEntry = void* (*)();
+    auto entry = reinterpret_cast<MetadataEntry>(dlsym(library, "PackageInitImageMetadata"));
+    const Uptr code = reinterpret_cast<Uptr>(dlsym(library, "PackageInitImagePackage"));
+    Target("publish-fixture-entries", entry && code);
+    const Uptr address = reinterpret_cast<Uptr>(entry());
+    bool before;
+    {
+        ElfUnloadQuiescence::ReadScope reader;
+        before = ElfUnloadQuiescence::IsLinkedAddress(code, true);
+    }
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* file = new CJFile(CString("index-publication"), address);
+    loader->AddLoadedFiles(file); // actual LinkImage -> public Rebuild
+    loader->RegisterLoadFile(address);
+    bool afterCode, afterMetadata, control;
+    {
+        ElfUnloadQuiescence::ReadScope reader;
+        afterCode = ElfUnloadQuiescence::RegisteredImageForAddress(code, true) != nullptr;
+        afterMetadata = ElfUnloadQuiescence::IsLinkedAddress(address);
+        control = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(P()), true);
+    }
+    std::fprintf(stderr, "IMAGE_PUBLICATION_TARGET before=%d code=%d metadata=%d control=%d executed=1\n",
+                 before, afterCode, afterMetadata, control);
+    Target("public-index-publishes-registration", !before && afterCode && afterMetadata);
+    Target("public-index-preserves-existing-image", control);
+    MRT_LibraryUnLoad(address);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    Target("publish-fixture-close", dlclose(library) == 0);
+}
+
+static void CheckMetadataDescriptorOwner(unsigned target)
 {
     Init();
     const std::string directory = MetadataFixtureDirectory();
@@ -523,19 +578,93 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataDescriptorOwner)
     using ForeignSetter = bool (*)(const void*);
     auto setForeign = reinterpret_cast<ForeignSetter>(dlsym(owner, "PackageInitOwnerSetForeign"));
     const void* foreignDescriptor = dlsym(foreign, "PackageInitForeignDescriptor");
-    Target("cross-owner-executable-input", setForeign && foreignDescriptor && setForeign(foreignDescriptor));
-    const bool same = ResolveMetadataPC(pc(0));
-    const bool cross = ResolveMetadataPC(pc(1));
-    const bool absent = ResolveMetadataPC(pc(2));
-    std::fprintf(stderr, "METADATA_DESCRIPTOR_OWNER_TARGET same=%d cross=%d absent=%d executed=1\n",
-                 same, cross, absent);
-    Target("same-owner-descriptor-accepted", same);
-    Target("cross-owner-descriptor-rejected", !cross);
-    Target("absent-owner-descriptor-rejected", !absent);
+    if (target == 0) {
+        Target("cross-owner-executable-input", setForeign && foreignDescriptor && setForeign(foreignDescriptor));
+    }
+    if (target != 0) {
+        using BoundaryPC = const uint32_t* (*)();
+        auto boundaryPC = reinterpret_cast<BoundaryPC>(dlsym(owner, "PackageInitBoundaryPC"));
+        Target("boundary-fixture-entry", boundaryPC != nullptr);
+        const Uptr boundary = reinterpret_cast<Uptr>(boundaryPC());
+        const auto ownerMap = ElfUnloadQuiescenceTest::Registered(reinterpret_cast<Uptr>(ownerMeta()));
+        Target("boundary-owner-record", ownerMap != nullptr);
+        size_t gaps = 0;
+        bool gapPublic = false, gapPrivate = false, edges = true, gapNative = true;
+        {
+            ElfUnloadQuiescence::ReadScope reader;
+            for (size_t i = 1; i < ownerMap->ranges.size(); ++i) {
+                const auto& left = ownerMap->ranges[i - 1];
+                const auto& right = ownerMap->ranges[i];
+                const Uptr last = left.start + left.size - 1;
+                if (last >= right.start - 1) { continue; }
+                const Uptr gap = last + 1;
+                const auto lookup = ElfUnloadQuiescence::RegisteredImageForAddress(gap);
+                const bool publicContains = ElfUnloadQuiescence::IsLinkedAddress(gap);
+                const bool privateContains = ownerMap->Contains(gap);
+                std::fprintf(stderr, "IMAGE_INTERNAL_GAP_INPUT left_last=%p gap=%p right=%p lookup=%p public=%d private=%d\n",
+                             reinterpret_cast<void*>(last), reinterpret_cast<void*>(gap),
+                             reinterpret_cast<void*>(right.start), lookup.get(), publicContains, privateContains);
+                if (target == 3) {
+                    const auto gapType = MetadataPCFrameType(reinterpret_cast<const uint32_t*>(gap));
+                    std::fprintf(stderr, "IMAGE_INTERNAL_GAP_ROOTS_INPUT type=%d executed=1\n", int(gapType));
+                    gapNative &= gapType == FrameType::NATIVE;
+                }
+                gapPublic |= lookup != nullptr || publicContains;
+                gapPrivate |= privateContains;
+                edges &= ElfUnloadQuiescence::IsLinkedAddress(last) &&
+                    ElfUnloadQuiescence::IsLinkedAddress(right.start) && ownerMap->Contains(last) &&
+                    ownerMap->Contains(right.start);
+                ++gaps;
+            }
+            if (target == 1) {
+            const bool executable = ownerMap->Contains(boundary, true);
+            const bool prefixFirst = ownerMap->Contains(boundary - sizeof(int32_t));
+            const bool prefixLast = ownerMap->Contains(boundary - 1);
+            const bool accepted = ResolveMetadataPC(boundaryPC());
+            std::fprintf(stderr, "METADATA_PREFIX_COVERAGE_TARGET pc=%p exec=%d first=%d last=%d accepted=%d executed=1\n",
+                         reinterpret_cast<void*>(boundary), executable, prefixFirst, prefixLast, accepted);
+            Target("prefix-outside-owner-rejected", executable && !prefixFirst && !prefixLast && !accepted);
+            }
+        }
+        if (target == 2) {
+        std::fprintf(stderr, "IMAGE_INTERNAL_GAP_TARGET samples=%zu public=%d private=%d edges=%d executed=1\n",
+                     gaps, gapPublic, gapPrivate, edges);
+        Target("internal-gap-is-not-registration", gaps != 0 && !gapPublic && !gapPrivate);
+        Target("internal-gap-neighbour-boundaries-visible", edges);
+
+        }
+    }
+    if (target == 3) {
+        std::fprintf(stderr, "IMAGE_GAP_ROOTS_TARGET samples=%zu native=%d executed=1\n", gaps, gapNative);
+        Target("roots-internal-gap-native", gaps != 0 && gapNative);
+    }
+    if (target == 0) {
+        const bool same = ResolveMetadataPC(pc(0));
+        const bool cross = ResolveMetadataPC(pc(1));
+        const bool absent = ResolveMetadataPC(pc(2));
+        const auto sameType = MetadataPCFrameType(pc(0));
+        const auto crossType = MetadataPCFrameType(pc(1));
+        const auto absentType = MetadataPCFrameType(pc(2));
+        std::fprintf(stderr, "METADATA_ROOTS_OWNER_TARGET same=%d cross=%d absent=%d executed=1\n",
+                     int(sameType), int(crossType), int(absentType));
+        Target("roots-same-owner-managed", sameType == FrameType::MANAGED);
+        Target("roots-cross-owner-native", crossType == FrameType::NATIVE);
+        Target("roots-absent-descriptor-native", absentType == FrameType::NATIVE);
+        std::fprintf(stderr, "METADATA_DESCRIPTOR_OWNER_TARGET same=%d cross=%d absent=%d executed=1\n",
+                     same, cross, absent);
+        Target("same-owner-descriptor-accepted", same);
+        Target("cross-owner-descriptor-rejected", !cross);
+        Target("absent-owner-descriptor-rejected", !absent);
+    }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     Target("owner-fixture-close", dlclose(owner) == 0);
     Target("foreign-fixture-close", dlclose(foreign) == 0);
 }
+
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataDescriptorOwner) { CheckMetadataDescriptorOwner(0); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataPrefixOutsideCoverage) { CheckMetadataDescriptorOwner(1); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredAddressInternalGap) { CheckMetadataDescriptorOwner(2); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredGapIsNative) { CheckMetadataDescriptorOwner(3); }
 
 static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst)
 {
@@ -621,17 +750,22 @@ static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst)
         static_cast<unsigned long long>(retiredGeneration), static_cast<unsigned long long>(publicGeneration),
         static_cast<unsigned long long>(remainingGeneration), readerAttempted, admittedDuringWriter,
         observation.otherGeneration == other->generation);
+    // Capture the final public result before any causal target can terminate
+    // this case. Publish/unpublish cuts must expose every observation.
+    MRT_LibraryUnLoad(addresses[1 - retired]);
+    bool finalVisible;
+    {
+        ElfUnloadQuiescence::ReadScope finalReader;
+        finalVisible = ElfUnloadQuiescence::IsLinkedAddress(code, true);
+    }
+    std::fprintf(stderr, "IMAGE_FINAL_UNPUBLISH_TARGET visible=%d executed=1\n", finalVisible);
+    Target("postcut-reader-cannot-see-retired-generation", readerAttempted && !admittedDuringWriter &&
+           publicGeneration == remainingGeneration && publicGeneration != retiredGeneration);
+    Target("final-generation-unlinked", !finalVisible);
     Target("precut-reader-retains-image", reachedDrain && oldReaderVisible);
     Target("unload-writer-keeps-own-generation", writerReached && observation.writerVisible &&
            observation.writerGeneration == retiredGeneration);
     Target("writer-falls-back-to-other-dso", observation.otherGeneration == other->generation);
-    Target("postcut-reader-cannot-see-retired-generation", readerAttempted && !admittedDuringWriter &&
-           publicGeneration == remainingGeneration && publicGeneration != retiredGeneration);
-    MRT_LibraryUnLoad(addresses[1 - retired]);
-    {
-        ElfUnloadQuiescence::ReadScope finalReader;
-        Target("final-generation-unlinked", !ElfUnloadQuiescence::IsLinkedAddress(code, true));
-    }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     Target("index-fixture-close", dlclose(library) == 0);
 }
