@@ -29,3 +29,9 @@
 每个LR项穿run.py实际instruction_checks→function_block→lr_flow（AST只取实际定义，避免导入执行产品驱动）；false项瞬态替换返回值只证明调用出口。保全项穿recipe.preserve_arms→preserve_then_delete→hash/copy/delete。总rc0包含目标拒绝被捕获，不伪称产品红臂进程rc非0。装置改动不改producer/consumer/cut或产品指令。工具实体绑定/cache域旧证据仅限定未改函数/原输入沿用；保全/LR旧通过不沿用。本批未覆盖真实Apple实体/cache命令、新objdump/CPU/green-cut-restore，继续hold。
 
 kkk2 box+ulimit -c 0；增量≤256MiB，起跑avail≥26GiB、低于24GiB停止；不调用cache/compiler/configure/build/GDB/native/GHA。不push，不merge，不动main。终态TRIAGED/next Triage。
+
+本轮限定读器复验（坐标fe740acf919cb4fffb55c567653c88aeb3c84137）：保全函数与输入未变，原1–8证据沿用，不重跑。既存offline入口改跑原9–18，加非base ADD写回strip值反例及历史clang-S明确INVALID，共12项。合法项同时覆盖4-byte编码列。接受地址冒号后恰好8位十六进制word或恰好4个2位byte，然后助记符；不靠hex任意长度贪婪分词。无编码列/非该布局不支持。ADD/SUB只支持三操作数无移位的非负十进制/hex立即数；未知来源写回失效值及地址标签，已知栈base只传播地址。不是通用指令/CFG验证器。
+
+历史saved-real-lr.s来自5950268782 evidence，是clang-S原件，无产品对象编码列；只作明确不支持输入，不冒充objdump输出。本轮实际llvm-objdump --disassemble真实Apple输出缺件，不新跑Apple。合成word/byte格式通过只证明有限读器。
+
+开发批1：只在实体副本瞬态切run.py ADD写回失效承重点，让非base ADD继承旧值，最多12项，首目标失败停止。最终冻结批：候选/恢复原源码一次12项，不同目录；不用同源码反复取绿。切刀只证明装置目标拒绝的因果敏感性，不证明产品行为；原技术Reject、旧9完成/10非目标失败/8未跑及所有hold保留。
