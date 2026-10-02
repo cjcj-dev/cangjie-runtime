@@ -37,10 +37,12 @@ target_compile_definitions(cj_metadata_foreign PRIVATE GC_METADATA_FOREIGN_IMAGE
 add_dependencies(metadata-code-shape cj_metadata_foreign cj_metadata_owner)
 
 # Isolated existing metadata entry: no gc_unit aggregate or product source copy.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(cj_metadata_contiguous SHARED ../metadata_owner_records.cpp)
   set_target_properties(cj_metadata_contiguous PROPERTIES PREFIX "")
   target_compile_definitions(cj_metadata_contiguous PRIVATE GC_METADATA_CONTIGUOUS_IMAGE=1)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(cj_metadata_owner PRIVATE -Wl,--section-start=.a2_boundary=0x400000)
   target_link_options(cj_metadata_contiguous PRIVATE
       -Wl,-z,max-page-size=4096
       -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/../a2_contiguous.ld
@@ -52,5 +54,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
           $<TARGET_FILE:cj_metadata_contiguous>
           $<TARGET_FILE_DIR:cj_metadata_contiguous>/cj_metadata_hole.so
       VERBATIM)
+  endif()
   add_dependencies(metadata-code-shape cj_metadata_contiguous)
 endif()

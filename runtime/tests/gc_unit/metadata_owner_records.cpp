@@ -49,6 +49,35 @@ asm(".pushsection .gc_unit_metadata,\"ax\",@progbits\n.balign 65536\n"
     ".long 0\n.zero 32\n.zero 65428\n.popsection\n"
     ".pushsection .data\n.globl A2DataCode\nA2DataCode:\n.long A2OwnerDescriptors - .\n.zero 16\n.popsection\n");
 #endif
+#if defined(__linux__) && !defined(GC_METADATA_CONTIGUOUS_IMAGE)
+asm(".pushsection .a2_boundary,\"ax\",@progbits\n"
+    ".globl A2BoundaryCode\nA2BoundaryCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char A2BoundaryCode[];
+extern "C" A2_EXPORT const uint32_t* A2GetBoundaryPC()
+{
+    return reinterpret_cast<const uint32_t*>(A2BoundaryCode);
+}
+#endif
+#if defined(_WIN64) && defined(GC_METADATA_CONTIGUOUS_IMAGE)
+// Real PE image allocation, with two committed regions of different protection.
+// VirtualQuery, not the PE section's byte length, produces registered ranges.
+asm(".section .a2prefix,\"xr\"\n.balign 65536\n.globl A2ContinuousPrefix\n"
+    ".zero 4094\nA2ContinuousPrefix:\n.long A2OwnerDescriptors - .\n"
+    ".globl A2ContinuousCode\nA2ContinuousCode:\n.zero 4096\n.text\n");
+extern "C" unsigned char A2ContinuousPrefix[], A2ContinuousCode[];
+extern "C" A2_EXPORT const uint32_t* A2GetContinuousPC()
+{
+    SYSTEM_INFO info {};
+    GetSystemInfo(&info);
+    if (info.dwPageSize != 4096) { return nullptr; }
+    auto* first = A2ContinuousPrefix - 4094;
+    if (reinterpret_cast<uintptr_t>(first) % info.dwPageSize != 0) { return nullptr; }
+    DWORD previous = 0;
+    if (!VirtualProtect(first, 4096, PAGE_READONLY, &previous) ||
+        !VirtualProtect(first + 4096, 4096, PAGE_EXECUTE_READ, &previous)) { return nullptr; }
+    return reinterpret_cast<const uint32_t*>(A2ContinuousCode);
+}
+#endif
 #if defined(__linux__) && defined(GC_METADATA_CONTIGUOUS_IMAGE)
 // Reuse a2_contiguous.ld/a2_prefix_hole.py: exact LOAD ownership differs
 // from page readability. The PC records are data inputs, never executed.

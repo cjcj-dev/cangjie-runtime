@@ -111,13 +111,17 @@ def a2_run_bundle(runtime_hash=None):
                "METADATA_ABSENT_TARGET absent=0 executed=1",
                f"METADATA_CODE_ONLY_TARGET data={expected_data} executed=1"]
     if not mac:
-        prefix_names = ["ordinary"] if windows else ["ordinary", "contiguous", "hole"]
+        prefix_names = ["ordinary", "contiguous"] if windows else ["ordinary", "contiguous", "outside", "hole"]
         for name in prefix_names:
             assert f"METADATA_PREFIX_INPUT name={name} qualified=1" in output, output
             assert f"METADATA_PREFIX_DESCRIPTOR name={name} qualified=1" in output, output
-            expected = int(name != "hole")
+            expected = int(name not in ("hole", "outside"))
             targets.append(f"METADATA_PREFIX_TARGET name={name} accepted={expected} expected={expected} executed=1")
         record["prefix_targets"] = prefix_names
+        if windows:
+            applicability = "APPLICABILITY_NOT_PRODUCIBLE_BY_CURRENT_WINDOWS_REGISTRATION"
+            assert "METADATA_PREFIX_APPLICABILITY name=hole status=" + applicability in output, output
+            record["prefix_internal_hole"] = applicability
     assert all(target in output for target in targets), output
     assert rc == (1 if expected_cross or expected_data else 0), (rc, output)
     record["behavior"] = "PRECISE_RED" if expected_cross or expected_data else "PASS"
@@ -288,7 +292,7 @@ else:
                 if path.is_file() and path.name.startswith("cj_metadata_") and path.suffix == extension:
                     shutil.copy2(path, bundle / path.name)
                     fixtures[path.name] = digest(path)
-            assert len(fixtures) == (4 if not windows and not mac else 2)
+            assert len(fixtures) == (2 if mac else 3 if windows else 4)
             # Preserve exact fixture producer commands, headers and bytes. No
             # product source is built into the metadata executable or fixtures.
             checked(["cmake", "--build", testbuild, "--target", "help"], "a2-targets")
