@@ -666,7 +666,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataPrefixOutsideCoverage) { CheckMeta
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredAddressInternalGap) { CheckMetadataDescriptorOwner(2); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredGapIsNative) { CheckMetadataDescriptorOwner(3); }
 
-static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst)
+static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst, bool finalOnly = false)
 {
     Init();
     const auto directory = MetadataFixtureDirectory();
@@ -759,6 +759,7 @@ static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst)
         finalVisible = ElfUnloadQuiescence::IsLinkedAddress(code, true);
     }
     std::fprintf(stderr, "IMAGE_FINAL_UNPUBLISH_TARGET visible=%d executed=1\n", finalVisible);
+    if (finalOnly) { Target("final-generation-unlinked", !finalVisible); }
     Target("postcut-reader-cannot-see-retired-generation", readerAttempted && !admittedDuringWriter &&
            publicGeneration == remainingGeneration && publicGeneration != retiredGeneration);
     Target("final-generation-unlinked", !finalVisible);
@@ -1430,6 +1431,11 @@ GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
     Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
     Target("uninit-handle-erased", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
 }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AddressIndexFinalGenerationUnpublished)
+{
+    CheckAddressIndexReaderWriterGenerations(false, true);
+}
+
 // ZGC zRootsIterator.cpp:107,117 enumerates CLD roots from the loader data
 // graph. The library image is loaded through the product entry
 // (CjFileLoader.cpp:44 -> CJFile::RegisterFile -> CJFile::LoadLinuxCJFileMeta)
