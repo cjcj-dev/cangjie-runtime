@@ -91,7 +91,8 @@ def captured(event):
                     check_policy()
                     check_symbols()
                 identity = method(self)
-                life.capture(event, identity)
+                if life.error is None:
+                    life.capture(event, identity)
             except Exception as error:
                 fail(error)
             return True  # outer gdb.execute('continue') returns before mutations
