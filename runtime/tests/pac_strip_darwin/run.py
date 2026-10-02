@@ -176,7 +176,7 @@ def lr_flow(block, require_stripped_return):
 
     xpac = False
     returns = 0
-    instruction = re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2,8}\s+)+(\w+)\s*(.*?)\s*$")
+    instruction = re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{8}|[0-9a-f]{2}\s+[0-9a-f]{2}\s+[0-9a-f]{2}\s+[0-9a-f]{2})\s+(\w+)\s*(.*?)\s*$")
     for line in block.splitlines():
         match = instruction.match(line)
         if not match:
@@ -188,9 +188,12 @@ def lr_flow(block, require_stripped_return):
         parts = [part.strip() for part in operands.split(",")]
         if op == "mov" and len(parts) == 2:
             write(parts[0], registers.get(parts[1]), bases.get(parts[1]))
-        elif op in ("add", "sub") and len(parts) == 3 and parts[1] in bases and parts[2].startswith("#"):
+        elif op in ("add", "sub"):
+            if len(parts) != 3 or not re.fullmatch(r"#(?:0x[0-9a-f]+|[0-9]+)", parts[2]):
+                raise RuntimeError("INVALID: unsupported add/sub operand")
             offset = int(parts[2][1:], 0) * (-1 if op == "sub" else 1)
-            write(parts[0], base=bases[parts[1]] + offset)
+            base = bases.get(parts[1])
+            write(parts[0], base=base + offset if base is not None else None)
         elif op in ("stp", "str", "stur", "ldp", "ldr", "ldur"):
             memory = re.search(r"\[(sp|x29)(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?\](!)?(?:,\s*#(-?(?:0x[0-9a-f]+|\d+)))?", operands)
             if memory is None:
@@ -240,7 +243,9 @@ def lr_flow(block, require_stripped_return):
             raise RuntimeError("INVALID: unsupported instruction " + op)
         elif op not in ("nop", "cmp", "tst") and parts:
             write(parts[0])
-    if not returns or (require_stripped_return and not xpac):
+    if not returns:
+        raise RuntimeError("INVALID: no encoded return instruction")
+    if require_stripped_return and not xpac:
         raise RuntimeError("actual strip/return instruction flow not established")
     return True
 

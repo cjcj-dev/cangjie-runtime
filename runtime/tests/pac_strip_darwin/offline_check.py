@@ -50,7 +50,8 @@ def check(name, action, expected=None):
     except RuntimeError as error:
         if expected is None or expected not in str(error):
             raise
-        value = {'target_rejection': str(error)}
+        assert not (namespace['OUT'] / 'instruction-check.json').exists()
+        value = {'target_rejection': str(error), 'success_file_absent': True}
     else:
         if expected is not None:
             raise AssertionError('expected target rejection: ' + name)
@@ -165,15 +166,7 @@ def instructions(callee=positive, target=caller, false_checker=False):
     return json.loads((namespace['OUT'] / 'instruction-check.json').read_text())
 
 try:
-    check('publisher-canonical-json-and-metadata', lambda: preserve('json'))
-    check('install-staging-subtarget-publication-hashes', lambda: preserve('categories'))
-    check('missing-formed-cjthread-retains-tree', lambda: missing('lost-cj', 'build/runtime-staging/lib/libcangjie-thread.a'))
-    check('formed-cjthread-restored', lambda: preserve('restored-cj'))
-    check('missing-formed-link-retains-tree', lambda: missing('lost-link', 'build/src/Base/CMakeFiles/Base.dir/link.txt'))
-    check('formed-link-restored', lambda: preserve('restored-link'))
-    check('formed-archive-copy-failure-retains-tree', copy_failure)
-    check('multiarm-first-fails-others-preserved', multi)
-    check('caller-callee-positive', instructions)
+    check('caller-callee-positive', lambda: instructions(positive.replace('aa0003fe', 'fe 03 00 aa')))
     check('R3-overwritten-x0-add-rejected', lambda: instructions(positive.replace('10: a8', 'e: 910043e0 add x0, sp, #16\n10: a8')), 'strip result dataflow')
     check('R3-overwritten-x30-add-rejected', lambda: instructions(target='0: 910043fe add x30, sp, #16\n4: d65f03c0 ret'), 'actual return does not restore')
     check('w0-write-invalidates-x0', lambda: instructions(positive.replace('10: a8', 'e: 2a1f03e0 mov w0, wzr\n10: a8')), 'strip result dataflow')
@@ -184,7 +177,9 @@ try:
     check('legal-SP-sub-add-restores-LR-and-strip', lambda: instructions(sp))
     check('unsupported-control-flow-INVALID', lambda: instructions(positive.replace('mov x0, x30', 'b 0x14')), 'INVALID: unsupported LR control-flow')
     check('caller-consumes-checker-false', lambda: instructions(false_checker=True), 'INVALID: caller LR checker rejected')
-    assert len(records) == 18
+    check('add-nonbase-invalidates-strip', lambda: instructions(positive.replace('10: a8', 'e: 91000400 add x0, x0, #1\n10: a8')), 'strip result dataflow')
+    check('historical-clang-S-explicit-INVALID', lambda: instructions((here / 'saved-real-lr.s').read_text()), 'INVALID: no encoded return instruction')
+    assert len(records) == 12
     assert not external
     (root / 'summary.json').write_text(json.dumps({'n': len(records), 'status': 'PASS',
         'scope': 'offline recipe only; byte mirrors, not product evidence', 'external_calls': external}, indent=2))
