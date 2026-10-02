@@ -578,12 +578,12 @@ static void CheckMetadataDescriptorOwner(unsigned target)
     using ForeignSetter = bool (*)(const void*);
     auto setForeign = reinterpret_cast<ForeignSetter>(dlsym(owner, "PackageInitOwnerSetForeign"));
     const void* foreignDescriptor = dlsym(foreign, "PackageInitForeignDescriptor");
-    if (target == 0) {
+    if (target == 0 || target == 4) {
         Target("cross-owner-executable-input", setForeign && foreignDescriptor && setForeign(foreignDescriptor));
     }
     size_t gaps = 0;
     bool gapNative = true;
-    if (target != 0) {
+    if (target >= 1 && target <= 3) {
         using BoundaryPC = const uint32_t* (*)();
         auto boundaryPC = reinterpret_cast<BoundaryPC>(dlsym(owner, "PackageInitBoundaryPC"));
         Target("boundary-fixture-entry", boundaryPC != nullptr);
@@ -656,6 +656,15 @@ static void CheckMetadataDescriptorOwner(unsigned target)
         Target("cross-owner-descriptor-rejected", !cross);
         Target("absent-owner-descriptor-rejected", !absent);
     }
+    if (target == 4 || target == 5) {
+        const auto controlType = MetadataPCFrameType(pc(0));
+        const auto rejectedType = MetadataPCFrameType(pc(target == 4 ? 1 : 2));
+        std::fprintf(stderr, "METADATA_ROOTS_RESOLVE_TARGET cross=%d actual=%d control=%d executed=1\n",
+                     target == 4, int(rejectedType), int(controlType));
+        Target(target == 4 ? "roots-cross-owner-native" : "roots-absent-descriptor-native",
+               rejectedType == FrameType::NATIVE);
+        Target("roots-valid-zero-root-managed-control", controlType == FrameType::MANAGED);
+    }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     Target("owner-fixture-close", dlclose(owner) == 0);
     Target("foreign-fixture-close", dlclose(foreign) == 0);
@@ -665,6 +674,8 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataDescriptorOwner) { CheckMetadataDe
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, MetadataPrefixOutsideCoverage) { CheckMetadataDescriptorOwner(1); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredAddressInternalGap) { CheckMetadataDescriptorOwner(2); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredGapIsNative) { CheckMetadataDescriptorOwner(3); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RootsCrossOwnerIsNative) { CheckMetadataDescriptorOwner(4); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RootsAbsentDescriptorIsNative) { CheckMetadataDescriptorOwner(5); }
 
 static void CheckAddressIndexReaderWriterGenerations(bool unloadSecondFirst, bool finalOnly = false)
 {
