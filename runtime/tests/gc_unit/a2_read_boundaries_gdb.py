@@ -66,9 +66,9 @@ def bind_inputs():
     bound(executable, rows)
     for path in {r[5] for r in rows}:
         name = os.path.basename(path)
-        if name.startswith(('libcangjie', 'libcj_metadata')):
+        if name.startswith(('libcangjie', 'libcj_metadata')) or name in ('libboundscheck.so', 'libtrace.so'):
             bound(path, rows)
-    for name in ('libcangjie-runtime.so', 'libcangjie-boundscheck.so'):
+    for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
         if not any(os.path.basename(r[5]) == name for r in rows):
             raise RuntimeError('required mapped product dependency missing: ' + name)
     return rows
