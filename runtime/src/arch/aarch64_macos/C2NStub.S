@@ -254,8 +254,7 @@ L_copy_end:
     ldr x0, [x29, #SafeStateOffset]
     bl  _MRT_C2N_Leave             // return: thread local data
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
-    .globl _unwindPCForC2NStubExceptionReturn
-_unwindPCForC2NStubExceptionReturn:
+L_unwindPCForC2NStubExceptionReturn:
 #endif
     str x0, [sp, #.Lmrt_a64_callee_x28]
 
@@ -327,6 +326,11 @@ L_stack_check_fail:
 _unwindPCForC2NStub = L_unwindPCForC2NStub
 
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    // Darwin requires private labels inside the CFI range. Export the actual
+    // Leave return PC through an alias, as for unwindPCForC2NStub above.
+    .globl _unwindPCForC2NStubExceptionReturn
+_unwindPCForC2NStubExceptionReturn = L_unwindPCForC2NStubExceptionReturn
+
     .section __TEXT,__const
     .p2align 3
     .globl _C2NStubFrameSize
