@@ -20,7 +20,7 @@ record = {'case': case, 'status': 'INVALID', 'errors': [], 'identities': [],
 manifest = {}
 armed = False
 watches = []
-build_probe = None
+build_probes = []
 returns = []
 life = Lifecycle()
 input_frame = None
@@ -85,8 +85,9 @@ def captured(event):
                     if input_watch is not None and (not record.get('watch_verified') or
                             len(watches) != 1 or not watches[0].is_valid() or not watches[0].enabled):
                         raise RuntimeError('memory observation window absent or invalidated')
-                    if case.startswith('roots-') and (build_probe is None or
-                            not build_probe.is_valid() or not build_probe.enabled or not record.get('build_locations')):
+                    if case.startswith('roots-') and (not build_probes or
+                            any(not bp.is_valid() or not bp.enabled for bp in build_probes) or
+                            not record.get('build_locations')):
                         raise RuntimeError('Build observation window absent or invalidated')
                     check_policy()
                     check_symbols()
@@ -208,8 +209,8 @@ class BuildEntry(gdb.Breakpoint):
         try:
             pc = int(gdb.newest_frame().read_register('pc'))
             symbol, identity = product_at(pc)
-            # Breakpoint locations at the first Build body statement, including
-            # inline instances. Save the actual chain to prove ROOTS caller.
+            # The preselected SAL is the function entry, before its prologue.
+            # Preserve the real stack guard; entry unwind qualification is required.
             names = []
             frame = gdb.newest_frame()
             while frame is not None:
@@ -306,13 +307,13 @@ def mutate(action, operation):
 
 
 def cleanup():
-    for bp in watches + returns + ([build_probe] if build_probe else []):
+    for bp in watches + returns + build_probes:
         if bp.is_valid():
             mutate('disable', lambda bp=bp: setattr(bp, 'enabled', False))
 
 
 def dispatch():
-    global armed, build_probe, snapshot_generation, symbol_objects, symbol_paths
+    global armed, snapshot_generation, symbol_objects, symbol_paths
     action = life.dispatch()
     record.setdefault('dispatch', []).append(action)
     if action == 'install':
@@ -347,8 +348,8 @@ def dispatch():
             if watch.kind == 'prefix':
                 record['prefix_watch_verified'] = True
         returns.append(mutate('install Finish', lambda: ConsumerReturn(input_frame, input_item)))
-        if build_probe:
-            mutate('enable Build', lambda: setattr(build_probe, 'enabled', True))
+        for bp in build_probes:
+            mutate('enable Build', lambda bp=bp: setattr(bp, 'enabled', True))
         armed = True
     elif action in ('disable', 'cleanup'):
         armed = False
@@ -358,24 +359,103 @@ def dispatch():
 
 
 def install_build():
-    global build_probe, snapshot_generation
-    if case.startswith('roots-'):
-        # The retained SO's CheckRegisterRoots call consumes HeapReferenceMap.
-        # Source line 277 selects StackPtrMap in that SO; candidate-tree line
-        # numbers cannot identify a retained artifact's template instance.
-        # Resolve the actual consumer's symbol, then bind every CLI location
-        # to the product SO. Execution still requires the real ROOTS stack.
-        locator = '_ZNK12MapleRuntime15StackMapBuilder5BuildINS_16HeapReferenceMapEEET_b'
-        record['build_locator'] = locator
-        build_probe = mutate('install Build', lambda: BuildEntry(locator, internal=False))
-        snapshot_generation = symbol_generation
-        text = gdb.execute('info breakpoints %d' % build_probe.number, to_string=True)
-        record['build_location_table'] = text
-        addresses, identities = locate(text, build_probe.number, snapshot_generation,
-                                       symbol_generation, lambda pc: product_at(pc)[1])
-        record['build_locations'] = sorted([{'so_sha256': identity['sha256'],
-            'relative_pc': pc - min(row[0] - row[5] for row in identity['maps'])}
-            for pc, identity in zip(addresses, identities)], key=lambda r: r['relative_pc'])
+    if not case.startswith('roots-'):
+        return
+    # GNU 12.1 python.c:gdbpy_decode_line returns all SALs without installing
+    # a breakpoint. linespec.c:convert_address_location_to_sals keeps explicit_pc.
+    # Do not create a MULTIPLE symbol breakpoint and then reject the ELF owner.
+    locator = '_ZNK12MapleRuntime15StackMapBuilder5BuildINS_16HeapReferenceMapEEET_b'
+    record['build_locator'] = locator
+    check_symbols()
+    rows = mappings()
+    products = [o for o in symbol_objects if os.path.basename(o.filename) == 'libcangjie-runtime.so']
+    if len(products) != 1:
+        raise RuntimeError('Build product objfile is not unique')
+    product = products[0]
+    product_identity = bound(product.filename, rows)
+    rest, sals = gdb.decode_line(locator)
+    record['build_decode_rest'] = rest
+    record['build_selection_generation'] = snapshot_generation
+    candidates = record['build_candidates'] = []
+    selected = set()
+    invalid = []
+    for sal in sals or ():
+        item = {'pc': int(sal.pc), 'line': sal.line, 'chain': [], 'selected': False}
+        candidates.append(item)
+        try:
+            if not sal.pc or sal.symtab is None or not sal.symtab.objfile.is_valid():
+                raise RuntimeError('incomplete Build SAL')
+            owner = sal.symtab.objfile
+            item.update({'owner': owner.filename, 'source': sal.symtab.fullname()})
+            if owner not in symbol_objects:
+                raise RuntimeError('Build SAL objfile outside symbol snapshot')
+            block = gdb.block_for_pc(sal.pc)
+            functions = []
+            while block is not None:
+                if block.function is not None:
+                    function = block.function
+                    if function.symtab is None or not function.symtab.objfile.is_valid():
+                        raise RuntimeError('incomplete Build block ownership')
+                    item['chain'].append({'function': str(function), 'start': int(block.start),
+                        'end': int(block.end), 'owner': function.symtab.objfile.filename})
+                    functions.append(function)
+                block = block.superblock
+            if not functions or functions[0].symtab.objfile != owner or (
+                    'StackMapBuilder::Build<MapleRuntime::HeapReferenceMap>' not in str(functions[0])):
+                raise RuntimeError('Build SAL/function specialization disagreement')
+            # This fixed SO has an out-of-line call, not an inline instance.
+            # Other SO shapes require separate qualification, never extrapolation.
+            if len(functions) != 1 or item['chain'][0]['start'] != int(sal.pc):
+                raise RuntimeError('Build candidate is not the qualified function entry')
+            if owner != product and os.path.realpath(owner.filename) != os.path.realpath(gdb.current_progspace().filename):
+                raise RuntimeError('unknown non-product Build candidate owner')
+            if owner == product:
+                item['selected'] = True
+                selected.add(int(sal.pc))
+        except Exception as error:
+            item['error'] = str(error)
+            invalid.append(str(error))
+    if rest or invalid or not selected:
+        raise RuntimeError('Build enumeration incomplete: ' + repr((rest, invalid, sorted(selected))))
+    # Audit the actual fixed product consumer call. Never read Build's product
+    # memory, use a previous ASLR address, or try another source line on failure.
+    disassembly = gdb.execute('disassemble /r MapleRuntime::StackFrameStream::CheckRegisterRoots', to_string=True)
+    record['build_consumer_disassembly'] = disassembly
+    targets = set()
+    for line in disassembly.splitlines():
+        match = re.search(r'\bcall\s+(0x[0-9a-fA-F]+)\s+<(.*)', line)
+        if match and 'StackMapBuilder' in match.group(2) and 'HeapReferenceMap' in match.group(2):
+            targets.add(int(match.group(1), 16))
+    record['build_consumer_targets'] = sorted(targets)
+    if not targets or not targets.issubset(selected):
+        raise RuntimeError('Build selection does not cover actual product consumer call')
+    prechecked = record['build_prechecked'] = []
+    for pc in sorted(selected):
+        check_symbols()
+        symbol, identity = product_at(pc)
+        if symbol.symtab.objfile != product or identity != product_identity:
+            raise RuntimeError('Build selection product identity changed')
+        prechecked.append({'pc': pc, 'so': identity, 'generation': snapshot_generation})
+    check_symbols()  # No breakpoint exists until every selected address passed.
+    tables = record['build_location_tables'] = []
+    installed = []
+    for pc in sorted(selected):
+        check_symbols()
+        bp = mutate('install Build', lambda pc=pc: BuildEntry('*0x%x' % pc, internal=False))
+        build_probes.append(bp)
+        check_symbols()
+        text = gdb.execute('info breakpoints %d' % bp.number, to_string=True)
+        tables.append(text)
+        record['build_location_table'] = '\n'.join(tables)
+        addresses, identities = locate(text, bp.number, snapshot_generation,
+                                       symbol_generation, lambda address: product_at(address)[1])
+        if set(addresses) != {pc} or any(identity != product_identity for identity in identities):
+            raise RuntimeError('installed Build location differs from prechecked selection')
+        installed.extend(zip(addresses, identities))
+    check_symbols()
+    record['build_locations'] = sorted([{'so_sha256': identity['sha256'],
+        'relative_pc': pc - min(row[0] - row[5] for row in identity['maps'])}
+        for pc, identity in installed], key=lambda r: r['relative_pc'])
 
 def check_symbols():
     validate_symbols([o.is_valid() for o in symbol_objects], symbol_paths,
@@ -387,7 +467,7 @@ def check_symbols():
 def symbols_changed(event):
     global symbol_generation
     symbol_generation += 1
-    if life.state == 'armed':
+    if snapshot_generation is not None:
         fail('symbol snapshot invalidated by DSO load/unload')
 
 
