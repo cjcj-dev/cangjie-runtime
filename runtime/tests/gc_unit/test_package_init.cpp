@@ -511,7 +511,8 @@ static void CheckPrefixQualification(unsigned kind)
 {
     Init();
     const auto directory = MetadataFixtureDirectory();
-    const char* name = kind == 1 ? "libcj_metadata_contiguous.so" : "libcj_metadata_owner.so";
+    const char* name = kind == 3 ? "libcj_metadata_hole.so" :
+        (kind == 1 ? "libcj_metadata_contiguous.so" : "libcj_metadata_owner.so");
     void* library = dlopen((directory + "/" + name).c_str(), RTLD_NOW | RTLD_LOCAL);
     Target("prefix-qualification-fixture-loaded", library != nullptr);
     using Meta = void* (*)();
@@ -519,7 +520,7 @@ static void CheckPrefixQualification(unsigned kind)
     using Row = const uint32_t* (*)(size_t);
     auto meta = reinterpret_cast<Meta>(dlsym(library, "PackageInitImageMetadata"));
     auto ordinary = reinterpret_cast<Row>(dlsym(library, "PackageInitOwnerPC"));
-    auto special = reinterpret_cast<PC>(dlsym(library, kind == 1 ? "PackageInitContinuousPC" : "PackageInitBoundaryPC"));
+    auto special = reinterpret_cast<PC>(dlsym(library, (kind == 1 || kind == 3) ? "PackageInitContinuousPC" : "PackageInitBoundaryPC"));
     Target("prefix-qualification-entries", meta && ordinary && (kind == 0 || special));
     const auto* pc = kind == 0 ? ordinary(0) : special();
     Target("prefix-qualification-pc", pc != nullptr);
@@ -555,7 +556,10 @@ static void CheckPrefixQualification(unsigned kind)
             std::fprintf(stderr, "A2_PREFIX_BYTE address=%p same_owner=%d exec=%d\n",
                          reinterpret_cast<void*>(prefix + b), same, image->Contains(prefix + b, true));
         }
-        if (covered) {
+        if (covered || kind == 3) {
+            // The hole fixture shares the contiguous fixture's readable ELF
+            // pages. Read actual bytes to prove this is registration coverage,
+            // while the product must refuse to read this unqualified record.
             std::memcpy(&displacement, reinterpret_cast<void*>(prefix), sizeof(displacement));
             const auto* bytes = reinterpret_cast<const unsigned char*>(prefix);
             std::fprintf(stderr, "A2_PREFIX_ACTUAL_BYTES %02x %02x %02x %02x\n",
@@ -571,14 +575,17 @@ static void CheckPrefixQualification(unsigned kind)
             adjacent = left.start + left.size == right.start && left.executable != right.executable;
         }
     }
-    const bool qualified = executable && (kind == 2 ? sameBytes == 0 : covered && descriptorOwned) &&
-                           (kind != 1 || adjacent);
+    const bool internalHole = sameBytes == 2 && image->Contains(prefix) && image->Contains(start - 1) &&
+        !image->Contains(prefix + 1) && !image->Contains(prefix + 2);
+    const bool qualified = executable &&
+        (kind == 2 ? sameBytes == 0 : (kind == 3 ? internalHole && descriptorOwned : covered && descriptorOwned)) &&
+        (kind != 1 || adjacent);
     std::fprintf(stderr, "A2_PREFIX_INPUT kind=%u pc=%p prefix=%p qualified=%d first=%zu last=%zu adjacent=%d\n",
                  kind, pc, reinterpret_cast<void*>(prefix), qualified, firstRange, lastRange, adjacent);
     Target("prefix-input-qualified", qualified); // failed layout is INVALID, never target-red evidence
     const bool accepted = A2ObservePrefix(pc);
     std::fprintf(stderr, "A2_PREFIX_RESULT kind=%u accepted=%d executed=1\n", kind, accepted);
-    Target("prefix-real-consumer-result", accepted == (kind != 2));
+    Target("prefix-real-consumer-result", accepted == (kind != 2 && kind != 3));
     MRT_LibraryUnLoad(metadataAddress);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     Target("prefix-fixture-close", dlclose(library) == 0);
@@ -586,6 +593,7 @@ static void CheckPrefixQualification(unsigned kind)
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixOrdinaryQualification) { CheckPrefixQualification(0); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixContinuousQualification) { CheckPrefixQualification(1); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixInvalidQualification) { CheckPrefixQualification(2); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PrefixInternalHoleQualification) { CheckPrefixQualification(3); }
 
 static FrameType MetadataPCFrameType(const uint32_t* pc)
 {

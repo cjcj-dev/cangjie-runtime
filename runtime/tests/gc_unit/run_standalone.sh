@@ -329,6 +329,7 @@ PACKAGE_INIT_UNRELATED_PID=$!
       "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared \
       -Wl,-T,"$SRC/a2_contiguous.ld" "$OUT/contiguous-evidence/package_init_image.o" \
       -o "$OUT/libcj_metadata_contiguous.so"
+    python3 "$SRC/a2_prefix_hole.py" "$OUT/libcj_metadata_contiguous.so" "$OUT/libcj_metadata_hole.so"
   ) &
   contiguous_pid=$!
   wait "$contiguous_pid"

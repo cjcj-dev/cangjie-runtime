@@ -222,6 +222,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         " -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld")
     set_property(TARGET cj_metadata_contiguous APPEND PROPERTY LINK_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld)
+    add_custom_command(TARGET cj_metadata_contiguous POST_BUILD
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/a2_prefix_hole.py
+            $<TARGET_FILE:cj_metadata_contiguous>
+            $<TARGET_FILE_DIR:cj_metadata_contiguous>/libcj_metadata_hole.so)
     add_dependencies(cj_gc_unit cj_metadata_foreign cj_metadata_owner cj_metadata_contiguous)
 endif()
 
