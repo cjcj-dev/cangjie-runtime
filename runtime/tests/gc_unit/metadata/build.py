@@ -288,6 +288,9 @@ else:
     checked(["llvm-nm" if windows else "nm", "--defined-only", libs[0]], "symbols")
     if args.mode == "a2":
         if args.arm == "candidate":
+            record["fixture_generator_sha256"] = {name: digest(tree / "tests/gc_unit" / name)
+                for name in ("metadata_owner_records.cpp", "a2_contiguous.ld", "a2_prefix_hole.py")}
+            save()
             testbuild = out / "a2-test-build"
             checked(["cmake", "-S", tree / "tests/gc_unit/metadata", "-B", testbuild, "-G", "Ninja",
                      "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_ASM_COMPILER=clang",
@@ -304,16 +307,19 @@ else:
                     shutil.copy2(path, bundle / path.name)
                     fixtures[path.name] = digest(path)
             assert len(fixtures) == (2 if mac else 3 if windows else 4)
-            # Preserve exact fixture producer commands, headers and bytes. No
-            # product source is built into the metadata executable or fixtures.
-            checked(["cmake", "--build", testbuild, "--target", "help"], "a2-targets")
-            checked(["ninja", "-C", testbuild, "-t", "commands", *targets], "a2-test-commands")
-            for name in fixtures:
-                inspector = ["llvm-readobj", "--file-headers", "--sections", "--program-headers"] if not windows else ["llvm-readobj", "--file-headers", "--sections"]
-                checked([*inspector, bundle / name], "a2-input-" + name)
-            record["fixture_generator_sha256"] = {name: digest(tree / "tests/gc_unit" / name)
-                for name in ("metadata_owner_records.cpp", "a2_contiguous.ld", "a2_prefix_hole.py")}
             record["fixture_sha256"] = fixtures
+            record["test_elf_sha256"] = digest(bundle / exe.name)
+            save() # identities survive the first inspection failure
+            if not mac:
+                # Preserve exact producer commands, headers and bytes; leave
+                # Apple capability and existing full-mode selection unchanged.
+                checked(["cmake", "--build", testbuild, "--target", "help"], "a2-targets")
+                checked(["ninja", "-C", testbuild, "-t", "commands", *targets], "a2-test-commands")
+                for name in fixtures:
+                    inspector = ["llvm-readobj", "--file-headers", "--sections"]
+                    if not windows:
+                        inspector.append("--program-headers")
+                    checked([*inspector, bundle / name], "a2-input-" + name)
             for path in libdir.iterdir():
                 if path.is_file() and path.suffix in (".dll", ".so", ".dylib"):
                     shutil.copy2(path, bundle / path.name)
