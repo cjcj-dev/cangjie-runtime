@@ -21,9 +21,7 @@ jobs:
     timeout-minutes: 65
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-      # Historical failed batch only. Future control must bind PLAN + deadline/event
-      # and supply current SCCACHE_PATH / PAC1481_LLVM_BIN; no activation here.
-      PAC1481_DEADLINE: '2026-10-02T10:37:17+00:00'
+      PAC1481_DEADLINE: '2026-10-02T16:30:32+00:00'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,16 +32,19 @@ jobs:
         run: |
           ulimit -c 0
           brew list llvm >/dev/null 2>&1 || brew install llvm
+          printf 'PAC1481_LLVM_BIN=%s/bin\n' "$(brew --prefix llvm)" >> "$GITHUB_ENV"
+          test -n "$SCCACHE_PATH"
+          printf 'SCCACHE_PATH=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
       - name: Frozen product batch
         env:
           PAC1481_HEAD: ${{ github.event.pull_request.head.sha }}
           PAC1481_LABEL: ${{ github.event.label.name }}
         run: |
           ulimit -c 0
-          python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5947853219"
+          python3 runtime/tests/pac_strip_darwin/run.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5955267819"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pac-product-1481-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5947853219
+          path: ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5955267819
           if-no-files-found: error

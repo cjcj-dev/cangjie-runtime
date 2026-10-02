@@ -3,7 +3,7 @@
   "pr": 1482,
   "baseline": "1a5e4c20fd3e8db9bd1d37b8b4bb07cb287aed75",
   "starting_head": "e11803b1054849bf05284bf9bb6081a0fcdb4061",
-  "deadline_utc": null,
+  "deadline_utc": "2026-10-02T16:30:32+00:00",
   "archive_reserve_seconds": 120,
   "activation": "NOT AUTHORIZED: control must separately bind new full candidate, absolute deadline and unique event",
   "platform": "macos-15 ordinary arm64 / Xcode16.4 / actual macosx SDK recorded",
