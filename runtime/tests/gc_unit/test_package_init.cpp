@@ -581,6 +581,8 @@ static void CheckMetadataDescriptorOwner(unsigned target)
     if (target == 0) {
         Target("cross-owner-executable-input", setForeign && foreignDescriptor && setForeign(foreignDescriptor));
     }
+    size_t gaps = 0;
+    bool gapNative = true;
     if (target != 0) {
         using BoundaryPC = const uint32_t* (*)();
         auto boundaryPC = reinterpret_cast<BoundaryPC>(dlsym(owner, "PackageInitBoundaryPC"));
@@ -588,8 +590,7 @@ static void CheckMetadataDescriptorOwner(unsigned target)
         const Uptr boundary = reinterpret_cast<Uptr>(boundaryPC());
         const auto ownerMap = ElfUnloadQuiescenceTest::Registered(reinterpret_cast<Uptr>(ownerMeta()));
         Target("boundary-owner-record", ownerMap != nullptr);
-        size_t gaps = 0;
-        bool gapPublic = false, gapPrivate = false, edges = true, gapNative = true;
+        bool gapPublic = false, gapPrivate = false, edges = true;
         {
             ElfUnloadQuiescence::ReadScope reader;
             for (size_t i = 1; i < ownerMap->ranges.size(); ++i) {
@@ -617,21 +618,20 @@ static void CheckMetadataDescriptorOwner(unsigned target)
                 ++gaps;
             }
             if (target == 1) {
-            const bool executable = ownerMap->Contains(boundary, true);
-            const bool prefixFirst = ownerMap->Contains(boundary - sizeof(int32_t));
-            const bool prefixLast = ownerMap->Contains(boundary - 1);
-            const bool accepted = ResolveMetadataPC(boundaryPC());
-            std::fprintf(stderr, "METADATA_PREFIX_COVERAGE_TARGET pc=%p exec=%d first=%d last=%d accepted=%d executed=1\n",
-                         reinterpret_cast<void*>(boundary), executable, prefixFirst, prefixLast, accepted);
-            Target("prefix-outside-owner-rejected", executable && !prefixFirst && !prefixLast && !accepted);
+                const bool executable = ownerMap->Contains(boundary, true);
+                const bool prefixFirst = ownerMap->Contains(boundary - sizeof(int32_t));
+                const bool prefixLast = ownerMap->Contains(boundary - 1);
+                const bool accepted = ResolveMetadataPC(boundaryPC());
+                std::fprintf(stderr, "METADATA_PREFIX_COVERAGE_TARGET pc=%p exec=%d first=%d last=%d accepted=%d executed=1\n",
+                             reinterpret_cast<void*>(boundary), executable, prefixFirst, prefixLast, accepted);
+                Target("prefix-outside-owner-rejected", executable && !prefixFirst && !prefixLast && !accepted);
             }
         }
         if (target == 2) {
-        std::fprintf(stderr, "IMAGE_INTERNAL_GAP_TARGET samples=%zu public=%d private=%d edges=%d executed=1\n",
-                     gaps, gapPublic, gapPrivate, edges);
-        Target("internal-gap-is-not-registration", gaps != 0 && !gapPublic && !gapPrivate);
-        Target("internal-gap-neighbour-boundaries-visible", edges);
-
+            std::fprintf(stderr, "IMAGE_INTERNAL_GAP_TARGET samples=%zu public=%d private=%d edges=%d executed=1\n",
+                         gaps, gapPublic, gapPrivate, edges);
+            Target("internal-gap-is-not-registration", gaps != 0 && !gapPublic && !gapPrivate);
+            Target("internal-gap-neighbour-boundaries-visible", edges);
         }
     }
     if (target == 3) {
