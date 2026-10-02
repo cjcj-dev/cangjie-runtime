@@ -2,11 +2,16 @@
 # Licensed under Apache-2.0 with Runtime Library Exception.
 # External Linux x86_64 observer. No inferior calls, return overrides, register
 # writes or product state changes. All instruction addresses come from this SO.
-import hashlib
 import json
 import os
 import re
+import sys
+import functools
 import gdb
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from a2_observer_contract import (digest, parse_maps, bind, required_inputs,
+                                  contains, locate, Lifecycle, verify_watch, validate_symbols)
 
 case = os.environ.get('A2_CASE', '')
 out = os.environ.get('A2_OBSERVER_OUT', '')
@@ -16,45 +21,27 @@ manifest = {}
 armed = False
 watches = []
 build_probe = None
-
-
-def digest(path):
-    with open(path, 'rb') as stream:
-        hasher = hashlib.sha256()
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-            hasher.update(chunk)
-        return hasher.hexdigest()
+returns = []
+life = Lifecycle()
+input_frame = None
+input_item = None
+input_watch = None
+symbol_generation = 0
+snapshot_generation = None
+exited = False
+symbol_objects = []
+symbol_paths = []
 
 
 def mappings():
-    pid = gdb.selected_inferior().pid
-    result = []
-    with open('/proc/%d/maps' % pid) as stream:
-        for line in stream:
-            fields = line.split(None, 5)
-            if len(fields) != 6 or not fields[5].startswith('/'):
-                continue
-            path = fields[5].strip()
-            if path.endswith(' (deleted)'):
-                raise RuntimeError('deleted mapped input: ' + path)
-            start, end = (int(x, 16) for x in fields[0].split('-'))
-            result.append((start, end, fields[1], fields[3], int(fields[4]), path))
-    return result
+    with open('/proc/%d/maps' % gdb.selected_inferior().pid) as stream:
+        rows = parse_maps(stream.read())
+    record['raw_mappings'] = [list(r) for r in rows]
+    return rows
 
 
 def bound(path, rows):
-    path = os.path.realpath(path)
-    wanted = manifest.get(path)
-    if wanted is None or digest(path) != wanted:
-        raise RuntimeError('unbound input hash: ' + path)
-    stat = os.stat(path)
-    rows = [r for r in rows if os.path.realpath(r[5]) == path]
-    if not rows or any(r[4] != stat.st_ino or
-                       tuple(int(v, 16) for v in r[3].split(':')) !=
-                       (os.major(stat.st_dev), os.minor(stat.st_dev)) for r in rows):
-        raise RuntimeError('mapped device/inode mismatch: ' + path)
-    identity = {'path': path, 'sha256': wanted, 'device': stat.st_dev,
-                'inode': stat.st_ino, 'maps': [list(r[:5]) for r in rows]}
+    identity = bind(path, rows, manifest)
     if identity not in record['identities']:
         record['identities'].append(identity)
     return identity
@@ -62,16 +49,42 @@ def bound(path, rows):
 
 def bind_inputs():
     rows = mappings()
-    executable = os.path.realpath(gdb.current_progspace().filename)
-    bound(executable, rows)
-    for path in {r[5] for r in rows}:
-        name = os.path.basename(path)
-        if name.startswith(('libcangjie', 'libcj_metadata')) or name in ('libboundscheck.so', 'libtrace.so'):
-            bound(path, rows)
-    for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
-        if not any(os.path.basename(r[5]) == name for r in rows):
-            raise RuntimeError('required mapped product dependency missing: ' + name)
+    for identity in required_inputs(gdb.current_progspace().filename, rows, manifest):
+        if identity not in record['identities']:
+            record['identities'].append(identity)
     return rows
+
+
+def consumer_identity(returning=False):
+    if life.identity is None:
+        raise RuntimeError('consumer identity absent')
+    thread, sp, caller = life.identity
+    if tuple(gdb.selected_thread().ptid) != thread:
+        raise RuntimeError('consumer thread changed')
+    frame = gdb.newest_frame()
+    wanted = caller if returning else sp
+    while frame is not None:
+        if int(frame.read_register('sp')) == wanted:
+            return life.identity
+        frame = frame.older()
+    raise RuntimeError('consumer frame identity lost')
+
+
+def captured(event):
+    def decorate(method):
+        @functools.wraps(method)
+        def stop(self):
+            life.phase = 'callback'
+            try:
+                if life.state == 'armed':
+                    check_symbols()
+                identity = method(self)
+                life.capture(event, identity)
+            except Exception as error:
+                fail(error)
+            return True  # outer gdb.execute('continue') returns before mutations
+        return stop
+    return decorate
 
 
 def product_at(pc):
@@ -84,23 +97,31 @@ def product_at(pc):
     path = symbol.symtab.objfile.filename
     if os.path.basename(path) != 'libcangjie-runtime.so':
         raise RuntimeError('observed instruction outside product SO: ' + path)
-    identity = bound(path, mappings())
+    rows = mappings()
+    row = contains(rows, pc, executable=True)
+    if row[6] != 'file' or os.path.realpath(row[5]) != os.path.realpath(path):
+        raise RuntimeError('instruction mapping and debug SO ownership disagree')
+    identity = bound(path, rows)
     return symbol, identity
 
 
 def fail(error):
     record['errors'].append(str(error))
+    life.error = str(error)
 
 
 class ReadWatch(gdb.Breakpoint):
     def __init__(self, address, kind):
+        life.mutation('construct read watch')
         super().__init__('*(unsigned int*)0x%x' % address, type=gdb.BP_WATCHPOINT,
-                         wp_class=gdb.WP_READ, internal=True)
+                         wp_class=gdb.WP_READ, internal=False)
         self.address, self.kind = address, kind
         self.hits = 0
 
+    @captured('read')
     def stop(self):
         try:
+            consumer_identity()
             frame = gdb.newest_frame()
             after = int(frame.read_register('pc'))
             symbol, identity = product_at(after)
@@ -125,41 +146,49 @@ class ReadWatch(gdb.Breakpoint):
                 raise RuntimeError('unclassified hardware watch access: ' + asm)
             if operands[0].startswith('mov') and ('[' not in operands[1].split(',')[-1]):
                 raise RuntimeError('hardware watch saw a store: ' + asm)
+            contains(mappings(), self.address, 4)
+            contains(mappings(), instruction['addr'], instruction['length'], executable=True)
             self.hits += 1
             record[self.kind + '_reads'].append({'watched_address': self.address,
                 'instruction': instruction, 'stop_pc': after, 'so': identity,
                 'bytes': bytes(gdb.selected_inferior().read_memory(instruction['addr'], instruction['length'])).hex()})
         except Exception as error:
             fail(error)
-        return False
+        return consumer_identity()
 
 
 class ConsumerReturn(gdb.FinishBreakpoint):
     def __init__(self, frame, item):
-        super().__init__(frame, internal=True)
+        life.mutation('construct Finish')
+        super().__init__(frame, internal=False)
         self.item = item
 
+    @captured('return')
     def stop(self):
-        global armed
-        armed = False
+        identity = consumer_identity(returning=True)
         self.item['returned'] = True
         if case.startswith('prefix-'):
             if self.return_value is None:
-                fail('prefix consumer return unavailable')
-            else:
-                self.item['accepted'] = int(self.return_value)
-        for watch in watches:
-            watch.enabled = False
-        return False
+                raise RuntimeError('prefix consumer return unavailable')
+            self.item['accepted'] = int(self.return_value)
+        return identity
 
     def out_of_scope(self):
-        fail('real consumer did not return normally')
+        life.phase = 'callback'
+        try:
+            life.capture('out_of_scope')
+            fail('real consumer did not return normally')
+        except Exception as error:
+            fail(error)
+        finally:
+            life.phase = 'outer'
+
 
 
 class BuildEntry(gdb.Breakpoint):
+    @captured('build')
     def stop(self):
-        if not armed:
-            return False
+        consumer_identity()
         try:
             pc = int(gdb.newest_frame().read_register('pc'))
             symbol, identity = product_at(pc)
@@ -176,51 +205,117 @@ class BuildEntry(gdb.Breakpoint):
                 'instruction': gdb.newest_frame().architecture().disassemble(pc, count=1), 'so': identity})
         except Exception as error:
             fail(error)
-        return False
+        return consumer_identity()
 
 
 class Input(gdb.Breakpoint):
+    @captured('input')
     def stop(self):
-        global armed
-        try:
-            if armed:
-                raise RuntimeError('more than one qualification input')
-            frame = gdb.newest_frame()
-            rows = bind_inputs()
-            pc = int(frame.read_var('pc'))
-            owner = [r for r in rows if r[0] <= pc < r[1] and 'x' in r[2]]
-            if len(owner) != 1:
-                raise RuntimeError('input PC has no unique mapped executable identity')
-            bound(owner[0][5], rows)
-            if case.startswith('prefix-') and not os.path.basename(owner[0][5]).startswith('libcj_metadata'):
-                raise RuntimeError('prefix PC not in real fixture DSO')
-            item = {'pc': pc, 'mapped_owner': owner[0][5], 'returned': False}
-            record['consumers'].append(item)
-            armed = True
-            if case.startswith('prefix-'):
-                watches.append(ReadWatch(pc - 4, 'prefix'))
-            else:
-                map_address = int(frame.read_var('map'))
-                item['map'] = map_address
-                if case == 'roots-zero':
-                    if not map_address or not any(r[0] <= map_address and map_address + 4 <= r[1] for r in rows):
-                        raise RuntimeError('zero-root map not in actual mapped input')
-                    watches.append(ReadWatch(map_address, 'map'))
-            # No watchpoint resource/unmapped-input failure is a green result.
-            watch_text = gdb.execute('info breakpoints', to_string=True)
-            record['watch_installation'] = watch_text
-            if watches and 'hw read watchpoint' not in watch_text.lower():
-                raise RuntimeError('hardware read watchpoint could not be verified')
-            ConsumerReturn(frame, item)
-        except Exception as error:
-            fail(error)
-        return False
+        global input_frame, input_item, input_watch
+        frame = gdb.newest_frame()
+        rows = bind_inputs()
+        pc = int(frame.read_var('pc'))
+        owner = contains(rows, pc, executable=True)
+        bound(owner[5], rows)
+        if case.startswith('prefix-') and not os.path.basename(owner[5]).startswith('libcj_metadata'):
+            raise RuntimeError('prefix PC not in real fixture DSO')
+        caller = frame.older()
+        if caller is None:
+            raise RuntimeError('consumer caller unavailable')
+        identity = (tuple(gdb.selected_thread().ptid), int(frame.read_register('sp')),
+                    int(caller.read_register('sp')))
+        input_frame = frame
+        input_item = {'pc': pc, 'mapped_owner': owner[5], 'returned': False,
+                      'thread_frame': identity}
+        record['consumers'].append(input_item)
+        input_watch = None
+        if case.startswith('prefix-'):
+            contains(rows, pc - 4, 4)
+            input_watch = (pc - 4, 'prefix')
+        else:
+            address = int(frame.read_var('map'))
+            input_item['map'] = address
+            if case == 'roots-zero':
+                contains(rows, address, 4)
+                input_watch = (address, 'map')
+        return identity
+
+
+def mutate(action, operation):
+    life.mutation(action)
+    return operation()
+
+
+def cleanup():
+    for bp in watches + returns + ([build_probe] if build_probe else []):
+        if bp.is_valid():
+            mutate('disable', lambda bp=bp: setattr(bp, 'enabled', False))
+
+
+def dispatch():
+    global armed, build_probe, snapshot_generation, symbol_objects, symbol_paths
+    action = life.dispatch()
+    record.setdefault('dispatch', []).append(action)
+    if action == 'install':
+        symbol_objects = list(gdb.objfiles())
+        symbol_paths = [o.filename for o in symbol_objects]
+        snapshot_generation = symbol_generation
+        install_build()
+        if input_watch:
+            watches.append(mutate('install read watch', lambda: ReadWatch(*input_watch)))
+        for watch in watches:
+            text = gdb.execute('info breakpoints %d' % watch.number, to_string=True)
+            record['watch_installation'] = text
+            verify_watch(text, watch.number, '*(unsigned int*)0x%x' % watch.address)
+        returns.append(mutate('install Finish', lambda: ConsumerReturn(input_frame, input_item)))
+        if build_probe:
+            mutate('enable Build', lambda: setattr(build_probe, 'enabled', True))
+        armed = True
+    elif action in ('disable', 'cleanup'):
+        armed = False
+        cleanup()
+    if life.error:
+        raise RuntimeError('observer lifecycle invalid: ' + life.error)
+
+
+def install_build():
+    global build_probe, snapshot_generation
+    if case.startswith('roots-'):
+        # Source is a locator, not evidence of execution. Inline locations must
+        # belong to this product SO and expose the actual ROOTS Build chain.
+        build_probe = mutate('install Build', lambda: BuildEntry('StackMap.h:277', internal=False))
+        snapshot_generation = symbol_generation
+        text = gdb.execute('info breakpoints %d' % build_probe.number, to_string=True)
+        record['build_location_table'] = text
+        addresses, identities = locate(text, build_probe.number, snapshot_generation,
+                                       symbol_generation, lambda pc: product_at(pc)[1])
+        record['build_locations'] = sorted([{'so_sha256': identity['sha256'],
+            'relative_pc': pc - min(row[0] - row[5] for row in identity['maps'])}
+            for pc, identity in zip(addresses, identities)], key=lambda r: r['relative_pc'])
+
+def check_symbols():
+    validate_symbols([o.is_valid() for o in symbol_objects], symbol_paths,
+                     [o.filename for o in gdb.objfiles()])
+    if snapshot_generation != symbol_generation:
+        raise RuntimeError('symbol generation invalidated')
+
+
+def symbols_changed(event):
+    global symbol_generation
+    symbol_generation += 1
+    if life.state == 'armed':
+        fail('symbol snapshot invalidated by DSO load/unload')
 
 
 def finish(event):
+    global exited
+    exited = True
     record['inferior_rc'] = getattr(event, 'exit_code', None)
+
+
+def finalize():
     inputs = record['consumers']
-    valid = not record['errors'] and record['inferior_rc'] == 0 and len(inputs) == 1 and inputs[0]['returned']
+    valid = life.exit(record['inferior_rc']) and not record['errors'] and len(inputs) == 1 and inputs[0]['returned']
     if case.startswith('prefix-'):
         positive = case != 'prefix-invalid'
         target = inputs and inputs[0].get('accepted') == int(positive) and bool(record['prefix_reads']) == positive
@@ -232,7 +327,7 @@ def finish(event):
     with open(out, 'w') as stream:
         json.dump(record, stream, indent=2)
     gdb.write('A2_BOUNDARY_RESULT ' + json.dumps(record) + '\n')
-    gdb.execute('quit %d' % (0 if record['target'] else 2))
+
 
 
 try:
@@ -249,31 +344,33 @@ try:
         raise RuntimeError('observer is Linux x86_64 only')
     bind_inputs()
     gdb.execute('set breakpoint pending off')
-    if case.startswith('roots-'):
-        # Source is a locator, not evidence of execution. Inline locations must
-        # belong to this product SO and expose the actual ROOTS Build chain.
-        build_probe = BuildEntry('StackMap.h:277', internal=True)
-        locations = [l for l in build_probe.locations if l.address is not None]
-        product_locations = []
-        for location in locations:
-            try:
-                _, identity = product_at(location.address)
-                base = min(row[0] for row in identity['maps'])
-                product_locations.append({'so_sha256': identity['sha256'],
-                                          'relative_pc': location.address - base})
-            except RuntimeError:
-                location.enabled = False
-        if not product_locations:
-            raise RuntimeError('real SO Build entry has no observable location')
-        record['build_locations'] = product_locations
-    Input('A2ObservePrefix' if case.startswith('prefix-') else 'A2ObserveRoots', internal=True)
+    mutate('install Input', lambda: Input('A2ObservePrefix' if case.startswith('prefix-') else 'A2ObserveRoots', internal=False))
+    gdb.events.new_objfile.connect(symbols_changed)
+    gdb.events.clear_objfiles.connect(symbols_changed)
     gdb.events.exited.connect(finish)
-    gdb.execute('continue')
-    record['stopped_program'] = gdb.execute('info program', to_string=True)
-    record['stopped_pc'] = str(gdb.parse_and_eval('$pc'))
-    raise RuntimeError('inferior stopped before normal exit; no abnormal stop is target evidence')
+    while not exited:
+        if life.error:
+            raise RuntimeError(life.error)
+        if life.state == 'armed':
+            check_symbols()
+        mutate('continue', lambda: gdb.execute('continue'))
+        life.phase = 'outer'
+        if exited:
+            break
+        dispatch()  # stopped, outside all Breakpoint.stop callbacks
+    cleanup()
+    finalize()
+    gdb.execute('quit %d' % (0 if record['target'] else 2))
+
 except Exception as error:
+    life.phase = 'outer'
     fail(error)
+    record['status'] = 'INVALID'
+    record['target'] = False
+    try:
+        cleanup()
+    except Exception as cleanup_error:
+        fail(cleanup_error)
     if out:
         with open(out, 'w') as stream:
             json.dump(record, stream, indent=2)
