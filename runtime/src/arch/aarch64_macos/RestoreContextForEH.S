@@ -18,15 +18,23 @@
     .global   _RestoreContextForEH
 _RestoreContextForEH:
     .cfi_startproc
+    // Entered by a redirected RET, not BL: LR names this function itself.
+    // The real managed PC is available only from the exception wrapper.
+    .cfi_undefined x30
     // Current sp point to the top managed method.
     mov     x1, sp
     sub     sp, sp, #ContextSize
+    .cfi_def_cfa sp, ContextSize
     stp     x29, x1,  [sp, #208]
-    .cfi_def_cfa sp, 224
-    .cfi_offset  x30, -8
+    .cfi_offset x29, -16
     bl      _MRT_GetTopManagedPC
     ldr     x1,  [sp, #216]
     str     x0,  [sp, #216]
+    .cfi_offset x30, -8
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    // ChangeEHStackInfoLR retained SignA(top managed PC, incoming SP).
+    .cfi_negate_ra_state
+#endif
 
     // Save all callee saved register to stack as the layout of context struct.
     stp     x19, x20, [sp]
@@ -44,6 +52,12 @@ _RestoreContextForEH:
     // Current sp point to the context struct address.
     mov     x0, sp
     bl      _MRT_RestoreContext
+    // The context now describes the catch frame; there is no return to the
+    // old managed PC with these registers. Do not expose a fictitious caller.
+    .cfi_undefined x30
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    .cfi_negate_ra_state
+#endif
 
     // See aarch64_linux/RestoreContextForEH.S: zero return regs for N2CStub.
     mov     x9, x0
@@ -61,6 +75,8 @@ _RestoreContextForEH:
     ldp     d14, d15, [sp, #144]
     ldr     x1,       [sp, #160]
     mov     sp,  x1
+    .cfi_def_cfa sp, 0
+    .cfi_restore x29
 
     // EHFrameInfo signs the landing pad separately from this stub's entry RA.
     // Authenticate with the restored caller SP, as on aarch64_linux.
