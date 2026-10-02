@@ -11,7 +11,7 @@ import gdb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from a2_observer_contract import (digest, parse_maps, bind, required_inputs,
-                                  contains, locate, Lifecycle, verify_watch, validate_symbols)
+                                  contains, read_boundary, locate, Lifecycle, verify_watch, validate_symbols)
 
 case = os.environ.get('A2_CASE', '')
 out = os.environ.get('A2_OBSERVER_OUT', '')
@@ -111,11 +111,11 @@ def fail(error):
 
 
 class ReadWatch(gdb.Breakpoint):
-    def __init__(self, address, kind):
+    def __init__(self, address, kind, owner):
         life.mutation('construct read watch')
         super().__init__('*(unsigned int*)0x%x' % address, type=gdb.BP_WATCHPOINT,
                          wp_class=gdb.WP_READ, internal=False)
-        self.address, self.kind = address, kind
+        self.address, self.kind, self.owner = address, kind, owner
         self.hits = 0
 
     @captured('read')
@@ -146,7 +146,7 @@ class ReadWatch(gdb.Breakpoint):
                 raise RuntimeError('unclassified hardware watch access: ' + asm)
             if operands[0].startswith('mov') and ('[' not in operands[1].split(',')[-1]):
                 raise RuntimeError('hardware watch saw a store: ' + asm)
-            contains(mappings(), self.address, 4)
+            read_boundary(mappings(), self.address, 4, self.owner, manifest)
             contains(mappings(), instruction['addr'], instruction['length'], executable=True)
             self.hits += 1
             record[self.kind + '_reads'].append({'watched_address': self.address,
@@ -216,7 +216,7 @@ class Input(gdb.Breakpoint):
         rows = bind_inputs()
         pc = int(frame.read_var('pc'))
         owner = contains(rows, pc, executable=True)
-        bound(owner[5], rows)
+        owner_identity = bound(owner[5], rows)
         if case.startswith('prefix-') and not os.path.basename(owner[5]).startswith('libcj_metadata'):
             raise RuntimeError('prefix PC not in real fixture DSO')
         caller = frame.older()
@@ -230,14 +230,14 @@ class Input(gdb.Breakpoint):
         record['consumers'].append(input_item)
         input_watch = None
         if case.startswith('prefix-'):
-            contains(rows, pc - 4, 4)
-            input_watch = (pc - 4, 'prefix')
+            read_boundary(rows, pc - 4, 4, owner_identity, manifest)
+            input_watch = (pc - 4, 'prefix', owner_identity)
         else:
             address = int(frame.read_var('map'))
             input_item['map'] = address
             if case == 'roots-zero':
-                contains(rows, address, 4)
-                input_watch = (address, 'map')
+                read_boundary(rows, address, 4)
+                input_watch = (address, 'map', None)
         return identity
 
 

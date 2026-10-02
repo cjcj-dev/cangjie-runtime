@@ -144,3 +144,18 @@ normal return, probes are disabled before resume and fixture dlclose at :584
 is normal teardown. Subsequent snapshot queries still reject generation/object
 changes. Armed load/clear/unload/identity loss always makes the run INVALID.
 This ordering avoids treating the expected fixture loader as an abnormal stop.
+
+## Continuous owner boundary revision (local offline only)
+Prefix reads use read_boundary in Input and ReadWatch with the Input-bound file
+identity. Adjacent readable half-open ranges may cover all four bytes without a
+gap, only for that same manifest/hash/path/device/inode owner. PC still uses a
+unique executable row; instruction ownership and bytes remain unchanged.
+Anonymous ROOTS reads use the original single-row rule with no file owner.
+The synthetic boundary batch exercises actual consumer call expressions via AST,
+not debugger callbacks. It grants no real GDB, two-VMA, A2 or product qualification.
+Old maps-positive/maps-boundary/maps-malformed and required deleted/missing/hash/
+inode results are not generalized to this new rule. The new batch covers read
+coverage, extent and selected deleted/hash/inode changes; required-missing and
+raw-parser malformed inputs remain previously observed only, not revalidated.
+CLI, lifecycle, collector and watch-layout implementation is unchanged; their
+previous 20-recipe facts remain separate, without new execution claims.

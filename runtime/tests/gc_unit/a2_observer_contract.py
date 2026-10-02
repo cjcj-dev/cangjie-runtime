@@ -57,6 +57,35 @@ def bind(path, rows, manifest):
             'inode': st.st_ino, 'maps': [list(r[:5]) + [r[7]] for r in selected]}
 
 
+def read_boundary(rows, address, size, owner=None, manifest=None):
+    """Cover a read without gaps; file reads retain their bound input owner.
+
+    Anonymous ROOTS reads use the original single-row boundary instead.
+    """
+    limit = 1 << 64
+    if size <= 0 or address < 0 or address >= limit or size > limit - address:
+        raise ValueError('invalid read extent')
+    if owner is None:
+        return [contains(rows, address, size)]
+    if bind(owner['path'], rows, manifest) != owner:
+        raise ValueError('read owner changed')
+    end = address + size
+    selected = sorted((r for r in rows if r[0] < end and address < r[1]),
+                      key=lambda r: r[0])
+    cursor = address
+    for row in selected:
+        if row[0] > cursor or (cursor != address and row[0] != cursor):
+            raise ValueError('read gap or overlapping ownership')
+        if row[6] != 'file' or 'r' not in row[2] or row[5].endswith(' (deleted)') or                 os.path.realpath(row[5]) != owner['path'] or row[4] != owner['inode'] or                 tuple(int(v, 16) for v in row[3].split(':')) !=                 (os.major(owner['device']), os.minor(owner['device'])):
+            raise ValueError('read outside bound readable owner')
+        if row[1] <= cursor:
+            raise ValueError('overlapping read ownership')
+        cursor = min(end, row[1])
+    if cursor != end:
+        raise ValueError('incomplete read coverage')
+    return selected
+
+
 def required_inputs(executable, rows, manifest):
     paths = [os.path.realpath(executable)]
     for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
