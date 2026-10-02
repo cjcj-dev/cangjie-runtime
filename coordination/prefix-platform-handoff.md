@@ -30,7 +30,7 @@ metadata-code-shape只编metadata_code_shape.cpp，链接cangjie-runtime/boundsc
 
 新增独立shape ELF启动0、metadata启动0，仍24潜在启动。新增真实Resolve调用Linux4×2+Windows2×2=12（原shape4×4=16，合计28），全部在已有四shape进程内。新Linux目标ordinary/continuous/outside/hole各2，Windowsordinary/continuous各2；hole适用性记录Windows2不是目标通过。新增fixture实体构建4（每构型一contiguous），Linuxhole派生2；新增平台加载6（Linux各contiguous/hole×2，Windowscontiguous×2）。全部执行N=0。
 
-新增工具子进程：cmake help4+ninja commands4+llvm-readobj14（Linux4fixture×2、Windows3fixture×2）=22；另外原hole生成器2次（CMake POST_BUILD，计于fixture生成），不算产品ELF启动。原所有metadata supervisor校准与拒绝输入保留。失败不续跑取绿。
+新增工具子进程：cmake help4+ninja commands4+产品导入清单4+llvm-readobj14（Linux4fixture×2、Windows3fixture×2）=26；另外原hole生成器2次（CMake POST_BUILD，计于fixture生成），不算产品ELF启动。原所有metadata supervisor校准与拒绝输入保留。失败不续跑取绿。
 
 ## workflow与首错保全
 

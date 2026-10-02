@@ -315,6 +315,8 @@ else:
                 # Apple capability and existing full-mode selection unchanged.
                 checked(["cmake", "--build", testbuild, "--target", "help"], "a2-targets")
                 checked(["ninja", "-C", testbuild, "-t", "commands", *targets], "a2-test-commands")
+                imports = ["llvm-readobj", "--coff-imports"] if windows else ["nm", "--undefined-only"]
+                checked([*imports, bundle / exe.name], "a2-test-imports")
                 for name in fixtures:
                     inspector = ["llvm-readobj", "--file-headers", "--sections"]
                     if not windows:

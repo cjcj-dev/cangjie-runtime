@@ -71,6 +71,9 @@ static int PrefixResult(const char* name, const uint32_t* pc, const void* descri
         image->Contains(reinterpret_cast<uintptr_t>(descriptor)) && (!continuous || adjacent);
     std::fprintf(stderr, "METADATA_PREFIX_INPUT name=%s qualified=%d bytes=%zu adjacent=%d\n",
                  name, qualified, sameBytes, adjacent);
+    std::fprintf(stderr, "METADATA_PREFIX_ADDRESS name=%s pc=%p prefix=%p descriptor=%p image=%p\n",
+                 name, static_cast<const void*>(pc), reinterpret_cast<const void*>(prefix), descriptor,
+                 reinterpret_cast<const void*>(image->identity));
     if (!qualified) { return 67; }
     // Hole bytes are readable in the existing ELF fixture's mapped pages;
     // this is an input check, never evidence of registered ownership.
