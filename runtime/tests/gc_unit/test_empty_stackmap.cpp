@@ -13,7 +13,9 @@
 #include "Exception/EhFrameInfo.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "UnwindStack/StackInfo.h"
 #include "gc_unittest.hpp"
+#include "metadata_code_fixture.hpp"
 #if defined(__linux__)
 #include <sys/wait.h>
 #include <unistd.h>
@@ -34,12 +36,14 @@ public:
     void SetGCThreshold(uint64_t) override {}
 };
 struct Metadata {
-    int32_t slot = 0;
-    uint32_t code[4] = {};
+    const uint32_t* code = nullptr;
     int32_t descriptor[8] = {};
     alignas(Uptr) uint8_t stackmap[64] = {};
 };
-enum class Entry { HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
+extern "C" { Metadata emptyStackmapMetadata; }
+GC_METADATA_CODE(emptyStackmapCode, emptyStackmapMetadata, Metadata, descriptor, 1)
+
+enum class Entry { ROOTS, HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
                    bool zeroRootRow = false, bool miss = false)
@@ -53,10 +57,8 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        static Metadata image;
-        if (descriptorPresent) {
-            image.slot = reinterpret_cast<char*>(image.descriptor) - reinterpret_cast<char*>(&image.slot);
-        }
+        auto& image = emptyStackmapMetadata;
+        image.code = emptyStackmapCodePC(0, descriptorPresent);
         if (stackmapPresent) {
             image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
         }
@@ -68,6 +70,20 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             image.stackmap[3] = 0x11; // line/derived index widths = 1
         }
         const Uptr pc = reinterpret_cast<Uptr>(image.code);
+        if (entry == Entry::ROOTS) {
+            ElfUnloadQuiescence::LinkImage(pc);
+            FrameAddress address {};
+            FrameInfo frame(image.code);
+            frame.SetFrameType(FrameType::MANAGED);
+            frame.mFrame.SetFA(&address);
+            frame.mFrame.SetIP(image.code);
+            const std::vector<FrameInfo> recorded {frame};
+            StackFrameStream frames(recorded);
+            frames.Start();
+            std::fprintf(stderr, "ROOTS_RECORDED_CONSUMER_TARGET returned=1 done=%d type=%d executed=1\n",
+                         frames.IsDone(), int(frames.Current().GetFrameType()));
+            _exit(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED ? 0 : 3);
+        }
         if (entry == Entry::CALLER_SP) {
             std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
         }
@@ -162,6 +178,143 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
     GC_EXPECT_TRUE(target);
 }
 }
+GC_TEST(ManagedMetadata, TextDescriptorIsRegistered)
+{
+    const uint32_t* pc = emptyStackmapCodePC(0, true);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    ElfUnloadQuiescence::ReadScope reader;
+    const auto result = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(pc));
+    const bool code = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(pc), true);
+    const bool data = ElfUnloadQuiescence::IsLinkedAddress(
+        reinterpret_cast<Uptr>(emptyStackmapMetadata.descriptor));
+    const bool owned = result == reinterpret_cast<FuncDescRef>(emptyStackmapMetadata.descriptor);
+    std::fprintf(stderr, "METADATA_TEXT_PC_TARGET code=%d data=%d owned=%d executed=1\n",
+                 code, data, owned);
+    GC_EXPECT_TRUE(code && data && owned);
+}
+
+GC_TEST(ManagedMetadata, ExecutableWithoutDescriptorIsNative)
+{
+    const uint32_t* pc = emptyStackmapCodePC(0, false);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    struct FrameInput {
+        ArchUInt start;
+        FrameAddress frame;
+    } input {};
+#if defined(__x86_64__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 9;
+#elif defined(__arm__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 12;
+#else
+    input.start = reinterpret_cast<ArchUInt>(pc);
+#endif
+    UnwindContext context;
+    context.frameInfo.mFrame.SetIP(pc + 1);
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_EXECUTABLE_CLASSIFICATION_TARGET native=%d executed=1\n", native);
+    GC_EXPECT_TRUE(native);
+}
+
+GC_TEST(ManagedMetadata, UnregisteredPCIsNative)
+{
+    const Uptr pc = 0x10000;
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+    UnwindContext context;
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(pc));
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    const bool registered = ElfUnloadQuiescence::IsLinkedAddress(pc);
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_UNREGISTERED_ROOTS_TARGET pc=%p registered=%d native=%d executed=1\n",
+                 reinterpret_cast<void*>(pc), registered, native);
+    GC_EXPECT_TRUE(!registered && native);
+}
+
+GC_TEST(ManagedMetadata, DataAddressIsNotCode)
+{
+    struct DataPC {
+        int32_t prefix;
+        uint32_t pc[4];
+        int32_t descriptor[8];
+    };
+    static DataPC data {};
+    data.prefix = reinterpret_cast<char*>(data.descriptor) - reinterpret_cast<char*>(&data.prefix);
+    const Uptr pc = reinterpret_cast<Uptr>(data.pc);
+    ElfUnloadQuiescence::LinkImage(pc);
+    ElfUnloadQuiescence::ReadScope reader;
+    const bool registeredData = ElfUnloadQuiescence::IsLinkedAddress(pc);
+    const bool code = ElfUnloadQuiescence::IsLinkedAddress(pc, true);
+    const auto descriptor = MFuncDesc::GetFuncDesc(pc);
+    struct Input { ArchUInt start; FrameAddress frame; } input {};
+#if defined(__x86_64__)
+    input.start = pc + 9;
+#elif defined(__arm__)
+    input.start = pc + 12;
+#else
+    input.start = pc;
+#endif
+    UnwindContext context;
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.frameInfo.mFrame.SetIP(data.pc + 1);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context);
+    frames.Start();
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_DATA_ROOTS_TARGET native=%d executed=1\n", native);
+    GC_EXPECT_TRUE(native);
+    std::fprintf(stderr, "METADATA_DATA_PC_TARGET registered=%d code=%d descriptor=%p executed=1\n",
+                 registeredData, code, descriptor);
+    GC_EXPECT_TRUE(registeredData && !code && descriptor == nullptr);
+}
+
+// These exercise CheckRegisterRoots, never AnalyseAndSetFrameType. Removing
+// its descriptor guard may hit the downstream lookup's fatal assertion; that
+// alone is not evidence of the guard's read-before-map boundary.
+// These two independent cases stay in the observed process. Existing forked
+// rejection tests remain unchanged; no child result is substituted for a probe.
+extern "C" __attribute__((noinline)) void A2ObserveRoots(StackFrameStream* frames, Uptr pc, Uptr map)
+{
+    std::fprintf(stderr, "A2_ROOTS_INPUT pc=%p map=%p\n", reinterpret_cast<void*>(pc), reinterpret_cast<void*>(map));
+    frames->Start(); // real public recordedFrames -> CheckRegisterRoots
+    std::fprintf(stderr, "A2_ROOTS_RESULT done=%d type=%d executed=1\n",
+                 frames->IsDone(), int(frames->Current().GetFrameType()));
+}
+static void CheckRootsQualification(bool present)
+{
+    auto& image = emptyStackmapMetadata;
+    image.code = emptyStackmapCodePC(0, present);
+    if (present) {
+        image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
+        image.stackmap[1] = 0x10;
+        image.stackmap[2] = 0x11;
+        image.stackmap[3] = 0x11;
+    }
+    const Uptr pc = reinterpret_cast<Uptr>(image.code);
+    ElfUnloadQuiescence::LinkImage(pc);
+    FrameAddress address {};
+    FrameInfo frame(image.code);
+    frame.SetFrameType(FrameType::MANAGED);
+    frame.mFrame.SetFA(&address);
+    frame.mFrame.SetIP(image.code);
+    const std::vector<FrameInfo> recorded {frame};
+    StackFrameStream frames(recorded);
+    A2ObserveRoots(&frames, pc, present ? reinterpret_cast<Uptr>(image.stackmap) : 0);
+    GC_EXPECT_TRUE(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED);
+}
+GC_TEST(ManagedMetadata, RootsMissingQualification) { CheckRootsQualification(false); }
+GC_TEST(ManagedMetadata, RootsZeroQualification) { CheckRootsQualification(true); }
+
+GC_TEST(ManagedMetadata, RootsRecordedDescriptorRejected)
+{ CheckMetadata(Entry::ROOTS, false, false, nullptr); }
+GC_TEST(ManagedMetadata, RootsRecordedZeroRoots)
+{ CheckMetadata(Entry::ROOTS, true, true, nullptr, true); }
+
 GC_TEST(ManagedMetadata, HeadAbsentDescriptor) { CheckMetadata(Entry::HEAD, false, false, "managed frame missing funcdesc"); }
 GC_TEST(ManagedMetadata, HeadAbsentStackMap) { CheckMetadata(Entry::HEAD, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, HeadPresent) { CheckMetadata(Entry::HEAD, true, true, nullptr); }

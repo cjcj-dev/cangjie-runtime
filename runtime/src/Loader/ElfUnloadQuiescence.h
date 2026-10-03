@@ -41,6 +41,7 @@ public:
         Uptr FindFunctionDescriptor(Uptr startPC) const;
 #endif
         bool Contains(Uptr address, bool codeOnly = false) const;
+        bool ContainsFunctionDescriptor(Uptr descriptor) const;
     };
     enum class ReaderKind : U8 {
         GENERIC,
@@ -169,7 +170,8 @@ public:
     static bool IsImageClosing(Uptr imageAddress);
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
-    static bool IsLinkedAddress(Uptr address);
+    static bool IsLinkedAddress(Uptr address, bool codeOnly = false);
+    static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address, bool codeOnly = false);
 #ifdef __APPLE__
     static Uptr FindFunctionDescriptor(Uptr startPC);
 #endif
@@ -195,7 +197,6 @@ private:
     static std::unordered_set<Uptr>& ClosingIdentities();
     static Uptr ResolveImageIdentity(Uptr address);
     static std::shared_ptr<const ImageAddressMap> RegisteredImage(Uptr metadata);
-    static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
     static Uptr RegisteredIdentity(Uptr metadata);
 };
 

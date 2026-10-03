@@ -52,23 +52,32 @@ inline int8_t MFuncDesc::GetStackTraceFormat() const
 inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 {
     ElfUnloadQuiescence::ReadScope reader;
+    const Uptr startPC = reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(fa));
+    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
+    if (image == nullptr) { return nullptr; }
     FuncDescRef desc = reinterpret_cast<FuncDescRef>(
         *reinterpret_cast<U64*>(reinterpret_cast<uintptr_t>(fa) - STACK_OFFSET_IN_APPLE));
-    return ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
+    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 }
 
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    if (!ElfUnloadQuiescence::IsLinkedAddress(startPC)) {
-        return nullptr;
-    }
 #ifdef __APPLE__
     return reinterpret_cast<FuncDescRef>(ElfUnloadQuiescence::FindFunctionDescriptor(startPC));
 #else
+    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
+    if (image == nullptr) { return nullptr; }
+    if (startPC < START_PC_OFFSET) { return nullptr; }
+    // A prefix may cross adjacent LOAD ranges of this registration. Check
+    // every byte before reading the offset; matching endpoints can hide a gap.
+    for (Uptr byte = startPC - START_PC_OFFSET; byte < startPC; ++byte) {
+        if (!image->Contains(byte)) { return nullptr; }
+    }
     DataRefOffset32<MFuncDesc>* offset =
         reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
-    return offset->GetDataRef();
+    FuncDescRef desc = offset->GetDataRef();
+    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 #endif
 }
 } // namespace MapleRuntime

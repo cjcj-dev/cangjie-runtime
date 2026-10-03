@@ -33,6 +33,7 @@ void CJFile::LoadWinCJFileMeta()
     cJFileMeta.typeInfoTbl.typeInfoBasePtr = reinterpret_cast<TypeInfo*>(*header->tables[TYPE_INFO_TABLE].tableAddr);
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = *header->tables[TYPE_INFO_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr = reinterpret_cast<FuncDescRef>(*header->tables[FUNC_DESC_TABLE].tableAddr);
+    cJFileMeta.funcDescTbl.funcDescTotalSize = *header->tables[FUNC_DESC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncTotalSize = *header->tables[GLOBAL_INIT_FUNC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncBasePtr =
         reinterpret_cast<Uptr*>(*header->tables[GLOBAL_INIT_FUNC_TABLE].tableAddr);
@@ -75,6 +76,7 @@ void CJFile::LoadMacCJFileMeta()
     cJFileMeta.typeInfoTbl.typeInfoBasePtr = reinterpret_cast<TypeInfo*>(*header->tables[TYPE_INFO_TABLE].tableAddr);
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = *header->tables[TYPE_INFO_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr = reinterpret_cast<FuncDescRef>(*header->tables[FUNC_DESC_TABLE].tableAddr);
+    cJFileMeta.funcDescTbl.funcDescTotalSize = *header->tables[FUNC_DESC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncTotalSize = *header->tables[GLOBAL_INIT_FUNC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncBasePtr =
         reinterpret_cast<Uptr*>(*header->tables[GLOBAL_INIT_FUNC_TABLE].tableAddr);
@@ -121,6 +123,7 @@ void CJFile::LoadLinuxCJFileMeta()
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = header->tables[TYPE_INFO_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr =
         reinterpret_cast<FuncDescRef>(begin + header->tables[FUNC_DESC_TABLE].tableOffset);
+    cJFileMeta.funcDescTbl.funcDescTotalSize = header->tables[FUNC_DESC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncTotalSize = header->tables[GLOBAL_INIT_FUNC_TABLE].tableSize;
     cJFileMeta.globalInitFuncTbl.globalInitFuncBasePtr =
         reinterpret_cast<Uptr*>(begin + header->tables[GLOBAL_INIT_FUNC_TABLE].tableOffset);

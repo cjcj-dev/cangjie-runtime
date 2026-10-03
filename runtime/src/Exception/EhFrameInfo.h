@@ -55,8 +55,8 @@ public:
 #endif
             EHTable ehTable(pc, eWrapper, startProc, lsdaStart, result);
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
-            result.landingPad = reinterpret_cast<Uptr>(
-                                    PtrauthSignWithInstAkey(reinterpret_cast<Uptr>(result.landingPad),
+            result.landingPad = static_cast<Uptr>(
+                                    PtrauthSignWithInstAkey(static_cast<Uptr>(result.landingPad),
                                     reinterpret_cast<Uptr>(mFrame.GetPtrAuthRAMod())));
 #endif
         }
