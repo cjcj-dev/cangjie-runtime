@@ -38,7 +38,9 @@ class ArrayEntry(gdb.Breakpoint):
             length = int(gdb.parse_and_eval('nElems'))
         except gdb.error:
             length = int(gdb.parse_and_eval('$rsi'))
-        if length < (1 << 31) and not (case == 'small' and length == 17):
+        # Boundary cases select the multi-GiB width; the small case selects the
+        # first ordinary width, whatever the compiler actually asks for.
+        if length < (1 << 31) and case != 'small':
             return False
         header = int(gdb.lookup_type('MapleRuntime::MArray').sizeof)
         pending = {'length': length, 'element_bytes': 1, 'header_bytes': header,
