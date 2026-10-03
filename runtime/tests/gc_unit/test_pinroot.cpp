@@ -1347,7 +1347,7 @@ extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
 static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = false, bool phase = false)
 {
     std::unique_ptr<B09RuntimeFixture> runtime;
-    if (buffered) { runtime = std::make_unique<B09RuntimeFixture>(); }
+    runtime = std::make_unique<B09RuntimeFixture>(16);
     CreateStandaloneHeap(16);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();

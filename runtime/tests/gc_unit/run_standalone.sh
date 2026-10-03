@@ -242,8 +242,11 @@ TEST_DEFINES=()
 # configuration. The published recipe is bound to both selected SO hashes;
 # a deleted test hook is not a configuration interface.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
-  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG <<<"$PRODUCT_CONFIGURATION"
+  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT" --with-debug)
+read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG SO_MRT_DEBUG <<<"$PRODUCT_CONFIGURATION"
+if [[ "$SO_MRT_DEBUG" == 1 ]]; then
+    TEST_DEFINES+=(-DMRT_DEBUG=1)
+fi
 if [[ "$SO_NDEBUG" == 1 ]]; then
     TEST_DEFINES+=(-DNDEBUG)
 fi

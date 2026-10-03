@@ -33,8 +33,14 @@ public:
         concurrencyModel = &concurrency;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
     }
-    ~ConcurrencyRootRuntime() override { runtime = nullptr; }
+    ~ConcurrencyRootRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:
