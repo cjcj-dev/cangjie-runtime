@@ -14,6 +14,8 @@
 #include <thread>
 
 #include "Base/Panic.h"
+#include "Loader/BinaryFile/CjFile/CjFileMeta.h"
+#include "ObjectModel/MFuncdesc.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 #include "RuntimeConfig.h"
@@ -214,6 +216,48 @@ bool ElfUnloadQuiescence::ImageAddressMap::Contains(Uptr address, bool codeOnly)
     return (!codeOnly || found->executable) && address - found->start < found->size;
 }
 
+bool ElfUnloadQuiescence::ImageAddressMap::ContainsFunctionDescriptor(Uptr descriptor) const
+{
+    // Existing AOT ABI: the prefix/frame slot selects a record in the registered
+    // FUNC_DESC_TABLE. CodeCache::find_blob (codeCache.cpp:750-759) establishes
+    // ownership before nmethod metadata is consumed; mapped bytes alone do not.
+    const auto readable = [this](Uptr first, size_t size) {
+        if (size == 0 || size - 1 > UINTPTR_MAX - first) { return false; }
+        for (size_t i = 0; i != size; ++i) {
+            if (!Contains(first + i)) { return false; }
+        }
+        return true;
+    };
+    constexpr size_t tableHeaderSize = offsetof(CJFileHeader, tables) + sizeof(TableDesc);
+    if (!readable(metadata, tableHeaderSize)) { return false; }
+    const auto* header = reinterpret_cast<const CJFileHeader*>(metadata);
+    if (header->magic != 0x12345678) { return false; }
+    const auto& table = header->tables[FUNC_DESC_TABLE];
+    Uptr first;
+    U32 size;
+#if defined(_WIN64) || defined(__APPLE__)
+    if (!readable(reinterpret_cast<Uptr>(table.tableAddr), sizeof(*table.tableAddr)) ||
+        !readable(reinterpret_cast<Uptr>(table.tableSize), sizeof(*table.tableSize))) {
+        return false;
+    }
+    first = *table.tableAddr;
+    size = *table.tableSize;
+#else
+    if (table.tableOffset > UINTPTR_MAX - metadata) { return false; }
+    first = metadata + table.tableOffset;
+    size = table.tableSize;
+#endif
+    constexpr size_t stride = sizeof(MFuncDesc);
+#ifdef __APPLE__
+    static_assert(stride == 40, "existing MachO function descriptor ABI");
+#else
+    static_assert(stride == 32, "existing ELF/PE function descriptor ABI");
+#endif
+    if (size < stride || size % stride != 0 || size - 1 > UINTPTR_MAX - first || descriptor < first) { return false; }
+    const Uptr offset = descriptor - first;
+    return offset % stride == 0 && offset <= size - stride && readable(descriptor, stride);
+}
+
 std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImage(Uptr metadata)
 {
     auto& maps = ImageMaps();
@@ -252,7 +296,7 @@ Uptr ElfUnloadQuiescence::FindFunctionDescriptor(Uptr startPC)
     const auto image = RegisteredImageForAddress(startPC, true);
     if (image == nullptr) { return 0; }
     const Uptr descriptor = image->FindFunctionDescriptor(startPC);
-    return image->Contains(descriptor) ? descriptor : 0;
+    return image->ContainsFunctionDescriptor(descriptor) ? descriptor : 0;
 }
 #endif
 

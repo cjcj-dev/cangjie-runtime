@@ -57,7 +57,7 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
     if (image == nullptr) { return nullptr; }
     FuncDescRef desc = reinterpret_cast<FuncDescRef>(
         *reinterpret_cast<U64*>(reinterpret_cast<uintptr_t>(fa) - STACK_OFFSET_IN_APPLE));
-    return image->Contains(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
+    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 }
 
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
@@ -77,7 +77,7 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
     DataRefOffset32<MFuncDesc>* offset =
         reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
     FuncDescRef desc = offset->GetDataRef();
-    return image->Contains(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
+    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 #endif
 }
 } // namespace MapleRuntime

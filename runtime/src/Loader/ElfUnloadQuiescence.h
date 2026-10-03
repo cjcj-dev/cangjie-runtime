@@ -41,6 +41,7 @@ public:
         Uptr FindFunctionDescriptor(Uptr startPC) const;
 #endif
         bool Contains(Uptr address, bool codeOnly = false) const;
+        bool ContainsFunctionDescriptor(Uptr descriptor) const;
     };
     enum class ReaderKind : U8 {
         GENERIC,
