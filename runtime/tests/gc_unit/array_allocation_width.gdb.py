@@ -98,10 +98,13 @@ class AllocationEntry(gdb.Breakpoint):
 gdb.execute('set pagination off')
 gdb.execute('set confirm off')
 gdb.execute('set breakpoint pending on')
-# The compiler picks the narrow or the wide array entry by element count, so
-# both producers are observed; the consumer is the same product allocator.
-ArrayEntry('MCC_NewArray8')
-ArrayEntry('MCC_NewArray64')
+# The compiler picks the array entry by element type and count (measured on the
+# real byte RawArray: small widths use MCC_NewArray8, the multi-GiB width uses
+# MCC_NewArrayGeneric). Every producer entry is observed; the consumer is the
+# same product allocator.
+for producer in ('MCC_NewArray8', 'MCC_NewArray32', 'MCC_NewArray64',
+                 'MCC_NewArray', 'MCC_NewArrayGeneric', 'MCC_NewArrayFast'):
+    ArrayEntry(producer)
 AllocationEntry('MapleRuntime::HeapManager::Allocate')
 gdb.execute('run ' + case)
 if not observed:
