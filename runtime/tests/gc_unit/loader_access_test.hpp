@@ -18,9 +18,6 @@ public:
 };
 class ElfUnloadQuiescenceTest {
 public:
-    static std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> Registered(Uptr metadata) {
-        return ElfUnloadQuiescence::RegisteredImage(metadata);
-    }
     static bool UnloadPending() {
         return (ElfUnloadQuiescence::State().load(std::memory_order_acquire) & ElfUnloadQuiescence::WRITER_BIT) != 0;
     }

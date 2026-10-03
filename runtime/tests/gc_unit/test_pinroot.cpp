@@ -3,7 +3,6 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "Heap/z/zHeuristics.hpp"
@@ -360,21 +359,22 @@ struct FrameRootInput : FrameInfo {
     using FrameInfo::START_PC_OFFSET_IN_STACK;
 };
 struct FrameRootMapImage {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t descriptorRest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
-extern "C" { FrameRootMapImage frameRootMapImage; }
-GC_METADATA_CODE(frameRootMapCode, frameRootMapImage, FrameRootMapImage, stackMapOffset, 1)
+FrameRootMapImage frameRootMapImage;
 
 void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, bool everyCallRoot = false)
 {
     auto& image = frameRootMapImage;
     std::memset(&image, 0, sizeof(image));
     image.returnPollFlag = 1;
-    image.pc = frameRootMapCodePC();
+    image.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset));
     image.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(image.bits) -
         reinterpret_cast<char*>(&image.stackMapOffset));
     ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
@@ -591,12 +591,9 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         const uintptr_t unexposed = frames[3][2];
         // Move the anchor to the return/native boundary; the watermark's
         // iterator remains at the frontier established by the ordinary poll.
-        // before_unwind's trigger frame and its caller must already be safe.
-        // The native caller exposure processes frame 3 from trigger frame 1.
-        const size_t trigger = requestEntry == 6 ? 1 : 2;
-        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[trigger][4]));
+        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[2][4]));
         context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + 16));
-        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[trigger][0]));
+        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[2][0]));
         class ReadExposedRoot final : public HandshakeClosure {
         public:
             explicit ReadExposedRoot(uintptr_t* p) : HandshakeClosure("K3-unwind-order"), p(p) {}

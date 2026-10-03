@@ -27,9 +27,8 @@ class Mutator;
 // HotSpot stackFrameStream.hpp and stackWatermark.cpp:44-63.
 class StackFrameStream {
 public:
-    enum class WalkMode { ROOTS, SENDER };
-    explicit StackFrameStream(const UnwindContext* context = nullptr, WalkMode mode = WalkMode::ROOTS)
-        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(context), isReliableN2CStub(false), walkMode(mode)
+    explicit StackFrameStream(const UnwindContext* context = nullptr)
+        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(context), isReliableN2CStub(false)
     {
         anchorFA = context == nullptr ? GetAnchorFAFromMutatorContext() : context->anchorFA;
     }
@@ -67,7 +66,6 @@ private:
     const UnwindContext* topContext;
     bool isReliableN2CStub;
     UnwindContext current;
-    WalkMode walkMode = WalkMode::ROOTS;
     bool done = true;
     RegSlotsMap regSlotsMap;
     const std::vector<FrameInfo>* recordedFrames = nullptr;

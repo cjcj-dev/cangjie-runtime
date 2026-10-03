@@ -18,7 +18,6 @@
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
 #include "UnwindStack/GcStackInfo.h"
 #include "UnwindStack/StackGrowStackInfo.h"
 #if defined(__linux__)
@@ -31,15 +30,13 @@
 using namespace MapleRuntime;
 namespace {
 struct Descriptor {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
-extern "C" { Descriptor stubMetadataDescriptors[69]; }
-GC_METADATA_CODE(stubRootCode, stubMetadataDescriptors, Descriptor, stackMapOffset, 69)
-
 struct Bits {
     uint8_t* data;
     unsigned pos = 0;
@@ -57,7 +54,7 @@ struct Bits {
 void InitDescriptor(Descriptor& d, uint64_t mask)
 {
     std::memset(&d, 0, sizeof(d));
-    d.pc = stubRootCodePC(&d - stubMetadataDescriptors);
+    d.descriptorOffset = reinterpret_cast<char*>(&d.stackMapOffset) - reinterpret_cast<char*>(&d.descriptorOffset);
     d.stackMapOffset = reinterpret_cast<char*>(d.bits) - reinterpret_cast<char*>(&d.stackMapOffset);
     Bits b {d.bits};
     b.Var(0); b.Var(0); b.Var(0); // stack size, format, prologue
@@ -81,7 +78,7 @@ constexpr unsigned savedGprs[] = {0, 3, 2, 1, 5, 4, 7, 8, 9, 10, 11, 12, 13, 14,
 void CheckSlots(bool xmm)
 {
     ConfigScope config;
-    auto* desc = stubMetadataDescriptors;
+    static Descriptor desc[33];
     size_t mismatches = 0;
     for (unsigned reg = 0; reg < 33; ++reg) {
         if (xmm ? reg < 17 : (reg > 15 || reg == 6)) { continue; }
@@ -125,7 +122,7 @@ GC_TEST(StubRegisterRoots, XmmSlots) { CheckSlots(true); }
 GC_TEST(StubRegisterRoots, BitmapPositions)
 {
     ConfigScope config;
-    auto* desc = stubMetadataDescriptors;
+    static Descriptor desc[33];
     size_t mismatches = 0;
     for (unsigned bit = 0; bit < 33; ++bit) {
         InitDescriptor(desc[bit], uint64_t(1) << bit);
@@ -251,7 +248,7 @@ GC_OTHER_VM_TEST(StubRegisterRoots, RealReturnStub)
     Mutator owner;
     owner.SetManagedContext(false);
     tls->SetMutator(&owner);
-    auto& descriptor = stubMetadataDescriptors[66];
+    static Descriptor descriptor;
     InitDescriptor(descriptor, ((uint64_t(1) << 16) - 1) << 17);
     alignas(16) char from[32][16] {};
     alignas(16) char to[32][16] {};
@@ -280,7 +277,7 @@ namespace {
 void RunThreeFrameRoots(FrameType stub, bool invalidCaller, unsigned route)
 {
     ConfigScope config;
-    auto* maps = &stubMetadataDescriptors[67];
+    static Descriptor maps[2];
     InitDescriptor(maps[0], uint64_t(1) << R12);
     InitDescriptor(maps[1], invalidCaller ? uint64_t(1) << R13 : 0);
     alignas(16) uintptr_t storage[3][64] {};

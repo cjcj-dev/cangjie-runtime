@@ -170,7 +170,7 @@ public:
     // interfaceSupport.inline.hpp:213-220: publish the active state with a
     // fence, then release any in-flight lock before processing requests.
     template<class Preprocess>
-    __attribute__((always_inline)) inline void PublishActiveState(Preprocess& preprocess)
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
@@ -184,12 +184,6 @@ public:
             preprocess();
             ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
-    }
-
-    template<class Preprocess>
-    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
-    {
-        PublishActiveState(preprocess);
         ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
@@ -205,25 +199,6 @@ public:
     // If current mutator is in saferegion, leave and return true
     // If current mutator has left saferegion, return false
     __attribute__((always_inline)) inline bool LeaveSaferegion() noexcept;
-
-    inline bool LeaveNative() noexcept
-    {
-        if (!InSaferegion()) { return false; }
-        auto preprocess = [] {};
-        PublishActiveState(preprocess);
-        // sharedRuntime_x86_64.cpp:2480 / macroAssembler_x86.cpp:2590:
-        // this poll belongs to native return, before requests can disarm it.
-        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-        const uintptr_t poll = tls->GetPollWord();
-        const MachineFrame& top = uwContext.frameInfo.mFrame;
-        const uintptr_t boundary = IsManagedContext() && top.GetIP() != nullptr ?
-            reinterpret_cast<uintptr_t>(top.GetFA()) : 0;
-        if (UNLIKELY((poll & ThreadLocalData::PollBit) != 0 || boundary > poll)) {
-            CheckSpecialConditionForNativeTransition();
-        }
-        return true;
-    }
-    void CheckSpecialConditionForNativeTransition();
 
     // Called if current mutator should do corresponding task by suspensionFlag value
     void HandleSuspensionRequest();

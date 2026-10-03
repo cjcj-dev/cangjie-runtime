@@ -27,7 +27,6 @@
 
 extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
 
 #if defined(__linux__)
 #include <csignal>
@@ -47,15 +46,13 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 
 struct Descriptor {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
-
-extern "C" { Descriptor regmapMetadataDescriptors[2]; }
-GC_METADATA_CODE(returnRegmapCode, regmapMetadataDescriptors, Descriptor, stackMapOffset, 2)
 
 struct Bits {
     uint8_t* data;
@@ -76,7 +73,8 @@ struct Bits {
 void InitDescriptor(Descriptor& desc, uint64_t mask)
 {
     std::memset(&desc, 0, sizeof(desc));
-    desc.pc = returnRegmapCodePC(&desc - regmapMetadataDescriptors);
+    desc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&desc.stackMapOffset) -
+        reinterpret_cast<char*>(&desc.descriptorOffset));
     desc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(desc.bits) -
         reinterpret_cast<char*>(&desc.stackMapOffset));
     Bits bits {desc.bits};
@@ -125,7 +123,8 @@ namespace {
 // Metadata and frame bytes are inputs; all classification, unwinding, location
 // propagation and pointer consumption happen in the linked product SO.
 struct PointerChain {
-    Descriptor& desc = regmapMetadataDescriptors[0];
+    static Descriptor descStorage;
+    Descriptor& desc = descStorage;
     alignas(16) uintptr_t frames[14][64] {};
     StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
     uint32_t savedEpoch = *ZPointerStoreGoodMaskLowOrderBitsAddr;
@@ -136,11 +135,12 @@ struct PointerChain {
 
     explicit PointerChain(bool returning)
     {
-        std::memset(&desc, 0, sizeof(desc));
+        std::memset(&descStorage, 0, sizeof(descStorage));
         desc.returnPollFlag = 1;
         ThreadLocal::GetThreadLocalData()->SetMutator(&owner);
         CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON;
-        desc.pc = returnRegmapCodePC(&desc - regmapMetadataDescriptors);
+        desc.descriptorOffset = reinterpret_cast<char*>(&desc.stackMapOffset) -
+            reinterpret_cast<char*>(&desc.descriptorOffset);
         desc.stackMapOffset = reinterpret_cast<char*>(desc.bits) - reinterpret_cast<char*>(&desc.stackMapOffset);
         Bits bits {desc.bits};
         // R13's prologue slot is fp-24. PC0 has no incoming stack pointer;
@@ -225,6 +225,7 @@ struct PointerChain {
         GC_EXPECT_EQ(observedValue, target);
     }
 };
+Descriptor PointerChain::descStorage;
 }
 
 GC_TEST(ReturnSafepointRegMap, SenderKeepsStubSlot)
@@ -350,7 +351,7 @@ GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
         GrowOff grow;
-        auto& desc = regmapMetadataDescriptors[1];
+        static Descriptor desc;
         InitDescriptor(desc, uint64_t(1) << R12);
         alignas(16) uintptr_t storage[128] {};
         uintptr_t* fp = &storage[56];

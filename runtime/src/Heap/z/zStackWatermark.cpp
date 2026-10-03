@@ -280,9 +280,6 @@ void StackWatermark::ensure_safe(const FrameInfo& frame)
     const uintptr_t senderSP = frame.CallerSP();
     const uintptr_t boundary = watermark();
     if (boundary != 0 && senderSP > boundary) { process_one(); }
-#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-    assert_is_frame_safe(frame);
-#endif
 }
 
 void StackWatermark::on_safepoint() { start_processing(); }
@@ -296,29 +293,6 @@ bool HasExposableFrame(Mutator& owner)
     const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
     return top.GetFA() != nullptr && top.GetIP() != nullptr;
 }
-
-// stackWatermark.inline.hpp:86-106: one typed sender skips the runtime
-// transition frame; it is not a search for an arbitrary managed frame.
-void SkipWatermarkStub(StackFrameStream& frames)
-{
-    if (frames.IsDone()) { return; }
-    switch (frames.Current().GetFrameType()) {
-        case FrameType::SAFEPOINT:
-        case FrameType::RETURN_SAFEPOINT:
-        case FrameType::C2R_STUB:
-        case FrameType::C2N_STUB:
-        case FrameType::STACKGROW:
-        case FrameType::EXSLUSIVE:
-        case FrameType::RUNTIME:
-#ifdef INTERPRETER_ENABLED
-        case FrameType::INTERPRETER_I2N:
-#endif
-            frames.Next();
-            break;
-        default: break;
-    }
-}
-
 }
 
 void StackWatermark::before_unwind()
@@ -327,17 +301,15 @@ void StackWatermark::before_unwind()
     // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
     // runtime leave has no Java frame: do not classify it.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (!HasExposableFrame(owner)) {
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
-    StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
+    StackFrameStream frames(&owner.GetUnwindContext());
     frames.Start();
-    SkipWatermarkStub(frames);
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
     if (frames.IsDone()) { return; }
-#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-    assert_is_frame_safe(frames.Current());
-#endif
     frames.Next();
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
 
@@ -345,12 +317,12 @@ void StackWatermark::after_unwind()
 {
     // stackWatermark.inline.hpp:109-124.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (!HasExposableFrame(owner)) {
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
-    StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
+    StackFrameStream frames(&owner.GetUnwindContext());
     frames.Start();
-    SkipWatermarkStub(frames);
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
 

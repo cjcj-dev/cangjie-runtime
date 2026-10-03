@@ -10,7 +10,6 @@
 #include "Heap/z/zAddress.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
-#include "UnwindStack/UnwindCApi.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -22,7 +21,7 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(ObjectPtr object, RefField<false>* fiel
 
 namespace {
 void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false, bool collect = true,
-                                 bool resumedEntry = false, bool nativeEntry = false)
+                                 bool resumedEntry = false)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -54,9 +53,7 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
             tls->SetMutator(owner);
         }
         pending = HasPendingSafepoint(tls);
-        if (nativeEntry) {
-            MRT_C2N_Leave(true, 0);
-        } else if (resumedEntry) {
+        if (resumedEntry) {
             resume(owner, tls);
         } else if (managedEntry) {
             MRT_PreRunManagedCode(owner, 0, tls);
@@ -87,8 +84,8 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
     collected.store(true, std::memory_order_release);
     thread.join();
     std::fprintf(stderr,
-                 "BINDING_MASK_TARGET executed=1 manager=%d managed=%d resumed=%d native=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
-                 managerBinding, managedEntry, resumedEntry, nativeEntry, before, after, expected, pending, active);
+                 "BINDING_MASK_TARGET executed=1 manager=%d managed=%d resumed=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
+                 managerBinding, managedEntry, resumedEntry, before, after, expected, pending, active);
     const bool target = after == expected;
     const bool setup = (collect ? before != expected : before == expected) && !pending && active;
     GC_EXPECT_TRUE(target);
@@ -121,17 +118,4 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, FreshOwnerWithoutCollection)
 GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ResumedEntryAfterCollection)
 {
     CheckBindingAfterCollection(false, false, true, true);
-}
-
-// Native-return entry observes masks published by a real collection. There
-// is no managed anchor on this foreign owner, so this pair proves the request
-// and no-anchor branches, not managed caller-root exposure.
-GC_RUNTIME_OTHER_VM_TEST(NativeReturn, RequestUsesPublishedMasks)
-{
-    CheckBindingAfterCollection(false, false, true, false, true);
-}
-
-GC_RUNTIME_OTHER_VM_TEST(NativeReturn, DisarmedNoAnchorLeavesActive)
-{
-    CheckBindingAfterCollection(false, false, false, false, true);
 }

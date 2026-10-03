@@ -36,29 +36,15 @@ void SigAppend(char* buf, size_t cap, const char* fmt, ...)
 uintptr_t FrameInfo::CallerSP() const
 {
     const uintptr_t fp = reinterpret_cast<uintptr_t>(mFrame.GetFA());
-#if defined(__x86_64__)
-#ifdef _WIN64
-    // UnwindWin.cpp:181-191: C2N consumes the two native-call ABI slots
-    // in addition to the saved frame head.
-    if (GetFrameType() == FrameType::C2N_STUB) { return fp + sizeof(FrameAddress) + 16; }
-#endif
+#if defined(__x86_64__) && !defined(_WIN64)
     return fp + sizeof(FrameAddress);
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) && !defined(__APPLE__)
     switch (GetFrameType()) {
         case FrameType::RETURN_SAFEPOINT:
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW: return fp + MRT_AARCH64_STUB_FRAME_BYTES;
         case FrameType::C2R_STUB: return fp + 8 * 14;
         case FrameType::C2N_STUB: return fp + 8 * 32;
-        case FrameType::EXSLUSIVE: return fp + 16 * 16;
-#ifdef INTERPRETER_ENABLED
-        case FrameType::INTERPRETER_I2N:
-#ifdef __APPLE__
-            return fp + 8 * 26;
-#else
-            return fp + 8 * 24;
-#endif
-#endif
         case FrameType::MANAGED: {
             ElfUnloadQuiescence::ReadScope reader;
             FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
@@ -71,30 +57,19 @@ uintptr_t FrameInfo::CallerSP() const
         }
         default: return 0;
     }
-#elif defined(__arm__)
-    // arm_linux stubs place the frame head at the bottom of their saved
-    // area. Managed frames retain the two-word FrameAddress head.
-    switch (GetFrameType()) {
-        case FrameType::SAFEPOINT:
-        case FrameType::RETURN_SAFEPOINT:
-        case FrameType::C2R_STUB: return fp + 4 * 12;
-        case FrameType::C2N_STUB: return fp + 4 * 30;
-        case FrameType::EXSLUSIVE: return fp + 144;
-        case FrameType::MANAGED: return fp + sizeof(FrameAddress);
-        default: return 0;
-    }
 #else
-#error Unsupported native-return frame layout
+    // No return poll ABI has been supplied for these compiler targets.
+    return 0;
 #endif
 }
 
-bool FrameInfo::ResolveProcInfo()
+void FrameInfo::ResolveProcInfo()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     startProc = GetFuncStartPC();
     if (startProc == nullptr) {
         lsdaStart = nullptr;
-        return false;
+        return;
     }
 #ifdef __APPLE__
     FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
@@ -105,10 +80,9 @@ bool FrameInfo::ResolveProcInfo()
         // The frame does not start at a valid function entry (e.g. a corrupted stack
         // while dumping a crash): no exception table can be resolved for it.
         lsdaStart = nullptr;
-        return false;
+        return;
     }
     lsdaStart = reinterpret_cast<uint8_t*>(funcDesc->GetEHTable());
-    return true;
 }
 
 void FrameInfo::PrintFrameInfo(uint32_t frameIdx) const

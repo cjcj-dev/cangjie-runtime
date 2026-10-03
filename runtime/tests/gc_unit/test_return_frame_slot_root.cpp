@@ -20,7 +20,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "Mutator/Mutator.h"
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
 
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 #define MRT_TEST_RETURN_FRAME_SLOT_ROOT 1
@@ -34,15 +33,15 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 
 struct ReturnPointFuncDesc {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
 
-extern "C" { ReturnPointFuncDesc gReturnSlotDesc; }
-GC_METADATA_CODE(returnSlotCode, gReturnSlotDesc, ReturnPointFuncDesc, stackMapOffset, 1)
+ReturnPointFuncDesc gReturnSlotDesc;
 bool gImageLinked = false;
 
 struct Bits {
@@ -108,7 +107,8 @@ uintptr_t ReturnPointStartPC()
 {
     if (!gImageLinked) {
         std::memset(&gReturnSlotDesc, 0, sizeof(gReturnSlotDesc));
-        gReturnSlotDesc.pc = returnSlotCodePC();
+        gReturnSlotDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gReturnSlotDesc.stackMapOffset) -
+            reinterpret_cast<char*>(&gReturnSlotDesc.descriptorOffset));
         gReturnSlotDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gReturnSlotDesc.bits) -
             reinterpret_cast<char*>(&gReturnSlotDesc.stackMapOffset));
         BuildReturnPointBits(gReturnSlotDesc.bits);

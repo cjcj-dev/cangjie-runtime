@@ -10,7 +10,6 @@
 
 #include "Heap/z/zStackWatermark.hpp"
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -57,7 +56,8 @@ private:
 static void ManagedFrameIp() {}
 
 struct EmptyFuncDesc {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc;
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
@@ -65,7 +65,8 @@ struct EmptyFuncDesc {
 };
 
 struct ReturnFuncDesc {
-    const uint32_t* pc;
+    int32_t descriptorOffset;
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
@@ -77,9 +78,8 @@ struct ChainNode {
     FrameAddress fa;
 };
 
-extern "C" { EmptyFuncDesc gEmptyDesc; ReturnFuncDesc gReturnDesc; }
-GC_METADATA_CODE(emptyReturnCode, gEmptyDesc, EmptyFuncDesc, stackMapOffset, 1)
-GC_METADATA_CODE(rootReturnCode, gReturnDesc, ReturnFuncDesc, stackMapOffset, 1)
+EmptyFuncDesc gEmptyDesc;
+ReturnFuncDesc gReturnDesc;
 bool gImagesReady = false;
 
 void EnsureImages()
@@ -89,11 +89,13 @@ void EnsureImages()
     }
     std::memset(&gEmptyDesc, 0, sizeof(gEmptyDesc));
     gEmptyDesc.returnPollFlag = 1; // This fixture models return-barrier frames.
-    gEmptyDesc.pc = emptyReturnCodePC();
+    gEmptyDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gEmptyDesc.stackMapOffset) -
+        reinterpret_cast<char*>(&gEmptyDesc.descriptorOffset));
     gEmptyDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gEmptyDesc.bits) -
         reinterpret_cast<char*>(&gEmptyDesc.stackMapOffset));
     std::memset(&gReturnDesc, 0, sizeof(gReturnDesc));
-    gReturnDesc.pc = rootReturnCodePC();
+    gReturnDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gReturnDesc.stackMapOffset) -
+        reinterpret_cast<char*>(&gReturnDesc.descriptorOffset));
     gReturnDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gReturnDesc.bits) -
         reinterpret_cast<char*>(&gReturnDesc.stackMapOffset));
     size_t bit = 0;
@@ -149,7 +151,7 @@ void EnsureImages()
 uintptr_t EmptyStartPC()
 {
     EnsureImages();
-    return reinterpret_cast<uintptr_t>(gEmptyDesc.pc);
+    return reinterpret_cast<uintptr_t>(&gEmptyDesc.pc);
 }
 
 void LinkManaged(ChainNode& node, FrameAddress* caller, const uint32_t* ip)
@@ -373,20 +375,9 @@ void CheckUnstartedExposure(bool returning)
         owner.GetUnwindContext().frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
         *ZPointerStoreGoodMaskLowOrderBitsAddr = StackWatermark::epoch_id() ^ 1;
         tls->SetPollWord(ThreadLocalData::DisarmedPollWord);
-        if (returning) {
-            HandleReturnSafepoint(tls);
-            _exit(0);
-        }
-        // macroAssembler_x86.cpp:2590-2597: a disarmed native return has
-        // no watermark slow path merely because the epoch is not started.
-        const uint32_t state = owner.GetStackWatermark().PackedState();
-        const bool transitioned = MRT_LeaveNative();
-        const bool unchanged = owner.GetStackWatermark().PackedState() == state &&
-            !owner.GetStackWatermark().processing_started();
-        const bool fast = transitioned && unchanged && !owner.InSaferegion();
-        std::fprintf(stderr, "K3_NATIVE_FAST_EPOCH_TARGET transitioned=%d unchanged=%d active=%d pass=%d\n",
-                     transitioned, unchanged, !owner.InSaferegion(), fast);
-        _exit(fast ? 0 : 1);
+        if (returning) { HandleReturnSafepoint(tls); }
+        else { MRT_LeaveNative(); }
+        _exit(0);
     }
     close(output[1]);
     std::string transcript;
@@ -400,9 +391,7 @@ void CheckUnstartedExposure(bool returning)
         transcript.find("Processing should already have started") != std::string::npos;
     std::fprintf(stderr, "K3_UNSTARTED_EXPOSURE_ASSERT returning=%d status=%d rejected=%d\n%s",
                  returning, status, rejected, transcript.c_str());
-    const bool keptLazyEpoch = WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
-        transcript.find("K3_NATIVE_FAST_EPOCH_TARGET transitioned=1 unchanged=1 active=1 pass=1") != std::string::npos;
-    GC_EXPECT_TRUE(returning ? rejected : keptLazyEpoch);
+    GC_EXPECT_TRUE(rejected);
 }
 }
 
@@ -411,7 +400,7 @@ GC_COMPONENT_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
     CheckUnstartedExposure(true);
 }
 
-GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeFastReturnKeepsUnstartedEpoch)
+GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
 {
     CheckUnstartedExposure(false);
 }
