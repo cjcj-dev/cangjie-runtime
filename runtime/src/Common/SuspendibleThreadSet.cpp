@@ -1,3 +1,4 @@
+#include "Base/Panic.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Base/Log.h"
 #include "Mutator/ThreadLocal.h"
@@ -30,28 +31,36 @@ bool SuspendibleThreadSet::is_synchronized()
     return nthreadsStopped == nthreads;
 }
 
+// HotSpot thread.hpp:215-230. This is diagnostic identity, not the STS count.
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 bool SuspendibleThreadSet::is_suspendible_thread()
 {
     return ThreadLocal::GetThreadLocalData()->isSuspendibleThread;
 }
 
+#endif
+
 void SuspendibleThreadSet::join()
 {
-    CHECK_DETAIL(!is_suspendible_thread(), "STS thread already joined");
+    MRT_ASSERT(!is_suspendible_thread(), "STS thread already joined");
     std::unique_lock<std::mutex> lock(stsLock);
     while (should_yield()) {
         stsWait.wait(lock);
     }
     ++nthreads;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     ThreadLocal::GetThreadLocalData()->isSuspendibleThread = true;
+#endif
 }
 
 void SuspendibleThreadSet::leave()
 {
-    CHECK_DETAIL(is_suspendible_thread(), "STS thread not joined");
+    MRT_ASSERT(is_suspendible_thread(), "STS thread not joined");
     std::unique_lock<std::mutex> lock(stsLock);
     CHECK_DETAIL(nthreads > 0, "STS leave without join");
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     ThreadLocal::GetThreadLocalData()->isSuspendibleThread = false;
+#endif
     --nthreads;
     if (should_yield() && is_synchronized()) {
         EnsureWakeup();
@@ -61,7 +70,7 @@ void SuspendibleThreadSet::leave()
 
 void SuspendibleThreadSet::yield_slow()
 {
-    CHECK_DETAIL(is_suspendible_thread(), "STS yield requires membership");
+    MRT_ASSERT(is_suspendible_thread(), "STS yield requires membership");
     std::unique_lock<std::mutex> lock(stsLock);
     if (should_yield()) {
         ++nthreadsStopped;

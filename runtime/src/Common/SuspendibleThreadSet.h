@@ -20,7 +20,9 @@ private:
     static void leave();
     static void yield_slow();
 public:
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     static bool is_suspendible_thread();
+#endif
     static bool should_yield() { return suspendAll.load(std::memory_order_relaxed); }
     static void yield()
     {

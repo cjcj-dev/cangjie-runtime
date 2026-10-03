@@ -247,9 +247,11 @@ GC_RUNTIME_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
     auto& young = Heap::GetHeap().young();
     InitializeGenerationWorkers(young, 1);
     young.Mark().MarkFollow();
-    std::fprintf(stderr, "VM1349_PROACTIVE_TARGET completed=1 sts=%d stopped=%d\n",
-                 SuspendibleThreadSet::is_suspendible_thread(), MutatorManager::Instance().WorldStopped());
+    std::fprintf(stderr, "VM1349_PROACTIVE_TARGET completed=1 stopped=%d\n",
+                 MutatorManager::Instance().WorldStopped());
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     GC_EXPECT_FALSE(SuspendibleThreadSet::is_suspendible_thread());
+#endif
     GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
 }
 
@@ -258,10 +260,12 @@ GC_RUNTIME_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
     VMThreadContainerRuntime container(8);
     ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
     const bool flushed = domain.TryTerminateFlush();
-    std::fprintf(stderr, "VM1349_TERMINATE_TARGET completed=1 flushed=%d sts=%d stopped=%d\n",
-                 flushed, SuspendibleThreadSet::is_suspendible_thread(), MutatorManager::Instance().WorldStopped());
+    std::fprintf(stderr, "VM1349_TERMINATE_TARGET completed=1 flushed=%d stopped=%d\n",
+                 flushed, MutatorManager::Instance().WorldStopped());
     GC_EXPECT_FALSE(flushed);
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     GC_EXPECT_FALSE(SuspendibleThreadSet::is_suspendible_thread());
+#endif
     GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
 }
 
@@ -315,6 +319,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     GC_EXPECT_TRUE(beforeEpoch != expectedEpoch && afterEpoch == expectedEpoch);
 }
 
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 namespace {
 class IndirectStateTask1349 : public WorkerTask {
 public:
@@ -413,6 +418,8 @@ GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, IndirectSTSRejectsSynchronousSubmissi
     std::fprintf(stderr, "INDIRECT1349_CONSUMER_TARGET matched_diagnostic=1\n");
 }
 
+#endif
+
 GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
 {
     VMThreadContainerRuntime container(8);
@@ -439,6 +446,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
     GC_EXPECT_TRUE(executed);
 }
 
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 GC_RUNTIME_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
 {
     VMThreadContainerRuntime container(8);
@@ -478,3 +486,37 @@ GC_RUNTIME_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
     workers.run(&cleared);
     GC_EXPECT_TRUE(cleared.clean);
 }
+
+#endif
+
+#if !defined(MRT_DEBUG) || (MRT_DEBUG != 1)
+GC_RUNTIME_TEST(ConcurrentVM1349, ReleaseCancelledSubmissionHasNoIdentityFatal)
+{
+    VMThreadContainerRuntime container(8);
+    class Cancelled : public VMOperation {
+    public:
+        unsigned prologues = 0;
+        bool ran = false;
+        bool doit_prologue() override { ++prologues; return false; }
+        bool evaluate_at_safepoint() const override { return false; }
+        const char* name() const override { return "1349 cancelled release control"; }
+        void doit() override { ran = true; }
+    } operation;
+    // HotSpot vmThread.cpp:529-530 has ASSERT preconditions, not product fatal checks.
+    { SuspendibleThreadSetJoiner joiner; VMThread::execute(&operation); }
+    class Submit : public WorkerTask {
+        VMOperation& operation;
+    public:
+        explicit Submit(VMOperation& op) : WorkerTask("1349 release cancelled worker"), operation(op) {}
+        void work(uint32_t) override { VMThread::execute(&operation); }
+    } task(operation);
+    WorkerThreads workers("1349 release control", 1);
+    workers.initialize_workers();
+    { SuspendibleThreadSetJoiner joiner; workers.run_task(&task); }
+    VMThread::execute(&operation);
+    std::fprintf(stderr, "RELEASE1349_IDENTITY_TARGET prologues=%u ran=%d expected=3\n",
+                 operation.prologues, operation.ran);
+    GC_EXPECT_EQ(operation.prologues, 3u);
+    GC_EXPECT_FALSE(operation.ran);
+}
+#endif

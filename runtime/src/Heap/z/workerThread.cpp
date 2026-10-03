@@ -186,23 +186,27 @@ void WorkerThreads::threads_do(const std::function<void(WorkerThread*)>& tc) con
 // states are carried on each worker's native TLS, available before publication.
 void WorkerThreads::set_indirect_states()
 {
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     const bool is_suspendible = SuspendibleThreadSet::is_suspendible_thread();
     const bool is_safepointed = VMThread::is_VM_thread() && MutatorManager::Instance().WorldStopped();
     threads_do([&](WorkerThread* worker) {
         auto* data = worker->_thread_local_data;
-        CHECK_DETAIL(!data->isIndirectlySuspendibleThread, "Unexpected indirect STS state");
-        CHECK_DETAIL(!data->isIndirectlySafepointThread, "Unexpected indirect safepoint state");
+        MRT_ASSERT(!data->isIndirectlySuspendibleThread, "Unexpected indirect STS state");
+        MRT_ASSERT(!data->isIndirectlySafepointThread, "Unexpected indirect safepoint state");
         if (is_suspendible) { data->isIndirectlySuspendibleThread = true; }
         if (is_safepointed) { data->isIndirectlySafepointThread = true; }
     });
+#endif
 }
 
 void WorkerThreads::clear_indirect_states()
 {
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     threads_do([](WorkerThread* worker) {
         worker->_thread_local_data->isIndirectlySuspendibleThread = false;
         worker->_thread_local_data->isIndirectlySafepointThread = false;
     });
+#endif
 }
 
 void WorkerThreads::run_task(WorkerTask* task)
