@@ -258,8 +258,9 @@ GC_RUNTIME_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
 GC_RUNTIME_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
 {
     VMThreadContainerRuntime container(8);
-    ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
-    const bool flushed = domain.TryTerminateFlush();
+    auto& young = Heap::GetHeap().young();
+    InitializeGenerationWorkers(young, 1);
+    const bool flushed = young.Mark().TryTerminateFlush();
     std::fprintf(stderr, "VM1349_TERMINATE_TARGET completed=1 flushed=%d stopped=%d\n",
                  flushed, MutatorManager::Instance().WorldStopped());
     GC_EXPECT_FALSE(flushed);
@@ -283,7 +284,14 @@ GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
     ZGlobalsPointers::flip_old_mark_start();
     flips.old = true;
     const uint64_t expectedEpoch = StackWatermark::epoch_id();
-    ZResurrection::block();
+    // zResurrection.cpp:31-33: establish the block at a real VM safepoint,
+    // then exercise the concurrent non-strong-reference phase after it exits.
+    class BlockResurrection final : public VMOperation {
+    public:
+        const char* name() const override { return "VM1349BlockResurrection"; }
+        void doit() override { ZResurrection::block(); }
+    } block;
+    VMThread::execute(&block);
     std::mutex lock;
     std::condition_variable condition;
     bool joined = false;
