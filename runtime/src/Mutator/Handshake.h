@@ -28,14 +28,14 @@ public:
     HandshakeClosure* closure() const { return cl_; }
     Mutator* target() const { return target_; }
     void do_handshake(Mutator* thread);
-    void add_target_count(size_t count) { pending_.fetch_add(count, std::memory_order_relaxed); }
+    void add_target_count(size_t count) { pending_.fetch_add(static_cast<int>(count), std::memory_order_relaxed); }
     bool is_completed() const { return pending_.load(std::memory_order_acquire) == 0; }
 
 private:
     HandshakeClosure* cl_;
     Mutator* target_;
     Mutator* requester_;
-    std::atomic<size_t> pending_{1};
+    std::atomic<int> pending_{1};
 };
 
 class HandshakeState {

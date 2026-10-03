@@ -1,7 +1,9 @@
+#include "Base/Panic.h"
 #include "Mutator/VMOperation.h"
 #include "Base/GcLog.h"
 #include "Base/Log.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Common/SuspendibleThreadSet.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
 
@@ -92,6 +94,10 @@ void VMThread::execute(VMOperation* operation)
         vmThread.inner_execute(operation);
         return;
     }
+    // HotSpot vmThread.cpp:525-530: synchronous wait must not pin STS.
+    MRT_ASSERT(!SuspendibleThreadSet::is_suspendible_thread(), "VM operation submitter must not belong to STS");
+    MRT_ASSERT(!ThreadLocal::GetThreadLocalData()->isIndirectlySuspendibleThread,
+                 "VM operation submitter must not indirectly belong to STS");
     CHECK_DETAIL(is_running(), "VM thread must be ready before operation submission");
     if (!operation->doit_prologue()) { return; }
     operation->set_calling_thread(ThreadLocal::GetThreadLocalData());

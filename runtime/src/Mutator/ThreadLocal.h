@@ -48,6 +48,12 @@ struct ThreadLocalData {
     // Internal thread local var.
     ThreadType threadType;
     bool isCJProcessor;
+    // HotSpot thread.hpp:209-230: identity bookkeeping exists only in ASSERT builds.
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    bool isSuspendibleThread;
+    bool isIndirectlySuspendibleThread;
+    bool isIndirectlySafepointThread;
+#endif
     void* threadCache;
 #ifndef INTERPRETER_ENABLED
     void* gcDataOffsetPadding;
