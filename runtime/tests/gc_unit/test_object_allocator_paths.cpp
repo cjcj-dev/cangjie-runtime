@@ -618,3 +618,43 @@ GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, TlabSlowPathOwnsRefillSchedule)
 {
     RunAllocatorCase(AllocateUntilSlowBranch);
 }
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+// HotSpot memAllocator.cpp:366-373 checks the extent at the clearing consumer.
+// This deliberately invalid input tests only that Debug contract.
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, DebugRejectsExtentBelowHeader)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDOUT_FILENO);
+        dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        RunAllocatorCase([](void*) -> void* {
+            alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+            auto* type = reinterpret_cast<TypeInfo*>(storage);
+            type->SetType(TypeKind::TYPE_KIND_CLASS);
+            type->SetInstanceSize(0);
+            TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+            MObject::NewObject(type, 0, AllocType::MOVEABLE_OBJECT);
+            return nullptr;
+        });
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[1024];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+                        transcript.find("unexpected object size") != std::string::npos;
+    std::fprintf(stderr, "CLEAR_EXTENT_CONTRACT_TARGET status=%d target=%d\n%s", status, target, transcript.c_str());
+    GC_EXPECT_TRUE(target);
+}
+#endif
