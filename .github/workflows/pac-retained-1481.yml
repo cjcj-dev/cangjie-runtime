@@ -1,8 +1,19 @@
 name: Apple PAC 1481 fixed artifact continuation
 on:
-  pull_request:
-    branches: [main]
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Approved candidate full SHA
+        required: true
+        type: string
+      activated_at:
+        description: Activation timestamp in UTC
+        required: true
+        type: string
+      deadline:
+        description: UTC deadline exactly 80 minutes after activation
+        required: true
+        type: string
 permissions:
   contents: read
   actions: read
@@ -11,28 +22,25 @@ concurrency:
   cancel-in-progress: false
 jobs:
   retained:
-    if: >-
-      github.repository == 'cjcj-dev/cangjie-runtime' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.number == 1482 &&
-      github.event.pull_request.head.ref == 'sym/1481-implement-r5946918200' &&
-      github.run_attempt == '1' &&
-      github.event.pull_request.head.sha == vars.PAC1481_RETAINED_HEAD &&
-      vars.PAC1481_RETAINED_DEADLINE != '' &&
-      github.event.label.name == format('retained1481-{0}', github.event.pull_request.head.sha)
+    if: github.repository == 'cjcj-dev/cangjie-runtime'
     runs-on: macos-15
     timeout-minutes: 80
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-      PAC1481_RETAINED_HEAD: ${{ vars.PAC1481_RETAINED_HEAD }}
-      PAC1481_RETAINED_DEADLINE: ${{ vars.PAC1481_RETAINED_DEADLINE }}
-      PAC1481_RETAINED_ACTIVATED_AT: ${{ vars.PAC1481_RETAINED_ACTIVATED_AT }}
-      PAC1481_LABEL: ${{ github.event.label.name }}
+      PAC1481_HEAD: ${{ inputs.candidate_sha }}
+      PAC1481_RETAINED_HEAD: ${{ inputs.candidate_sha }}
+      PAC1481_RETAINED_DEADLINE: ${{ inputs.deadline }}
+      PAC1481_RETAINED_ACTIVATED_AT: ${{ inputs.activated_at }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Validate dispatch identity and activation before download
+        id: activation
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/pac_strip_darwin/retained.py --validate-activation
       - name: Acquire exact original archive
         uses: actions/github-script@v7
         with:
@@ -57,9 +65,9 @@ jobs:
           ulimit -c 0
           python3 runtime/tests/pac_strip_darwin/retained.py "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5961667441" "$RUNNER_TEMP/sym_cangjie_runtime_1481_implement_r5961667441-acquisition/original.zip"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.activation.outcome == 'success'
         with:
-          name: pac-retained-1481-${{ github.event.pull_request.head.sha }}
+          name: pac-retained-1481-${{ github.sha }}
           path: |
             ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5961667441-acquisition
             ${{ runner.temp }}/sym_cangjie_runtime_1481_implement_r5961667441

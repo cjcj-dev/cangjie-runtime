@@ -1,15 +1,72 @@
 """One fixed-artifact continuation; existing execution and assertions only."""
 import ast
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import time
+
+
+def validate_activation(env, head, now):
+    """Validate only dispatch inputs and checkout identity, without driver setup."""
+    if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        raise RuntimeError("workflow_dispatch required")
+    if env.get("GITHUB_REPOSITORY") != "cjcj-dev/cangjie-runtime":
+        raise RuntimeError("same repository required")
+    if env.get("GITHUB_REF") != "refs/heads/sym/1481-implement-r5946918200":
+        raise RuntimeError("designated candidate branch required")
+    if env.get("GITHUB_RUN_ATTEMPT") != "1":
+        raise RuntimeError("run_attempt=1 required")
+    if not re.fullmatch(r"[0-9]+", env.get("GITHUB_RUN_ID", "")):
+        raise RuntimeError("execution run_id required")
+    approved = env.get("PAC1481_RETAINED_HEAD", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", approved):
+        raise RuntimeError("approved full SHA required")
+    if head != approved or env.get("GITHUB_SHA") != approved:
+        raise RuntimeError("checkout/event/approved SHA mismatch")
+    if env.get("PAC1481_HEAD") != approved:
+        raise RuntimeError("result head initialization mismatch")
+    timestamps = []
+    for key in ("PAC1481_RETAINED_ACTIVATED_AT", "PAC1481_RETAINED_DEADLINE"):
+        value = env.get(key, "")
+        if not value:
+            raise RuntimeError(key + " required")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise RuntimeError(key + " invalid UTC timestamp") from error
+        if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+            raise RuntimeError(key + " explicit UTC required")
+        timestamps.append(parsed.timestamp())
+    activated, expires = timestamps
+    if expires - activated != 4800 or not activated <= now < expires - 120:
+        raise RuntimeError("fixed control 80-minute window unavailable")
+    return expires
+
+
+def checkout_activation():
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    expires = validate_activation(os.environ, head, time.time())
+    if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
+        raise RuntimeError("dirty checkout")
+    return head, expires
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--validate-activation"]:
+    try:
+        checkout_activation()
+    except Exception as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(20)
+    print("dispatch identity and activation validated; no driver initialized")
+    sys.exit(0)
+
 
 source = Path(__file__).with_name("run.py")
 receipt = json.loads(source.with_name("RETAINED.json").read_text())
@@ -27,22 +84,18 @@ require = namespace["require"]
 sha = namespace["sha"]
 
 try:
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    deadline = os.environ.get("PAC1481_RETAINED_DEADLINE", "")
-    if (not deadline or head != os.environ.get("PAC1481_RETAINED_HEAD") or
-            os.environ.get("PAC1481_LABEL") != "retained1481-" + head or
-            os.environ.get("GITHUB_RUN_ATTEMPT") != "1"):
-        raise RuntimeError("new exact head/event/deadline activation missing")
-    if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
-        raise RuntimeError("dirty checkout")
-    activated = datetime.fromisoformat(os.environ["PAC1481_RETAINED_ACTIVATED_AT"]).timestamp()
-    expires = datetime.fromisoformat(deadline).timestamp()
-    if expires - activated != 4800 or not activated <= time.time() < expires - 120:
-        raise RuntimeError("fixed control 80-minute window unavailable")
+    head, expires = checkout_activation()
+    deadline = os.environ["PAC1481_RETAINED_DEADLINE"]
     namespace["DEADLINE"] = expires
-    result.update(deadline_utc=deadline, static_receipt=receipt,
-                  run_id=os.environ["GITHUB_RUN_ID"], product_builds=0,
-                  native_limit=1, cut="NOT_RUN not licensed", restored="NOT_RUN not licensed")
+    result.update(head=head, execution_head=head,
+                  execution_run_id=os.environ["GITHUB_RUN_ID"],
+                  execution_run_attempt=os.environ["GITHUB_RUN_ATTEMPT"],
+                  source_head="f59e66b83fdc5d6d35a27198668fad31e579cd91",
+                  source_run_id=receipt["run_id"], source_run_attempt=1,
+                  deadline_utc=deadline, static_receipt=receipt,
+                  run_id=os.environ["GITHUB_RUN_ID"], run_attempt=os.environ["GITHUB_RUN_ATTEMPT"],
+                  product_builds=0, native_limit=1,
+                  cut="NOT_RUN not licensed", restored="NOT_RUN not licensed")
     save()
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise RuntimeError("official macos-15 arm64 required")
