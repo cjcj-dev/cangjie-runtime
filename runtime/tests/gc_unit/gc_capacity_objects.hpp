@@ -6,8 +6,13 @@
 #include <vector>
 #include <deque>
 #include "ObjectModel/MObject.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "TypeInfoManager.h"
 
+namespace MapleRuntime {
+extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
+}
 namespace MapleRuntime::GcUnit {
 // Capacity is not a class layout. Keep each real class allocation within the
 // existing U32 ABI, and retain every object while the director/allocator runs.
@@ -41,7 +46,7 @@ inline std::vector<U64> AllocateRootedCapacity(size_t bytes, bool pinned)
         const size_t size = std::min(chunkBytes, bytes - total);
         auto* type = size == chunkBytes ? fullType : tailType;
         auto* object = pinned ? MObject::NewPinnedObject(type, static_cast<MSize>(size)) :
-                              MObject::NewObject(type, static_cast<MSize>(size));
+                              reinterpret_cast<MObject*>(MCC_NewObject(type, static_cast<MSize>(size)));
         GC_EXPECT_TRUE(object != nullptr);
         roots.push_back(heap.cross_vm().export_roots().RegisterExportRoot(object));
         total += size;
