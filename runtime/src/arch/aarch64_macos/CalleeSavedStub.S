@@ -44,6 +44,9 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
 
 .macro CalleeSavedRegistersStub, funcName
     .cfi_startproc
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    paciasp
+#endif
     stp  x29, x30, [sp,  #-StubFrameContextSize]!
     cfi_adjust_cfa_offset (StubFrameContextSize)
     cfi_rel_offset (x29, 0)
@@ -101,6 +104,10 @@ MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
     cfi_adjust_cfa_offset (-StubFrameContextSize)
     cfi_restore (x29)
     cfi_restore (x30)
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    // ExceptionHandling::ChangeEHStackInfoLR signs with FA + frame size.
+    autiasp
+#endif
     ret
     .cfi_endproc
 .endm
@@ -452,3 +459,11 @@ _CJ_MCC_GetAssociatedValues:
 
     .global _unwindPCForC2RStubEnd
 _unwindPCForC2RStubEnd:
+
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    .section __TEXT,__const
+    .p2align 3
+    .globl _CalleeSavedStubFrameSize
+_CalleeSavedStubFrameSize:
+    .quad StubFrameContextSize
+#endif
