@@ -13,6 +13,7 @@
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "gc_unittest.hpp"
+#include "gc_capacity_objects.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -224,14 +225,7 @@ void* AllocateMediumBlockingFailure(void*)
     // A single cached granule can satisfy fast-medium after prime. Occupy
     // all remaining capacity so both cache and cold branches must fail.
     const size_t occupiedBytes = heap.GetMaxCapacity() - heap.page_allocator().GetAllocatedSize();
-    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
-    std::memset(storage, 0, sizeof(storage));
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
+    const auto roots = AllocateRootedCapacity(occupiedBytes, false);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = (*ZGeneration::old()).seqnum();
@@ -242,7 +236,7 @@ void* AllocateMediumBlockingFailure(void*)
     const bool valid = result == 0 && after > before;
     std::fprintf(stderr, "MEDIUM_BLOCKING_TARGET result=%#zx occupied=%zu before=%llu after=%llu valid=%d\n",
                  result, occupiedBytes, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.cross_vm().export_roots().RemoveExportRoot(root);
+    for (const U64 root : roots) { heap.cross_vm().export_roots().RemoveExportRoot(root); }
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
@@ -251,13 +245,7 @@ void* AllocateRelocationCapacity(void*)
 {
     auto& heap = Heap::GetHeap();
     const size_t occupiedBytes = heap.GetMaxCapacity() - ZGranuleSize;
-    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
+    const auto roots = AllocateRootedCapacity(occupiedBytes, false);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = (*ZGeneration::old()).seqnum();
@@ -266,7 +254,7 @@ void* AllocateRelocationCapacity(void*)
     const bool valid = result == 0 && after == before;
     std::fprintf(stderr, "RELOCATION_CAPACITY_TARGET result=%#zx before=%llu after=%llu valid=%d\n",
                  result, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.cross_vm().export_roots().RemoveExportRoot(root);
+    for (const U64 root : roots) { heap.cross_vm().export_roots().RemoveExportRoot(root); }
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }

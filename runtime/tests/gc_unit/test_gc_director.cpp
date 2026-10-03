@@ -18,6 +18,7 @@
 #include "TypeInfoManager.h"
 #include "Inspector/ProfilerAgentImpl.h"
 #include "gc_unittest.hpp"
+#include "gc_capacity_objects.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -133,15 +134,10 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
     auto& heap = Heap::GetHeap();
     auto& manager = MutatorManager::Instance();
     manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t size = heap.GetMaxCapacity() / 2;
-    type->SetInstanceSize(size);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, size));
+        AllocateRootedCapacity(size, true);
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
@@ -525,15 +521,10 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     auto& heap = Heap::GetHeap();
     auto& manager = MutatorManager::Instance();
     manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
-    type->SetInstanceSize(firstSize - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
+        AllocateRootedCapacity(firstSize, true);
     }
     std::fprintf(stderr, "CAUSE_FIRST_ALLOCATION_READY scenario=%s\n", scenario);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -544,14 +535,9 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG);
     if (allocationRate || proactive) {
         const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
-        alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
-        auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
-        secondType->SetType(TypeKind::TYPE_KIND_CLASS);
-        secondType->SetInstanceSize(nextSize - TYPEINFO_PTR_SIZE);
-        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
         {
             ScopedObjectAccess access;
-            heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
+            AllocateRootedCapacity(nextSize, true);
         }
         std::fprintf(stderr, "CAUSE_SECOND_ALLOCATION_READY scenario=%s\n", scenario);
     }
