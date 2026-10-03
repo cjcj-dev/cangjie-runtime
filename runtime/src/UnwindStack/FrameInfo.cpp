@@ -82,6 +82,15 @@ bool FrameInfo::ResolveProcInfo()
         lsdaStart = nullptr;
         return false;
     }
+    // Existing AOT FuncEnd-FuncBegin length, produced by CJMetadata.cpp.
+    // sharedRuntime.cpp:573-590 selects the containing compiled function before
+    // consuming its exception metadata. Use subtraction to avoid end overflow.
+    const Uptr pc = reinterpret_cast<Uptr>(mFrame.GetIP());
+    const Uptr start = reinterpret_cast<Uptr>(startProc);
+    if (pc < start || pc - start >= funcDesc->GetCodeSize()) {
+        lsdaStart = nullptr;
+        return false;
+    }
     lsdaStart = reinterpret_cast<uint8_t*>(funcDesc->GetEHTable());
     return true;
 }
@@ -178,11 +187,16 @@ CString FrameInfo::GetFrameInfo(uint32_t frameIdx) const
 
 FuncDescRef SigHandlerFrameinfo::GetFuncDescForSignal() const
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    const Uptr start = reinterpret_cast<Uptr>(GetFuncStartPC());
 #ifdef __APPLE__
-    return MFuncDesc::GetFuncDesc(mFrame.GetFA());
+    FuncDescRef descriptor = MFuncDesc::GetFuncDesc(mFrame.GetFA());
 #else
-    return MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetFuncStartPC()));
+    FuncDescRef descriptor = MFuncDesc::GetFuncDesc(start);
 #endif
+    const Uptr pc = reinterpret_cast<Uptr>(mFrame.GetIP());
+    return descriptor != nullptr && pc >= start && pc - start < descriptor->GetCodeSize()
+        ? descriptor : nullptr;
 }
 
 void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
