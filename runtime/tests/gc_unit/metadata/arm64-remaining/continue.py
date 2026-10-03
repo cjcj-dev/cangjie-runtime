@@ -249,4 +249,8 @@ finally:
     if 'copies' in record:
         record['copies_after'] = {item['copy']: digest(Path(item['copy'])) for item in record['copies']}
         record['copies_unchanged'] = all(record['copies_after'][item['copy']] == item['sha256'] for item in record['copies'])
+        if not record['copies_unchanged']:
+            record['behavior'] = 'INVALID_COPY_CHANGED'
+            save()
+            raise RuntimeError('fixed artifact copy changed during execution')
     save()
