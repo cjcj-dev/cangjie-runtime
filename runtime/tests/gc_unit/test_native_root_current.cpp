@@ -230,6 +230,12 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     if (threadKind != 0) {
         if (threadKind == 3) thread->GetGCData().clear_invisible_root();
         else thread->PopNativeFrameRootsTo(frameMark);
+        // threads.cpp:935-942: the owner leaves the mutator set before the
+        // stand-in is torn down. End the mutator this body created the way a
+        // normal thread end does. Teardown only; the sequence above is the one
+        // under test.
+        (void)thread->DoLeaveSaferegion();
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);

@@ -157,7 +157,7 @@ public:
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
-    void StopTheWorld(VMOperation* operation);
+    void StopTheWorld();
     void StartTheWorld() noexcept;
     void StartLightSync();
     void StopLightSync() noexcept;
@@ -349,10 +349,10 @@ public:
 class ScopedStopTheWorld {
 public:
     __attribute__((always_inline)) explicit ScopedStopTheWorld(const char* gcReason, bool = false,
-        int = 0, VMOperation* operation = nullptr) : reason(gcReason)
+        int = 0) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        MutatorManager::Instance().StopTheWorld(operation == nullptr ? &defaultOperation : operation);
+        MutatorManager::Instance().StopTheWorld();
         stoppedTime = TimeUtil::NanoSeconds();
     }
 
@@ -372,7 +372,6 @@ public:
 
 
 private:
-    VMOperation defaultOperation;
     const char* reason = nullptr;
     uint64_t startTime = 0;
     uint64_t stoppedTime = 0;
@@ -408,11 +407,5 @@ private:
 };
 
 // Scoped lock STW, this prevent other thread STW during the current scope.
-class ScopedSTWLock {
-public:
-    __attribute__((always_inline)) explicit ScopedSTWLock() { MutatorManager::Instance().SyncMutexLock(); }
-
-    __attribute__((always_inline)) ~ScopedSTWLock() { MutatorManager::Instance().SyncMutexUnlock(); }
-};
 } // namespace MapleRuntime
 #endif

@@ -234,9 +234,15 @@ public:
         concurrency.Init(concurrencyParam);
         // CollectorResources::Init initializes statistics before any phase timer.
         ZStat::Initialize();
+        VMThread::create();
     }
 
-    ~WeakClosureTestRuntime() override { runtime = nullptr; }
+    ~WeakClosureTestRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
 
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}

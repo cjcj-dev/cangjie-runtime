@@ -125,3 +125,5 @@ reference_carrier_product.cj               manual     candidate compiler and reb
 reference_startup_product.cj               manual     matching Reference ABI SDK and reference_startup_dependency static package; dependency global initialization finalizer registration; #1356
 reference_startup_control.cj               manual     same SDK as startup product probe; no-finalizer collection and mutex control for core publication cut; #1356
 reference_startup_dependency              manual     static dependency package for reference_startup_product.cj; initializes collection and finalizable global before main; #1356
+
+return_abi                              manual     qualified private SDK compiles main.cj + native.c; Linux x64 N2C result/pending assertions, see return_abi/README.md

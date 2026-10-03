@@ -5,17 +5,20 @@
 #define MRT_Z_BARRIER_SET_HPP
 
 #include "Common/BaseObject.h"
+#include "Heap/shared/barrierSet.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAccessBackend.hpp"
-#include "Heap/z/zThreadLocalData.hpp"
 
 namespace MapleRuntime {
 class MArray;
-class ZBarrierSet {
+class ZBarrierSet : public BarrierSet {
 public:
-    static void on_slowpath_allocation_exit(BaseObject* new_obj);
-    static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native);
-    static void on_thread_detach(ThreadGCData& data);
+    ZBarrierSet() : BarrierSet(FakeRtti(GetName<ZBarrierSet>::value)) {}
+    void on_thread_create(ThreadGCData& data) override;
+    void on_thread_destroy(ThreadGCData& data) override;
+    void on_slowpath_allocation_exit(BaseObject* new_obj) override;
+    void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native) override;
+    void on_thread_detach(ThreadGCData& data) override;
 
     template<DecoratorSet decorators, typename BarrierSetT = ZBarrierSet>
     class AccessBarrier {
@@ -67,5 +70,4 @@ public:
 };
 } // namespace MapleRuntime
 
-#include "Heap/z/zBarrierSet.inline.hpp"
 #endif

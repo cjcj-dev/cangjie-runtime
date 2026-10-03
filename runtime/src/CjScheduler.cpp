@@ -26,6 +26,7 @@
 #include "Mutator/MutatorManager.h"
 #include "RuntimeConfig.h"
 #include "Heap/shared/gcArguments.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "schedule.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "ExceptionManager.h"

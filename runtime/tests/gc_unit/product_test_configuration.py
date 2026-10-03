@@ -35,7 +35,7 @@ def configuration(runtime, library, output):
     def enabled(name):
         return int(any(arg in ('-D' + name, '-D' + name + '=1') for arg in arguments))
     return (enabled('MRT_TESTABLE_INTERNALS'), enabled('MRT_GC_UNIT_TESTS'),
-            enabled('MRT_GC_UNIT_OHOS_HOST'), enabled('NDEBUG'))
+            enabled('MRT_GC_UNIT_OHOS_HOST'), enabled('NDEBUG'), enabled('MRT_DEBUG'))
 
 
 def elf_identity(path):
@@ -91,6 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('output', type=Path)
     parser.add_argument('--copy-object', action='store_true')
     parser.add_argument('--resolve-root', action='store_true')
+    parser.add_argument('--with-debug', action='store_true')
     parser.add_argument('--compiler', default='clang++')
     args = parser.parse_args()
     try:
@@ -99,7 +100,8 @@ if __name__ == '__main__':
         elif args.copy_object:
             print(copy_object(args.runtime, args.library, args.output, args.compiler))
         else:
-            print(*configuration(args.runtime, args.library, args.output))
+            values = configuration(args.runtime, args.library, args.output)
+            print(*(values if args.with_debug else values[:4]))
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f'GC_UNIT_PRODUCT_CONFIGURATION_FAIL: {error}', file=sys.stderr)
         sys.exit(2)

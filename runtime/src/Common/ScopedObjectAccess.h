@@ -20,7 +20,8 @@ public:
         Mutator* mutator = Mutator::GetMutator();
         ThreadType threadType = ThreadLocal::GetThreadType();
         if (onlyForMutator &&
-            (threadType == ThreadType::FP_THREAD || threadType == ThreadType::GC_THREAD)) {
+            (threadType == ThreadType::FP_THREAD || threadType == ThreadType::GC_THREAD ||
+             threadType == ThreadType::VM_THREAD)) {
             stateChanged = false;
         } else {
             stateChanged = (mutator != nullptr) ? mutator->EnterSaferegion(true) : false;

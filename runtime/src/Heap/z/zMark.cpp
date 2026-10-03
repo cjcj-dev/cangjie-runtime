@@ -7,6 +7,7 @@
 
 
 #include "Heap/z/zHeap.hpp"
+#include "Mutator/VMOperation.h"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zVerify.hpp"
@@ -653,6 +654,37 @@ bool ZMark::FlushThreadLocal(ThreadLocalData* tls, ZMark* domain)
                               : ZMark::FlushThreadMarkProducers(tls, domain)) || published;
 }
 
+// ZGC zMark.cpp:535-585: one closure for managed and native owners.
+class ZMarkFlushStacksHandshakeClosure : public HandshakeClosure {
+public:
+    explicit ZMarkFlushStacksHandshakeClosure(ZMark* domain)
+        : HandshakeClosure("ZMarkFlushStacks"), domain_(domain), flushed_(false) {}
+    void do_thread(Mutator* thread) override { do_thread(thread->GetGCData()); }
+    void do_thread(ThreadGCData& data)
+    {
+        if (FlushTargetGCData(data, domain_)) { flushed_ = true; }
+    }
+    bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
+private:
+    ZMark* const domain_;
+    std::atomic<bool> flushed_;
+};
+
+class VM_ZMarkFlushOperation final : public VMOperation {
+public:
+    explicit VM_ZMarkFlushOperation(ZMarkFlushStacksHandshakeClosure* cl) : cl_(cl) {}
+    const char* name() const override { return "ZMarkFlushOperation"; }
+    bool evaluate_at_safepoint() const override { return false; }
+    bool is_gc_operation() const override { return true; }
+    void doit() override
+    {
+        // A native VM thread has no Mutator; its owner is nativeGCData.
+        cl_->do_thread(ThreadLocal::GetNativeGCData());
+    }
+private:
+    ZMarkFlushStacksHandshakeClosure* const cl_;
+};
+
 bool ZMark::HandshakeFlush(ZMark* domain)
 {
     auto& manager = MutatorManager::Instance();
@@ -666,31 +698,11 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         return flushed;
     }
 
-    class ZMarkFlushStacksHandshakeClosure : public HandshakeClosure {
-    public:
-        explicit ZMarkFlushStacksHandshakeClosure(ZMark* d)
-            : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
-        void do_thread(Mutator* thread) override
-        {
-            // ZGC zMark.cpp:535-557: no per-owner lock. The closure runs on
-            // the owner itself, or on the handshaker while the owner is
-            // observed safe; a saferegion-resident owner never touches its
-            // marking state (the exit flush runs before EnterSaferegion).
-            if (FlushTargetGCData(thread->GetGCData(), domain_)) {
-                flushed_ = true;
-            }
-        }
-        bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
-    private:
-        ZMark* domain_;
-        std::atomic<bool> flushed_;
-    } cl(domain);
+    ZMarkFlushStacksHandshakeClosure cl(domain);
+    VM_ZMarkFlushOperation vmCl(&cl);
     Handshake::execute(&cl);
-    flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
-    if (cl.flushed()) {
-        flushed = true;
-    }
-    return flushed;
+    VMThread::execute(&vmCl);
+    return cl.flushed();
 }
 
 bool ZMark::Flush()

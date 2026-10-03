@@ -17,6 +17,7 @@
 #include "Heap/z/zGCIdPrinter.hpp"
 
 namespace MapleRuntime {
+struct ThreadLocalData;
 struct ThreadGCData;
 class WorkerTaskDispatcher;
 class WorkerThread;
@@ -83,6 +84,8 @@ private:
     std::mutex _stop_lock;
 
     WorkerThread* create_worker(uint32_t name_suffix);
+    void set_indirect_states();
+    void clear_indirect_states();
 
 protected:
     virtual void on_create_worker(WorkerThread* worker) { (void)worker; }
@@ -135,6 +138,8 @@ private:
     WorkerTaskDispatcher* const _dispatcher;
     pthread_t _thread;
     std::atomic<ThreadGCData*> _gc_data{nullptr};
+    ThreadLocalData* _thread_local_data = nullptr;
+    Semaphore _initialized;
     char _name[32];
 
     static void set_worker_id(uint32_t worker_id) { _worker_id = worker_id; }
