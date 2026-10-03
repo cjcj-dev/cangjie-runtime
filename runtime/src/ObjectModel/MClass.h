@@ -632,6 +632,8 @@ public:
     inline bool IsRawArray() const;
     inline bool IsVArray() const;
     inline bool IsWeakRefType() const;
+    inline bool IsFinalReferenceType() const;
+    inline bool IsReferenceType() const;
     inline bool IsForeignType() const;
     inline bool IsExportedType() const;
     inline bool IsArrayType() const;

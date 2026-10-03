@@ -30,21 +30,21 @@ template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
-ptrdiff_t BaseObject::referent_offset()
+ptrdiff_t BaseObject::referent_offset(BaseObject* object)
 {
-    return static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE);
+    return static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE + object->GetTypeInfo()->GetFieldOffset(0));
 }
 
 bool BaseObject::is_referent_field(BaseObject* obj, ptrdiff_t offset)
 {
-    if (offset != referent_offset()) {
-        return false;
-    }
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+    // javaClasses.cpp:3954-3960 rejects the field offset before reading the
+    // class. Reference._value is the first declared payload field in the core
+    // compiler ABI. A non-referent access may name a headerless value record.
+    if (offset != static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE) || obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return false;
     }
     TypeInfo* klass = obj->GetTypeInfo();
-    return klass->IsWeakRefType();
+    return klass->IsReferenceType() && offset == referent_offset(obj);
 }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -91,14 +91,14 @@ size_t BaseObject::GetSize() const
     }
 }
 
-void BaseObject::OnFinalizerCreated()
+BaseObject* BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
     Heap::page(reinterpret_cast<MAddress>(this))->generation()
         ->MarkObjectIfActive<false, false, false, false>(from_object(this));
     // HotSpot sharedRuntime.cpp:1072-1075 / instanceKlass.cpp:1919-1932:
     // constructor completion registers the object before returning to the caller.
-    heap.GetFinalizerProcessor().RegisterFinalizer(this);
+    return heap.GetFinalizerProcessor().RegisterFinalizer(this);
 }
 
 bool BaseObject::IsInTraceRegion() const

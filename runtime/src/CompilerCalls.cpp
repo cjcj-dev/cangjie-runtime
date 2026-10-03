@@ -170,8 +170,7 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
 
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref)
 {
-    ref->OnFinalizerCreated();
-    return ref;
+    return static_cast<ObjRef>(ref->OnFinalizerCreated());
 }
 extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
 {
@@ -2165,6 +2164,7 @@ extern "C" ArrayRef MCC_NewArrayGeneric(const TypeInfo* arrayInfo, MIndex nElems
         case TypeKind::TYPE_KIND_CLASS:
         case TypeKind::TYPE_KIND_EXPORTED_REF:
         case TypeKind::TYPE_KIND_FOREIGN_PROXY:
+        case TypeKind::TYPE_KIND_FINALREF_CLASS:
         case TypeKind::TYPE_KIND_WEAKREF_CLASS:
         case TypeKind::TYPE_KIND_INTERFACE:
         case TypeKind::TYPE_KIND_TEMP_ENUM:
@@ -2244,6 +2244,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_CLASS:
         case TypeKind::TYPE_KIND_EXPORTED_REF:
         case TypeKind::TYPE_KIND_FOREIGN_PROXY:
+        case TypeKind::TYPE_KIND_FINALREF_CLASS:
         case TypeKind::TYPE_KIND_WEAKREF_CLASS:
         case TypeKind::TYPE_KIND_INTERFACE:
         case TypeKind::TYPE_KIND_TEMP_ENUM:

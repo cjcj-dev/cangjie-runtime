@@ -27,6 +27,9 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
+#include "ObjectModel/MReference.h"
+#include "Common/Handle.h"
+#include "Heap/z/zRootsIterator.hpp"
 
 
 
@@ -48,23 +51,21 @@ uint32_t ReferenceProcessor::worker_index()
     return id;
 }
 
-void ReferenceProcessor::list_append(Node*& head, Node*& tail, Node* reference)
+static volatile zpointer* reference_referent_addr(BaseObject* reference)
 {
-    if (head == nullptr) {
-        head = reference;
-    } else {
-        tail->next = reference;
-    }
-    tail = reference;
+    return reinterpret_cast<volatile zpointer*>(MReference::referent_addr(reference));
 }
+static zpointer reference_referent(BaseObject* reference) { return ZBarrier::load_atomic(reference_referent_addr(reference)); }
+static BaseObject* reference_discovered(BaseObject* reference) { return MReference::discovered(reference); }
+static void reference_set_discovered(BaseObject* reference, BaseObject* value) { MReference::set_discovered(reference, value); }
+static BaseObject* reference_next(BaseObject* reference) { return MReference::next(reference); }
+static void reference_set_next(BaseObject* reference, BaseObject* value) { MReference::set_next(reference, value); }
 
-void ReferenceProcessor::DeleteList(Node* list)
+void ReferenceProcessor::list_append(BaseObject*& head, BaseObject*& tail, BaseObject* reference)
 {
-    while (list != nullptr) {
-        Node* next = list->next;
-        delete list;
-        list = next;
-    }
+    if (head == nullptr) { head = reference; }
+    else { reference_set_discovered(tail, reference); }
+    tail = reference;
 }
 
 ReferenceProcessor::ReferenceProcessor(ZWorkers* workers)
@@ -80,16 +81,7 @@ ReferenceProcessor::ReferenceProcessor(ZWorkers* workers)
     reset_statistics();
 }
 
-ReferenceProcessor::~ReferenceProcessor()
-{
-    ZPerWorkerIterator<Node*> iter(&discovered_list);
-    for (Node** start; iter.next(&start);) {
-        DeleteList(*start);
-        *start = nullptr;
-    }
-    DeleteList(pending_list.get());
-    pending_list.set(nullptr);
-}
+ReferenceProcessor::~ReferenceProcessor() = default;
 
 void ReferenceProcessor::set_workers(ZWorkers* value) { workers = value; }
 
@@ -105,26 +97,16 @@ bool ReferenceProcessor::uses_clear_all_soft_reference_policy() const
 
 bool ReferenceProcessor::is_inactive(BaseObject* reference, BaseObject* referent, ReferenceType type) const
 {
-    (void)reference;
-    if (type == ReferenceType::FINAL) {
-        return false;
-    }
+    if (type == ReferenceType::FINAL) { return reference_next(reference) != nullptr; }
     return referent == nullptr;
 }
 
 bool ReferenceProcessor::is_strongly_live(BaseObject* referent) const
 {
-    if (referent == nullptr || !Heap::IsHeapAddress(referent)) {
-        return false;
-    }
+    // Cangjie stack objects are outside the moving heap and cannot be cleared.
+    if (!Heap::IsHeapAddress(referent)) { return true; }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
-    if (region == nullptr) {
-        return false;
-    }
-    if (region->IsYoungRegion()) {
-        return true;
-    }
-    return region->is_object_strongly_live(from_object(referent));
+    return region->IsYoungRegion() || region->is_object_strongly_live(from_object(referent));
 }
 
 bool ReferenceProcessor::is_softly_live(BaseObject* reference, ReferenceType type) const
@@ -138,112 +120,52 @@ bool ReferenceProcessor::is_softly_live(BaseObject* reference, ReferenceType typ
 
 bool ReferenceProcessor::should_discover(BaseObject* reference, ReferenceType type) const
 {
-    if (reference == nullptr) {
-        return false;
-    }
-    if (type != ReferenceType::WEAK && type != ReferenceType::FINAL) {
-        return false;
-    }
-    if (type == ReferenceType::WEAK) {
-        // ZGC zReferenceProcessor.cpp:174-196. A declined discovery lets
-        // VM enumeration follow the referent as an ordinary strong field.
-        auto* field = reinterpret_cast<volatile zpointer*>(
-            reinterpret_cast<MAddress>(reference) + TYPEINFO_PTR_SIZE);
-        BaseObject* referent = to_object(ZBarrier::load_barrier_on_oop_field(field));
-        if (is_inactive(reference, referent, type)) {
-            return false;
-        }
-        if (Heap::page(reinterpret_cast<MAddress>(reference))->IsYoungRegion()) {
-            return false;
-        }
-        if (is_strongly_live(referent)) {
-            return false;
-        }
-        if (is_softly_live(reference, type)) {
-            return false;
-        }
-    }
-    if (type == ReferenceType::FINAL) {
-        Node* head = discovered_list.get(worker_index());
-        for (Node* existing = head; existing != nullptr; existing = existing->next) {
-            if (existing->type == type && existing->reference == reference) {
-                return false;
-            }
-        }
-    }
+    BaseObject* referent = to_object(ZBarrier::load_barrier_on_oop_field(reference_referent_addr(reference)));
+    if (is_inactive(reference, referent, type)) { return false; }
+    if (Heap::page(reinterpret_cast<MAddress>(reference))->IsYoungRegion()) { return false; }
+    if (is_strongly_live(referent)) { return false; }
+    if (is_softly_live(reference, type)) { return false; }
     return true;
-}
-
-bool ReferenceProcessor::is_object_finalizable(BaseObject* reference)
-{
-    if (reference == nullptr || !Heap::IsHeapAddress(reference)) {
-        return false;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(reference));
-    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
-        return false;
-    }
-    const zaddress addr = from_object(reference);
-    return region->is_object_live(addr) && !region->is_object_strongly_live(addr);
-}
-
-bool ReferenceProcessor::CleanWeakReference(BaseObject* reference)
-{
-    HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    const zpointer observed = referentField.GetFieldValue(std::memory_order_acquire);
-    BaseObject* referent = to_object(RefField<>(observed).GetTargetObject());
-    if (referent == nullptr) {
-        return false;
-    }
-    if (Heap::IsHeapAddress(referent)) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
-        if (region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion()) {
-            if (region->is_object_strongly_live(from_object(referent))) {
-                return false;
-            }
-        }
-    }
-    if (referentField.CompareExchange(observed, to_zpointer(0))) {
-        return true;
-    }
-    return false;
 }
 
 bool ReferenceProcessor::try_make_inactive(BaseObject* reference, ReferenceType type) const
 {
+    const zpointer referent = reference_referent(reference);
+    if (is_null_any(referent)) { return false; }
+    auto* field = reference_referent_addr(reference);
     if (type == ReferenceType::WEAK) {
-        HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-        BaseObject* target = to_object(referentField.GetTargetObject(std::memory_order_acquire));
-        if (isStronglyLiveFn && target != nullptr && isStronglyLiveFn(target)) {
-            return false;
-        }
-        if (!isStronglyLiveFn && is_strongly_live(target)) {
-            return false;
-        }
-        const bool cleared = const_cast<ReferenceProcessor*>(this)->CleanWeakReference(reference);
-        return cleared;
+        return ZBarrier::clean_barrier_on_weak_oop_field(field);
     }
     if (type == ReferenceType::FINAL) {
-        return is_object_finalizable(reference);
+        if (ZBarrier::clean_barrier_on_final_oop_field(field)) {
+            DCHECK(reference_next(reference) == nullptr);
+            reference_set_next(reference, reference);
+            return true;
+        }
+    } else {
+        LOG(RTLOG_FATAL, "unsupported Reference type");
     }
     return false;
 }
 
 void ReferenceProcessor::discover(BaseObject* reference, ReferenceType type)
 {
-    Node* node = new (std::nothrow) Node{ reference, type, nullptr };
-    CHECK(node != nullptr);
-    Node* old = discovered_list.get(worker_index());
-    do {
-        node->next = old;
-    } while (!__atomic_compare_exchange_n(discovered_list.addr(worker_index()), &old, node, false,
-                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     discovered_count.get(worker_index())[TypeIndex(type)]++;
+    if (type == ReferenceType::FINAL) {
+        ZBarrier::MarkBarrierOnOldOopField(*MReference::referent_addr(reference), true);
+    }
+    DCHECK(!Heap::page(reinterpret_cast<MAddress>(reference))->IsYoungRegion());
+    DCHECK(reference_discovered(reference) == nullptr);
+    BaseObject** list = discovered_list.addr(worker_index());
+    reference_set_discovered(reference, *list);
+    *list = reference;
 }
 
 bool ReferenceProcessor::discover_reference(BaseObject* reference, ReferenceType type)
 {
     encountered_count.get(worker_index())[TypeIndex(type)]++;
+    // SOFT/PHANTOM remain unsupported under #399; no surrogate policy.
+    if (type != ReferenceType::WEAK && type != ReferenceType::FINAL) { return false; }
     if (!should_discover(reference, type)) {
         return false;
     }
@@ -251,37 +173,34 @@ bool ReferenceProcessor::discover_reference(BaseObject* reference, ReferenceType
     return true;
 }
 
-void ReferenceProcessor::process_worker_discovered_list(Node* list)
+void ReferenceProcessor::process_worker_discovered_list(BaseObject* list)
 {
-    Node* keep_head = nullptr;
-    Node* keep_tail = nullptr;
-    for (Node* node = list; node != nullptr;) {
-        Node* next = node->next;
-        node->next = nullptr;
-        if (try_make_inactive(node->reference, node->type)) {
-            enqueued_count.get(worker_index())[TypeIndex(node->type)]++;
-            list_append(keep_head, keep_tail, node);
-        } else {
-            delete node;
+    BaseObject* keep_head = nullptr;
+    BaseObject* keep_tail = nullptr;
+    for (BaseObject* reference = list; reference != nullptr;) {
+        const ReferenceType type = MReference::reference_type(reference->GetTypeInfo());
+        BaseObject* next = reference_discovered(reference);
+        reference_set_discovered(reference, nullptr);
+        if (try_make_inactive(reference, type)) {
+            enqueued_count.get(worker_index())[TypeIndex(type)]++;
+            list_append(keep_head, keep_tail, reference);
         }
-        node = next;
+        reference = next;
         SuspendibleThreadSet::yield();
     }
     if (keep_head != nullptr) {
-        Node* old_pending = __atomic_exchange_n(pending_list.addr(), keep_head, __ATOMIC_ACQ_REL);
-        keep_tail->next = old_pending;
-        if (old_pending == nullptr) {
-            pending_list_tail = keep_tail;
-        }
+        BaseObject* old = __atomic_exchange_n(pending_list.addr(), keep_head, __ATOMIC_ACQ_REL);
+        reference_set_discovered(keep_tail, old);
+        if (old == nullptr) { pending_list_tail = keep_tail; }
     }
 }
 
 void ReferenceProcessor::work()
 {
     SuspendibleThreadSetJoiner stsJoiner;
-    ZPerWorkerIterator<Node*> iter(&discovered_list);
-    for (Node** start; iter.next(&start);) {
-        Node* list = __atomic_exchange_n(start, nullptr, __ATOMIC_ACQ_REL);
+    ZPerWorkerIterator<BaseObject*> iter(&discovered_list);
+    for (BaseObject** start; iter.next(&start);) {
+        BaseObject* list = __atomic_exchange_n(start, nullptr, __ATOMIC_ACQ_REL);
         if (list != nullptr) {
             process_worker_discovered_list(list);
         }
@@ -291,8 +210,8 @@ void ReferenceProcessor::work()
 void ReferenceProcessor::verify_empty() const
 {
 #ifdef ASSERT
-    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
-    for (Node** list; iter.next(&list);) {
+    ZPerWorkerIterator<BaseObject*> iter(const_cast<ZPerWorker<BaseObject*>*>(&discovered_list));
+    for (BaseObject** list; iter.next(&list);) {
         CHECK(*list == nullptr);
     }
     CHECK(pending_list.get() == nullptr);
@@ -371,42 +290,37 @@ void ReferenceProcessor::process_references()
     collect_statistics();
 }
 
-void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
-{
-    isStronglyLiveFn = isStronglyLive;
-    process_references();
-    isStronglyLiveFn = {};
-}
-
-
 void ReferenceProcessor::verify_pending_references()
 {
 #ifdef ASSERT
     SuspendibleThreadSetJoiner stsJoiner;
-    for (Node* current = pending_list.get(); current != nullptr; current = current->next) {
+    for (BaseObject* current = pending_list.get(); current != nullptr; current = reference_discovered(current)) {
+        BaseObject* referent = to_object(ZBarrier::load_barrier_on_oop_field(reference_referent_addr(current)));
+        const ReferenceType type = MReference::reference_type(current->GetTypeInfo());
+        DCHECK(is_inactive(current, referent, type));
+        if (type == ReferenceType::FINAL) {
+            DCHECK(ZPointer::is_marked_any_old(reference_referent(current)));
+        }
         SuspendibleThreadSet::yield();
     }
 #endif
 }
 
-void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal)
+void ReferenceProcessor::enqueue_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesEnqueue);
+    if (pending_list.get() == nullptr) { return; }
     verify_pending_references();
-    Node* list = __atomic_exchange_n(pending_list.addr(), nullptr, __ATOMIC_ACQ_REL);
-    pending_list_tail = nullptr;
-    while (list != nullptr) {
-        Node* node = list;
-        list = list->next;
-        bool accepted = false;
-        if (node->type == ReferenceType::WEAK) {
-            accepted = true;
-        } else if (node->type == ReferenceType::FINAL) {
-            accepted = enqueueFinal(node->reference);
-        }
-        (void)accepted;
-        delete node;
+    auto& owner = Heap::GetHeap().GetFinalizerProcessor();
+    {
+        std::lock_guard<std::mutex> lock(owner.PendingLock());
+        SuspendibleThreadSetJoiner stsJoiner;
+        BaseObject* previous = owner.SwapPendingList(pending_list.get());
+        reference_set_discovered(pending_list_tail, previous);
+        owner.NotifyPending();
     }
+    pending_list.set(nullptr);
+    pending_list_tail = nullptr;
 }
 
 size_t ReferenceProcessor::Encountered(ReferenceType type) const
@@ -441,8 +355,8 @@ size_t ReferenceProcessor::Enqueued(ReferenceType type) const
 
 bool ReferenceProcessor::Empty() const
 {
-    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
-    for (Node** list; iter.next(&list);) {
+    ZPerWorkerIterator<BaseObject*> iter(const_cast<ZPerWorker<BaseObject*>*>(&discovered_list));
+    for (BaseObject** list; iter.next(&list);) {
         if (*list != nullptr) {
             return false;
         }
@@ -450,56 +364,42 @@ bool ReferenceProcessor::Empty() const
     return pending_list.get() == nullptr;
 }
 
-constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
-
-static BaseObject* LoadFinalizerGood(NativeSlot& slot)
+// The native threads provide Cangjie's managed-entry and shutdown boundary.
+// All per-reference state, queues and finalizer registration live in std.core.
+extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* argument)
 {
-    // FinalizerProcessor is part of the mutator set. Route this retained root through the public
-    // runtime load exit so resolution, root healing and the fail-closed postcondition stay one path.
-    return NativeAccess<>::oop_load(&(slot));
-}
-
-// Note: can only be called by FinalizerProcessor thread
-extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
-{
-#ifdef __APPLE__
-    CHECK_PTHREAD_CALL(pthread_setname_np, ("gc-helper"), "finalizer-processor thread setname");
-#elif defined(__linux__) || defined(hongmeng)
-    CHECK_PTHREAD_CALL(prctl, (PR_SET_NAME, "gc-helper"), "finalizer-processor thread setname");
-#endif
-    reinterpret_cast<FinalizerProcessor*>(arg)->Run();
+    static_cast<FinalizerProcessor*>(argument)->Run();
     return nullptr;
 }
+static void* ProcessReferenceHandler(void* argument)
+{
+    static_cast<FinalizerProcessor*>(argument)->RunReferenceHandler();
+    return nullptr;
+}
+
+FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
+    : referencePending(strongStorage.Allocate()), referenceProcessor(workers) {}
+
+FinalizerProcessor::~FinalizerProcessor() { strongStorage.Release(referencePending); }
 
 void FinalizerProcessor::Start()
 {
     Heap::GetHeap().page_allocator().StartUncommitters();
-    pthread_t thread;
+    running.store(true, std::memory_order_release);
     pthread_attr_t attr;
-    size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB; // default 1MB stacksize
+    size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB;
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-    // PTHREAD_STACK_MIN is not supported in Windows.
-    const size_t minStackSize = static_cast<size_t>(PTHREAD_STACK_MIN);
-    if (stackSize < minStackSize) {
-        stackSize = minStackSize;
-    }
+    stackSize = std::max(stackSize, static_cast<size_t>(PTHREAD_STACK_MIN));
 #endif
-    CHECK_PTHREAD_CALL(pthread_attr_init, (&attr), "init pthread attr");
-    CHECK_PTHREAD_CALL(pthread_attr_setdetachstate, (&attr, PTHREAD_CREATE_JOINABLE), "set pthread joinable");
-    CHECK_PTHREAD_CALL(pthread_attr_setstacksize, (&attr, stackSize), "set pthread stacksize");
-    CHECK_PTHREAD_CALL(pthread_create, (&thread, &attr, MRT_ProcessFinalizers, this),
-                       "create finalizer-process thread");
-#ifdef __WIN64
-    CHECK_PTHREAD_CALL(pthread_setname_np, (thread, "gc-helper"), "finalizer-processor thread setname");
-#endif
-    CHECK_PTHREAD_CALL(pthread_attr_destroy, (&attr), "destroy pthread attr");
-    threadHandle = thread;
-
+    CHECK_PTHREAD_CALL(pthread_attr_init, (&attr), "init reference thread attr");
+    CHECK_PTHREAD_CALL(pthread_attr_setdetachstate, (&attr, PTHREAD_CREATE_JOINABLE), "joinable reference threads");
+    CHECK_PTHREAD_CALL(pthread_attr_setstacksize, (&attr, stackSize), "reference thread stack");
+    CHECK_PTHREAD_CALL(pthread_create, (&referenceThread, &attr, ProcessReferenceHandler, this), "reference handler");
+    CHECK_PTHREAD_CALL(pthread_create, (&finalizerThread, &attr, MRT_ProcessFinalizers, this), "finalizer thread");
+    CHECK_PTHREAD_CALL(pthread_attr_destroy, (&attr), "destroy reference thread attr");
     WaitStarted();
 }
 
-// Stop FinalizerProcessor is only invoked at Fork or Runtime finliazaiton
-// Should only invoke once.
 void FinalizerProcessor::Stop()
 {
     CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
@@ -509,336 +409,183 @@ void FinalizerProcessor::Stop()
     WaitStop();
 }
 
-FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
-    : referenceProcessor(workers)
-{
-    weakStorage.register_num_dead_callback(ReportNumDead);
-    started = false;
-    running.store(false, std::memory_order_relaxed);
-    iterationWaitTime = DEFAULT_FINALIZER_TIMEOUT_MS;
-    timeProcessorBegin = 0;
-    timeProcessUsed = 0;
-    timeCurrentProcessBegin = 0;
-}
-
-void FinalizerProcessor::Run()
-{
-    Init();
-    NotifyStarted();
-    while (running.load(std::memory_order_acquire)) {
-        bool hasPendingFinalizableJob = false;
-        {
-            while (running.load(std::memory_order_acquire)) {
-                hasPendingFinalizableJob = HasFinalizableJob();
-                if (hasPendingFinalizableJob) {
-                    break;
-                }
-                Wait(iterationWaitTime);
-            }
-        }
-
-        if (!running.load(std::memory_order_acquire)) {
-            break;
-        }
-
-        if (UNLIKELY(!finalizerCJThreadInitialized)) {
-            // Delay finalizer CJThread creation until the worker really has something to do,
-            // and initialize its execution context once.
-            InitFinalizerCJThread();
-        }
-
-        if (hasPendingFinalizableJob) {
-            ProcessFinalizables();
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-            LogAfterProcess();
-#endif
-        }
-    }
-    Fini();
-}
-
-void FinalizerProcessor::Init()
-{
-    // Only start the finalizer worker thread here. Its CJThread identity is created on demand
-    // so it does not consume the earliest CJThread id before any finalize work exists.
-    MutatorManager::Instance().MutatorManagementRLock();
-    fpMutator = nullptr;
-    MutatorManager::Instance().MutatorManagementRUnlock();
-    running.store(true, std::memory_order_release);
-    timeProcessorBegin = TimeUtil::MicroSeconds();
-    timeProcessUsed = 0;
-    LOG(RTLOG_INFO, "FinalizerProcessor thread started");
-}
-
-void FinalizerProcessor::Fini()
-{
-    MutatorManager::Instance().MutatorManagementRLock();
-    fpMutator = nullptr;
-    MutatorManager::Instance().MutatorManagementRUnlock();
-    // Finalizer may exit without ever running a finalize task, so only tear down the CJThread
-    // context if it was really materialized.
-    if (finalizerCJThreadInitialized) {
-        EndFinalizerCJThread();
-        finalizerCJThreadInitialized = false;
-    }
-    LOG(RTLOG_INFO, "FinalizerProcessor thread stopped");
-}
-
-void FinalizerProcessor::WaitStop()
-{
-    pthread_t thread = threadHandle;
-    int tmpResult = ::pthread_join(thread, nullptr);
-    CHECK_DETAIL(tmpResult == 0, "::pthread_join() in FinalizerProcessor::WaitStop() return %d rather than 0. ",
-                 tmpResult);
-    started = false;
-    threadHandle = 0;
-}
-
-void FinalizerProcessor::Notify()
-{
-    std::lock_guard<std::mutex> lock(wakeLock);
-    wakeCondition.notify_one();
-}
-
-void FinalizerProcessor::Wait()
-{
-    std::unique_lock<std::mutex> lock(wakeLock);
-    while (running.load(std::memory_order_acquire) &&
-           !HasFinalizableJob()) {
-        lock.unlock();
-        if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
-            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
-        }
-        lock.lock();
-        wakeCondition.wait_for(lock, std::chrono::milliseconds(1), [this] {
-            return !running.load(std::memory_order_acquire) ||
-                HasFinalizableJob();
-        });
-    }
-}
-
-void FinalizerProcessor::Wait(U32 timeoutMilliSeconds)
-{
-    std::unique_lock<std::mutex> lock(wakeLock);
-    lock.unlock();
-    if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
-        (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
-    }
-    lock.lock();
-    std::chrono::milliseconds epoch(timeoutMilliSeconds);
-    wakeCondition.wait_for(lock, epoch);
-}
-
 void FinalizerProcessor::NotifyStarted()
 {
-    {
-        std::unique_lock<std::mutex> lock(startedLock);
-        CHECK_DETAIL(started != true, "unpexcted true, FinalizerProcessor might not wait stopped");
-        started = true;
-    }
+    std::lock_guard<std::mutex> lock(startedLock);
+    ++started;
     startedCondition.notify_all();
 }
 
 void FinalizerProcessor::WaitStarted()
 {
     std::unique_lock<std::mutex> lock(startedLock);
-    if (started) {
-        return;
-    }
-    startedCondition.wait(lock, [this] { return started; });
+    startedCondition.wait(lock, [this] { return started == 2; });
 }
 
-bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
+void FinalizerProcessor::WaitStop()
 {
-    std::lock_guard<std::mutex> l(listLock);
-    auto it = finalizers.begin();
-    while (it != finalizers.end()) {
-        BaseObject* obj = LoadFinalizerGood(*it);
-        if (obj == nullptr || CollectedHeap::is_filler_object(obj)) {
-            // oopHandle.inline.hpp:63-67: publish coloured null, then release the slot.
-            NativeAccess<>::oop_store(&*it, nullptr);
-            weakStorage.Release(&*it);
-            it = finalizers.erase(it);
-            continue;
-        }
-        if (obj != candidate) {
-            ++it;
-            continue;
-        }
-        NativeSlot* strong = strongStorage.Allocate();
-        strong->StoreColoured(it->GetFieldValue(), std::memory_order_relaxed);
-        finalizables.push_back(strong);
-        NativeAccess<>::oop_store(&*it, nullptr);
-        weakStorage.Release(&*it);
-        finalizers.erase(it);
-        hasFinalizableJob = true;
-        VLOG(REPORT, "enqueued finalizer %p", candidate);
-        return true;
-    }
-    return false;
+    CHECK_PTHREAD_CALL(pthread_join, (referenceThread, nullptr), "join reference handler");
+    CHECK_PTHREAD_CALL(pthread_join, (finalizerThread, nullptr), "join finalizer");
+    referenceThread = 0;
+    finalizerThread = 0;
+    started = 0;
 }
 
-void FinalizerProcessor::ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive)
+void FinalizerProcessor::Notify()
 {
-    referenceProcessor.ProcessReferences(isStronglyLive);
+    std::lock_guard<std::mutex> lock(pendingLock);
+    pendingCondition.notify_all();
 }
 
-void FinalizerProcessor::EnqueueReferences()
+void FinalizerProcessor::SetReferenceMethods(void* registration, void* handler, void* finalizer)
 {
-    bool enqueued = false;
-    referenceProcessor.EnqueueReferences(
-        [this, &enqueued](BaseObject* obj) {
-            const bool accepted = EnqueueFinalizableReference(obj);
-            enqueued = accepted || enqueued;
-            return accepted;
-        });
-    if (enqueued) {
-        Notify();
-    }
+    std::lock_guard<std::mutex> lock(pendingLock);
+    registerMethod = registration;
+    handlerMethod = handler;
+    finalizerMethod = finalizer;
+    methodsReady.store(true, std::memory_order_release);
+    pendingCondition.notify_all();
 }
 
-bool FinalizerProcessor::HasFinalizableJob()
+void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
 {
-    std::lock_guard<std::mutex> l(listLock);
-    CHECK_DETAIL(hasFinalizableJob == !finalizables.empty(),
-                 "finalizable job predicate must match queue state");
-    return hasFinalizableJob;
-}
-
-void FinalizerProcessor::FinishFinalizableBatch()
-{
-    std::lock_guard<std::mutex> l(listLock);
-    hasFinalizableJob = !finalizables.empty();
-}
-
-// Process finalizable list
-// 1. always process list head
-// 2. Leave safe region (calling in finalizerProcessor thread)
-// 3. Invoke finalize method
-// 4. remove processed finalizables
-void FinalizerProcessor::ProcessFinalizableList()
-{
-    auto itor = workingFinalizables.begin();
-    while (itor != workingFinalizables.end() && running.load(std::memory_order_acquire)) {
-        // keep GC thread from visiting roots when workingFinalizables list is updating
-        ScopedObjectAccess soa;
-        CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
-        BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
-        if (finalizeObjAddr == nullptr || CollectedHeap::is_filler_object(finalizeObjAddr)) {
-            std::lock_guard<std::mutex> l(listLock);
-            NativeAccess<>::oop_store(&*itor, nullptr);
-            strongStorage.Release(&*itor);
-            itor = workingFinalizables.erase(itor);
-            continue;
-        }
-
-        TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
-        FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
-        Mutator* mutator = ThreadLocal::GetMutator();
-
-        CHECK_DETAIL(finalizerMethod != nullptr, "%p has no finalize method", finalizeObjAddr);
-        void (*finalizer)(BaseObject*, TypeInfo*) = reinterpret_cast<void (*)(BaseObject*, TypeInfo*)>(finalizerMethod);
-        // finalize method return void, (moving) gc may take place here
-        mutator->SetManagedContext(true);
-        DLOG(FINALIZE, "tid %u finalize object %p", tid, finalizeObjAddr);
-        uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
-        ExecuteCangjieStub(finalizeObjAddr, finalizeObjAddr->GetTypeInfo(), 0, reinterpret_cast<void*>(finalizer),
-                           reinterpret_cast<void*>(threadData), 0);
-        mutator->SetManagedContext(false);
-
-        if (ExceptionManager::HasFatalException()) {
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-            ExceptionManager::DumpException();
+    Mutator* mutator = Mutator::GetMutator();
+    const bool wasManaged = mutator->IsManagedContext();
+    mutator->SetManagedContext(true);
+    const uintptr_t data = MRT_GetThreadLocalData();
+    uintptr_t unit = 0;
+#if defined(__aarch64__)
+    // The managed Unit result uses the AArch64 indirect-result register x8.
+    ExecuteCangjieStub(argument, 0, 0, entry, reinterpret_cast<void*>(data), &unit);
+#else
+    // Unit is an sret parameter before the explicit managed arguments.
+    ExecuteCangjieStub(&unit, argument, 0, entry, reinterpret_cast<void*>(data), 0);
 #endif
-            LOG(RTLOG_FATAL, "FatalException happened in finalizer");
-        }
-        ExceptionManager::ClearPendingException();
-        {
-            std::lock_guard<std::mutex> l(listLock);
-            NativeAccess<>::oop_store(&*itor, nullptr);
-            strongStorage.Release(&*itor);
-            itor = workingFinalizables.erase(itor);
-        }
-    }
+    mutator->SetManagedContext(wasManaged);
 }
 
-void FinalizerProcessor::ProcessFinalizables()
+void FinalizerProcessor::Run() { RunWorker(false); }
+void FinalizerProcessor::RunReferenceHandler() { RunWorker(true); }
+
+void FinalizerProcessor::RunWorker(bool handler)
+{
+    NotifyStarted();
+    {
+        std::unique_lock<std::mutex> lock(pendingLock);
+        pendingCondition.wait(lock, [this] {
+            return !IsRunning() || (firstPending && methodsReady.load(std::memory_order_acquire));
+        });
+    }
+    if (!IsRunning()) { return; }
+    (void)NewFinalizerCJThread();
+    Mutator* mutator = Mutator::GetMutator();
+    if (!handler) {
+        MutatorManager::Instance().MutatorManagementRLock();
+        fpMutator = mutator;
+        tid = mutator->GetTid();
+        MutatorManager::Instance().MutatorManagementRUnlock();
+    }
+    {
+        ScopedObjectAccess access;
+        InvokeManaged(handler ? handlerMethod : finalizerMethod, nullptr);
+        CHECK_DETAIL(!ExceptionManager::HasPendingException(), "Reference service exited with an exception");
+    }
+    if (!handler) {
+        MutatorManager::Instance().MutatorManagementRLock();
+        fpMutator = nullptr;
+        MutatorManager::Instance().MutatorManagementRUnlock();
+    }
+    EndFinalizerCJThread();
+}
+
+BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)
+{
+    // instanceKlass.cpp:1919-1932: the argument remains an updatable root
+    // throughout the managed allocation of its distinct FinalReference.
+    BaseObject* result;
+    {
+        ScopedObjectAccess access;
+        Mutator* mutator = Mutator::GetMutator();
+        HandleMark mark(*mutator);
+        Handle handle(mutator, object);
+        CHECK_DETAIL(methodsReady.load(std::memory_order_acquire), "core Reference methods are not published");
+        InvokeManaged(registerMethod, handle());
+        result = handle();
+    }
+    if (ExceptionManager::HasPendingException()) {
+        ExceptionManager::CheckAndThrowPendingException("Finalizer.register");
+    }
+    return result;
+}
+
+BaseObject* FinalizerProcessor::SwapPendingList(BaseObject* head)
+{
+    BaseObject* previous = NativeAccess<>::oop_load(referencePending);
+    NativeAccess<>::oop_store(referencePending, head);
+    return previous;
+}
+
+void FinalizerProcessor::NotifyPending()
+{
+    firstPending = true;
+    pendingCondition.notify_all();
+}
+
+BaseObject* FinalizerProcessor::WaitPending()
 {
     {
-        // we leave saferegion to avoid GC visit those changing queues.
-        ScopedObjectAccess soa;
-        std::lock_guard<std::mutex> l(listLock);
-        // FP will not come here before cleaning up workingFinalizables
-        // workingFinalizables is expected empty, thus we could use std::swap here
-        workingFinalizables.swap(finalizables);
-    }
-    DLOG(FINALIZE, "finalizer: working size %zu", workingFinalizables.size());
-    ProcessFinalizableList();
-    FinishFinalizableBatch();
-}
-
-
-void FinalizerProcessor::InitFinalizerCJThread()
-{
-    // Bind the existing finalizer OS thread to a CJThread/scheduler so operations like
-    // CJThreadPark can work, but delay this until there is real finalizer-side work to do.
-    void* cjthread = NewFinalizerCJThread();
-    CHECK_DETAIL(cjthread != nullptr, "create finalizer cjthread failed");
-    Mutator* mutator = ThreadLocal::GetMutator();
-    CHECK_DETAIL(mutator != nullptr, "create finalizer mutator failed");
-    // NewFinalizerCJThread prepares the thread for managed execution. We immediately re-enter
-    // saferegion here because the finalizer main loop itself stays idle most of the time and
-    // only leaves saferegion again through ScopedObjectAccess when work is processed.
-    (void)mutator->EnterSaferegion(true);
-    tid = mutator->GetTid();
-
-    MutatorManager::Instance().MutatorManagementRLock();
-    fpMutator = mutator;
-    MutatorManager::Instance().MutatorManagementRUnlock();
-    finalizerCJThreadInitialized = true;
-}
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void FinalizerProcessor::LogAfterProcess()
-{
-    if (!ENABLE_LOG(FINALIZE)) {
-        return;
-    }
-    uint64_t timeNow = TimeUtil::MicroSeconds();
-    uint64_t timeConsumed = timeNow - timeCurrentProcessBegin;
-    uint64_t totalTimePassed = timeNow - timeProcessorBegin;
-    timeProcessUsed += timeConsumed;
-    constexpr float percentageDivend = 100.0f;
-    float percentage = (static_cast<float>(TIME_FACTOR * timeProcessUsed) / totalTimePassed) / percentageDivend;
-    DLOG(FINALIZE, "[FinalizerProcessor] End (%luus [%luus] [%.2f%%])", timeConsumed, timeProcessUsed, percentage);
-}
-#endif
-
-// oopStorage.hpp:174-190: only the storage owner retires cleared records.
-void FinalizerProcessor::ReportNumDead(size_t numDead)
-{
-    if (numDead == 0) {
-        return;
-    }
-    auto& owner = Heap::GetHeap().GetFinalizerProcessor();
-    std::lock_guard<std::mutex> lock(owner.listLock);
-    for (auto it = owner.finalizers.begin(); it != owner.finalizers.end();) {
-        if (NativeAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(&*it) == nullptr) {
-            owner.weakStorage.Release(&*it);
-            it = owner.finalizers.erase(it);
-        } else {
-            ++it;
+        ScopedEnterSaferegion safe(false);
+        std::unique_lock<std::mutex> lock(pendingLock);
+        while (IsRunning() && is_null_any(referencePending->GetFieldValue(std::memory_order_acquire))) {
+            lock.unlock();
+            if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
+                (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
+            }
+            lock.lock();
+            pendingCondition.wait_for(lock, std::chrono::milliseconds(1));
         }
     }
+    ScopedObjectAccess access;
+    std::lock_guard<std::mutex> lock(pendingLock);
+    return SwapPendingList(nullptr);
 }
 
-void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
+void FinalizerProcessor::InvokeFinalize(BaseObject* object)
 {
-    std::lock_guard<std::mutex> l(listLock);
-    NativeSlot* slot = weakStorage.Allocate();
-    NativeAccess<>::oop_store(&(*slot), obj);
-    finalizers.push_back(slot);
+    {
+        ScopedObjectAccess access;
+        Mutator* mutator = Mutator::GetMutator();
+        HandleMark mark(*mutator);
+        Handle handle(mutator, object);
+        TypeInfo* klass = handle()->GetTypeInfo();
+        FuncRef method = klass->GetFinalizeMethod();
+        CHECK_DETAIL(method != nullptr, "FinalReference referent has no finalize method");
+        const bool wasManaged = mutator->IsManagedContext();
+        mutator->SetManagedContext(true);
+        ExecuteCangjieStub(handle(), klass, 0, reinterpret_cast<void*>(method),
+                           reinterpret_cast<void*>(MRT_GetThreadLocalData()), 0);
+        mutator->SetManagedContext(wasManaged);
+    }
+    if (ExceptionManager::HasPendingException()) {
+        ExceptionManager::CheckAndThrowPendingException("Finalizer.invokeFinalize");
+    }
 }
 
+extern "C" MRT_EXPORT void CJ_MCC_SetReferenceMethods(void* registration, void* handler, void* finalizer)
+{
+    Heap::GetHeap().GetFinalizerProcessor().SetReferenceMethods(registration, handler, finalizer);
+}
+extern "C" MRT_EXPORT BaseObject* CJ_MCC_ReferenceWaitPending()
+{
+    return Heap::GetHeap().GetFinalizerProcessor().WaitPending();
+}
+extern "C" MRT_EXPORT bool CJ_MCC_ReferenceRuntimeRunning()
+{
+    return Heap::GetHeap().GetFinalizerProcessor().IsRunning();
+}
+extern "C" MRT_EXPORT int64_t CJ_MCC_ReferenceNanoTime() { return TimeUtil::NanoSeconds(); }
+extern "C" MRT_EXPORT void CJ_MCC_ReferenceInvokeFinalize(BaseObject* object)
+{
+    FinalizerProcessor::InvokeFinalize(object);
+}
 } // namespace MapleRuntime
-

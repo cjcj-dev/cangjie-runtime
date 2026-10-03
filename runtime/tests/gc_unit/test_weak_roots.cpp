@@ -135,31 +135,3 @@ GC_TEST(WeakRootsProduct, YoungBlockedAccessDoesNotDeathClean)
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
     std::fprintf(stderr, "WEAK_ROOTS_YOUNG_NO_DEATH_CLEAN_ASSERT_EXECUTED\n");
 }
-
-// oopStorageSetParState.inline.hpp:76-91: run a real driver collection,
-// observing the record retirement performed by the product storage owner.
-// The companion debugger check counts the real owner callback, without a
-// replacement callback or a product test hook.
-GC_RUNTIME_OTHER_VM_TEST(WeakRootsProduct, CollectionReportsDeadToOwnerOnce)
-{
-    RuntimeParam params{};
-    params.heapParam.heapSize = 64 * 1024;
-    params.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
-    auto& owner = Heap::GetHeap().GetFinalizerProcessor();
-    auto& storage = owner.WeakRootStorage();
-    const size_t before = storage.AllocationCount();
-    owner.RegisterFinalizer(nullptr);
-    const size_t registered = storage.AllocationCount();
-    Heap::GetHeap().RequestGC(GC_REASON_USER);
-    const size_t after = storage.AllocationCount();
-    std::fprintf(stderr, "WEAK_OWNER_RETIRE_ASSERT before=%zu registered=%zu after=%zu\n",
-                 before, registered, after);
-    const bool inputPresent = registered == before + 1;
-    const bool retired = after == before;
-    std::fprintf(stderr, "WEAK_OWNER_INPUT_ASSERT result=%d; WEAK_OWNER_RETIRE_ASSERT result=%d\n",
-                 inputPresent, retired);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-    GC_EXPECT_TRUE(inputPresent);
-    GC_EXPECT_TRUE(retired);
-}

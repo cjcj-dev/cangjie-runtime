@@ -8,6 +8,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "gc_verify_fixture.hpp"
+#include "reference_layout_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
@@ -431,13 +432,27 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         type->SetType(TypeKind::TYPE_KIND_CLASS);
         type->SetInstanceSize(sizeof(uintptr_t));
     }
+    const bool referenceHolder = mode == VerifyFieldCase::ReferentSkippedAtMark ||
+                                 mode == VerifyFieldCase::ReferentCheckedAfterWeak;
+    static U32 referenceOffsets[4]{0, 8, 16, 24};
+    if (referenceHolder) {
+        holderType->SetFieldNum(4);
+        holderType->SetOffsets(referenceOffsets);
+        holderType->SetInstanceSize(4 * sizeof(uintptr_t));
+    }
     holderType->SetFlagHasRefField();
     GCTib tib{};
-    tib.tag = SIGN_BIT | 1;
+    tib.tag = SIGN_BIT | (referenceHolder ? 15 : 1);
     holderType->SetGCTib(tib);
-    auto* holder = MObject::NewPinnedObject(holderType, 2 * sizeof(uintptr_t));
+    auto* holder = MObject::NewPinnedObject(holderType, TYPEINFO_PTR_SIZE + holderType->GetInstanceSize());
     auto* target = MObject::NewPinnedObject(targetType, 2 * sizeof(uintptr_t));
     if (holder == nullptr || target == nullptr) { _exit(122); }
+    if (referenceHolder) {
+        for (U32 offset : referenceOffsets) {
+            HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE + offset)
+                .StoreColoured(StoreGoodPointer(nullptr));
+        }
+    }
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(target));
     auto& heap = Heap::GetHeap();
@@ -818,8 +833,11 @@ GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
         return;
     }
     GcVerifyFixture fixture;
+    ReferenceLayoutFixture reference;
+    reference.Place(reinterpret_cast<MAddress>(fixture.obj0), nullptr);
+    fixture.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fixture.obj0) +
+                                        RegionSpace::GetAllocSize(*fixture.obj0));
     fixture.PrepareOldSource();
-    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
     RememberedSet& remset = HeapTestRemset();

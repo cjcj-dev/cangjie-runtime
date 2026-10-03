@@ -62,8 +62,7 @@ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
 
 OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
                                                      ZGenerationIdOptional generation)
-    : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
-              {SyncWeakOopStorage(), workers},
+    : states{{{SyncWeakOopStorage(), workers},
               {StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()
