@@ -75,12 +75,12 @@ bool UnwindContext::UnwindToCallerContext(UnwindContext& caller, UnwindContextSt
             caller.frameInfo.mFrame.SetFA(n2cSlotData->fa);
             caller.frameInfo.mFrame.SetIP(n2cSlotData->pc);
         } else if (n2cSlotData->status == UnwindContextStatus::RELIABLE) {
-            frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, uwCtxStatus);
+            frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, uwCtxStatus, GetCallerFrameSiteKind(frameInfo.GetFrameType()));
         }
         caller.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
         return true;
     } else {
-    return frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, uwCtxStatus);
+    return frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, uwCtxStatus, GetCallerFrameSiteKind(frameInfo.GetFrameType()));
     }
     return true;
 }

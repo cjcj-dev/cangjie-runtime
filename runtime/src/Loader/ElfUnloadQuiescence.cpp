@@ -443,19 +443,26 @@ ElfUnloadQuiescence::FrameMetadata ElfUnloadQuiescence::FindFrameMetadata(Uptr p
         if (function == nullptr || (entry != 0 && function->startPC != entry)) { continue; }
         const U32 offset = static_cast<U32>(pc - function->startPC);
         U16 bits = 0;
+        U16 matchedKind = 0;
+        QualificationMatch match = QualificationMatch::NONE;
         if (kind == 0) {
             auto transition = std::upper_bound(function->transitions.begin(), function->transitions.end(), offset,
                 [](U32 value, const ImageAddressMap::Transition& row) { return value < row.offset; });
             bits = static_cast<U16>((--transition)->bits);
+            match = QualificationMatch::CURRENT;
         } else {
             const auto site = std::lower_bound(function->sites.begin(), function->sites.end(), offset,
                 [](const ImageAddressMap::Site& row, U32 value) { return row.offset < value; });
             auto exact = site;
             while (exact != function->sites.end() && exact->offset == offset && exact->kind != kind) { ++exact; }
-            if (exact != function->sites.end() && exact->offset == offset) { bits = exact->bits; }
+            if (exact != function->sites.end() && exact->offset == offset && exact->kind == kind) {
+                bits = exact->bits;
+                matchedKind = exact->kind;
+                match = QualificationMatch::SAVED_SITE;
+            }
         }
         return {image->identity, image->ownerGeneration, image->metadata, image->generation,
-                function->startPC, function->descriptor, pc, function->mapLimit, kind, bits};
+                function->startPC, function->descriptor, pc, function->mapLimit, matchedKind, bits, match};
     }
     return {};
 }
@@ -465,6 +472,8 @@ bool ElfUnloadQuiescence::ValidateFrameMetadata(const FrameMetadata& frame)
     const auto current = FindFrameMetadata(frame.site, frame.kind, frame.entry);
     return frame.descriptor != 0 && current.owner == frame.owner && current.ownerGeneration == frame.ownerGeneration &&
         current.metadata == frame.metadata && current.generation == frame.generation && current.descriptor == frame.descriptor &&
+        current.entry == frame.entry && current.site == frame.site && current.kind == frame.kind &&
+        current.match == frame.match && frame.match != QualificationMatch::NONE &&
         current.bits == frame.bits && current.mapLimit == frame.mapLimit;
 }
 

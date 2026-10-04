@@ -73,12 +73,21 @@ FuncDescRef FrameInfo::GetQualifiedDescriptor() const
 bool FrameInfo::ResolveProcInfo(U16 kind, bool diagnostic)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
+    if (metadata.descriptor == 0) {
+        metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
+    } else {
+        CHECK_DETAIL(metadata.kind == kind && ElfUnloadQuiescence::ValidateFrameMetadata(metadata),
+                     "frame qualification changed before classification");
+    }
     startProc = reinterpret_cast<const uint32_t*>(metadata.entry);
     lsdaStart = nullptr;
     if (metadata.descriptor == 0) { return false; }
     // frame.cpp:1158 / codeCache.cpp:750: select compiled identity before
     // consuming frame layout. A saved site, rather than pc-1, supplies the map.
+    if (metadata.match == ElfUnloadQuiescence::QualificationMatch::NONE) {
+        if (diagnostic) { return false; }
+        CHECK_DETAIL(false, "CJ frame missing exact site qualification");
+    }
     if (diagnostic && (metadata.bits & 2) == 0) { return false; }
     CHECK_DETAIL((metadata.bits & 2) != 0, "CJ frame layout is not qualified at saved PC");
 #ifndef _WIN64

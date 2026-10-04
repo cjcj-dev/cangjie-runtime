@@ -26,6 +26,12 @@
 namespace MapleRuntime {
 const int StackInfo::NEED_FILTED_FLAG = -1;
 
+U16 GetCallerFrameSiteKind(FrameType calleeType)
+{
+    if (calleeType == FrameType::SAFEPOINT || calleeType == FrameType::STACKGROW) { return 2; }
+    return calleeType == FrameType::UNKNOWN ? 0 : 1;
+}
+
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
 static uint64_t *stackFrameAlign(uint64_t *fa)
 {
@@ -70,7 +76,7 @@ void StackFrameStream::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
             GetContextWin64(&rip, &rsp);
             FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
             UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
 #else
             MRT_UNW_GETCALLERFRAME(uwContext.frameInfo);
 #endif
@@ -156,8 +162,7 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
             isReliableN2CStub = false;
             // CodeCache ownership precedes metadata lookup; executable bytes
             // alone do not prove this is a managed function (codeCache.cpp:750).
-            const U16 siteKind = (lastFrameType == FrameType::SAFEPOINT || lastFrameType == FrameType::STACKGROW)
-                ? 2 : (lastFrameType == FrameType::UNKNOWN ? 0 : 1);
+            const U16 siteKind = GetCallerFrameSiteKind(lastFrameType);
             if (!frameInfo.ResolveProcInfo(siteKind, diagnostic)) {
                 frameInfo.SetFrameType(frameInfo.GetMetadata().descriptor == 0 ? FrameType::NATIVE : FrameType::UNKNOWN);
             }

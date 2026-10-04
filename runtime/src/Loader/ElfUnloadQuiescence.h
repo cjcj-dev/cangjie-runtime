@@ -185,6 +185,7 @@ public:
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address, bool codeOnly = false);
     static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address, bool codeOnly = false);
+    enum class QualificationMatch : U16 { NONE, CURRENT, SAVED_SITE };
     struct FrameMetadata {
         Uptr owner { 0 };
         U64 ownerGeneration { 0 };
@@ -196,6 +197,7 @@ public:
         Uptr mapLimit { 0 };
         U16 kind { 0 };
         U16 bits { 0 };
+        QualificationMatch match { QualificationMatch::NONE };
     };
     // kind 0 is an exact current PC; 1/2/3 are exact saved sites.
     static FrameMetadata FindFrameMetadata(Uptr pc, U16 kind = 0, Uptr entry = 0);

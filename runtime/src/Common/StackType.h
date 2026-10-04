@@ -46,6 +46,9 @@ enum class FrameType {
 #endif
 };
 
+// One callee-context decision shared by classification and PE pre-unwind.
+U16 GetCallerFrameSiteKind(FrameType calleeType);
+
 enum class StackMode {
     EH = 0,
     GC = 1,
@@ -218,7 +221,7 @@ public:
     // caller assures this frame is a normal frame.
     // we name the direct caller frame in machine stack with "machine caller".
 #ifdef _WIN64
-    bool UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status) const;
+    bool UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status, U16 siteKind) const;
 #else
     bool UnwindToCallerMachineFrame(MachineFrame& caller) const;
 #endif

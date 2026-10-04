@@ -301,7 +301,7 @@ int InitCJThreadStackInfoFromCurrFunc(uint32_t maxStrSize,
     GetContextWin64(&rip, &rsp);
     frameInfo = GetCurFrameInfo(winModuleManager, rip, rsp);
     UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-    unwindCxt.frameInfo = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs);
+    unwindCxt.frameInfo = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
 #else
     void* ip = __builtin_return_address(0);
     void* fa = __builtin_frame_address(0);

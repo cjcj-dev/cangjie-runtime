@@ -117,7 +117,7 @@ FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp)
 // unContext.status : Current state during operation, to determine the initial state when the stack unwind.
 // stackInfo.status(of Unwinding) : status of a frame when unwinding, to determine whether the stack is a runtime stack.
 FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFrame& curFrame,
-                             UnwindContextStatus& status)
+                             UnwindContextStatus& status, U16 siteKind)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     static bool isCalleeThrowStackOverFlowError = false;
@@ -163,8 +163,9 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
         frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(
             reinterpret_cast<Uptr>(curFrame.GetFA()) + mutator->GetStackGrowFrameSize()));
     } else {
-        if (status != UnwindContextStatus::RISKY && !(frameInfo.mFrame.IsRuntimeFrame())) {
-            CHECK_DETAIL(frameInfo.ResolveProcInfo(1), "caller PE frame is not qualified");
+        if (status != UnwindContextStatus::RISKY && !(frameInfo.mFrame.IsRuntimeFrame()) &&
+            ElfUnloadQuiescence::IsLinkedAddress(callerPC, true)) {
+            CHECK_DETAIL(frameInfo.ResolveProcInfo(siteKind), "caller PE frame is not qualified");
             FuncDescRef funcDesc = frameInfo.GetQualifiedDescriptor();
             CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                          reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(curFrame.GetIP()));

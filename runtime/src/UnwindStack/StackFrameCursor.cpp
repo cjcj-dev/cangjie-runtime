@@ -95,7 +95,10 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     const auto descriptor = reinterpret_cast<FuncDescRef>(qualification.descriptor);
     CHECK_DETAIL(descriptor != nullptr, "return frame missing funcdesc startPC=%p ip=%p",
                  reinterpret_cast<const void*>(startPC), reinterpret_cast<const void*>(sitePC));
-    CHECK_DETAIL((qualification.bits & 2) != 0 && descriptor->HasReturnPoll(), "return frame missing kind3 layout qualification");
+    CHECK_DETAIL(qualification.match == ElfUnloadQuiescence::QualificationMatch::SAVED_SITE &&
+                 qualification.kind == 3 && qualification.entry == startPC && qualification.site == sitePC &&
+                 ElfUnloadQuiescence::ValidateFrameMetadata(qualification) && descriptor->HasReturnPoll(),
+                 "return frame missing exact kind3 saved site");
     StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap map = builder.Build<HeapReferenceMap>();
     CHECK_DETAIL(map.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
