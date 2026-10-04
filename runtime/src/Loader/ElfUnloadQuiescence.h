@@ -34,18 +34,30 @@ public:
         Uptr identity { 0 };
         U64 generation { 0 };
         std::vector<Range> ranges;
-#ifdef __APPLE__
-        // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.
-        struct Function { Uptr startPC; Uptr descriptor; };
+        U64 ownerGeneration { 0 };
+        struct Transition { U32 offset; U32 bits; };
+        struct Site { U32 offset; U16 kind; U16 bits; };
+        struct Function {
+            Uptr startPC;
+            Uptr descriptor;
+            U32 codeSize;
+            Uptr mapLimit;
+            std::vector<Transition> transitions;
+            std::vector<Site> sites;
+        };
         std::vector<Function> functions;
-        Uptr FindFunctionDescriptor(Uptr startPC) const;
-#endif
+        Uptr descriptorStart { 0 };
+        U32 descriptorBytes { 0 };
+        bool Covers(Uptr address, size_t size, bool codeOnly = false) const;
+        void ValidateMetadata();
+        const Function* FindFunction(Uptr pc, U16 kind = 0) const;
         bool Contains(Uptr address, bool codeOnly = false) const;
         bool ContainsFunctionDescriptor(Uptr descriptor) const;
     };
     enum class ReaderKind : U8 {
         GENERIC,
         GC_STACK_ENTRY,
+        SIGNAL_DIAGNOSTIC,
     };
 
     class ReadScope final {
@@ -55,6 +67,7 @@ public:
 
         ReadScope(const ReadScope&) = delete;
         ReadScope& operator=(const ReadScope&) = delete;
+        bool IsActive() const { return active; }
 
     private:
         bool active { false };
@@ -172,9 +185,23 @@ public:
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address, bool codeOnly = false);
     static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address, bool codeOnly = false);
-#ifdef __APPLE__
+    struct FrameMetadata {
+        Uptr owner { 0 };
+        U64 ownerGeneration { 0 };
+        Uptr metadata { 0 };
+        U64 generation { 0 };
+        Uptr entry { 0 };
+        Uptr descriptor { 0 };
+        Uptr site { 0 };
+        Uptr mapLimit { 0 };
+        U16 kind { 0 };
+        U16 bits { 0 };
+    };
+    // kind 0 is an exact current PC; 1/2/3 are exact saved sites.
+    static FrameMetadata FindFrameMetadata(Uptr pc, U16 kind = 0, Uptr entry = 0);
+    static bool ValidateFrameMetadata(const FrameMetadata& frame);
     static Uptr FindFunctionDescriptor(Uptr startPC);
-#endif
+    static void ValidateFileHeader(Uptr metadata);
     static bool IsAddressInImage(Uptr address, Uptr imageAddress);
     static bool IsPurgeAuthorized(Uptr imageAddress);
     static bool HasCallerPurgeProtection();
@@ -196,6 +223,7 @@ private:
     static std::mutex& ClosingMutex();
     static std::unordered_set<Uptr>& ClosingIdentities();
     static Uptr ResolveImageIdentity(Uptr address);
+    static std::shared_ptr<ImageAddressMap> CaptureImage(Uptr metadata);
     static std::shared_ptr<const ImageAddressMap> RegisteredImage(Uptr metadata);
     static Uptr RegisteredIdentity(Uptr metadata);
 };

@@ -8,6 +8,7 @@
 #ifndef MRT_STACK_TYPE_H
 #define MRT_STACK_TYPE_H
 
+#include "Loader/ElfUnloadQuiescence.h"
 #include <cstdint>
 
 #include "Base/CString.h"
@@ -256,6 +257,7 @@ public:
         this->startProc = frame.startProc;
         this->lsdaStart = frame.lsdaStart;
         this->fType = frame.fType;
+        this->metadata = frame.metadata;
     }
 
     virtual FrameInfo& operator=(const FrameInfo& frame)
@@ -265,6 +267,7 @@ public:
             this->startProc = frame.startProc;
             this->lsdaStart = frame.lsdaStart;
             this->fType = frame.fType;
+            this->metadata = frame.metadata;
         }
         return *this;
     }
@@ -277,6 +280,7 @@ public:
         startProc = nullptr;
         lsdaStart = nullptr;
         fType = FrameType::UNKNOWN;
+        metadata = {};
     }
 
     void SetFrameType(FrameType type) { fType = type; }
@@ -290,7 +294,9 @@ public:
     MachineFrame GetMachineFrame() const { return mFrame; }
 
     // Get startProc and lsdaStart by parsing the ip.
-    bool ResolveProcInfo();
+    bool ResolveProcInfo(U16 kind = 1);
+    const ElfUnloadQuiescence::FrameMetadata& GetMetadata() const { return metadata; }
+    FuncDescRef GetQualifiedDescriptor() const;
     uintptr_t CallerSP() const;
 
     // print this frame symbol
@@ -330,15 +336,8 @@ public:
 
     const uint32_t* GetFuncStartPC() const
     {
-#if defined(_WIN64)
+        // Identity is selected by the owner catalog, never reconstructed from FA.
         return startProc;
-#else
-        if (mFrame.fa == nullptr) {
-            return nullptr;
-        }
-        return reinterpret_cast<const uint32_t*>(*(reinterpret_cast<ArchUInt*>(mFrame.fa) - 1) -
-                                                 START_PC_OFFSET_IN_STACK);
-#endif
     }
 
     // Basic ip and fa information data structure.
@@ -348,6 +347,7 @@ protected:
     const uint32_t* startProc;
     const uint8_t* lsdaStart;
     FrameType fType;
+    ElfUnloadQuiescence::FrameMetadata metadata {};
 
 #if defined(__x86_64__)
     static constexpr uint32_t START_PC_OFFSET_IN_STACK = 9;
@@ -376,6 +376,7 @@ public:
             this->startProc = frame.GetStartProc();
             this->lsdaStart = frame.GetLsdaProc();
             this->fType = frame.GetFrameType();
+            this->metadata = frame.GetMetadata();
         }
         return *this;
     }
@@ -386,6 +387,7 @@ public:
             this->startProc = frame.GetStartProc();
             this->lsdaStart = frame.GetLsdaProc();
             this->fType = frame.GetFrameType();
+            this->metadata = frame.GetMetadata();
         }
         return *this;
     }

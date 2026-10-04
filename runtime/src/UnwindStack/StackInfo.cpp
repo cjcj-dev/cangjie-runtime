@@ -158,7 +158,9 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
             isReliableN2CStub = false;
             // CodeCache ownership precedes metadata lookup; executable bytes
             // alone do not prove this is a managed function (codeCache.cpp:750).
-            if (!frameInfo.ResolveProcInfo()) { frameInfo.SetFrameType(FrameType::NATIVE); }
+            const U16 siteKind = (lastFrameType == FrameType::SAFEPOINT || lastFrameType == FrameType::STACKGROW)
+                ? 2 : (lastFrameType == FrameType::UNKNOWN ? 0 : 1);
+            if (!frameInfo.ResolveProcInfo(siteKind)) { frameInfo.SetFrameType(FrameType::NATIVE); }
         } else {
             // C++ / runtime-transition frames are not managed. GetFuncStartPC
             // loads fa-1 and faults when that slot is not a function entry.

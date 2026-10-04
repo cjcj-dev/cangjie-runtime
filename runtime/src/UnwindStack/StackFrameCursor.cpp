@@ -91,9 +91,11 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     ElfUnloadQuiescence::ReadScope metadataReader;
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.
-    const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
+    const auto qualification = ElfUnloadQuiescence::FindFrameMetadata(sitePC, 3, startPC);
+    const auto descriptor = reinterpret_cast<FuncDescRef>(qualification.descriptor);
     CHECK_DETAIL(descriptor != nullptr, "return frame missing funcdesc startPC=%p ip=%p",
                  reinterpret_cast<const void*>(startPC), reinterpret_cast<const void*>(sitePC));
+    CHECK_DETAIL((qualification.bits & 2) != 0 && descriptor->HasReturnPoll(), "return frame missing kind3 layout qualification");
     StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap map = builder.Build<HeapReferenceMap>();
     CHECK_DETAIL(map.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
@@ -147,16 +149,10 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-        return;
-    }
+    const auto descriptor = frame.GetQualifiedDescriptor();
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
+    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(true);
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;

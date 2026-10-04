@@ -63,35 +63,35 @@ uintptr_t FrameInfo::CallerSP() const
 #endif
 }
 
-bool FrameInfo::ResolveProcInfo()
+FuncDescRef FrameInfo::GetQualifiedDescriptor() const
+{
+    ElfUnloadQuiescence::AssertReaderActive();
+    CHECK_DETAIL(ElfUnloadQuiescence::ValidateFrameMetadata(metadata), "managed frame metadata generation changed");
+    return reinterpret_cast<FuncDescRef>(metadata.descriptor);
+}
+
+bool FrameInfo::ResolveProcInfo(U16 kind)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    startProc = GetFuncStartPC();
-    if (startProc == nullptr) {
-        lsdaStart = nullptr;
-        return false;
-    }
+    metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
+    startProc = reinterpret_cast<const uint32_t*>(metadata.entry);
+    lsdaStart = nullptr;
+    if (metadata.descriptor == 0) { return false; }
+    // frame.cpp:1158 / codeCache.cpp:750: select compiled identity before
+    // consuming frame layout. A saved site, rather than pc-1, supplies the map.
+    CHECK_DETAIL((metadata.bits & 2) != 0, "CJ frame layout is not qualified at saved PC");
+#ifndef _WIN64
+    CHECK_DETAIL((metadata.bits & 1) != 0 && mFrame.GetFA() != nullptr, "CJ frame slot is not qualified");
 #ifdef __APPLE__
-    FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
+    const Uptr savedDescriptor = *reinterpret_cast<const Uptr*>(reinterpret_cast<Uptr>(mFrame.GetFA()) - 16);
+    CHECK_DETAIL(savedDescriptor == metadata.descriptor, "CJ frame descriptor disagrees with PC owner");
 #else
-    FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
+    const Uptr savedEntry = reinterpret_cast<Uptr>(GetFuncStartPCFromFrameAddress(mFrame.GetFA()));
+    CHECK_DETAIL(savedEntry == metadata.entry, "CJ frame entry disagrees with PC owner");
 #endif
-    if (funcDesc == nullptr) {
-        // The frame does not start at a valid function entry (e.g. a corrupted stack
-        // while dumping a crash): no exception table can be resolved for it.
-        lsdaStart = nullptr;
-        return false;
-    }
-    // Existing AOT FuncEnd-FuncBegin length, produced by CJMetadata.cpp.
-    // sharedRuntime.cpp:573-590 selects the containing compiled function before
-    // consuming its exception metadata. Use subtraction to avoid end overflow.
-    const Uptr pc = reinterpret_cast<Uptr>(mFrame.GetIP());
-    const Uptr start = reinterpret_cast<Uptr>(startProc);
-    if (pc < start || pc - start >= funcDesc->GetCodeSize()) {
-        lsdaStart = nullptr;
-        return false;
-    }
-    lsdaStart = reinterpret_cast<uint8_t*>(funcDesc->GetEHTable());
+#endif
+    const auto descriptor = GetQualifiedDescriptor();
+    lsdaStart = reinterpret_cast<const uint8_t*>(descriptor->GetEHTable());
     return true;
 }
 

@@ -96,22 +96,8 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
     ElfUnloadQuiescence::ReadScope reader;
-#ifdef __APPLE__
     return reinterpret_cast<FuncDescRef>(ElfUnloadQuiescence::FindFunctionDescriptor(startPC));
-#else
-    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
-    if (image == nullptr) { return nullptr; }
-    if (startPC < START_PC_OFFSET) { return nullptr; }
-    // A prefix may cross adjacent LOAD ranges of this registration. Check
-    // every byte before reading the offset; matching endpoints can hide a gap.
-    for (Uptr byte = startPC - START_PC_OFFSET; byte < startPC; ++byte) {
-        if (!image->Contains(byte)) { return nullptr; }
-    }
-    DataRefOffset32<MFuncDesc>* offset =
-        reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
-    FuncDescRef desc = offset->GetDataRef();
-    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
-#endif
 }
+
 } // namespace MapleRuntime
 #endif // MRT_MFUNC_DESC_INLINE_H
