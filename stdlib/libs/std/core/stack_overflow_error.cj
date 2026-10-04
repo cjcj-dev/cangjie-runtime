@@ -9,16 +9,13 @@
 package std.core
 
 public class StackOverflowError <: Error {
-    private let NotFolded: UInt64 = 0
-    private let TopFolded: UInt64 = 1
-    private let BottomFolded: UInt64 = 2
-    private var FoldedFlag: UInt64 = NotFolded
+    private let NotFolded: Int64 = 0
+    private let TopFolded: Int64 = 1
+    private let BottomFolded: Int64 = 2
+    private var FoldedFlag: Int64 = NotFolded
 
     private func getIsFolded() {
-        let size = arraySize(pcArray)
-        if (size % 3 == 1) {
-            FoldedFlag = arrayGet(pcArray, size - 1)
-        }
+        FoldedFlag = capture.fold
     }
 
     init() {
