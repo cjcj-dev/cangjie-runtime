@@ -162,7 +162,12 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
             isReliableN2CStub = false;
             // CodeCache ownership precedes metadata lookup; executable bytes
             // alone do not prove this is a managed function (codeCache.cpp:750).
-            const U16 siteKind = GetCallerFrameSiteKind(lastFrameType);
+            U16 siteKind = GetCallerFrameSiteKind(lastFrameType);
+#ifdef _WIN64
+            // PE already selected the sender before reading frameSize. This
+            // token also retains the decision for an initial saved caller.
+            if (frameInfo.GetMetadata().descriptor != 0) { siteKind = frameInfo.GetMetadata().kind; }
+#endif
             if (!frameInfo.ResolveProcInfo(siteKind, diagnostic)) {
                 frameInfo.SetFrameType(frameInfo.GetMetadata().descriptor == 0 ? FrameType::NATIVE : FrameType::UNKNOWN);
             }

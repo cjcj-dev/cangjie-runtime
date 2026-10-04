@@ -70,6 +70,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& r
 void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots)
 {
 #if defined(__x86_64__) || defined(__aarch64__)
+    CHECK_DETAIL(frame.mFrame.GetFA() != nullptr, "return stub missing saved register area");
     RegSlotsMap saved;
     RegRoot::RecordStubAllRegister(saved, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
     saved.allRegistersSaved = false;
@@ -80,14 +81,11 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     constexpr RegisterNum startRegister = X17;
     constexpr RegisterNum siteRegister = X16;
 #endif
-    if (saved.addrMap[startRegister] == nullptr || saved.addrMap[siteRegister] == nullptr) {
-        return;
-    }
+    CHECK_DETAIL(saved.addrMap[startRegister] != nullptr && saved.addrMap[siteRegister] != nullptr,
+                 "return stub missing saved entry/site registers");
     const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(saved.addrMap[startRegister]);
     const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(saved.addrMap[siteRegister]);
-    if (startPC == 0 || sitePC == 0) {
-        return;
-    }
+    CHECK_DETAIL(startPC != 0 && sitePC != 0, "return stub missing saved entry/site");
     ElfUnloadQuiescence::ReadScope metadataReader;
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.

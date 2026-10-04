@@ -469,11 +469,12 @@ ElfUnloadQuiescence::FrameMetadata ElfUnloadQuiescence::FindFrameMetadata(Uptr p
 
 bool ElfUnloadQuiescence::ValidateFrameMetadata(const FrameMetadata& frame)
 {
+    if (frame.descriptor == 0 || frame.match == QualificationMatch::NONE) { return false; }
     const auto current = FindFrameMetadata(frame.site, frame.kind, frame.entry);
     return frame.descriptor != 0 && current.owner == frame.owner && current.ownerGeneration == frame.ownerGeneration &&
         current.metadata == frame.metadata && current.generation == frame.generation && current.descriptor == frame.descriptor &&
         current.entry == frame.entry && current.site == frame.site && current.kind == frame.kind &&
-        current.match == frame.match && frame.match != QualificationMatch::NONE &&
+        current.match == frame.match &&
         current.bits == frame.bits && current.mapLimit == frame.mapLimit;
 }
 
