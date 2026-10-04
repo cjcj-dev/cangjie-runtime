@@ -24,7 +24,7 @@ constexpr int PROGRAM_NODE_ID = 2;      // 2: the (program) node id
 constexpr int IDLE_NODE_ID = 3;         // 3: the (idel) node id
 
 struct CodeInfo {
-    uint64_t funcIdentifier = 0;
+    TraceFunctionIdentity functionIdentity;
     uint64_t scriptId = 0;
     uint32_t lineNumber = 0;
     FrameType frameType = FrameType::UNKNOWN;
@@ -33,12 +33,8 @@ struct CodeInfo {
 
     bool operator < (const CodeInfo& codeInfo) const
     {
-        return frameType < codeInfo.frameType ||
-                (frameType == codeInfo.frameType && funcIdentifier < codeInfo.funcIdentifier) ||
-                (frameType == codeInfo.frameType && funcIdentifier == codeInfo.funcIdentifier &&
-                functionName < codeInfo.functionName) || (frameType == codeInfo.frameType &&
-                funcIdentifier == codeInfo.funcIdentifier && functionName == codeInfo.functionName &&
-                lineNumber < codeInfo.lineNumber);
+        return std::tie(frameType, functionIdentity, functionName, lineNumber) <
+               std::tie(codeInfo.frameType, codeInfo.functionIdentity, codeInfo.functionName, codeInfo.lineNumber);
     }
 };
 
@@ -77,16 +73,12 @@ struct ProfileInfo {
 
 class SampleTask {
 public:
-    explicit SampleTask(uint64_t time, uint64_t id, std::vector<uint64_t>& func, std::vector<FrameType>& types,
-        std::vector<uint32_t>& numbers) : timeStamp(time), mutatorId(id), funcDescRefs(func), frameTypes(types),
-        lineNumbers(numbers), frameCnt(func.size()) {}
+    explicit SampleTask(uint64_t time, uint64_t id, const std::vector<RawTraceFrame>& captured)
+        : timeStamp(time), mutatorId(id), frames(captured) {}
 
     uint64_t timeStamp;
     uint64_t mutatorId;
-    std::vector<uint64_t> funcDescRefs;
-    std::vector<FrameType> frameTypes;
-    std::vector<uint32_t> lineNumbers;
-    uint64_t frameCnt;
+    std::vector<RawTraceFrame> frames;
     bool finishParsed {false};
     int checkPoint {0};
 };
@@ -108,8 +100,7 @@ public:
     void RunTaskLoop();
     void DoSingleTask(uint64_t previousTimeStemp);
     void ParseSampleData(uint64_t previousTimeStemp);
-    void Post(uint64_t mutatorId, std::vector<uint64_t>& FuncDescRefs,
-            std::vector<FrameType>& FrameTypes, std::vector<uint32_t>& LineNumbers);
+    void Post(uint64_t mutatorId, const std::vector<RawTraceFrame>& frames);
     std::vector<CodeInfo> BuildCodeInfos(SampleTask* task);
     int GetSamplingInterval() { return interval; }
     bool OpenFile(int fd);
@@ -133,10 +124,10 @@ private:
     void AddTimeDelta(ProfileInfo* info, int timeDelta);
     void SetPreviousTimeStamp(ProfileInfo* info, uint64_t timeStamp);
     std::vector<CodeInfo> GetCodeInfos(SampleTask& task);
-    CString GetUrl(uint64_t funcIdentifier);
-    CString ParseUrl(uint64_t funcIdentifier);
-    CString GetDemangleName(uint64_t funcIdentifier);
-    CString ParseDemangleName(uint64_t funcIdentifier);
+    CString GetUrl(const RawTraceFrame& frame);
+    CString ParseUrl(const RawTraceFrame& frame);
+    CString GetDemangleName(const RawTraceFrame& frame);
+    CString ParseDemangleName(const RawTraceFrame& frame);
     void WriteFile();
     bool IsTimeout(uint64_t previousTimeStemp);
     ProfileInfo* GetProfileInfo(uint64_t mutatorId);
@@ -150,8 +141,8 @@ private:
     ProfileInfo* profileInfo {nullptr};
     std::map<CString, uint64_t> scriptIdMap {{"", 0}}; // {filePath, id}: each filePath has a unique id.
     int interval {500}; // 500 : default interval 500us
-    std::map<uint64_t, CString> identifierFuncnameMap;
-    std::map<uint64_t, CString> identifierUrlMap;
+    std::map<TraceFunctionIdentity, CString> identifierFuncnameMap;
+    std::map<TraceFunctionIdentity, CString> identifierUrlMap;
 };
 } // namespace MapleRuntime
 #endif // MRT_SAMPLES_RECORD_H

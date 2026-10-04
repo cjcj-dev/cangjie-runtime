@@ -59,9 +59,11 @@ public:
     int GetThreadState() { return state; }
     FrameInfo* GetCurrentFramePtr() { return currentFramePtr; }
     void FillInStackTrace() override;
+    void FillInStackTraceForSnapshot();
     void VisitStackRoots(const RootVisitor &func, Mutator &mutator);
 
     std::vector<FrameInfo* > stacks;
+    std::vector<RawTraceFrame> traceFrames;
 
 private:
     uint32_t tid = 0;

@@ -125,46 +125,39 @@ void StackManager::PrintSignalStackTrace(UnwindContext* uwContext, uintptr_t pc,
 
 void StackManager::PrintStackTraceForCpuProfile(UnwindContext* unContext, unsigned long long int cjThreadId)
 {
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    PrintStackInfo printStackInfo(unContext);
-    printStackInfo.FillInStackTrace();
-    auto stacks = printStackInfo.GetStack();
-    std::vector<uint64_t> funcDescRefs;
-    std::vector<FrameType> frameTypes;
-    std::vector<uint32_t> lineNumbers;
-    for (const auto& frame : stacks) {
-        if (frame.GetFrameType() != FrameType::MANAGED) { continue; }
-        FuncDescRef funcDesc = frame.GetQualifiedDescriptor();
-        if (funcDesc == nullptr) { continue; }
-        StackMapBuilder stackMapBuild(reinterpret_cast<uintptr_t>(frame.GetFuncStartPC()),
-            reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()), 0, reinterpret_cast<uint64_t*>(funcDesc));
-        MethodMap methodMap = stackMapBuild.Build<MethodMap>();
-        uint32_t lineNum = methodMap.IsValid() ? methodMap.GetLineNum() : 0;
-        funcDescRefs.emplace_back(reinterpret_cast<uint64_t>(funcDesc));
-        frameTypes.emplace_back(frame.GetFrameType());
-        lineNumbers.emplace_back(lineNum);
+    std::vector<RawTraceFrame> frames;
+    {
+        ElfUnloadQuiescence::ReadScope metadataReader;
+        PrintStackInfo info(unContext);
+        info.FillInStackTrace();
+        for (const auto& frame : info.GetStack()) {
+            if (frame.GetFrameType() == FrameType::MANAGED) {
+                frames.emplace_back(StackInfo::CaptureRawFrame(frame));
+            }
+        }
     }
-    CpuProfiler::GetInstance().GetGenerator().Post(cjThreadId, funcDescRefs, frameTypes, lineNumbers);
+    // No parsing/cache lock or managed allocation inside the metadata reader.
+    CpuProfiler::GetInstance().GetGenerator().Post(cjThreadId, frames);
 }
 
-void StackManager::RecordLiteFrameInfos(std::vector<uint64_t>& liteFrameInfos, size_t steps)
+void StackManager::RecordRawFrames(std::vector<RawTraceFrame>& frames, size_t steps)
 {
-    PrintStackInfo printStackInfo;
-    printStackInfo.SetProcessingOwner(Mutator::GetMutator());
-    printStackInfo.FillInStackTrace();
-    printStackInfo.ExtractLiteFrameInfoFromStack(liteFrameInfos, steps);
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    PrintStackInfo info;
+    info.SetProcessingOwner(Mutator::GetMutator());
+    info.FillInStackTrace();
+    info.ExtractRawFramesFromStack(frames, steps);
 }
 
-void StackManager::GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
-                                                 std::vector<StackTraceElement>& stackTrace)
+void StackManager::DecodeRawFrames(const std::vector<RawTraceFrame>& frames,
+                                   std::vector<StackTraceElement>& stackTrace)
 {
-    StackInfo::GetStackTraceByLiteFrameInfos(liteFrameInfos, stackTrace);
+    StackInfo::DecodeRawFrames(frames, stackTrace);
 }
 
-void StackManager::GetStackTraceByLiteFrameInfo(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
-                                                StackTraceElement& ste)
+void StackManager::DecodeRawFrame(const RawTraceFrame& frame, StackTraceElement& ste)
 {
-    StackInfo::GetStackTraceByLiteFrameInfo(ip, pc, funcDesc, ste);
+    StackInfo::DecodeRawFrame(frame, ste);
 }
 
 void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator)

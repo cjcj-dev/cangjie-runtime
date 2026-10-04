@@ -191,6 +191,21 @@ void RecordStackInfo::FillInStackTrace()
     }
 }
 
+void RecordStackInfo::FillInStackTraceForSnapshot()
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    FillInStackTrace();
+    for (const auto* frame : stacks) {
+        if (frame->GetFrameType() == FrameType::MANAGED
+#ifdef INTERPRETER_ENABLED
+            || frame->GetFrameType() == FrameType::INTERPRETER
+#endif
+        ) {
+            traceFrames.emplace_back(StackInfo::CaptureRawFrame(*frame));
+        }
+    }
+}
+
 void CJThreadStackInfo::FillInStackTrace()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;

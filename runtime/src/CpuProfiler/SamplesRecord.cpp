@@ -353,7 +353,7 @@ void SamplesRecord::RunTaskLoop()
         batch.swap(taskQueue);
     }
     for (auto& task : batch) {
-        if (task.frameCnt == 0) {
+        if (task.frames.size() == 0) {
             AddEmptySample(task);
         } else {
             AddSample(task);
@@ -375,7 +375,7 @@ void SamplesRecord::DoSingleTask(uint64_t previousTimeStemp)
         taken.splice(taken.end(), taskQueue, taskQueue.begin());
     }
     SampleTask& task = taken.front();
-    if (task.frameCnt == 0) {
+    if (task.frames.size() == 0) {
         AddEmptySample(task);
     } else {
         AddSample(task);
@@ -392,10 +392,10 @@ void SamplesRecord::ParseSampleData(uint64_t previousTimeStemp)
         if (task.finishParsed) {
             continue;
         }
-        const int frameCnt = static_cast<int>(task.frameCnt);
+        const int frameCnt = static_cast<int>(task.frames.size());
         for (int i = task.checkPoint; i < frameCnt; ++i) {
-            GetDemangleName(task.funcDescRefs[i]);
-            GetUrl(task.funcDescRefs[i]);
+            GetDemangleName(task.frames[i]);
+            GetUrl(task.frames[i]);
             if (IsTimeout(previousTimeStemp)) {
                 task.checkPoint = i + 1;
                 return;
@@ -416,70 +416,54 @@ bool SamplesRecord::IsTimeout(uint64_t previousTimeStemp)
     return false;
 }
 
-void SamplesRecord::Post(uint64_t mutatorId, std::vector<uint64_t>& FuncDescRefs,
-                         std::vector<FrameType>& FrameTypes, std::vector<uint32_t>& LineNumbers)
+void SamplesRecord::Post(uint64_t mutatorId, const std::vector<RawTraceFrame>& frames)
 {
-    uint64_t timeStamp = SamplesRecord::GetMicrosecondsTimeStamp();
-    SampleTask task(timeStamp, mutatorId, FuncDescRefs, FrameTypes, LineNumbers);
+    SampleTask task(SamplesRecord::GetMicrosecondsTimeStamp(), mutatorId, frames);
     std::lock_guard<std::mutex> lock(sampleMonitor);
-    taskQueue.push_back(task);
+    taskQueue.push_back(std::move(task));
 }
 
 std::vector<CodeInfo> SamplesRecord::GetCodeInfos(SampleTask& task)
 {
     std::vector<CodeInfo> codeInfos;
-    for (uint64_t i = 0; i < task.frameCnt; ++i) {
+    for (uint64_t i = 0; i < task.frames.size(); ++i) {
         CodeInfo codeInfo;
-        codeInfo.lineNumber = task.lineNumbers[i];
-        codeInfo.frameType = task.frameTypes[i];
-        codeInfo.funcIdentifier = task.funcDescRefs[i];
-        codeInfo.functionName = GetDemangleName(codeInfo.funcIdentifier);
-        codeInfo.url = GetUrl(codeInfo.funcIdentifier);
+        codeInfo.lineNumber = task.frames[i].lineNumber;
+        codeInfo.frameType = FrameType::MANAGED;
+        codeInfo.functionIdentity = task.frames[i].identity;
+        codeInfo.functionName = GetDemangleName(task.frames[i]);
+        codeInfo.url = GetUrl(task.frames[i]);
         codeInfo.scriptId = UpdateScriptIdMap(codeInfo.url);
         codeInfos.emplace_back(codeInfo);
     }
     return codeInfos;
 }
 
-CString SamplesRecord::GetUrl(uint64_t funcIdentifier)
+CString SamplesRecord::GetUrl(const RawTraceFrame& frame)
 {
-    if (identifierUrlMap.find(funcIdentifier) != identifierUrlMap.end()) {
-        return identifierUrlMap[funcIdentifier];
-    }
-    return ParseUrl(funcIdentifier);
+    auto found = identifierUrlMap.find(frame.identity);
+    return found != identifierUrlMap.end() ? found->second : ParseUrl(frame);
 }
 
-CString SamplesRecord::ParseUrl(uint64_t funcIdentifier)
+CString SamplesRecord::ParseUrl(const RawTraceFrame& frame)
 {
-    FuncDescRef funcDescRef = reinterpret_cast<FuncDescRef>(funcIdentifier);
-    CString path = funcDescRef->GetFuncDir();
-    CString fileName = funcDescRef->GetFuncFilename();
-#ifdef _WIN64
-    CString slash = "\\";
-#else
-    CString slash = "/";
-#endif
-    CString url =  path.IsEmpty() ? fileName : path + slash + fileName;
-    identifierUrlMap.emplace(funcIdentifier, url);
+    CString url = frame.FilePath();
+    identifierUrlMap.emplace(frame.identity, url);
     return url;
 }
 
-CString SamplesRecord::GetDemangleName(uint64_t funcIdentifier)
+CString SamplesRecord::GetDemangleName(const RawTraceFrame& frame)
 {
-    if (identifierFuncnameMap.find(funcIdentifier) != identifierFuncnameMap.end()) {
-        return identifierFuncnameMap[funcIdentifier];
-    }
-    return ParseDemangleName(funcIdentifier);
+    auto found = identifierFuncnameMap.find(frame.identity);
+    return found != identifierFuncnameMap.end() ? found->second : ParseDemangleName(frame);
 }
 
-CString SamplesRecord::ParseDemangleName(uint64_t funcIdentifier)
+CString SamplesRecord::ParseDemangleName(const RawTraceFrame& frame)
 {
-    FuncDescRef funcDescRef = reinterpret_cast<FuncDescRef>(funcIdentifier);
-    MangleNameHelper mangleNameHelper(funcDescRef->GetFuncName(),
-        StackTraceFormatFlag(funcDescRef->GetStackTraceFormat()));
-    mangleNameHelper.Demangle();
-    CString funcName = mangleNameHelper.GetDemangleName();
-    identifierFuncnameMap.emplace(funcIdentifier, funcName);
-    return funcName;
+    MangleNameHelper helper(frame.mangledName, frame.format);
+    helper.Demangle();
+    CString name = helper.GetDemangleName();
+    identifierFuncnameMap.emplace(frame.identity, name);
+    return name;
 }
 }

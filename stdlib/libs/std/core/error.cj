@@ -10,16 +10,16 @@ package std.core
 
 public open class Error <: ToString {
     private var detailMessage: String = String.empty
-    var pcArray: RawArray<UInt64> = RawArray<UInt64>(1, repeat: 0)
+    var capture: TraceCapture = TraceCapture()
     var traceElementArray: Array<StackTraceElement> = []
 
     init() {
-        pcArray = fillInStackTrace(RawArray<UInt64>(1, repeat: 0), detailMessage.toArray().rawptr)
+        capture = fillInStackTrace(TraceCapture(), detailMessage.toArray().rawptr)
     }
 
     init(message: String) {
         detailMessage = message
-        pcArray = fillInStackTrace(RawArray<UInt64>(1, repeat: 0), detailMessage.toArray().rawptr)
+        capture = fillInStackTrace(TraceCapture(), detailMessage.toArray().rawptr)
     }
 
     protected open func getClassName(): String {
@@ -60,6 +60,6 @@ public open class Error <: ToString {
     }
 
     public func getStackTrace(): Array<StackTraceElement> {
-        getStackTraceImpl(pcArray)
+        getStackTraceImpl(capture)
     }
 }

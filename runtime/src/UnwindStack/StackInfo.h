@@ -84,12 +84,13 @@ public:
     virtual ~StackInfo() = default;
     void SetProcessingOwner(Mutator* owner) { processingOwner = owner; }
     std::vector<FrameInfo>& GetStack() { return stack; }
-    void ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos,
+    void ExtractRawFramesFromStack(std::vector<RawTraceFrame>& frames,
                                       size_t steps = STACK_UNWIND_STEP_MAX) const;
-    static void GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
+    static void DecodeRawFrames(const std::vector<RawTraceFrame>& frames,
                                             std::vector<StackTraceElement>& stackTrace);
-    static void GetStackTraceByLiteFrameInfo(uint64_t ip, uint64_t pc, uint64_t fa,
-                                           StackTraceElement& ste);
+    static RawTraceFrame CaptureRawFrame(const FrameInfo& frame);
+    static void DecodeRawFrame(const RawTraceFrame& frame,
+                                           StackTraceElement& ste, bool filter = true);
     virtual void FillInStackTrace() = 0;
     static const int NEED_FILTED_FLAG;
 

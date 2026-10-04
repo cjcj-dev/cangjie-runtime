@@ -10,6 +10,8 @@
 
 #include "Loader/ElfUnloadQuiescence.h"
 #include <cstdint>
+#include <tuple>
+#include "UnwindStack/MangleNameHelper.h"
 
 #include "Base/CString.h"
 #include "Base/Log.h"
@@ -90,6 +92,40 @@ struct StackTraceElement {
     CString methodName;
     CString fileName;
     int64_t lineNumber;
+};
+
+// Numeric identity only: never dereferenced by a delayed consumer.
+struct TraceFunctionIdentity {
+    Uptr owner = 0;
+    U64 ownerGeneration = 0;
+    Uptr metadata = 0;
+    U64 metadataGeneration = 0;
+    Uptr entry = 0;
+    auto Key() const { return std::tie(owner, ownerGeneration, metadata, metadataGeneration, entry); }
+    bool operator<(const TraceFunctionIdentity& other) const { return Key() < other.Key(); }
+    bool operator==(const TraceFunctionIdentity& other) const { return Key() == other.Key(); }
+};
+
+// javaClasses.cpp:2500 and threadService.cpp:593 retain klass holders.
+// System DSO metadata has no mirror root here; retain only owned bytes instead.
+struct RawTraceFrame {
+    CString mangledName;
+    CString directory;
+    CString filename;
+    int64_t lineNumber = 0;
+    StackTraceFormatFlag format = StackTraceFormatFlag::DEFAULT;
+    bool interpreted = false;
+    StackTraceElement resolved;
+    TraceFunctionIdentity identity;
+    uintptr_t capturedPC = 0; // native exception/iOS logging only
+    CString FilePath() const
+    {
+#ifdef _WIN64
+        return directory.IsEmpty() ? filename : directory + "\\" + filename;
+#else
+        return directory.IsEmpty() ? filename : directory + "/" + filename;
+#endif
+    }
 };
 
 // Stack data structure used to return data of the arrayRef type to the cangjie code.
