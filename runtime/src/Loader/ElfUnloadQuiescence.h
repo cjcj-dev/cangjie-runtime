@@ -202,6 +202,7 @@ public:
     static bool ValidateFrameMetadata(const FrameMetadata& frame);
     static Uptr FindFunctionDescriptor(Uptr startPC);
     static void ValidateFileHeader(Uptr metadata);
+    static const char* ValidatedSDKVersion(Uptr metadata);
     static bool IsAddressInImage(Uptr address, Uptr imageAddress);
     static bool IsPurgeAuthorized(Uptr imageAddress);
     static bool HasCallerPurgeProtection();

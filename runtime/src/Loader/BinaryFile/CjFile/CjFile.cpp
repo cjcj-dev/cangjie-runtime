@@ -7,6 +7,7 @@
 
 
 #include "CjFile.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 #include "Base/Types.h"
 #include "CjFileMeta.h"
@@ -30,6 +31,7 @@ void CJFile::LoadWinCJFileMeta()
     // Init TablePtrs
     cJFileMetaEnd = cJFileMetaBegin + *header->cJFileSize;
     cJFileMeta.stackMapTbl.stackMapBasePtr = reinterpret_cast<void*>(*header->tables[STACK_MAP_TABLE].tableAddr);
+    cJFileMeta.stackMapTbl.stackMapTotalSize = *header->tables[STACK_MAP_TABLE].tableSize;
     cJFileMeta.typeInfoTbl.typeInfoBasePtr = reinterpret_cast<TypeInfo*>(*header->tables[TYPE_INFO_TABLE].tableAddr);
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = *header->tables[TYPE_INFO_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr = reinterpret_cast<FuncDescRef>(*header->tables[FUNC_DESC_TABLE].tableAddr);
@@ -73,6 +75,7 @@ void CJFile::LoadMacCJFileMeta()
     // Init TablePtrs
     cJFileMetaEnd = cJFileMetaBegin + *header->cJFileSize;
     cJFileMeta.stackMapTbl.stackMapBasePtr = reinterpret_cast<void*>(*header->tables[STACK_MAP_TABLE].tableAddr);
+    cJFileMeta.stackMapTbl.stackMapTotalSize = *header->tables[STACK_MAP_TABLE].tableSize;
     cJFileMeta.typeInfoTbl.typeInfoBasePtr = reinterpret_cast<TypeInfo*>(*header->tables[TYPE_INFO_TABLE].tableAddr);
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = *header->tables[TYPE_INFO_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr = reinterpret_cast<FuncDescRef>(*header->tables[FUNC_DESC_TABLE].tableAddr);
@@ -121,6 +124,7 @@ void CJFile::LoadLinuxCJFileMeta()
     cJFileMeta.typeInfoTbl.typeInfoBasePtr =
         reinterpret_cast<TypeInfo*>(begin + header->tables[TYPE_INFO_TABLE].tableOffset);
     cJFileMeta.typeInfoTbl.typeInfoTotalSize = header->tables[TYPE_INFO_TABLE].tableSize;
+    cJFileMeta.stackMapTbl.stackMapTotalSize = header->tables[STACK_MAP_TABLE].tableSize;
     cJFileMeta.funcDescTbl.funcDescBasePtr =
         reinterpret_cast<FuncDescRef>(begin + header->tables[FUNC_DESC_TABLE].tableOffset);
     cJFileMeta.funcDescTbl.funcDescTotalSize = header->tables[FUNC_DESC_TABLE].tableSize;
@@ -160,6 +164,7 @@ void CJFile::LoadLinuxCJFileMeta()
 
 void CJFile::LoadCJFileMeta()
 {
+    ElfUnloadQuiescence::ValidateFileHeader(GetFileMetaAddr());
 #if defined(_WIN64)
     LoadWinCJFileMeta();
 #elif defined(__APPLE__)
@@ -288,14 +293,6 @@ U32 CJFile::GetTypeExtTotalSize()
 
 CString CJFile::GetSDKVersion() const
 {
-    Uptr begin = GetFileMetaAddr();
-    CJFileHeader* header = reinterpret_cast<CJFileHeader*>(begin);
-#if defined(__APPLE__)
-    return CString(reinterpret_cast<char*>(*reinterpret_cast<U64*>(*header->cJSDKVersionPtr)));
-#elif defined(_WIN64)
-    return CString(reinterpret_cast<char*>(*reinterpret_cast<U64*>(*header->cJSDKVersionPtr)));
-#else
-    return CString(reinterpret_cast<char*>(*reinterpret_cast<Uptr*>(begin + header->cJSDKVersionOffset)));
-#endif
+    return CString(ElfUnloadQuiescence::ValidatedSDKVersion(GetFileMetaAddr()));
 }
 } // namespace MapleRuntime

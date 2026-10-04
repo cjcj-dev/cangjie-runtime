@@ -96,14 +96,10 @@ private:
         }
         ElfUnloadQuiescence::ReadScope metadataReader;
         const uintptr_t startPC = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-        if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
-#else
-        if (MFuncDesc::GetFuncDesc(startPC) == nullptr) { return; }
-#endif
+        const auto descriptor = frame.GetQualifiedDescriptor();
         StackPtrMap pointers = StackMapBuilder(startPC,
             reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
-            reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+            reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), reinterpret_cast<uint64_t*>(descriptor)).Build<StackPtrMap>();
         if (!pointers.IsValid()) { return; }
         StackPtrVisitor visit = [&](ObjectRef& slot) {
             const uintptr_t target = raw(slot.LoadPlain());
@@ -125,7 +121,7 @@ private:
         // method's barrier property. Cangjie records it in the function descriptor.
         if (frame.GetFrameType() != FrameType::MANAGED) { return false; }
         ElfUnloadQuiescence::ReadScope metadataReader;
-        const auto descriptor = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frame.GetStartProc()));
+        const auto descriptor = frame.GetQualifiedDescriptor();
         return descriptor != nullptr && descriptor->HasReturnPoll();
 #else
         return false;

@@ -294,7 +294,7 @@ public:
     MachineFrame GetMachineFrame() const { return mFrame; }
 
     // Get startProc and lsdaStart by parsing the ip.
-    bool ResolveProcInfo(U16 kind = 1);
+    bool ResolveProcInfo(U16 kind = 1, bool diagnostic = false);
     const ElfUnloadQuiescence::FrameMetadata& GetMetadata() const { return metadata; }
     FuncDescRef GetQualifiedDescriptor() const;
     uintptr_t CallerSP() const;

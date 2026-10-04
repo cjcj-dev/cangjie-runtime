@@ -14,7 +14,7 @@
 namespace MapleRuntime {
 class PrintSignalStackInfo : public PrintStackInfo {
 public:
-    explicit PrintSignalStackInfo(const UnwindContext* context = nullptr) : PrintStackInfo(context), stackIndex(0) {}
+    explicit PrintSignalStackInfo(const UnwindContext* context = nullptr) : PrintStackInfo(context), stackIndex(0) { diagnostic = true; }
 
     ~PrintSignalStackInfo() override = default;
     void FillInStackTrace() override;

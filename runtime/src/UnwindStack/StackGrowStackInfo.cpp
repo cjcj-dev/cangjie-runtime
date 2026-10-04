@@ -61,7 +61,7 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress).Build<StackPtrMap>(true);
+    StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress, reinterpret_cast<uint64_t*>(frame.GetQualifiedDescriptor())).Build<StackPtrMap>(true);
     if (stackPtrMap.IsValid()) {
         if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),

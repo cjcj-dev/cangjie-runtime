@@ -37,14 +37,12 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     if (calleeFrameInfo.GetFrameType() == FrameType::MANAGED) {
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(
-            reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(
-                reinterpret_cast<FrameAddress*>(calleeFrameInfo.mFrame.GetFA()))));
+        FuncDescRef funcDesc = calleeFrameInfo.GetQualifiedDescriptor();
         CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                      reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
         CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                      reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
-        const FramePrologue prologue(funcDesc->GetStackMap());
+        const FramePrologue prologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification()));
         auto fa = calleeFrameInfo.mFrame.GetFA();
         const size_t count = prologue.GetSavedRegisterCount();
         callerFrameInfo.mFrame.SetPtrAuthRAMod(stackFrameAlign(reinterpret_cast<uint64_t*>(fa) + count));
@@ -160,7 +158,9 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
             // alone do not prove this is a managed function (codeCache.cpp:750).
             const U16 siteKind = (lastFrameType == FrameType::SAFEPOINT || lastFrameType == FrameType::STACKGROW)
                 ? 2 : (lastFrameType == FrameType::UNKNOWN ? 0 : 1);
-            if (!frameInfo.ResolveProcInfo(siteKind)) { frameInfo.SetFrameType(FrameType::NATIVE); }
+            if (!frameInfo.ResolveProcInfo(siteKind, diagnostic)) {
+                frameInfo.SetFrameType(frameInfo.GetMetadata().descriptor == 0 ? FrameType::NATIVE : FrameType::UNKNOWN);
+            }
         } else {
             // C++ / runtime-transition frames are not managed. GetFuncStartPC
             // loads fa-1 and faults when that slot is not a function entry.
@@ -222,17 +222,10 @@ void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-            if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-            if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-                regSlotsMap = RegSlotsMap();
-                return;
-            }
+            const auto descriptor = frame.GetQualifiedDescriptor();
             const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
             StackPtrMap pointers = StackMapBuilder(startIP, frameIP,
-                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), reinterpret_cast<uint64_t*>(descriptor)).Build<StackPtrMap>();
             pointers.RecordCalleeSaved(regSlotsMap);
             regSlotsMap.allRegistersSaved = false;
             break;
@@ -283,13 +276,12 @@ void StackFrameStream::CheckRegisterRoots() const
     if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) { return; }
-#endif
-    HeapReferenceMap roots = StackMapBuilder(startIP, frameIP,
-        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+    const auto descriptor = frame.GetQualifiedDescriptor();
+    StackMapBuilder builder = StackMapBuilder(startIP, frameIP,
+        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), reinterpret_cast<uint64_t*>(descriptor));
+    HeapReferenceMap roots = builder.Build<HeapReferenceMap>(true);
+    CHECK_DETAIL(roots.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
+                 "managed frame missing exact ordinary root map");
     if (roots.IsValid() && roots.HasRegisterRoots()) {
         LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
             reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
@@ -366,11 +358,7 @@ void StackInfo::ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameIn
             case FrameType::MANAGED: {
                 liteFrameInfos.push_back(reinterpret_cast<uint64_t>(frameInfo.mFrame.GetIP()));
                 liteFrameInfos.push_back(reinterpret_cast<uint64_t>(frameInfo.GetFuncStartPC()));
-#ifdef __APPLE__
-                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(frameInfo.mFrame.GetFA());
-#else
-                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frameInfo.GetFuncStartPC()));
-#endif
+                FuncDescRef funcDesc = frameInfo.GetQualifiedDescriptor();
                 liteFrameInfos.push_back(reinterpret_cast<uint64_t>(funcDesc));
                 break;
             }

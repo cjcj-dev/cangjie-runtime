@@ -55,6 +55,7 @@ protected:
     uint32_t n2cCount;
     uint32_t* anchorFA = nullptr;
     FrameType lastFrameType;
+    bool diagnostic { false };
 #ifdef _WIN64
     UnwindContextStatus uwCtxStatus;
 #endif

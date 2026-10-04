@@ -116,6 +116,8 @@ void Target(const char* name, bool passed)
 }
 CJFile* RegisterMetadata(Metadata& value, const char* name)
 {
+    value.header.magic = 0x12345678;
+    value.header.version = 0x80000001;
     value.header.cJFileSize = sizeof(value);
     value.header.tables[GC_FLAGS_TABLE] = { offsetof(Metadata, flags), sizeof(value.flags) };
     value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(Metadata, entries), sizeof(value.entries) };

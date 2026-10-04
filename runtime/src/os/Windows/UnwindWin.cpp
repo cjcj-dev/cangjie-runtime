@@ -98,12 +98,13 @@ FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp)
         // 8: the first slot is pushed rbp
         frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(sp + stackOffset - 8));
     } else {
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
+        CHECK_DETAIL(frameInfo.ResolveProcInfo(0), "current PE frame is not qualified");
+        FuncDescRef funcDesc = frameInfo.GetQualifiedDescriptor();
         CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                      reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(pc));
         CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                      reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(pc));
-        stackOffset = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
+        stackOffset = FramePrologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification())).GetFrameSize();
         Uptr* calleeFA = reinterpret_cast<Uptr*>(sp - 0x10);
         Uptr winRbp = reinterpret_cast<Uptr>(*calleeFA);
         frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(winRbp + stackOffset));
@@ -163,12 +164,13 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
             reinterpret_cast<Uptr>(curFrame.GetFA()) + mutator->GetStackGrowFrameSize()));
     } else {
         if (status != UnwindContextStatus::RISKY && !(frameInfo.mFrame.IsRuntimeFrame())) {
-            FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
+            CHECK_DETAIL(frameInfo.ResolveProcInfo(1), "caller PE frame is not qualified");
+            FuncDescRef funcDesc = frameInfo.GetQualifiedDescriptor();
             CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                          reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(curFrame.GetIP()));
             CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                          reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(curFrame.GetIP()));
-            uint32_t stackOffset = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
+            uint32_t stackOffset = FramePrologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification())).GetFrameSize();
             Uptr callerRbp = reinterpret_cast<Uptr>(curFrame.GetFA()->callerFrameAddress);
             frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(callerRbp + stackOffset));
         } else {

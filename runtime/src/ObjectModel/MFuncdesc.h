@@ -28,7 +28,6 @@ public:
     inline int8_t GetStackTraceFormat() const;
     CString GetStringFromDict(U32 offset) const;
 
-    static FuncDescRef GetFuncDesc(FrameAddress *fa);
     static FuncDescRef GetFuncDesc(Uptr startPC);
 
 private:

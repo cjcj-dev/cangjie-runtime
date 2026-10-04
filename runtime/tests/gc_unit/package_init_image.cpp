@@ -33,6 +33,8 @@ extern "C" void PackageInitImageSetRoot(uintptr_t value)
 static void* PrepareMetadata(ImageMetadata& value)
 {
     value.roots[0] = &value.root;
+    value.header.magic = 0x12345678;
+    value.header.version = 0x80000001;
     value.header.cJFileSize = sizeof(value);
     value.header.tables[GC_FLAGS_TABLE] = { offsetof(ImageMetadata, flags), sizeof(value.flags) };
     value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(ImageMetadata, entries), sizeof(value.entries) };

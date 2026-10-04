@@ -108,6 +108,11 @@ void StackManager::PrintStackTrace(UnwindContext* uwContext)
 
 void StackManager::PrintSignalStackTrace(UnwindContext* uwContext, uintptr_t pc, uintptr_t fa)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::SIGNAL_DIAGNOSTIC);
+    if (!metadataReader.IsActive()) {
+        FLOG(RTLOG_ERROR, "  %p CJ metadata unavailable during writer", reinterpret_cast<void*>(pc));
+        return;
+    }
     PrintSignalStackInfo printSignalStackInfo(uwContext);
     if (uwContext->GetUnwindContextStatus() == UnwindContextStatus::RISKY) {
         printSignalStackInfo.GetSignalStack()[printSignalStackInfo.GetStackIndex()] = SigHandlerFrameinfo(
@@ -128,11 +133,8 @@ void StackManager::PrintStackTraceForCpuProfile(UnwindContext* unContext, unsign
     std::vector<FrameType> frameTypes;
     std::vector<uint32_t> lineNumbers;
     for (const auto& frame : stacks) {
-#ifdef __APPLE__
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(frame.mFrame.GetFA());
-#else
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frame.GetFuncStartPC()));
-#endif
+        if (frame.GetFrameType() != FrameType::MANAGED) { continue; }
+        FuncDescRef funcDesc = frame.GetQualifiedDescriptor();
         if (funcDesc == nullptr) { continue; }
         StackMapBuilder stackMapBuild(reinterpret_cast<uintptr_t>(frame.GetFuncStartPC()),
             reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()), 0, reinterpret_cast<uint64_t*>(funcDesc));

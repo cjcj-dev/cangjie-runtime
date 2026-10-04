@@ -82,17 +82,6 @@ inline int8_t MFuncDesc::GetStackTraceFormat() const
     return *(reinterpret_cast<const int8_t*>(dictOffsets + base - 1));
 }
 
-inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
-{
-    ElfUnloadQuiescence::ReadScope reader;
-    const Uptr startPC = reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(fa));
-    const auto image = ElfUnloadQuiescence::RegisteredImageForAddress(startPC, true);
-    if (image == nullptr) { return nullptr; }
-    FuncDescRef desc = reinterpret_cast<FuncDescRef>(
-        *reinterpret_cast<U64*>(reinterpret_cast<uintptr_t>(fa) - STACK_OFFSET_IN_APPLE));
-    return image->ContainsFunctionDescriptor(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
-}
-
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
     ElfUnloadQuiescence::ReadScope reader;

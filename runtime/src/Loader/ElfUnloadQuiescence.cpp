@@ -139,6 +139,7 @@ ImageDirectory& ImageMaps()
 thread_local U32 readerDepth = 0;
 thread_local bool unloadWriter = false;
 thread_local std::vector<ImageInterval> unloadWriterIntervals;
+thread_local std::unique_ptr<ImageSnapshot> unloadWriterSnapshot;
 thread_local Uptr purgeAuthorizedImage = 0;
 thread_local const ElfUnloadQuiescence::TaskAdmissionScope* purgeAdmission = nullptr;
 } // namespace
@@ -289,6 +290,13 @@ void CheckMetadataHeader(const ImageMap& image)
     const auto header = ReadMetadata<CJFileHeader>(image.metadata);
     CHECK_DETAIL(header.magic == 0x12345678, "invalid CJ metadata magic");
     CHECK_DETAIL(header.version == 0x80000001, "old AOT qualification ABI: rebuild CJ objects and std");
+#if defined(_WIN64) || defined(__APPLE__)
+    CHECK_DETAIL(image.Covers(reinterpret_cast<Uptr>(header.cJFileSize), sizeof(U32)), "CJ size indirection outside owner");
+    const U32 fileSize = ReadMetadata<U32>(reinterpret_cast<Uptr>(header.cJFileSize));
+#else
+    const U32 fileSize = header.cJFileSize;
+#endif
+    CHECK_DETAIL(fileSize <= UINTPTR_MAX - image.metadata, "CJ metadata end overflow");
     for (U32 i = 0; i != C_FILE_MAX; ++i) { (void)ReadMetadataTable(image, header, static_cast<CFileTable>(i)); }
 }
 } // namespace
@@ -299,13 +307,38 @@ void ElfUnloadQuiescence::ValidateFileHeader(Uptr metadata)
     CheckMetadataHeader(*image);
 }
 
+const char* ElfUnloadQuiescence::ValidatedSDKVersion(Uptr metadata)
+{
+    const auto image = CaptureImage(metadata);
+    CheckMetadataHeader(*image);
+    const auto header = ReadMetadata<CJFileHeader>(metadata);
+#if defined(_WIN64) || defined(__APPLE__)
+    CHECK_DETAIL(image->Covers(reinterpret_cast<Uptr>(header.cJFileSize), sizeof(U32)), "CJ size indirection outside owner");
+    CHECK_DETAIL(image->Covers(reinterpret_cast<Uptr>(header.cJSDKVersionPtr), sizeof(U64)), "CJ SDK indirection outside owner");
+    const Uptr versionSlot = ReadMetadata<U64>(reinterpret_cast<Uptr>(header.cJSDKVersionPtr));
+#else
+    CHECK_DETAIL(header.cJSDKVersionOffset <= UINTPTR_MAX - metadata, "CJ SDK offset overflow");
+    const Uptr versionSlot = metadata + header.cJSDKVersionOffset;
+#endif
+    CHECK_DETAIL(image->Covers(versionSlot, sizeof(Uptr)), "CJ SDK version pointer outside owner");
+    const Uptr version = ReadMetadata<Uptr>(versionSlot);
+    Uptr end = version;
+    for (;;) {
+        CHECK_DETAIL(image->Covers(end, 1), "CJ SDK string outside owner");
+        if (ReadMetadata<U8>(end) == 0) { break; }
+        CHECK_DETAIL(end != UINTPTR_MAX, "CJ SDK string overflow");
+        ++end;
+    }
+    return reinterpret_cast<const char*>(version);
+}
+
 void ElfUnloadQuiescence::ImageAddressMap::ValidateMetadata()
 {
     CheckMetadataHeader(*this);
     const auto header = ReadMetadata<CJFileHeader>(metadata);
     const auto descriptors = ReadMetadataTable(*this, header, FUNC_DESC_TABLE);
     const auto maps = ReadMetadataTable(*this, header, STACK_MAP_TABLE);
-    CHECK_DETAIL(descriptors.size % sizeof(MFuncDesc) == 0, "invalid AOT descriptor stride");
+    CHECK_DETAIL(descriptors.start % alignof(MFuncDesc) == 0 && descriptors.size % sizeof(MFuncDesc) == 0, "invalid AOT descriptor stride");
     descriptorStart = descriptors.start;
     descriptorBytes = descriptors.size;
     for (size_t offset = 0; offset < descriptors.size; offset += sizeof(MFuncDesc)) {
@@ -397,7 +430,7 @@ ElfUnloadQuiescence::ImageAddressMap::FindFunction(Uptr pc, U16 kind) const
 ElfUnloadQuiescence::FrameMetadata ElfUnloadQuiescence::FindFrameMetadata(Uptr pc, U16 kind, Uptr entry)
 {
     AssertReaderActive();
-    const auto* snapshot = ImageMaps().snapshot.load(std::memory_order_acquire);
+    const auto* snapshot = unloadWriter ? unloadWriterSnapshot.get() : ImageMaps().snapshot.load(std::memory_order_acquire);
     if (snapshot == nullptr) { return {}; }
     // CodeCache::find_blob -> CodeHeap::find_blob: address ownership, then
     // enumerate independent metadata registrations of that exact owner.
@@ -461,7 +494,7 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
         const auto image = FindImageInterval(unloadWriterIntervals, address, codeOnly);
         if (image != nullptr) { return image; }
     }
-    const auto* snapshot = ImageMaps().snapshot.load(std::memory_order_acquire);
+    const auto* snapshot = unloadWriter ? unloadWriterSnapshot.get() : ImageMaps().snapshot.load(std::memory_order_acquire);
     return snapshot == nullptr ? nullptr : FindImageInterval(snapshot->intervals, address, codeOnly);
 }
 
@@ -540,6 +573,12 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
         const Uptr last = range.start + std::min<Uptr>(range.size - 1, ~Uptr(0) - range.start);
         unloadWriterIntervals.push_back({range.start, last, image, range.executable});
     }
+    {
+        auto& maps = ImageMaps();
+        std::lock_guard<std::mutex> directoryLock(maps.mutex);
+        const auto* snapshot = maps.snapshot.load(std::memory_order_acquire);
+        if (snapshot != nullptr) { unloadWriterSnapshot.reset(new ImageSnapshot(*snapshot)); }
+    }
     unloadWriter = true;
 }
 
@@ -572,6 +611,7 @@ ElfUnloadQuiescence::UnloadScope::~UnloadScope()
     CHECK_DETAIL(admissionOpen, "ELF unload must reopen lookup admission after purge");
     unloadWriter = false;
     unloadWriterIntervals.clear();
+    unloadWriterSnapshot.reset();
 }
 
 bool ElfUnloadQuiescence::SharedTaskAdmissionScope::TryAcquire(void* scope)
@@ -843,6 +883,12 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     auto image = CaptureImage(imageAddress);
     CHECK_DETAIL(!IsImageClosing(imageAddress), "ELF load cannot reopen a closing image generation");
     image->ValidateMetadata();
+    CHECK_DETAIL(readerDepth == 0 && !unloadWriter, "metadata registration cannot run inside a reader or unload");
+    std::unique_lock<std::mutex> publicationLock(WriterMutex());
+    CHECK_DETAIL(!IsImageClosing(imageAddress), "metadata publisher cannot reopen a closing owner");
+    const U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_acq_rel);
+    CHECK_DETAIL((previous & WRITER_BIT) == 0, "metadata publishers must be serialized");
+    {
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
     static std::atomic<U64> nextGeneration { 1 };
@@ -854,7 +900,8 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
         image->ownerGeneration = registered->ownerGeneration;
         for (const auto& function : image->functions) {
             for (const auto& old : registered->functions) {
-                CHECK_DETAIL(function.startPC >= old.startPC + old.codeSize ||
+                CHECK_DETAIL((function.descriptor == old.descriptor && function.startPC == old.startPC && function.codeSize == old.codeSize) ||
+                             function.startPC >= old.startPC + old.codeSize ||
                              old.startPC >= function.startPC + function.codeSize,
                              "conflicting function metadata in one owner");
             }
@@ -863,6 +910,19 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     maps.images.push_back(image);
     maps.Rebuild();
     maps.Publish();
+    }
+    // Publish and retire first; the same unload reader drain protects old
+    // snapshots during normal registration, without a second epoch mechanism.
+    {
+        std::unique_lock<std::mutex> drainLock(DrainMutex());
+        DrainCondition().wait(drainLock, []() { return (State().load(std::memory_order_acquire) & READER_MASK) == 0; });
+    }
+    {
+        auto& maps = ImageMaps();
+        std::lock_guard<std::mutex> directoryLock(maps.mutex);
+        maps.retired.clear();
+    }
+    State().fetch_and(READER_MASK, std::memory_order_release);
     return image;
 }
 

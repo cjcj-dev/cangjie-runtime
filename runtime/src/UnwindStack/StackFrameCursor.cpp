@@ -154,6 +154,9 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(true);
+    CHECK_DETAIL(heapMap.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
+                 "managed frame missing exact root map startPC=%p ip=%p", reinterpret_cast<void*>(startIP),
+                 reinterpret_cast<void*>(frameIP));
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
     DerivedPtrVisitor derived =
