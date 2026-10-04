@@ -322,6 +322,9 @@ public:
     // low address    ...
     static uint32_t* GetFuncStartPCFromFrameAddress(FrameAddress* fa)
     {
+#if defined(__x86_64__)
+        static_assert(START_PC_OFFSET_IN_STACK == 9, "compiler layout FuncStartPCOffsetX86");
+#endif
         return reinterpret_cast<uint32_t*>(*(reinterpret_cast<uint64_t*>(fa) - 1) - START_PC_OFFSET_IN_STACK);
     }
 
