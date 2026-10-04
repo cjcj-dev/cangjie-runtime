@@ -19,6 +19,15 @@ constexpr unsigned ArrayHeaderSize = 16;
 constexpr unsigned TypeInfoSize = 96;
 constexpr unsigned FuncDescReturnPollOffsetMachO = 32;
 constexpr unsigned FuncDescReturnPollOffsetELF = 28;
+constexpr unsigned FuncDescEntryOffsetMachO = 40;
+constexpr unsigned FuncDescStrideMachO = 56;
+constexpr unsigned FuncDescEntryOffsetELF = 32;
+constexpr unsigned FuncDescStrideELF = 48;
+constexpr unsigned FuncDescQualificationOffsetMachO = 48;
+constexpr unsigned FuncDescQualificationTagOffsetMachO = 52;
+constexpr unsigned FuncDescQualificationOffsetELF = 36;
+constexpr unsigned FuncDescQualificationTagOffsetELF = 40;
+constexpr unsigned FuncDescReservedOffsetELF = 44;
 namespace TypeInfo {
 constexpr unsigned typeInfoNameIndex = 0;
 constexpr unsigned typeInfoNameOffset = 0;

@@ -249,9 +249,9 @@ bool ElfUnloadQuiescence::ImageAddressMap::ContainsFunctionDescriptor(Uptr descr
 #endif
     constexpr size_t stride = sizeof(MFuncDesc);
 #ifdef __APPLE__
-    static_assert(stride == 40, "existing MachO function descriptor ABI");
+    static_assert(stride == 56, "AOT qualification MachO function descriptor ABI");
 #else
-    static_assert(stride == 32, "existing ELF/PE function descriptor ABI");
+    static_assert(stride == 48, "AOT qualification ELF/PE function descriptor ABI");
 #endif
     if (size < stride || size % stride != 0 || size - 1 > UINTPTR_MAX - first || descriptor < first) { return false; }
     const Uptr offset = descriptor - first;

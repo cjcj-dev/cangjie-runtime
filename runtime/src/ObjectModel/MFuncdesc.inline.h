@@ -27,6 +27,39 @@ inline bool MFuncDesc::HasReturnPoll() const
     return (returnPollFlag & 1u) != 0;
 }
 
+inline Uptr MFuncDesc::GetAOTEntry() const
+{
+#ifdef __APPLE__
+    static_assert(offsetof(MFuncDesc, entryRel) == 40, "compiler layout FuncDescEntryOffsetMachO");
+    static_assert(sizeof(MFuncDesc) == 56, "compiler layout FuncDescStrideMachO");
+#else
+    static_assert(offsetof(MFuncDesc, entryRel) == 32, "compiler layout FuncDescEntryOffsetELF");
+    static_assert(sizeof(MFuncDesc) == 48, "compiler layout FuncDescStrideELF");
+#endif
+    return reinterpret_cast<Uptr>(entryRel.GetDataRef());
+}
+
+inline U8* MFuncDesc::GetAOTQualification() const
+{
+#ifdef __APPLE__
+    static_assert(offsetof(MFuncDesc, qualificationRel) == 48, "compiler layout FuncDescQualificationOffsetMachO");
+    static_assert(offsetof(MFuncDesc, qualificationTag) == 52, "compiler layout FuncDescQualificationTagOffsetMachO");
+#else
+    static_assert(offsetof(MFuncDesc, qualificationRel) == 36, "compiler layout FuncDescQualificationOffsetELF");
+    static_assert(offsetof(MFuncDesc, qualificationTag) == 40, "compiler layout FuncDescQualificationTagOffsetELF");
+#endif
+    return qualificationRel.GetDataRef();
+}
+
+inline bool MFuncDesc::HasAOTQualificationTag() const
+{
+#ifndef __APPLE__
+    static_assert(offsetof(MFuncDesc, qualificationReserved) == 44, "compiler layout FuncDescReservedOffsetELF");
+    if (qualificationReserved != 0) { return false; }
+#endif
+    return qualificationTag == AOT_QUALIFICATION_TAG;
+}
+
 inline Uptr* MFuncDesc::GetEHTable() const
 {
 #ifdef __APPLE__
