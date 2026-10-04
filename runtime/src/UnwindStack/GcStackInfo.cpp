@@ -202,6 +202,15 @@ void RecordStackInfo::FillInStackTraceForSnapshot()
 #endif
         ) {
             traceFrames.emplace_back(StackInfo::CaptureRawFrame(*frame));
+        } else if (frame->GetFrameType() != FrameType::NATIVE) {
+            // Preserve the snapshot's existing OS/stub frame result, owning its bytes before leaving the reader.
+            RawTraceFrame raw;
+            raw.systemFrame = true;
+            raw.resolved.className = frame->GetPackClassName();
+            raw.resolved.methodName = frame->GetMethodName();
+            raw.resolved.fileName = frame->GetFileNameForTrace();
+            raw.resolved.lineNumber = frame->GetLineNum();
+            traceFrames.emplace_back(std::move(raw));
         }
     }
 }

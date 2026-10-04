@@ -698,7 +698,10 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(ObjRef capture, int64_t index
         CHECK_DETAIL(offset + sizeof(ArrayRef) <= size, "Trace frame reference layout out of bounds");
         ArrayRef bytes = *reinterpret_cast<ArrayRef*>(payload.data() + offset);
         CHECK_DETAIL(bytes != nullptr, "Missing owned trace bytes");
-        return CString(reinterpret_cast<const char*>(bytes->ConvertToCArray()), bytes->GetLength());
+        CString result(bytes->GetLength(), '\0');
+        const auto* data = reinterpret_cast<const char*>(bytes->ConvertToCArray());
+        for (MIndex i = 0; i < bytes->GetLength(); ++i) { result[i] = data[i]; }
+        return result;
     };
     auto getInt = [&](size_t offset) {
         CHECK_DETAIL(offset + sizeof(int64_t) <= size, "Trace frame value layout out of bounds");
@@ -805,7 +808,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         StackTraceElement decoded;
         StackInfo::DecodeRawFrame(frame, decoded, false);
         CString className = decoded.className;
-        CString fileName = decoded.fileName;
+        CString fileName = (frame.interpreted || frame.systemFrame) ? decoded.fileName : frame.filename;
         CString methodName = decoded.methodName;
         int64_t lineNumber = decoded.lineNumber;
 

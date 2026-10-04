@@ -115,7 +115,8 @@ struct RawTraceFrame {
     int64_t lineNumber = 0;
     StackTraceFormatFlag format = StackTraceFormatFlag::DEFAULT;
     bool interpreted = false;
-    StackTraceElement resolved;
+    StackTraceElement resolved {};
+    bool systemFrame = false; // synchronous snapshot of a non-managed OS/stub frame only
     TraceFunctionIdentity identity;
     uintptr_t capturedPC = 0; // native exception/iOS logging only
     CString FilePath() const

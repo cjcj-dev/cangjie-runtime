@@ -399,7 +399,7 @@ void StackInfo::ExtractRawFramesFromStack(std::vector<RawTraceFrame>& frames, si
 
 void StackInfo::DecodeRawFrame(const RawTraceFrame& raw, StackTraceElement& ste, bool filter)
 {
-    if (raw.interpreted) {
+    if (raw.interpreted || raw.systemFrame) {
         ste = raw.resolved;
         return;
     }
