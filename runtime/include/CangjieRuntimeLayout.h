@@ -13,6 +13,7 @@ constexpr unsigned MutexStateOffset = 24;
 constexpr unsigned MutexLocked = 4;
 constexpr unsigned ObjectStateWordOffset = 0;
 constexpr unsigned ObjectHeaderSize = 8;
+constexpr unsigned FuncStartPCOffsetX86 = 9;
 constexpr unsigned ArrayLengthOffset = 8;
 constexpr unsigned ArrayHeaderSize = 16;
 constexpr unsigned TypeInfoSize = 96;
