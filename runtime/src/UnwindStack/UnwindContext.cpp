@@ -72,6 +72,7 @@ bool UnwindContext::UnwindToCallerContext(UnwindContext& caller, UnwindContextSt
         if (n2cSlotData->status == UnwindContextStatus::RISKY ||
             n2cSlotData->status == UnwindContextStatus::SIGNAL_STATUS ||
             n2cSlotData->status == UnwindContextStatus::UNKNOWN) {
+            caller.frameInfo.Reset();
             caller.frameInfo.mFrame.SetFA(n2cSlotData->fa);
             caller.frameInfo.mFrame.SetIP(n2cSlotData->pc);
         } else if (n2cSlotData->status == UnwindContextStatus::RELIABLE) {

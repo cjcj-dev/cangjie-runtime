@@ -73,12 +73,17 @@ FuncDescRef FrameInfo::GetQualifiedDescriptor() const
 bool FrameInfo::ResolveProcInfo(U16 kind, bool diagnostic)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    if (metadata.descriptor == 0) {
-        metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
-    } else {
-        CHECK_DETAIL(metadata.kind == kind && ElfUnloadQuiescence::ValidateFrameMetadata(metadata),
+#ifdef _WIN64
+    if (metadata.descriptor != 0) {
+        CHECK_DETAIL(metadata.site == reinterpret_cast<Uptr>(mFrame.GetIP()) && metadata.kind == kind &&
+                     ElfUnloadQuiescence::ValidateFrameMetadata(metadata),
                      "frame qualification changed before classification");
+    } else {
+        metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
     }
+#else
+    metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
+#endif
     startProc = reinterpret_cast<const uint32_t*>(metadata.entry);
     lsdaStart = nullptr;
     if (metadata.descriptor == 0) { return false; }
