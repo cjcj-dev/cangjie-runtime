@@ -793,11 +793,17 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
     }
     GC_EXPECT_TRUE(live != nullptr);
+    std::unordered_set<RootSlot*> rootsBefore;
+    VisitCJThreadRoots([&](CJThreadRoot& root) {
+        root.oops_do([&](RootSlot& slot) { rootsBefore.insert(&slot); });
+    });
+    static std::atomic<unsigned> executions{0};
+    const unsigned executionsBefore = executions.load();
     LWTData initialData{};
     initialData.obj = live;
     auto* thread = CJThreadBuild(
         reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
-        nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
+        nullptr, [](void*, unsigned int) -> void* { ++executions; return nullptr; }, &initialData, sizeof(initialData),
         CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(thread != nullptr);
     LWTData* data = nullptr;
@@ -814,6 +820,8 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         });
         return count;
     };
+    const size_t rootsBeforeBuild = rootsBefore.count(carrierSlot);
+    GC_EXPECT_EQ(rootsBeforeBuild, 0u);
     const size_t registeredRoots = countCarrierRoots();
     std::fprintf(stderr, "VERIFY_ARMED_REGISTER_TARGET registered=%zu\n", registeredRoots);
     GC_EXPECT_EQ(registeredRoots, 1u);
@@ -843,7 +851,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     const size_t remainingRoots = countCarrierRoots();
     std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
     GC_EXPECT_EQ(remainingRoots, 0u);
+    GC_EXPECT_EQ(executions.load(), executionsBefore);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    std::fprintf(stderr, "VERIFY_ARMED_FINI_COMPLETE executions=%u\n", executions.load());
+    GC_EXPECT_EQ(executions.load(), executionsBefore);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
