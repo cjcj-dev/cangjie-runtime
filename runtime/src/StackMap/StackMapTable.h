@@ -171,7 +171,11 @@ public:
 protected:
     ATTR_NO_INLINE BitsManager ResolveHeader(U32 headerInfo[], U32 size)
     {
-        BitsManager cur(tableBits);
+        return ResolveHeader(headerInfo, size, tableBits);
+    }
+    ATTR_NO_INLINE BitsManager ResolveHeader(U32 headerInfo[], U32 size, const BitsManager& start)
+    {
+        BitsManager cur(start);
         for (U32 i = 0; i < size; ++i) {
             VarInt varInt(cur);
             VarPair headerPair = varInt.GetValue();
@@ -636,8 +640,17 @@ private:
     }
     void Init()
     {
+        BitsManager cur = ResolveHeader(headerInfo, 1);
+        // oopMap.cpp:85-91 checks count before reading an absent value. The
+        // Cangjie producer emits only padding after a zero record count.
+        if (headerInfo[RECORD_NUM] == 0) {
+            const VarPair padding = VarInt(cur).GetValue();
+            data = cur.GetNext(padding.second).GetNext(padding.first);
+            nextTable = data;
+            return;
+        }
         U32 cols = HeaderColCount();
-        data = ResolveHeader(headerInfo, cols).GetNext(headerInfo[cols - 1]);
+        data = ResolveHeader(headerInfo + 1, cols - 1, cur).GetNext(headerInfo[cols - 1]);
         rowBitsLen = PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
             headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
         if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
