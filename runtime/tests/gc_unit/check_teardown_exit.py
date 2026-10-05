@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import platform
 import signal
+import re
+import threading
 import struct
 import subprocess
 import sys
@@ -169,8 +171,13 @@ def main():
     emit('CONSTRUCTION_DOMAIN', machine=machine, kernel=platform.release(), glibc=os.confstr('CS_GNU_LIBC_VERSION'), live=args.live)
     for artifact in (elf, libdir + '/libcangjie-runtime.so', libdir + '/libboundscheck.so'):
         print('TEARDOWN_IDENTITY sha256=%s path=%s' % (hashlib.sha256(Path(artifact).read_bytes()).hexdigest(), artifact), flush=True)
+    output_read, output_write = os.pipe()
     pid = os.fork()
     if pid == 0:
+        os.close(output_read)
+        os.dup2(output_write, 1)
+        os.dup2(output_write, 2)
+        os.close(output_write)
         try:
             trace(TRACEME, 0)
         except TraceError as error:
@@ -178,9 +185,23 @@ def main():
             os._exit(77)
         os.environ.update(LD_LIBRARY_PATH=libdir, GC_UNIT_OTHER_VM_CHILD='RuntimeWorkers.ActivePoolBeforeHarnessShutdown')
         os.execv(elf, [elf, '--gtest_filter=RuntimeWorkers.ActivePoolBeforeHarnessShutdown'])
+    os.close(output_write)
+    pool_records = []
+    pool_ready = threading.Event()
+    def forward_output():
+        with os.fdopen(output_read) as stream:
+            for line in stream:
+                print(line, end='', flush=True)
+                match = re.fullmatch(r'RUNTIME_WORKERS_LIVE created=(\d+) active=(\d+)\n', line)
+                if match:
+                    pool_records.append(tuple(map(int, match.groups())))
+                    pool_ready.set()
+    reader = threading.Thread(target=forward_output, daemon=True)
+    reader.start()
     owned = {pid}
     held, joined = None, False
     workers, exits, reaped = set(), set(), set()
+    worker_names = {}
     stage = 'exec-stop'
     def wait(tid=-1):
         who, status = os.waitpid(tid, WALL)
@@ -232,10 +253,10 @@ def main():
             elif event == 6:
                 name, _ = task_record(pid, tid)
                 if name.startswith('RuntimeWorker#'):
-                    for path in Path(f'/proc/{pid}/task').glob('*/comm'):
-                        if path.read_text().startswith('RuntimeWorker#'):
-                            workers.add(int(path.parent.name))
                     workers.add(tid)
+                    if tid in worker_names or name in worker_names.values():
+                        raise RuntimeError('duplicate worker exit identity')
+                    worker_names[tid] = name
                     exits.add(tid)
                     if name == 'RuntimeWorker#0':
                         if held is not None:
@@ -272,10 +293,20 @@ def main():
                     trace(SYSCALL, tid)
             else:
                 trace(SYSCALL if tid == pid else CONT, tid, data=0 if sig in (signal.SIGSTOP, signal.SIGTRAP) else sig)
-            if held is not None and joined and workers and workers <= exits:
+            if held is not None and joined:
+                # The product emitted this before initiating shutdown; the reader
+                # drains it independently of ptrace. Outer timeout bounds blocking.
+                pool_ready.wait()
+                if len(pool_records) != 1 or not 0 < pool_records[0][1] <= pool_records[0][0]:
+                    raise RuntimeError('invalid actual runtime worker pool')
+                created, active = pool_records[0]
+                if len(workers) < created:
+                    continue
+                if len(workers) != created or set(worker_names.values()) != {f'RuntimeWorker#{i}' for i in range(created)}:
+                    raise RuntimeError('incomplete actual runtime worker set')
                 if join_tid != held or held not in workers or not workers <= owned:
                     raise RuntimeError('worker/join identity mismatch')
-                emit('WORKER_SET', workers=sorted(workers), exit_events=sorted(exits), held=held, tgid=pid)
+                emit('WORKER_SET', workers=sorted(workers), exit_events=sorted(exits), held=held, tgid=pid, created=created, active=active, names=worker_names)
                 break
         name, state = task_record(pid, held)
         if name != 'RuntimeWorker#0' or state in ('Z', 'X'):
@@ -287,9 +318,18 @@ def main():
                 raise RuntimeError('live sample missing held worker')
             sample_passed = teardown_before_sentinel([sample])
             print(f'TEARDOWN_CONSTRUCT_PRE_EXIT tid={held} accepted={sample_passed}', flush=True)
+        stage = 'held-exit-ready'
+        trace(CONT, held)
+        ready = os.waitid(os.P_PID, held, os.WEXITED | os.WNOWAIT | WALL)
+        if ready.si_pid != held or ready.si_code != os.CLD_EXITED or ready.si_status != 0:
+            raise RuntimeError(f'unexpected held exit event: {ready}')
+        name, state = task_record(pid, held)
+        if name != 'RuntimeWorker#0' or state != 'Z' or held in reaped:
+            raise RuntimeError('held exit readiness is not unreaped Z')
+        emit('HELD_EXIT_READY', tid=held, si_pid=ready.si_pid, si_code=ready.si_code,
+             si_status=ready.si_status, state=state, reaped=False)
         stage = 'completion-breakpoint'
         trace(CONT, pid)
-        trace(CONT, held)
         waited, status = wait(pid)
         if not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTRAP or status >> 16:
             raise RuntimeError(f'completion breakpoint not reached status={status:x}')
@@ -332,6 +372,9 @@ def main():
                     continue
                 if os.WEXITSTATUS(status) != 0:
                     raise RuntimeError(f'product exit rc={os.WEXITSTATUS(status)}')
+                reader.join()
+                if len(pool_records) != 1:
+                    raise RuntimeError('duplicate product pool record')
                 print('TEARDOWN_CONSTRUCT_EXECUTED product_rc=0', flush=True)
                 break
             if os.WIFSIGNALED(status):

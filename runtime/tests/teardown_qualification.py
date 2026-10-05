@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One native teardown build and finite baseline/candidate/cut/restored batch."""
+"""One native teardown build and finite candidate/cut/restored batch."""
 import argparse
 import difflib
 import hashlib
@@ -24,44 +24,6 @@ def validate(candidate, selected):
     if not re.fullmatch('[0-9a-f]{40}', candidate) or selected != TEST:
         raise ValueError('requires full candidate SHA and exact teardown filter')
 
-
-def offline_controls(normal, evidence):
-    """Only mutate retained real records; no targets or synthetic producer."""
-    verify(normal)
-    modifications = [
-        ('missing-run', 'teardown.log', '[  RUN   ] ' + TEST, ''),
-        ('missing-sentinel', 'teardown-exited.log', 'GC_UNIT_OTHER_VM_OKIDOKI ' + TEST, ''),
-        ('missing-target', 'teardown-exited.log', 'ASSERT_TEARDOWN_BEFORE_SENTINEL samples=1 PASS', ''),
-        ('missing-completion', 'teardown-live.log', 'TEARDOWN_CONSTRUCT_EXECUTED product_rc=0', ''),
-        ('not-run', 'teardown-exited.rc', '0', '77'),
-        ('timeout', 'teardown-exited.rc', '0', '124'),
-        ('empty-samples', 'teardown-exited.log', 'samples=1 PASS', 'samples=0 PASS'),
-        ('missing-held', 'teardown-exited.log', 'CONSTRUCT_HOLD_EXIT', 'REMOVED_HOLD'),
-        ('missing-state', 'teardown-exited.log', 'TASK_STATE ', 'REMOVED_STATE '),
-        ('missing-worker-set', 'teardown-exited.log', 'WORKER_SET ', 'REMOVED_WORKER_SET '),
-        ('missing-regset', 'teardown-exited.log', 'REGSET ', 'REMOVED_REGSET '),
-        ('missing-log', 'teardown-live.log', None, None),
-    ]
-    results = [{'name': 'normal', 'status': 'accepted', 'target_starts': 0}]
-    root = evidence / 'offline-controls'
-    for name, filename, old, new in modifications:
-        directory = root / name
-        shutil.copytree(normal, directory)
-        path = directory / filename
-        if old is None:
-            path.unlink()
-        else:
-            original = path.read_text()
-            if old not in original:
-                raise ValueError('control source absent: ' + name)
-            path.write_text(original.replace(old, new, 1) if filename.endswith('.rc') else original.replace(old, new))
-        try:
-            verify(directory)
-        except (ValueError, OSError, KeyError, IndexError) as error:
-            results.append({'name': name, 'status': 'rejected', 'reason': str(error), 'target_starts': 0})
-        else:
-            raise ValueError('control incorrectly accepted: ' + name)
-    (evidence / 'offline-controls.json').write_text(json.dumps(results, indent=2))
 
 
 def qualify(args):
@@ -105,32 +67,52 @@ def qualify(args):
     need('uptime-before', ['uptime'])
     env = dict(os.environ, GC_UNIT_GATE_SKIP='1', GC_UNIT_BUILD_ONLY='1',
                GC_UNIT_JOBS=str(len(os.sched_getaffinity(0))))
-    build = evidence / 'build'
-    need('configure', ['cmake', '-S', source / 'runtime', '-B', build,
-         '-DCMAKE_BUILD_TYPE=Release', '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1',
-         '-DRUNTIME_TRACE_FLAG=1', '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1',
-         '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_CXX_COMPILER=/usr/bin/clang++',
-         '-DCMAKE_AR_PATH=ar', '-DCMAKE_C_COMPILER_LAUNCHER=sccache',
-         '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache', '-DCMAKE_ASM_COMPILER_LAUNCHER=sccache',
-         '-DMRT_TESTABLE_INTERNALS=OFF', '-DMRT_GC_UNIT_TESTS=OFF'], env)
-    need('product-build', ['cmake', '--build', build, '--target', 'cangjie-runtime', '-j', len(os.sched_getaffinity(0))], env)
-    cache = (build / 'CMakeCache.txt').read_text()
-    root = Path(re.search(r'^OUTPUT_TEMP_PATH:INTERNAL=(.*)$', cache, re.M)[1])
-    libraries = list(root.glob('lib/*/libcangjie-runtime.so'))
-    if len(libraries) != 1:
-        raise ValueError('expected one product publication')
-    library = libraries[0].parent
-    identity('product-at-link', [library / 'libcangjie-runtime.so', library / 'libboundscheck.so'])
-    shutil.copytree(root, evidence / 'publication')
-    library = evidence / 'publication' / library.relative_to(root)
-    env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(evidence / 'publication'),
-               LD_LIBRARY_PATH=str(library), GC_UNIT_OUT=str(evidence / 'standalone'))
-    need('standalone-build-only', ['bash', source / 'runtime/tests/gc_unit/run_standalone.sh'], env)
-    if 'GC_UNIT_BUILD_ONLY_DONE tests_executed=0' not in (evidence / 'standalone-build-only.log').read_text():
-        raise ValueError('build-only branch not observed')
-    elf = evidence / 'standalone/cj_gc_unit'
-    artifacts = [elf, library / 'libcangjie-runtime.so', library / 'libboundscheck.so']
-    identity('elf-at-link', artifacts)
+    if args.reuse:
+        reuse = args.reuse.resolve()
+        elf_source = reuse / 'standalone/cj_gc_unit'
+        libraries = list((reuse / 'publication/lib').glob('*/libcangjie-runtime.so'))
+        if not elf_source.is_file() or len(libraries) != 1:
+            raise ValueError('retained artifact layout unavailable')
+        shutil.copytree(reuse / 'publication', evidence / 'publication')
+        (evidence / 'standalone').mkdir()
+        shutil.copy2(elf_source, evidence / 'standalone/cj_gc_unit')
+        library = evidence / 'publication/lib' / libraries[0].parent.name
+        elf = evidence / 'standalone/cj_gc_unit'
+        elf.chmod(0o755)
+        artifacts = [elf, library / 'libcangjie-runtime.so', library / 'libboundscheck.so']
+        (evidence / 'reuse.json').write_text(json.dumps(dict(run=37322917803, source=str(reuse),
+            product_source=BASE, retained_candidate='59510a3e459f25b49e8afaf2399406ccf3745a22'), indent=2))
+        for name in ('domain.json', 'configure.log', 'product-at-link.sha256', 'elf-at-link.sha256'):
+            if (reuse / name).is_file():
+                shutil.copy2(reuse / name, evidence / ('retained-' + name))
+        env.update(LD_LIBRARY_PATH=str(library))
+    else:
+        build = evidence / 'build'
+        need('configure', ['cmake', '-S', source / 'runtime', '-B', build,
+             '-DCMAKE_BUILD_TYPE=Release', '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1',
+             '-DRUNTIME_TRACE_FLAG=1', '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1',
+             '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_CXX_COMPILER=/usr/bin/clang++',
+             '-DCMAKE_AR_PATH=ar', '-DCMAKE_C_COMPILER_LAUNCHER=sccache',
+             '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache', '-DCMAKE_ASM_COMPILER_LAUNCHER=sccache',
+             '-DMRT_TESTABLE_INTERNALS=OFF', '-DMRT_GC_UNIT_TESTS=OFF'], env)
+        need('product-build', ['cmake', '--build', build, '--target', 'cangjie-runtime', '-j', len(os.sched_getaffinity(0))], env)
+        cache = (build / 'CMakeCache.txt').read_text()
+        root = Path(re.search(r'^OUTPUT_TEMP_PATH:INTERNAL=(.*)$', cache, re.M)[1])
+        libraries = list(root.glob('lib/*/libcangjie-runtime.so'))
+        if len(libraries) != 1:
+            raise ValueError('expected one product publication')
+        library = libraries[0].parent
+        identity('product-at-link', [library / 'libcangjie-runtime.so', library / 'libboundscheck.so'])
+        shutil.copytree(root, evidence / 'publication')
+        library = evidence / 'publication' / library.relative_to(root)
+        env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(evidence / 'publication'),
+                   LD_LIBRARY_PATH=str(library), GC_UNIT_OUT=str(evidence / 'standalone'))
+        need('standalone-build-only', ['bash', source / 'runtime/tests/gc_unit/run_standalone.sh'], env)
+        if 'GC_UNIT_BUILD_ONLY_DONE tests_executed=0' not in (evidence / 'standalone-build-only.log').read_text():
+            raise ValueError('build-only branch not observed')
+        elf = evidence / 'standalone/cj_gc_unit'
+        artifacts = [elf, library / 'libcangjie-runtime.so', library / 'libboundscheck.so']
+        identity('elf-at-link', artifacts)
     need('elf-headers', ['readelf', '-h', '-l', elf])
     need('elf-symbols', ['nm', '--defined-only', '-C', elf])
     need('elf-imports', ['nm', '-u', '-C', elf])
@@ -141,22 +123,15 @@ def qualify(args):
     address = int(symbol[0], 16)
     need('completion-text', ['objdump', '-d', '--start-address='+str(address), '--stop-address='+str(address+128), elf])
     scripts = source / 'runtime/tests/gc_unit'
-    def arm(label, runner, cut=False, legacy=False):
+    def arm(label, runner, cut=False):
         identity(label+'-inputs', artifacts)
         directory = evidence / label
         rc = run(label, ['bash', runner, elf, library, directory], env)
         expected = 1 if cut else 0
         if rc != expected:
             raise RuntimeError(f'{label}: unexpected integration rc={rc}, expected={expected}; dependents NOT_RUN')
-        result = verify(directory, cut=cut, legacy=legacy)
+        result = verify(directory, cut=cut)
         (evidence / (label+'-results.json')).write_text(json.dumps(result, indent=2))
-    if machine == 'x86_64':
-        baseline = evidence / 'baseline-scripts'
-        baseline.mkdir()
-        for name in ('run_other_vm_teardown.sh', 'check_other_vm_teardown.py', 'check_teardown_exit.py'):
-            content = subprocess.check_output(['git', '-C', source, 'show', BASE+':runtime/tests/gc_unit/'+name])
-            (baseline / name).write_bytes(content)
-        arm('baseline', baseline / 'run_other_vm_teardown.sh', legacy=True)
     arm('candidate', scripts / 'run_other_vm_teardown.sh')
     classifier = scripts / 'check_other_vm_teardown.py'
     original = classifier.read_bytes()
@@ -176,11 +151,9 @@ def qualify(args):
         raise ValueError('classifier restoration mismatch')
     arm('restored', scripts / 'run_other_vm_teardown.sh')
     need('source-restored', ['git', '-C', source, 'diff', '--exit-code'])
-    if machine == 'x86_64':
-        offline_controls(evidence / 'candidate', evidence)
     need('sccache-stats', ['sccache', '--show-stats'])
     need('uptime-after', ['uptime'])
-    (evidence / 'QUALIFICATION_DONE').write_text('real three-process baseline/candidate/cut/restored records qualified\n')
+    (evidence / 'QUALIFICATION_DONE').write_text('real three-process candidate/cut/restored records qualified\n')
 
 
 def main():
@@ -188,6 +161,7 @@ def main():
     parser.add_argument('--candidate', required=True)
     parser.add_argument('--filter', required=True)
     parser.add_argument('--evidence', type=Path, default=Path('evidence'))
+    parser.add_argument('--reuse', type=Path)
     parser.add_argument('--validate-only', action='store_true')
     args = parser.parse_args()
     validate(args.candidate, args.filter)

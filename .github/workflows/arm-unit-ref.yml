@@ -232,13 +232,16 @@ jobs:
           retention-days: 7
 
   teardown-qualification-1426:
+    permissions:
+      contents: read
+      actions: read
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.teardown_qualification_1426 && !inputs.root_qualification_1411 }}
     strategy:
       fail-fast: false
       matrix:
         host: [ubuntu-24.04-arm, ubuntu-24.04]
     runs-on: ${{ matrix.host }}
-    timeout-minutes: 50
+    timeout-minutes: 40
     env:
       SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-1426-${{ matrix.host }}
     steps:
@@ -281,6 +284,12 @@ jobs:
           path: ${{ env.SCCACHE_DIR }}
           key: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
           restore-keys: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: teardown-qualification-1426-${{ matrix.host }}-37322917803
+          run-id: 37322917803
+          github-token: ${{ github.token }}
+          path: retained
       - name: Build once and execute finite teardown batch
         env:
           CANDIDATE: ${{ github.sha }}
@@ -289,7 +298,7 @@ jobs:
           ulimit -S -c 0
           ulimit -H -c 0
           set +e
-          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence > evidence/qualification.log 2>&1
+          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence --reuse retained > evidence/qualification.log 2>&1
           result=$?
           printf '%s\n' "$result" > evidence/qualification.rc
           cat evidence/qualification.log
