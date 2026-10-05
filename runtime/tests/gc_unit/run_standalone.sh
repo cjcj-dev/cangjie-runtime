@@ -220,8 +220,11 @@ run_ohos_host_arm() {
     set -e
     echo "$list_rc" >"$OUT/ohos_armed.list.rc"
     [[ $list_rc -eq 0 ]] || return "$list_rc"
+    awk '/^[A-Za-z_][A-Za-z0-9_]*\.$/ { suite=$0; sub(/\.$/, "", suite); next }
+         /^[[:space:]]+[A-Za-z0-9_]+$/ { name=$0; sub(/^[[:space:]]+/, "", name); print suite "." name }' \
+      "$OUT/ohos_armed.list" >"$OUT/ohos_armed.names"
     for test_name in "${armed_tests[@]}"; do
-      if ! grep -Fxq "$test_name" "$OUT/ohos_armed.list"; then
+      if ! grep -Fxq "$test_name" "$OUT/ohos_armed.names"; then
         echo "GC_UNIT_OHOS_ARMED_REJECT name=$test_name reason=not_enumerated" >&2
         return 3
       fi
