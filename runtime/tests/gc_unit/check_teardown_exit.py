@@ -1,5 +1,6 @@
 """Construct real held-exit and joined/unreaped worker states on native Linux."""
 import argparse
+from collections import Counter
 import ctypes
 import hashlib
 import json
@@ -247,6 +248,8 @@ def main():
             if event == 3:
                 child = ctypes.c_ulong()
                 trace(GETEVENTMSG, tid, data=ctypes.addressof(child))
+                if child.value in owned:
+                    raise RuntimeError('duplicate clone identity')
                 owned.add(child.value)
                 emit('CLONE', parent=tid, child=child.value)
                 trace(SYSCALL if tid == pid else CONT, tid)
@@ -254,7 +257,7 @@ def main():
                 name, _ = task_record(pid, tid)
                 if name.startswith('RuntimeWorker#'):
                     workers.add(tid)
-                    if tid in worker_names or name in worker_names.values():
+                    if tid in worker_names:
                         raise RuntimeError('duplicate worker exit identity')
                     worker_names[tid] = name
                     exits.add(tid)
@@ -302,7 +305,7 @@ def main():
                 created, active = pool_records[0]
                 if len(workers) < created:
                     continue
-                if len(workers) != created or set(worker_names.values()) != {f'RuntimeWorker#{i}' for i in range(created)}:
+                if len(workers) != created or Counter(worker_names.values()) != Counter(f'RuntimeWorker#{i}'[:15] for i in range(created)):
                     raise RuntimeError('incomplete actual runtime worker set')
                 if join_tid != held or held not in workers or not workers <= owned:
                     raise RuntimeError('worker/join identity mismatch')

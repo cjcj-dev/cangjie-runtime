@@ -1,5 +1,6 @@
 """Fail closed on the actual three-process teardown runner records."""
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -45,7 +46,9 @@ def verify(directory, cut=False):
             if len(sets) != 1:
                 raise ValueError(f'{phase}: worker set missing')
             ws = sets[0]
-            if not ws['workers'] or set(ws['workers']) != set(ws['exit_events']) or int(held[0]) != ws['held'] or ws['held'] not in ws['workers']:
+            if (not ws['workers'] or len(set(ws['workers'])) != len(ws['workers'])
+                    or len(set(ws['exit_events'])) != len(ws['exit_events'])
+                    or set(ws['workers']) != set(ws['exit_events'])) or int(held[0]) != ws['held'] or ws['held'] not in ws['workers']:
                 raise ValueError(f'{phase}: incomplete worker exit events')
             pools = re.findall(r'^RUNTIME_WORKERS_LIVE created=(\d+) active=(\d+)$', log, re.M)
             names = ws['names']
@@ -53,8 +56,26 @@ def verify(directory, cut=False):
                     or not 0 < ws['active'] <= ws['created']
                     or len(ws['workers']) != ws['created']
                     or set(map(int, names)) != set(ws['workers'])
-                    or set(names.values()) != {f'RuntimeWorker#{i}' for i in range(ws['created'])}):
+                    or Counter(names.values()) != Counter(f'RuntimeWorker#{i}'[:15] for i in range(ws['created']))):
                 raise ValueError(f'{phase}: full product worker pool missing')
+            # Names establish the product family/multiplicity; kernel TIDs establish
+            # identity. Every member must belong to this clone tree and have its
+            # own observed PTRACE_EVENT_EXIT with the same TGID/name.
+            owned = {ws['tgid']}
+            for clone in records('CLONE'):
+                if clone['parent'] not in owned or clone['child'] in owned:
+                    raise ValueError(f'{phase}: invalid clone ownership')
+                owned.add(clone['child'])
+            if not set(ws['workers']) <= owned or ws['tgid'] in ws['workers']:
+                raise ValueError(f'{phase}: worker outside clone ownership')
+            exit_tids = [r['tid'] for r in records('WAIT_EVENT') if r['event'] == 6]
+            states = records('TASK_STATE')
+            for tid in ws['workers']:
+                observations = [r for r in states if r['tid'] == tid]
+                if (exit_tids.count(tid) != 1 or not observations
+                        or any(r['pid'] != ws['tgid'] or r['tgid'] != ws['tgid']
+                               or r['name'] != names[str(tid)] for r in observations)):
+                    raise ValueError(f'{phase}: worker TID/TGID/exit identity mismatch')
             ready = records('HELD_EXIT_READY')
             if len(ready) != 1 or ready[0] != dict(tid=ws['held'], si_pid=ws['held'], si_code=1, si_status=0, state='Z', reaped=False):
                 raise ValueError(f'{phase}: exact non-reap exit readiness missing')
