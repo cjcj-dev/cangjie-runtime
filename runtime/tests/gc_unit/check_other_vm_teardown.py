@@ -15,6 +15,9 @@ def runtime_workers(pid):
             continue
         name = record[record.index("(") + 1:record.rindex(")")]
         state = record[record.rindex(")") + 2:].split()[0]
+        if name.startswith("RuntimeWorker#"):
+            print("TEARDOWN_WORKER_STATE tid=%s name=%s state=%s" %
+                  (path.parent.name, name, state), flush=True)
         if name.startswith("RuntimeWorker#") and state not in ("Z", "X"):
             workers.append(name)
     return sorted(workers)
