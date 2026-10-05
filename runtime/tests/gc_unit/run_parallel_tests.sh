@@ -171,6 +171,8 @@ is_serial_test() {
   return 1
 }
 
+SELECTED_MANIFEST="$OUT/test-manifest.selected.tsv"
+: >"$SELECTED_MANIFEST"
 PARALLEL_MANIFEST="$OUT/test-manifest.parallel.tsv"
 SERIAL_MANIFEST="$OUT/test-manifest.serial.tsv"
 : >"$PARALLEL_MANIFEST"
@@ -185,6 +187,7 @@ while IFS=$'\t' read -r kind test index; do
       continue
     fi
   fi
+  printf '%s\t%s\t%s\n' "$kind" "$test" "$index" >>"$SELECTED_MANIFEST"
   if [[ "$JOBS" -ne 1 ]] && is_serial_test "$test"; then
     printf '%s\t%s\t%s\n' "$kind" "$test" "$index" >>"$SERIAL_MANIFEST"
   else
@@ -256,7 +259,9 @@ while IFS=$'\t' read -r kind test index; do
   log="$LOG_DIR/${index}-${kind}.log"
   rc_file="$RC_DIR/${index}-${kind}.rc"
   tally_file="$TALLY_DIR/${index}-${kind}.txt"
-  cat "$log"
+  if [[ -f "$log" ]]; then
+    cat "$log"
+  fi
   if [[ ! -f "$rc_file" ]]; then
     rc=125
   else
@@ -271,7 +276,7 @@ while IFS=$'\t' read -r kind test index; do
   # tally. Everything else is an explicit incomplete failure.
   completed_pass=0
   completed_fail=0
-  if [[ -f "$tally_file" ]] && [[ $(wc -l <"$tally_file") -eq 1 ]]; then
+  if [[ -f "$log" && -f "$tally_file" ]] && [[ $(wc -l <"$tally_file") -eq 1 ]]; then
     if [[ "$rc" -eq 0 ]] &&
         /usr/bin/grep -F -q "[  PASS  ] $test" "$log" &&
         /usr/bin/grep -qxF '[========] 1 tests: 1 passed, 0 failed' "$tally_file"; then
@@ -301,7 +306,7 @@ while IFS=$'\t' read -r kind test index; do
       publication_rc=1
     fi
   fi
-done <"$MANIFEST"
+done <"$SELECTED_MANIFEST"
 
 suite_count=$(sort -u "$suites_file" | wc -l)
 END=$(date +%s%N)
