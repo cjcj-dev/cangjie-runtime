@@ -24,27 +24,15 @@ for phase in exited live; do
 done
 wait
 set -e
-rc=$(cat "$out/teardown.rc")
-if [[ "$rc" = 0 ]] && ! grep -Fq 'GC_UNIT_OTHER_VM_OKIDOKI RuntimeWorkers.ActivePoolBeforeHarnessShutdown' "$out/teardown.log"; then
-  echo 'ASSERT_TEARDOWN_SENTINEL FAIL' >> "$out/teardown.log"
-  rc=1
-fi
+# Child rc files remain original; aggregation has its own rc.
+set +e
+python3 "$src/check_teardown_records.py" "$out" > "$out/teardown-records.log" 2>&1
+rc=$?
+set -e
+cat "$out/teardown-records.log"
 for phase in exited live; do
-  phase_rc=$(cat "$out/teardown-$phase.rc")
-  echo "TEARDOWN_CONSTRUCT_${phase^^}_RC=$phase_rc"
-  if [[ "$phase_rc" = 77 ]]; then
-    echo "TEARDOWN_CONSTRUCTION_NOT_RUN phase=$phase ptrace unavailable; not counted as PASS"
-    [[ "$rc" = 0 ]] && rc=77
-    continue
-  fi
-  expected_rc=0; expected_assertion=PASS
-  [[ "$phase" = live ]] && { expected_rc=1; expected_assertion=FAIL; }
-  if [[ "$phase_rc" != "$expected_rc" ]] ||
-      ! grep -Fxq "ASSERT_TEARDOWN_BEFORE_SENTINEL samples=1 $expected_assertion" "$out/teardown-$phase.log" ||
-      ! grep -Fxq 'TEARDOWN_CONSTRUCT_EXECUTED product_rc=0' "$out/teardown-$phase.log"; then
-    [[ "$rc" = 0 ]] && rc=1
-  fi
+  echo "TEARDOWN_CONSTRUCT_${phase^^}_RC=$(cat "$out/teardown-$phase.rc")"
 done
-echo "$rc" > "$out/teardown.rc"
+echo "$rc" > "$out/teardown-aggregate.rc"
 grep -E '^(TEARDOWN_OBSERVE|ASSERT_TEARDOWN)' "$out/teardown.log" || true
 exit "$rc"
