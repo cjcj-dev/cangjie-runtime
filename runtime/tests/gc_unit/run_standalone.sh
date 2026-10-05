@@ -209,44 +209,42 @@ run_ohos_host_arm() {
   } >"$OUT/ohos_host_lineage.txt"
 
   if [[ "${GC_UNIT_OHOS_ARMED:-}" == 1 ]]; then
-    local armed_filter="${GC_UNIT_OHOS_ARMED_FILTER-ZVerifyCarrier.ArmedBadRootIsSkipped}"
-    if [[ -z "$armed_filter" ]]; then
-      echo "GC_UNIT_OHOS_ARMED_REJECT reason=empty" >&2
-      return 3
-    fi
+    local -a armed_tests=(
+      ZVerifyCarrier.ScheduledCallbackChangesSharedObservation
+      ZVerifyCarrier.ArmedBadRootIsSkipped
+    )
     set +e
     env LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
       "$elf" --gtest_list_tests >"$OUT/ohos_armed.list" 2>"$OUT/ohos_armed.list.stderr"
     local list_rc=$?
     set -e
-    echo "GC_UNIT_OHOS_ARMED_LIST_RC=$list_rc"
-    if [[ $list_rc -ne 0 ]]; then
-      return "$list_rc"
-    fi
-    if ! grep -F -q "ArmedBadRootIsSkipped" "$OUT/ohos_armed.list"; then
-      echo "GC_UNIT_OHOS_ARMED_REJECT reason=not_enumerated" >&2
-      return 3
-    fi
-    if ! grep -F -q "$armed_filter" "$OUT/ohos_armed.list" && [[ "$armed_filter" != *ArmedBadRootIsSkipped* ]]; then
-      echo "GC_UNIT_OHOS_ARMED_REJECT name=$armed_filter" >&2
-      return 3
-    fi
-    set +e
-    env LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      "$elf" "--gtest_filter=$armed_filter" >"$OUT/ohos_armed.log" 2>&1
-    rc=$?
-    set -e
-    echo "$rc" >"$OUT/ohos_armed.rc"
-    echo "GC_UNIT_OHOS_ARMED_FILTER test=$armed_filter rc=$rc log=$OUT/ohos_armed.log"
+    echo "$list_rc" >"$OUT/ohos_armed.list.rc"
+    [[ $list_rc -eq 0 ]] || return "$list_rc"
+    for test_name in "${armed_tests[@]}"; do
+      if ! grep -Fxq "$test_name" "$OUT/ohos_armed.list"; then
+        echo "GC_UNIT_OHOS_ARMED_REJECT name=$test_name reason=not_enumerated" >&2
+        return 3
+      fi
+    done
+    for test_name in "${armed_tests[@]}"; do
+      key=${test_name##*.}
+      set +e
+      env LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$elf" "--gtest_filter=$test_name" >"$OUT/ohos_armed_$key.log" 2>&1
+      rc=$?
+      set -e
+      echo "$rc" >"$OUT/ohos_armed_$key.rc"
+      echo "GC_UNIT_OHOS_ARMED_FILTER test=$test_name rc=$rc log=$OUT/ohos_armed_$key.log"
+      [[ $rc -eq 0 ]] || return "$rc"
+    done
     {
       echo "SCHEMA_VERSION=1"
       echo "CONFIGURATION=MRT_GC_UNIT_OHOS_HOST"
       echo "MODE=ARMED"
-      echo "FILTER_ARMED_RC=$rc"
-      echo "RESULT=$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)"
+      echo "RESULT=PASS"
       sha256sum "$elf" "$so" "$bounds"
     } >"$receipt"
-    return "$rc"
+    return 0
   fi
 
   declare -a tests=(

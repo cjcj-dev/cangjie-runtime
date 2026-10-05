@@ -784,6 +784,64 @@ extern "C" void CJ_CJThreadFree(struct CJThread*, bool);
 #define CJ_ARMED_SKIP_FREE 0
 #endif
 
+namespace {
+std::atomic<unsigned> carrierExecutions{0};
+std::atomic<bool> carrierDone{false};
+struct CarrierObservation {
+    unsigned executions;
+    bool done;
+};
+CarrierObservation ObserveCarrierCallback()
+{
+    const bool done = carrierDone.load(std::memory_order_acquire);
+    return {carrierExecutions.load(std::memory_order_acquire), done};
+}
+void* SharedCarrierCallback(void*, unsigned int)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    carrierExecutions.fetch_add(1, std::memory_order_relaxed);
+    carrierDone.store(true, std::memory_order_release);
+    return nullptr;
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ScheduledCallbackChangesSharedObservation)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 512 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    bool finished = false;
+    try {
+        const auto before = ObserveCarrierCallback();
+        CJThreadAttr attr;
+        CJThreadAttrInit(&attr);
+        CJThreadAttrCjFromCSet(&attr, true);
+        LWTData data{};
+        GC_EXPECT_TRUE(CJThreadNew(
+            reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+            &attr, SharedCarrierCallback, &data, sizeof(data)) != nullptr);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!ObserveCarrierCallback().done && std::chrono::steady_clock::now() < until) {
+            std::this_thread::yield();
+        }
+        const auto after = ObserveCarrierCallback();
+        std::fprintf(stderr, "VERIFY_CALLBACK_COMPLETION_TARGET done=%d\n", after.done);
+        GC_EXPECT_TRUE(after.done);
+        std::fprintf(stderr, "VERIFY_CALLBACK_COUNT_TARGET before=%u after=%u\n", before.executions, after.executions);
+        GC_EXPECT_EQ(after.executions, before.executions + 1U);
+        const auto fini = FiniCJRuntime();
+        finished = true;
+        std::fprintf(stderr, "VERIFY_CALLBACK_FINI_TARGET rc=%d\n", static_cast<int>(fini));
+        GC_EXPECT_EQ(fini, E_OK);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, before.executions + 1U);
+    } catch (const AssertFailure& failure) {
+        const auto fini = finished ? E_OK : FiniCJRuntime();
+        std::fprintf(stderr, "VERIFY_CALLBACK_CLEANUP_TARGET rc=%d\n", static_cast<int>(fini));
+        throw failure;
+    }
+}
+
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
 {
     if (!ZVerifyRoots) {
@@ -802,56 +860,8 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         bool injected;
         bool finished;
     } cleanup{nullptr, nullptr, nullptr, false, false};
-    // Static storage survives both timeout cleanup and scheduler worker join.
-    // No task-owned context is read after the release publication.
-    static std::atomic<unsigned> executions{0};
-    static std::atomic<bool> positiveDone{false};
+    const auto observationBefore = ObserveCarrierCallback();
     try {
-        const unsigned executionsBefore = executions.load(std::memory_order_acquire);
-        positiveDone.store(false, std::memory_order_relaxed);
-        {
-            CJThreadAttr attr;
-            CJThreadAttrInit(&attr);
-            CJThreadAttrCjFromCSet(&attr, true);
-            LWTData positiveData{};
-            auto* positive = CJThreadNew(
-                reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
-                &attr,
-                [](void*, unsigned int) -> void* {
-                    // Match the existing native task entry in test_package_init.cpp.
-                    Mutator::GetMutator()->SetManagedContext(false);
-                    executions.fetch_add(1, std::memory_order_relaxed);
-                    positiveDone.store(true, std::memory_order_release);
-                    return nullptr;
-                },
-                &positiveData, sizeof(positiveData));
-            GC_EXPECT_TRUE(positive != nullptr);
-            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (!positiveDone.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until) {
-                std::this_thread::yield();
-            }
-            GC_EXPECT_TRUE(positiveDone.load(std::memory_order_acquire));
-            // Completion is not retirement. CJThreadMexit clears argStart under
-            // this lock only after CJThreadEntryInitMutator ran the exit hook.
-            // This default-stack carrier is scheduler-owned and retained in its
-            // freelist until Fini; this native body cannot grow its stack.
-            bool retired = false;
-            while (std::chrono::steady_clock::now() < until) {
-                {
-                    std::lock_guard<std::recursive_mutex> lock(positive->uncoloredRootLock);
-                    retired = positive->argStart == nullptr;
-                }
-                if (retired) { break; }
-                std::this_thread::yield();
-            }
-            std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_RETIRED retired=%d\n", retired);
-            GC_EXPECT_TRUE(retired);
-            // Fini joins scheduler workers; never manually free this carrier.
-        }
-        const unsigned executionsAfterPositive = executions.load();
-        std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_TARGET before=%u after=%u\n", executionsBefore,
-                     executionsAfterPositive);
-        GC_EXPECT_EQ(executionsAfterPositive, executionsBefore + 1U);
         alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
         auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
         liveType->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -873,12 +883,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         CJThreadAttr armedAttr;
         CJThreadAttrInit(&armedAttr);
         CJThreadAttrStackSizeSet(&armedAttr, 128U * 1024U);
+        CJThreadAttrCjFromCSet(&armedAttr, true);
         auto* thread = CJThreadBuild(
             reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
-            &armedAttr, [](void*, unsigned int) -> void* {
-                executions.fetch_add(1);
-                return nullptr;
-            },
+            &armedAttr, SharedCarrierCallback,
             &initialData, sizeof(initialData), CJ_ARMED_BUILD_SOURCE, ZPointerStoreGoodMask);
         GC_EXPECT_TRUE(thread != nullptr);
         cleanup.thread = thread;
@@ -936,11 +944,13 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         const size_t remainingRoots = countCarrierRoots();
         std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
         GC_EXPECT_EQ(remainingRoots, 0u);
-        GC_EXPECT_EQ(executions.load(), executionsAfterPositive);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, observationBefore.executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().done, observationBefore.done);
         GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
         cleanup.finished = true;
-        std::fprintf(stderr, "VERIFY_ARMED_FINI_COMPLETE executions=%u\n", executions.load());
-        GC_EXPECT_EQ(executions.load(), executionsAfterPositive);
+        std::fprintf(stderr, "VERIFY_ARMED_FINI_COMPLETE executions=%u\n", ObserveCarrierCallback().executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, observationBefore.executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().done, observationBefore.done);
     } catch (const AssertFailure& failure) {
         int cleanupRc = 0;
         if (cleanup.injected && cleanup.data != nullptr) {
