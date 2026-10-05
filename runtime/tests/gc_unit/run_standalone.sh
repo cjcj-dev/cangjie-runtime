@@ -81,6 +81,8 @@ run_ohos_host_arm() {
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
       -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include" \
+      -I"$ROOT/runtime/src/CJThread/src/base/mid/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
       "${runtime_include_flags[@]}" \
@@ -96,6 +98,8 @@ run_ohos_host_arm() {
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
       -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include" \
+      -I"$ROOT/runtime/src/CJThread/src/base/mid/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
       "${runtime_include_flags[@]}" \
@@ -348,6 +352,8 @@ INC_FLAGS=(
   -I"$ROOT/runtime/src/Heap"
   -I"$ROOT/runtime/src/Heap/z/os/linux"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
+  -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include"
+  -I"$ROOT/runtime/src/CJThread/src/base/mid/include"
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
 )

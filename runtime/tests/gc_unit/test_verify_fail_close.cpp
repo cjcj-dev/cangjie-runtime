@@ -13,6 +13,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <csignal>
 #include <cstdlib>
 #include <string>
@@ -792,66 +795,79 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 512 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    static std::atomic<unsigned> executions{0};
-    const unsigned executionsBefore = executions.load();
-    {
-        CJThreadAttr attr;
-        CJThreadAttrInit(&attr);
-        CJThreadAttrCjFromCSet(&attr, true);
-        LWTData positiveData{};
-        auto* positive = CJThreadNew(
-            reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
-            &attr,
-            [](void*, unsigned int) -> void* {
-                executions.fetch_add(1);
-                return nullptr;
-            },
-            &positiveData, sizeof(positiveData));
-        GC_EXPECT_TRUE(positive != nullptr);
-        void* positiveResult = nullptr;
-        GC_EXPECT_EQ(GetTaskRet(positive, &positiveResult), E_OK);
-    }
-    const unsigned executionsAfterPositive = executions.load();
-    std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_TARGET before=%u after=%u\n", executionsBefore,
-                 executionsAfterPositive);
-    GC_EXPECT_EQ(executionsAfterPositive, executionsBefore + 1U);
-    alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
-    auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
-    liveType->SetType(TypeKind::TYPE_KIND_CLASS);
-    liveType->SetInstanceSize(sizeof(uintptr_t));
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
-        reinterpret_cast<uintptr_t>(liveStorage), sizeof(liveStorage));
-    BaseObject* live = nullptr;
-    {
-        ScopedObjectAccess access;
-        live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
-    }
-    GC_EXPECT_TRUE(live != nullptr);
-    std::unordered_set<RootSlot*> rootsBefore;
-    VisitCJThreadRoots([&](CJThreadRoot& root) {
-        root.oops_do([&](RootSlot& slot) { rootsBefore.insert(&slot); });
-    });
-    LWTData initialData{};
-    initialData.obj = live;
-    CJThreadAttr armedAttr;
-    CJThreadAttrInit(&armedAttr);
-    CJThreadAttrStackSizeSet(&armedAttr, 128U * 1024U);
-    auto* thread = CJThreadBuild(
-        reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
-        &armedAttr, [](void*, unsigned int) -> void* {
-            executions.fetch_add(1);
-            return nullptr;
-        },
-        &initialData, sizeof(initialData), CJ_ARMED_BUILD_SOURCE, ZPointerStoreGoodMask);
-    GC_EXPECT_TRUE(thread != nullptr);
     struct ArmedCleanup {
         struct CJThread* thread;
         LWTData* data;
         BaseObject* saved;
         bool injected;
         bool finished;
-    } cleanup{thread, nullptr, nullptr, false, false};
+    } cleanup{nullptr, nullptr, nullptr, false, false};
+    // Static storage survives both timeout cleanup and scheduler worker join.
+    // No task-owned context is read after the release publication.
+    static std::atomic<unsigned> executions{0};
+    static std::atomic<bool> positiveDone{false};
     try {
+        const unsigned executionsBefore = executions.load(std::memory_order_acquire);
+        positiveDone.store(false, std::memory_order_relaxed);
+        {
+            CJThreadAttr attr;
+            CJThreadAttrInit(&attr);
+            CJThreadAttrCjFromCSet(&attr, true);
+            LWTData positiveData{};
+            auto* positive = CJThreadNew(
+                reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+                &attr,
+                [](void*, unsigned int) -> void* {
+                    // Match the existing native task entry in test_package_init.cpp.
+                    Mutator::GetMutator()->SetManagedContext(false);
+                    executions.fetch_add(1, std::memory_order_relaxed);
+                    positiveDone.store(true, std::memory_order_release);
+                    return nullptr;
+                },
+                &positiveData, sizeof(positiveData));
+            GC_EXPECT_TRUE(positive != nullptr);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!positiveDone.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until) {
+                std::this_thread::yield();
+            }
+            GC_EXPECT_TRUE(positiveDone.load(std::memory_order_acquire));
+            // The copied LWTData contains only null roots. The scheduler owns its
+            // carrier and exit hooks; Fini joins those workers before deleting runtime.
+        }
+        const unsigned executionsAfterPositive = executions.load();
+        std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_TARGET before=%u after=%u\n", executionsBefore,
+                     executionsAfterPositive);
+        GC_EXPECT_EQ(executionsAfterPositive, executionsBefore + 1U);
+        alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
+        auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
+        liveType->SetType(TypeKind::TYPE_KIND_CLASS);
+        liveType->SetInstanceSize(sizeof(uintptr_t));
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(liveStorage), sizeof(liveStorage));
+        BaseObject* live = nullptr;
+        {
+            ScopedObjectAccess access;
+            live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
+        }
+        GC_EXPECT_TRUE(live != nullptr);
+        std::unordered_set<RootSlot*> rootsBefore;
+        VisitCJThreadRoots([&](CJThreadRoot& root) {
+            root.oops_do([&](RootSlot& slot) { rootsBefore.insert(&slot); });
+        });
+        LWTData initialData{};
+        initialData.obj = live;
+        CJThreadAttr armedAttr;
+        CJThreadAttrInit(&armedAttr);
+        CJThreadAttrStackSizeSet(&armedAttr, 128U * 1024U);
+        auto* thread = CJThreadBuild(
+            reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+            &armedAttr, [](void*, unsigned int) -> void* {
+                executions.fetch_add(1);
+                return nullptr;
+            },
+            &initialData, sizeof(initialData), CJ_ARMED_BUILD_SOURCE, ZPointerStoreGoodMask);
+        GC_EXPECT_TRUE(thread != nullptr);
+        cleanup.thread = thread;
         LWTData* data = nullptr;
         CJThreadVisitRoots(thread, [](void* arg, void* context) {
             *static_cast<LWTData**>(context) = static_cast<LWTData*>(arg);
