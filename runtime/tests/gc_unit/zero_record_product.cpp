@@ -25,7 +25,8 @@ static int Run(void* image, const char* target)
     const bool gcEmpty = std::strcmp(target, "gc-empty") == 0;
     const char* name = line ? "line_record" : root ? "root_record" : zeroRoot ? "zero_root_record" : "zero_record";
     const Uptr entry = reinterpret_cast<Uptr>(dlsym(image, name));
-    if (!entry || !ElfUnloadQuiescence::LinkImage(entry)) { return 2; }
+    const Uptr metadataStart = reinterpret_cast<Uptr>(dlsym(image, "_CJMetadataStart"));
+    if (!entry || !metadataStart || !ElfUnloadQuiescence::LinkImage(metadataStart)) { return 2; }
     ElfUnloadQuiescence::ReadScope reader;
     const U16 kind = root || zeroRoot ? 3 : line ? 1 : 0;
     Uptr site = 0;
