@@ -800,14 +800,18 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
         CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(thread != nullptr);
-    auto* previous = CJThreadGetHandle();
-    ThreadLocal::SetCJThread(thread);
-    auto* data = static_cast<LWTData*>(CJThreadGetArg());
-    ThreadLocal::SetCJThread(previous);
+    LWTData* data = nullptr;
+    CJThreadVisitRoots(thread, [](void* arg, void* context) {
+        *static_cast<LWTData**>(context) = static_cast<LWTData*>(arg);
+    }, &data);
+    GC_EXPECT_TRUE(data != nullptr);
+    // Save only the address: after free, enumeration must never access data.
+    RootSlot* const carrierSlot = &RootSlotAt(&data->obj);
     auto countCarrierRoots = [&]() {
         size_t count = 0;
-        RootVisitor visitor = [&](RootSlot& root) { count += &root == &RootSlotAt(&data->obj); };
-        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+        VisitCJThreadRoots([&](CJThreadRoot& root) {
+            root.oops_do([&](RootSlot& slot) { count += &slot == carrierSlot; });
+        });
         return count;
     };
     const size_t registeredRoots = countCarrierRoots();
@@ -818,6 +822,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
         Heap::GetHeap().young().pause_mark_start();
     }
+    // Finish all background root consumers while the roots are still valid.
+    // stop joins GC services and worker pools; verification remains a
+    // synchronous VM operation and does not use the deleted drivers.
+    Heap::GetHeap().StopGCWork();
+    std::fprintf(stderr, "VERIFY_ARMED_STOP_COMPLETE\n");
     auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
