@@ -109,6 +109,27 @@ if [[ ! -s "$LIST_DIR/main.txt" || ! -s "$LIST_DIR/publication.txt" ]]; then
   exit 2
 fi
 
+if [[ -n "${GC_UNIT_ONLY_TESTS+x}" ]]; then
+  if [[ -z "${GC_UNIT_ONLY_TESTS}" ]]; then
+    echo "GC_UNIT_ONLY_TESTS_REJECT reason=empty" >&2
+    exit 3
+  fi
+  only_ok=0
+  while IFS= read -r wanted; do
+    [[ -z "$wanted" ]] && continue
+    if ! grep -Fxq "$wanted" "$LIST_DIR/main.txt" && ! grep -Fxq "$wanted" "$LIST_DIR/publication.txt"; then
+      echo "GC_UNIT_ONLY_TESTS_REJECT name=$wanted" >&2
+      exit 3
+    fi
+    only_ok=$((only_ok + 1))
+  done <<<"${GC_UNIT_ONLY_TESTS//,/$'\n'}"
+  if [[ "$only_ok" -eq 0 ]]; then
+    echo "GC_UNIT_ONLY_TESTS_REJECT reason=empty" >&2
+    exit 3
+  fi
+  echo "GC_UNIT_ONLY_TESTS_ACCEPT count=$only_ok"
+fi
+
 MANIFEST="$OUT/test-manifest.tsv"
 : >"$MANIFEST"
 exec 3<"$LIST_DIR/main.txt"
@@ -155,6 +176,15 @@ SERIAL_MANIFEST="$OUT/test-manifest.serial.tsv"
 : >"$PARALLEL_MANIFEST"
 : >"$SERIAL_MANIFEST"
 while IFS=$'\t' read -r kind test index; do
+  if [[ -n "${GC_UNIT_ONLY_TESTS+x}" ]]; then
+    keep=0
+    while IFS= read -r wanted; do
+      [[ "$wanted" == "$test" ]] && keep=1
+    done <<<"${GC_UNIT_ONLY_TESTS//,/$'\n'}"
+    if [[ "$keep" -ne 1 ]]; then
+      continue
+    fi
+  fi
   if [[ "$JOBS" -ne 1 ]] && is_serial_test "$test"; then
     printf '%s\t%s\t%s\n' "$kind" "$test" "$index" >>"$SERIAL_MANIFEST"
   else
