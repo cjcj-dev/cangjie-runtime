@@ -60,5 +60,5 @@ protected func decodeRawStackTrace(rawStackTrace: TraceCapture, frameIndex: Int6
         return Option<StackTraceElement>.None
     }
     return StackTraceElement(
-        String(data.className), String(data.methodName), String(data.fileName), data.lineNumber)
+        data.classNameText, data.methodNameText, data.fileNameText, data.lineNumber)
 }

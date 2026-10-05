@@ -20,6 +20,11 @@ protected struct StackTraceData {
     public let methodName: RawArray<UInt8> = EMPTY_UINT8_RAW_ARRAY
     public let fileName: RawArray<UInt8> = EMPTY_UINT8_RAW_ARRAY
     public let lineNumber: Int64 = 0
+
+    // Interpret decoder-owned bytes inside core, preserving the internal String semantics.
+    public prop classNameText: String { get() { String(className) } }
+    public prop methodNameText: String { get() { String(methodName) } }
+    public prop fileNameText: String { get() { String(fileName) } }
 }
 
 protected struct TraceFrame {
@@ -30,6 +35,10 @@ protected struct TraceFrame {
     public let lineNumber: Int64 = 0
     public let format: Int64 = 0
     public let kind: Int64 = 0 // native=0; interpreted=1
+
+    public prop mangledNameText: String { get() { String(mangledName) } }
+    public prop directoryText: String { get() { String(directory) } }
+    public prop filenameText: String { get() { String(filename) } }
 }
 
 protected class TraceCapture {
@@ -56,9 +65,9 @@ func getStackTraceImpl(capture: TraceCapture): Array<StackTraceElement> {
             continue
         }
         let stkEle = StackTraceElement(
-            String(data.className),
-            String(data.methodName),
-            String(data.fileName),
+            data.classNameText,
+            data.methodNameText,
+            data.fileNameText,
             data.lineNumber
         )
         stackTraceArray[eleSize] = stkEle

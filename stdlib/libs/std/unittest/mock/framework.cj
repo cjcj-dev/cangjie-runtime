@@ -383,12 +383,12 @@ private struct RawStackTraceElement <: Hashable & Equatable<RawStackTraceElement
     }
 
     private init(frame: TraceFrame) {
-        mangledName = String(frame.mangledName)
-        directory = String(frame.directory)
-        filename = String(frame.filename)
-        resolvedClass = String(frame.resolved.className)
-        resolvedMethod = String(frame.resolved.methodName)
-        resolvedFile = String(frame.resolved.fileName)
+        mangledName = frame.mangledNameText
+        directory = frame.directoryText
+        filename = frame.filenameText
+        resolvedClass = frame.resolved.classNameText
+        resolvedMethod = frame.resolved.methodNameText
+        resolvedFile = frame.resolved.fileNameText
         resolvedLine = frame.resolved.lineNumber
         lineNumber = frame.lineNumber
         format = frame.format
