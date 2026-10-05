@@ -831,8 +831,22 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
                 std::this_thread::yield();
             }
             GC_EXPECT_TRUE(positiveDone.load(std::memory_order_acquire));
-            // The copied LWTData contains only null roots. The scheduler owns its
-            // carrier and exit hooks; Fini joins those workers before deleting runtime.
+            // Completion is not retirement. CJThreadMexit clears argStart under
+            // this lock only after CJThreadEntryInitMutator ran the exit hook.
+            // This default-stack carrier is scheduler-owned and retained in its
+            // freelist until Fini; this native body cannot grow its stack.
+            bool retired = false;
+            while (std::chrono::steady_clock::now() < until) {
+                {
+                    std::lock_guard<std::recursive_mutex> lock(positive->uncoloredRootLock);
+                    retired = positive->argStart == nullptr;
+                }
+                if (retired) { break; }
+                std::this_thread::yield();
+            }
+            std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_RETIRED retired=%d\n", retired);
+            GC_EXPECT_TRUE(retired);
+            // Fini joins scheduler workers; never manually free this carrier.
         }
         const unsigned executionsAfterPositive = executions.load();
         std::fprintf(stderr, "VERIFY_ARMED_POSITIVE_TARGET before=%u after=%u\n", executionsBefore,
