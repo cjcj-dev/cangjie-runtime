@@ -1,3 +1,4 @@
+#include "gc_vm_producer.hpp"
 #include "LoaderManager.h"
 #include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
@@ -152,14 +153,16 @@ struct MarkPort203TestAccess {
             YoungTypeSetter type(collector.young(), ZYoungType::minor);
             collector.young().pause_mark_start();
         }
-        if (duplicateRootOrder != 0) {
-            if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-            if (duplicateRootOrder > 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
-        } else if (markOnly) {
-            array->SetInvisibleObject(true);
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-        }
+        GcUnit::ProduceOnVMThread([&] {
+            if (duplicateRootOrder != 0) {
+                if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+                ZBarrier::Mark<false, false, false, false>(from_object(array));
+                if (duplicateRootOrder > 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+            } else if (markOnly) {
+                array->SetInvisibleObject(true);
+                ZBarrier::Mark<false, false, false, false>(from_object(array));
+            }
+        });
         if (major) { collector.old().concurrent_mark(); }
         else { collector.young().concurrent_mark(); }
     }
@@ -177,8 +180,14 @@ public:
         runtime = this;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
     }
-    ~MarkPortRuntime() override { runtime = nullptr; }
+    ~MarkPortRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:

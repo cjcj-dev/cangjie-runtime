@@ -10,6 +10,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <cstdio>
 
 #include "CangjieRuntime.h"
 #include "StackManager.h"
@@ -30,7 +31,8 @@ namespace MapleRuntime {
 #define MRT_ASSERT(p, msg) \
     do { \
         if (!(p)) { \
-            (void)PRINT_INFO("%s:%d:%s", __FILE__, __LINE__, msg); \
+            (void)std::fprintf(stderr, "%s:%d:%s\n", __FILE__, __LINE__, msg); \
+            (void)std::fflush(stderr); \
             abort(); \
         } \
     } while (0)

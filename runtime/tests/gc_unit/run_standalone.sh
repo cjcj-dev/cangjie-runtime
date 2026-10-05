@@ -242,8 +242,11 @@ TEST_DEFINES=()
 # configuration. The published recipe is bound to both selected SO hashes;
 # a deleted test hook is not a configuration interface.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
-  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG <<<"$PRODUCT_CONFIGURATION"
+  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT" --with-debug)
+read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG SO_MRT_DEBUG <<<"$PRODUCT_CONFIGURATION"
+if [[ "$SO_MRT_DEBUG" == 1 ]]; then
+    TEST_DEFINES+=(-DMRT_DEBUG=1)
+fi
 if [[ "$SO_NDEBUG" == 1 ]]; then
     TEST_DEFINES+=(-DNDEBUG)
 fi
@@ -310,6 +313,7 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
+  "$SRC/test_vmthread.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
@@ -345,6 +349,7 @@ MAIN_SOURCES=(
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_relocation_request_queue.cpp"
+  "$SRC/test_barrier_remap_no_relocate.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
@@ -401,6 +406,8 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_exit_detach_mark_end.cpp"
   "$SRC/test_native_thread_detach.cpp"
+  "$SRC/test_barrier_owner_1391.cpp"
+  "$SRC/test_shutdown_1459.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_package_init.cpp"

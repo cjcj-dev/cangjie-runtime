@@ -9,6 +9,7 @@
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_heap_fixture.hpp"
+#include "gc_vmthread_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -25,16 +26,18 @@ zpointer* SlotOf(NativeSlot& slot)
 }
 }
 
-GC_TEST(WeakRootsProduct, EmptyRendezvousCompletes)
+GC_RUNTIME_TEST(WeakRootsProduct, EmptyRendezvousCompletes)
 {
+    VMThreadContainerRuntime container(8);
     ZRendezvousGCThreads op;
-    op.doit();
+    VMThread::execute(&op);
     GC_EXPECT_FALSE(SuspendibleThreadSet::should_yield());
     std::fprintf(stderr, "WEAK_ROOTS_EMPTY_RENDEZVOUS_ASSERT_EXECUTED\n");
 }
 
-GC_TEST(WeakRootsProduct, JoinerLeaveWakesSynchronize)
+GC_RUNTIME_TEST(WeakRootsProduct, JoinerLeaveWakesSynchronize)
 {
+    VMThreadContainerRuntime container(8);
     std::atomic<bool> joined{false};
     std::atomic<bool> done{false};
     std::thread participant([&] {
@@ -50,7 +53,7 @@ GC_TEST(WeakRootsProduct, JoinerLeaveWakesSynchronize)
         std::this_thread::yield();
     }
     ZRendezvousGCThreads op;
-    op.doit();
+    VMThread::execute(&op);
     participant.join();
     GC_EXPECT_TRUE(done.load(std::memory_order_acquire));
     std::fprintf(stderr, "WEAK_ROOTS_JOIN_YIELD_ASSERT_EXECUTED\n");
