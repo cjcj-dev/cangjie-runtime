@@ -140,8 +140,14 @@ class Wiring(unittest.TestCase):
             'SCHEMA=packaged-v1', 'LLVM_SHA=' + inputs.PRODUCER, 'BASE_SDK_SHA256=' + '0' * 64,
             'tool\tpresent\tsource\tversion\tsha256',
             'llvm-readobj\tyes\ttuple:' + inputs.PRODUCER + '\tLLVM fixture-version\t' + digest]))
-        return {'tuple': inputs.sha(self.root / 'llvm-tools.manifest'),
-                'reader': inputs.sha(self.root / 'llvm-tools.packaged.manifest')}
+        hashes = {'tuple': inputs.sha(self.root / 'llvm-tools.manifest'),
+                  'reader': inputs.sha(self.root / 'llvm-tools.packaged.manifest')}
+        (self.root / 'producer.json').write_text(json.dumps(dict(
+            tools_source_sha=inputs.TOOL_SOURCE, llvm_sha=inputs.PRODUCER,
+            paired_runtime_sha=inputs.PAIRED_RUNTIME, paired_runtime_mode='private',
+            paired_runtime_url=inputs.RUNTIME_URL, artifact='fixed-llvm-tools-linux_aarch64',
+            tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])))
+        return hashes
 
     def test_tool_selection(self):
         hashes = self.tool_input()
@@ -165,7 +171,7 @@ class Wiring(unittest.TestCase):
     def test_manifest_rejection(self):
         hashes = self.tool_input()
         hashes['tuple'] = '0' * 64
-        with self.assertRaisesRegex(ValueError, 'manifest differs'):
+        with self.assertRaisesRegex(ValueError, 'receipt differs'):
             inputs.tools(self.root, self.root / 'selected', 'linux_aarch64', hashes)
 
     def test_native_rejection(self):

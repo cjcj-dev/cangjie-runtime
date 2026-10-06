@@ -496,7 +496,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: cjcj-dev/cjcj
-          ref: bf788bfcb2f1b3172cebb395169b375d1656b91d
+          ref: cab2fea8a3f66d30933508d96f78b08f9c99f571
           path: _tool-producer
           persist-credentials: false
       - uses: actions/setup-node@v4

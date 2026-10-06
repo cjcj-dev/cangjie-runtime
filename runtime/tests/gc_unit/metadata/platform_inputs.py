@@ -8,7 +8,11 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 
+TOOL_SOURCE = 'cab2fea8a3f66d30933508d96f78b08f9c99f571'
+PAIRED_RUNTIME = '4909b2dec1af7f522133c6401e2ce960b0ef511d'
+RUNTIME_URL = 'https://github.com/cjcj-dev/cangjie-runtime.git'
 PRODUCER = '20a76c752153ca2f56b3f65b205653f7f60e8869'
 PLATFORMS = {'linux-arm64': 'linux_aarch64', 'windows-x64': 'windows_x86_64',
              'macos-arm64': 'darwin_aarch64'}
@@ -103,7 +107,6 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
     if logs is None:
         logs = Path(os.environ.get('RUNNER_TEMP', str(root.parent))) / 'metadata' / 'logs'
     logs = Path(logs).resolve()
-    logs.mkdir(parents=True, exist_ok=True)
     prefix = logs / (role + '-checkout')
     git = shutil.which('git')
     if git is None:
@@ -111,12 +114,22 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
     git = str(Path(git).resolve())
     record = dict(role=role, root=str(root), expected_sha=expected,
                   git_executable=git, commands=[])
+    io_errors = []
+
+    def retain(path, data):
+        try:
+            logs.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as error:
+            io_errors.append(str(error))
+            print(role + ' checkout diagnostic write failed: ' + str(error), file=sys.stderr)
+
 
     def capture(name, args):
         result = subprocess.run([git, '-C', str(root), *args], capture_output=True)
         output = prefix.with_name(prefix.name + '-' + name)
-        output.with_suffix('.stdout').write_bytes(result.stdout)
-        output.with_suffix('.stderr').write_bytes(result.stderr)
+        retain(output.with_suffix('.stdout'), result.stdout)
+        retain(output.with_suffix('.stderr'), result.stderr)
         record['commands'].append(dict(name=name, argv=args, rc=result.returncode))
         return result
 
@@ -147,7 +160,7 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
         capture('attributes', ['check-attr', '-z', '--all', '--', *paths])
         capture('eol', ['ls-files', '--eol', '-z', '--', *literal])
     record['tracked_paths'] = paths
-    prefix.with_suffix('.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+    retain(prefix.with_suffix('.json'), (json.dumps(record, indent=2) + '\n').encode('utf-8'))
     if head.returncode:
         raise ValueError(role + ' checkout HEAD query failed')
     if actual != expected:
@@ -156,12 +169,36 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
         raise ValueError(role + ' checkout cleanliness query failed')
     if dirty:
         raise ValueError(role + ' checkout must be clean')
+    if io_errors:
+        raise ValueError(role + ' checkout required diagnostics could not be retained')
     if any(command['rc'] != 0 for command in record['commands']
            if command['name'] != 'config'):
         raise ValueError(role + ' checkout diagnostics failed')
     if next(command['rc'] for command in record['commands'] if command['name'] == 'config') not in (0, 1):
         raise ValueError(role + ' checkout config diagnostics failed')
     return actual
+
+
+def paired_environment(environment):
+    if environment.get('LLVM_SHA', PRODUCER) != PRODUCER:
+        raise ValueError('unapproved LLVM/runtime pair')
+    for key, expected in dict(CJCJ_LLVM_RUNTIME_MODE='private', CJCJ_LLVM_RUNTIME_URL=RUNTIME_URL,
+                              CJCJ_LLVM_RUNTIME_SHA=PAIRED_RUNTIME).items():
+        if key in environment and environment[key] != expected:
+            raise ValueError('unapproved private runtime source: ' + key)
+    return dict(environment, LLVM_SHA=PRODUCER, CJCJ_LLVM_RUNTIME_MODE='private',
+                CJCJ_LLVM_RUNTIME_URL=RUNTIME_URL, CJCJ_LLVM_RUNTIME_SHA=PAIRED_RUNTIME)
+
+
+def tool_receipt(artifact, platform, hashes):
+    receipt = json.loads((artifact / 'producer.json').read_text())
+    expected = dict(tools_source_sha=TOOL_SOURCE, llvm_sha=PRODUCER,
+                    paired_runtime_sha=PAIRED_RUNTIME, paired_runtime_mode='private',
+                    paired_runtime_url=RUNTIME_URL, artifact='fixed-llvm-tools-' + platform,
+                    tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        raise ValueError('tool producer receipt differs from approved source/pair/manifests')
+    return receipt
 
 
 def fields(path):
@@ -190,6 +227,7 @@ def native(path, platform):
 def tools(artifact, output, platform, hashes):
     """Consume the existing tuple layout; never select latest or generate tools."""
     artifact = artifact.resolve()
+    receipt = tool_receipt(artifact, platform, hashes)
     manifest = artifact / 'llvm-tools.manifest'
     reader_manifest = artifact / 'llvm-tools.packaged.manifest'
     if sha(manifest) != hashes['tuple'] or sha(reader_manifest) != hashes['reader']:
@@ -234,7 +272,7 @@ def tools(artifact, output, platform, hashes):
         result[role] = str(destination.resolve())
         result[role + '_sha256'] = digest
         result[role + '_version'] = actual
-    return dict(result, producer=PRODUCER, platform=platform,
+    return dict(result, producer=PRODUCER, platform=platform, receipt=receipt,
                 tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])
 
 

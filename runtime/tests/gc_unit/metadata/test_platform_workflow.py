@@ -41,7 +41,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("inputs.a2_batch == 'tools'", producer['if'])
         checkouts = [s for s in producer['steps'] if s.get('uses') == 'actions/checkout@v4']
         self.assertEqual(checkouts[1]['with'], {'repository': 'cjcj-dev/cjcj',
-            'ref': 'bf788bfcb2f1b3172cebb395169b375d1656b91d', 'path': '_tool-producer', 'persist-credentials': False})
+            'ref': 'cab2fea8a3f66d30933508d96f78b08f9c99f571', 'path': '_tool-producer', 'persist-credentials': False})
         commands = [s['run'] for s in producer['steps'] if 'run' in s]
         self.assertEqual(sum('prepare_tools.py _tool-producer' in command for command in commands), 2)
         self.assertFalse(any('build.py fixtures' in command for command in commands))

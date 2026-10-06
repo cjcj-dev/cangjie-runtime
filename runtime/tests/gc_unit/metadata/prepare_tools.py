@@ -12,7 +12,7 @@ import urllib.request
 
 import platform_inputs as inputs
 
-TOOL_SOURCE = 'bf788bfcb2f1b3172cebb395169b375d1656b91d'
+TOOL_SOURCE = inputs.TOOL_SOURCE
 
 
 
@@ -40,6 +40,15 @@ def validate_sdk_input(repo, selected, sdk):
     return expected
 
 
+def tuple_environment(repo, environment):
+    pins = inputs.fields(repo / 'ci/llvm_pin.env')
+    env = dict(inputs.paired_environment(environment), LLVM_URL='https://github.com/cjcj-dev/cjcj-llvm.git', LLVM_SHA=inputs.PRODUCER,
+               CANGJIE_COMPILER_URL=pins['CANGJIE_COMPILER_URL'], CANGJIE_COMPILER_SHA=pins['CANGJIE_COMPILER_SHA'],
+               FLATBUFFERS_URL=pins['FLATBUFFERS_URL'], FLATBUFFERS_SHA=pins['FLATBUFFERS_SHA'],
+               SCCACHE_PATH=shutil.which('sccache') or '')
+    return env
+
+
 def main():
     repo = Path(sys.argv[1]).resolve()
     # Keep --sdk-inputs usable before native tuple configuration is supplied.
@@ -47,7 +56,6 @@ def main():
     if log_root is None:
         log_root = Path(os.environ.get('RUNNER_TEMP', str(repo.parent))) / 'metadata-tool-sources'
     logs = Path(log_root).resolve() / 'logs'
-    logs.mkdir(parents=True, exist_ok=True)
     inputs.checkout_identity(repo, TOOL_SOURCE, role='tool', logs=logs)
     if sys.argv[2:] == ['--sdk-inputs']:
         print(json.dumps(approved_sdk_inputs(repo), indent=2))
@@ -63,6 +71,7 @@ def main():
     configuration = json.loads(os.environ['TOOL_PREPARE_INPUTS'])
     pins = inputs.fields(repo / 'ci/llvm_pin.env')
     sdk = validate_sdk_input(repo, selected, configuration['base_sdk'][selected])
+    inputs.paired_environment(os.environ)  # Reject a wrong pair before SDK I/O.
     root = Path(os.environ['TUPLE_ROOT']).resolve()
     root.mkdir(parents=True, exist_ok=True)
     archive = root / 'base-sdk.archive'
@@ -71,16 +80,14 @@ def main():
     base_digest = inputs.sha(archive)
     if base_digest != sdk['sha256']:
         raise ValueError('base SDK archive digest differs from approved input')
-    env = dict(os.environ, LLVM_URL='https://github.com/cjcj-dev/cjcj-llvm.git', LLVM_SHA=inputs.PRODUCER,
-               CANGJIE_COMPILER_URL=pins['CANGJIE_COMPILER_URL'], CANGJIE_COMPILER_SHA=pins['CANGJIE_COMPILER_SHA'],
-               FLATBUFFERS_URL=pins['FLATBUFFERS_URL'], FLATBUFFERS_SHA=pins['FLATBUFFERS_SHA'],
-               SCCACHE_PATH=shutil.which('sccache') or '')
+    env = tuple_environment(repo, os.environ)
     if not env['SCCACHE_PATH']:
         raise ValueError('C++ sccache launcher is required')
     def checked(argv):
         subprocess.run([str(x) for x in argv], cwd=repo, env=env, check=True)
     checked(['bash', 'ci/platform_tuples/fetch_sources.sh'])
     checked(['bash', 'ci/platform_tuples/build_tuple.sh'])
+    paired_head = inputs.checkout_identity(root / 'paired-runtime', inputs.PAIRED_RUNTIME, logs=logs)
     # Normal dependency build in the SAME tuple CMake tree, not a second LLVM recipe.
     checked(['cmake', '--build', root / 'llvm-build', '--target', 'llvm-readobj', 'lld',
              '--parallel', str(os.cpu_count())])
@@ -95,7 +102,8 @@ def main():
                    attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_sha=os.environ['GITHUB_SHA'],
                    tools_source_sha=TOOL_SOURCE, llvm_sha=inputs.PRODUCER,
                    compiler_sha=pins['CANGJIE_COMPILER_SHA'], flatbuffers_sha=pins['FLATBUFFERS_SHA'],
-                   paired_runtime_sha=subprocess.check_output(['git', '-C', str(root / 'paired-runtime'), 'rev-parse', 'HEAD'], text=True).strip(),
+                   paired_runtime_sha=paired_head, paired_runtime_mode=env['CJCJ_LLVM_RUNTIME_MODE'],
+                   paired_runtime_url=env['CJCJ_LLVM_RUNTIME_URL'],
                    artifact='fixed-llvm-tools-' + os.environ['TUPLE_PLATFORM'], base_sdk_sha256=base_digest,
                    tuple_manifest_sha256=inputs.sha(output / 'llvm-tools.manifest'),
                    reader_manifest_sha256=inputs.sha(output / 'llvm-tools.packaged.manifest'))
