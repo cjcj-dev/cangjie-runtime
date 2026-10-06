@@ -682,7 +682,7 @@ void* AllocateWideArray(void*)
     size_t witness = bytes;
     while (witness + 64 <= extent && !BytesAre(base + witness, base + witness + 64, 0xa5)) { witness += 64; }
     const bool dirtyWitness = witness + 64 <= extent;
-    MArray* array = ZCollectedHeap::heap()->array_allocate(*type, bytes, bytes - MArray::GetContentOffset(), true);
+    MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, bytes - MArray::GetContentOffset()));
     const ZPage* page = array == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(array));
     const size_t actual = page == nullptr ? 0 : page->size();
     const bool width = actual == extent;
