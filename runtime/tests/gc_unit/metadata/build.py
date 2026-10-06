@@ -36,7 +36,11 @@ if args.mode == "fixtures":
     selected_platform = os.environ["METADATA_PLATFORM"]
     tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
                                  inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
-    record["workflow_sha"] = os.environ["GITHUB_SHA"]
+    actual_workflow = subprocess.check_output([
+        'git', '-C', str(Path(__file__).resolve().parents[4]), 'rev-parse', 'HEAD'], text=True).strip()
+    if actual_workflow != os.environ['GITHUB_SHA']:
+        raise ValueError('workflow driver checkout differs from event SHA')
+    record["workflow_sha"] = actual_workflow
     record["tool_identity"] = tool_identity
 windows = platform.system() == "Windows"
 mac = platform.system() == "Darwin"
