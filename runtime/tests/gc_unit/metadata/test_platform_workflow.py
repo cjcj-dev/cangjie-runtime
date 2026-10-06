@@ -34,7 +34,7 @@ class Workflow(unittest.TestCase):
 
     def test_producer_is_separate(self):
         jobs = self.workflow['jobs']
-        for job in ('prepare', 'arms', 'capability'):
+        for job in ('prepare', 'arms', 'pac-capability'):
             self.assertIn("inputs.a2_batch != 'tools'", jobs[job]['if'])
         self.assertIn("inputs.a2_batch == 'fixtures'", jobs['fixtures']['if'])
         producer = jobs['tools']

@@ -527,10 +527,18 @@ jobs:
         shell: bash
         run: sccache --show-stats
       - uses: actions/upload-artifact@v4
+        id: native-artifact
         with:
           name: fixed-llvm-tools-${{ matrix.tuple }}
           path: _tool-producer/fixed-toolchain/${{ matrix.tuple }}/
           retention-days: 3
+      - name: Retain service artifact identity
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.native-artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.native-artifact.outputs.artifact-digest }}
+        run: |
+          printf 'run=%s attempt=%s artifact_id=%s artifact_digest=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ARTIFACT_ID" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

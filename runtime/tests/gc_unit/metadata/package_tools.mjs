@@ -16,7 +16,8 @@ for (const tool of names) {
     continue;
   }
   const binary = path.join(root, 'llvm-build/bin', tool + (process.platform === 'win32' ? '.exe' : ''));
-  const version = execFileSync(binary, ['--version'], {encoding: 'utf8'}).trim().replace(/[\r\n\t]+/g, ' ');
+  const version = execFileSync(binary, ['--version'], {encoding: 'utf8'}).split(/\r?\n/).find(line => /LLVM version |^LLD /.test(line))?.trim();
+  if (!version) throw new Error('missing LLVM tool version: ' + tool);
   tools.push({tool, present: 'yes', source: 'tuple:' + tuple.get('LLVM_SHA'), version,
               sha256: createHash('sha256').update(await fs.readFile(binary)).digest('hex')});
 }

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Narrow native tuple orchestration; no fixture targets and no SDK tool fallback."""
 import gzip
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -71,6 +70,7 @@ def main():
                    tuple_manifest_sha256=inputs.sha(output / 'llvm-tools.manifest'),
                    reader_manifest_sha256=inputs.sha(output / 'llvm-tools.packaged.manifest'))
     (output / 'producer.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print(json.dumps(receipt, indent=2), flush=True)
 
 
 if __name__ == '__main__':
