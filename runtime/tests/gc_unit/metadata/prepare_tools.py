@@ -62,7 +62,7 @@ def main():
     log_root = os.environ.get('TUPLE_ROOT')
     if log_root is None:
         log_root = Path(os.environ.get('RUNNER_TEMP', str(repo.parent))) / 'metadata-tool-sources'
-    logs = Path(log_root).resolve() / 'logs'
+    logs = Path(os.path.abspath(log_root)) / 'logs'
     inputs.checkout_identity(repo, TOOL_SOURCE, role='tool', logs=logs)
     if sys.argv[2:] == ['--sdk-inputs']:
         print(json.dumps(approved_sdk_inputs(repo), indent=2))

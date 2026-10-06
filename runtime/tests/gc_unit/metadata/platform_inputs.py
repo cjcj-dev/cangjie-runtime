@@ -106,7 +106,7 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
         raise ValueError('unknown checkout role')
     if logs is None:
         logs = Path(os.environ.get('RUNNER_TEMP', str(root.parent))) / 'metadata' / 'logs'
-    logs = Path(logs).resolve()
+    logs = Path(os.path.abspath(logs))  # Log path resolution must not perform I/O before identity checks.
     prefix = logs / (role + '-checkout')
     git = shutil.which('git')
     if git is None:
