@@ -406,7 +406,6 @@ jobs:
       METADATA_TUPLE_ATTEMPT: ${{ fromJSON(inputs.fixture_provenance).attempt }}
       METADATA_TOOL_ARTIFACT_IDS: ${{ toJSON(fromJSON(inputs.fixture_provenance).artifact_ids) }}
       METADATA_TOOL_MANIFESTS: ${{ inputs.fixture_tool_manifests }}
-      METADATA_TUPLE_ARTIFACT: ${{ runner.temp }}/metadata-tuple
       METADATA_PLATFORM: ${{ matrix.platform }}
       METADATA_RESUME_RUN: ${{ inputs.resume_run }}
       METADATA_PAC_RESUME: ${{ inputs.pac_resume }}
@@ -446,12 +445,16 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - if: runner.os != 'Windows'
         shell: bash
+        env:
+          METADATA_TUPLE_ARTIFACT: ${{ runner.temp }}/metadata-tuple
         run: |
           ulimit -Sc 0
           ulimit -Hc 0
           python3 runtime/tests/gc_unit/metadata/build.py fixtures --config ${{ matrix.config }}
       - if: runner.os == 'Windows'
         shell: msys2 {0}
+        env:
+          METADATA_TUPLE_ARTIFACT: ${{ runner.temp }}/metadata-tuple
         run: |
           ulimit -Sc 0
           ulimit -Hc 0
@@ -486,7 +489,6 @@ jobs:
       TUPLE_PLATFORM: ${{ matrix.tuple }}
       METADATA_PLATFORM: ${{ matrix.platform }}
       LLVM_TARGETS: ${{ matrix.targets }}
-      TUPLE_ROOT: ${{ runner.temp }}/metadata-tool-sources
       CMAKE_C_COMPILER_LAUNCHER: sccache
       CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
@@ -513,12 +515,16 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - if: runner.os != 'Windows'
         shell: bash
+        env:
+          TUPLE_ROOT: ${{ runner.temp }}/metadata-tool-sources
         run: |
           ulimit -Sc 0
           ulimit -Hc 0
           python3 runtime/tests/gc_unit/metadata/prepare_tools.py _tool-producer
       - if: runner.os == 'Windows'
         shell: msys2 {0}
+        env:
+          TUPLE_ROOT: ${{ runner.temp }}/metadata-tool-sources
         run: |
           ulimit -Sc 0
           ulimit -Hc 0
