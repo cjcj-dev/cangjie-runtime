@@ -431,6 +431,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.fixture_tuple_run }}
           artifact-ids: ${{ steps.producer.outputs.artifact_id }}
+          merge-multiple: true
           path: ${{ runner.temp }}/metadata-tuple
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
