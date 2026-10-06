@@ -681,6 +681,18 @@ void* AllocateWideArray(void*)
     type->SetComponentTypeInfo(component);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MIndex length = bytes - MArray::GetContentOffset();
+    // Prime an exact large-page cache entry with nonzero bytes, including
+    // slack after the object. Reuse identity is checked separately from zeroing.
+    const size_t backingSize = AlignUp(bytes, ZGranuleSize);
+    ZPage* dirtyPage = Heap::alloc_page(backingSize, ZPageType::large, PageAge::eden,
+                                       NonBlockingAllocationFlags());
+    if (dirtyPage == nullptr) { return reinterpret_cast<void*>(10); }
+    const uintptr_t dirtyStart = dirtyPage->GetRegionStart();
+    std::memset(reinterpret_cast<void*>(dirtyStart), 0xa5, backingSize);
+    bool dirty = true;
+    const auto* before = reinterpret_cast<const unsigned char*>(dirtyStart);
+    for (size_t i = 0; i < backingSize; ++i) { dirty &= before[i] == 0xa5; }
+    Heap::free_page(dirtyPage);
     MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
     const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
     const ZPage* page = object == 0 ? nullptr : Heap::page(object);
@@ -691,20 +703,32 @@ void* AllocateWideArray(void*)
     // the requested byte size. A larger legal backing still satisfies this.
     const bool width = page != nullptr && actual >= bytes && object >= pageStart &&
                        object + bytes >= object && object + bytes <= pageStart + actual;
-    // Owned interval is the returned payload, not leftover bytes of another page.
-    // A wrapping clear size cannot both preserve the header and stay inside it.
+    const bool reused = object == dirtyStart && actual == backingSize;
     bool payloadZero = false;
     bool rangeInside = false;
-    if (array != nullptr && page != nullptr && lengthKept) {
+    bool sentinel = false;
+    size_t contentSize = 0;
+    if (array != nullptr && page != nullptr && lengthKept && reused) {
+        // Read the product's content extent. This byte array has no tail
+        // padding, so it is exactly the complete segmented clear interval.
+        contentSize = array->GetContentSize();
         const uintptr_t payload = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
-        const bool payloadNoWrap = payload >= object && payload + length >= payload;
-        rangeInside = payloadNoWrap && payload + length <= pageStart + actual && payload >= pageStart;
-        if (rangeInside && width) {
+        rangeInside = payload >= pageStart && payload + contentSize >= payload &&
+                      payload + contentSize < pageStart + actual;
+        if (rangeInside) {
             const auto* data = reinterpret_cast<const unsigned char*>(payload);
-            payloadZero = data[0] == 0 && data[length / 2] == 0 && data[length - 1] == 0;
+            payloadZero = true;
+            for (size_t i = 0; i < contentSize; ++i) { payloadZero &= data[i] == 0; }
+            sentinel = true;
+            const auto* outside = reinterpret_cast<const unsigned char*>(payload + contentSize);
+            for (size_t i = 0; i < pageStart + actual - (payload + contentSize); ++i) {
+                sentinel &= outside[i] == 0xa5;
+            }
         }
     }
-    const bool zero = lengthKept && rangeInside && payloadZero;
+    const bool zero = dirty && reused && lengthKept && rangeInside && payloadZero && sentinel;
+    std::fprintf(stderr, "ARRAY_CLEAR_TARGET dirty=%d reused=%d content_size=%zu full_zero=%d sentinel=%d zero=%d\n",
+                 dirty, reused, contentSize, payloadZero, sentinel, zero);
     g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0};
     std::fprintf(stderr,
                  "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
