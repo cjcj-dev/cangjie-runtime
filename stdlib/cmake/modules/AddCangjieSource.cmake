@@ -280,6 +280,7 @@ function(add_cangjie_library target_name)
 
     add_custom_command(
         OUTPUT ${output_full_name}
+        ${cangjie_compile_job_pool}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_dir}
         ${MKDIR_TEMP_FILES_CMD}
         COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}"  "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
@@ -304,6 +305,7 @@ function(add_cangjie_library target_name)
     if(generate_lto_bc)
         add_custom_command(
             OUTPUT ${output_lto_bc_full_name}
+            ${cangjie_compile_job_pool}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_bc_dir}
             COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}" "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
                      ${COMPILE_BC_CMD}
