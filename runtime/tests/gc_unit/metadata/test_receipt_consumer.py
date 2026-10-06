@@ -16,7 +16,7 @@ class ManifestBoundary(Exception):
     pass
 
 
-def exercise_receipt_consumer(test, artifact):
+def exercise_receipt_consumer(test, artifact, cases=None):
     artifact.mkdir(parents=True, exist_ok=True)
     manifest = artifact / 'llvm-tools.manifest'
     manifest.write_text('receipt-only observation boundary; not a native manifest\n')
@@ -27,13 +27,20 @@ def exercise_receipt_consumer(test, artifact):
                   artifact='fixed-llvm-tools-linux_x86_64',
                   tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])
     original_sha = inputs.sha
-    for name, key in [('legal', None), ('bad-source', 'tools_source_sha'),
-                      ('bad-pair', 'paired_runtime_sha')]:
+    branches = [('legal', None), ('bad-source', 'tools_source_sha'),
+                ('bad-pair', 'paired_runtime_sha'), ('missing', None)]
+    if cases is not None:
+        branches = [(name, key) for name, key in branches if name in cases]
+    for name, key in branches:
         with test.subTest(receipt=name):
             value = dict(record)
             if key:
                 value[key] = '0' * 40
-            (artifact / 'producer.json').write_text(json.dumps(value))
+            receipt = artifact / 'producer.json'
+            if name == 'missing':
+                receipt.unlink(missing_ok=True)
+            else:
+                receipt.write_text(json.dumps(value))
             observed = []
 
             def boundary(path):
@@ -57,12 +64,20 @@ def exercise_receipt_consumer(test, artifact):
                 actual = ('receipt-rejected', str(error))
             else:
                 actual = ('unexpected', type(error).__name__, str(error), observed)
+            if name == 'missing':
+                actual = (type(error).__name__, getattr(error, 'filename', None),
+                          observed, (artifact / 'never-produced').exists())
+                expected = ('FileNotFoundError', str(receipt.resolve()), [], False)
             print('TARGET_RECEIPT_CONSUMER name=' + name + ' actual=' + repr(actual), flush=True)
             test.assertEqual(actual, expected, 'TARGET_RECEIPT_CONSUMER ' + name)
     (artifact / 'producer.json').write_text(json.dumps(record))
 
 
 class ReceiptConsumer(unittest.TestCase):
+    def test_missing_receipt(self):
+        with tempfile.TemporaryDirectory(prefix='receipt-consumer-') as root:
+            exercise_receipt_consumer(self, Path(root), cases={'missing'})
+
     def test_receipt_rejection(self):
         with tempfile.TemporaryDirectory(prefix='receipt-consumer-') as root:
             exercise_receipt_consumer(self, Path(root))
