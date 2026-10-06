@@ -473,7 +473,7 @@ void CheckNoPageAllocationPacing()
     // allocating a page. Keep this workload far below capacity: it tests the
     // removed fixed pacing delay, not the legitimate allocation-stall path.
     RuntimeParam param{};
-    param.heapParam.heapSize = heapKB;
+    param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     PageAllocationTiming timing;
@@ -666,7 +666,7 @@ void* AllocateWideArray(void*)
     alignas(TypeInfo) static unsigned char storage[2 * sizeof(TypeInfo)]{};
     auto* component = reinterpret_cast<TypeInfo*>(storage);
     auto* type = reinterpret_cast<TypeInfo*>(storage + sizeof(TypeInfo));
-    // A byte-sized value struct selects the ordinary product clearing path.
+    // A byte-sized value struct uses the product segmented initializer.
     component->SetType(TypeKind::TYPE_KIND_STRUCT);
     component->SetInstanceSize(1);
     type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
@@ -676,23 +676,26 @@ void* AllocateWideArray(void*)
     ZPage* dirty = Heap::alloc_page(extent, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags());
     if (dirty == nullptr) { return reinterpret_cast<void*>(1); }
     std::memset(reinterpret_cast<void*>(dirty->GetRegionStart()), 0xa5, extent);
+    const uintptr_t base = dirty->GetRegionStart();
     Heap::free_page(dirty);
+    // Cache metadata can occupy the suffix: retain an unchanged dirty witness.
+    size_t witness = bytes;
+    while (witness + 64 <= extent && !BytesAre(base + witness, base + witness + 64, 0xa5)) { witness += 64; }
+    const bool dirtyWitness = witness + 64 <= extent;
     MArray* array = ZCollectedHeap::heap()->array_allocate(*type, bytes, bytes - MArray::GetContentOffset(), true);
     const ZPage* page = array == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(array));
     const size_t actual = page == nullptr ? 0 : page->size();
     const bool width = actual == extent;
     // Inspect only a valid returned extent even when the signature truncates.
     // Thus the broken arm reaches the size/range invariant instead of faulting.
-    bool zero = width && array->GetLength() == bytes - MArray::GetContentOffset();
+    bool zero = width && reinterpret_cast<uintptr_t>(array) == base && dirtyWitness && array->GetLength() == bytes - MArray::GetContentOffset();
     if (zero) {
         const auto* data = reinterpret_cast<const unsigned char*>(array->ConvertToCArray());
         for (size_t i = 0; i < bytes - MArray::GetContentOffset(); ++i) {
             if (data[i] != 0) { zero = false; break; }
         }
-        const auto* tail = reinterpret_cast<const unsigned char*>(array) + bytes;
-        for (size_t i = 0; i < extent - bytes; ++i) {
-            if (tail[i] != 0xa5) { zero = false; break; }
-        }
+        zero = zero && BytesAre(reinterpret_cast<uintptr_t>(array) + witness,
+                               reinterpret_cast<uintptr_t>(array) + witness + 64, 0xa5);
     }
     std::fprintf(stderr, "ARRAY_WIDTH_RANGE_TARGET requested=%zu allocated=%zu expected=%zu width=%d zero_and_bounds=%d\n",
                  bytes, actual, extent, width, zero);
