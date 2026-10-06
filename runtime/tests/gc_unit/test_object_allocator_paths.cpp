@@ -685,8 +685,15 @@ void* AllocateWideArray(void*)
     // The mapped cache coalesces adjacent extents, then removes a size-class
     // slice (zMappedCache.cpp:620-668). Dirty the whole available cache extent
     // so either end selected for the array is provably nonzero beforehand.
-    const size_t backingSize = std::max(AlignUp(bytes, ZGranuleSize),
-                                       Heap::GetHeap().page_allocator().GetCachedBytes());
+    const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
+    const size_t backingSize = std::max(AlignUp(bytes, ZGranuleSize), cached);
+    // A smaller preexisting cache cannot satisfy the wide allocation but may
+    // coalesce with the newly committed extent on free. Keep it occupied.
+    ZPage* reservation = cached != 0 && cached < backingSize
+        ? Heap::alloc_page(cached, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags()) : nullptr;
+    if (cached != 0 && cached < backingSize && reservation == nullptr) {
+        return reinterpret_cast<void*>(11);
+    }
     ZPage* dirtyPage = Heap::alloc_page(backingSize, ZPageType::large, PageAge::eden,
                                        NonBlockingAllocationFlags());
     if (dirtyPage == nullptr) { return reinterpret_cast<void*>(10); }
@@ -739,6 +746,7 @@ void* AllocateWideArray(void*)
                  "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
                  "length_kept=%d range_inside=%d payload_zero=%d zero_and_bounds=%d\n",
                  bytes, actual, width, lengthKept, rangeInside, payloadZero, zero);
+    if (reservation != nullptr) { Heap::GetHeap().undo_alloc_page(reservation); }
     return nullptr;
 }
 }
