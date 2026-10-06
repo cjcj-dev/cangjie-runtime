@@ -5,10 +5,22 @@ on:
       a2_batch:
         description: 'Explicit A2 batch; full retains the existing platform contract'
         type: choice
-        options: [disabled, linux-windows-candidate, full]
+        options: [disabled, linux-windows-candidate, full, fixtures]
         default: disabled
       candidate_sha:
         description: 'Exact 40-character event SHA approved for this dispatch'
+        type: string
+        default: ''
+      runtime_source_sha:
+        description: 'Fixtures only: fixed runtime checkout SHA, bound to candidate_sha and event SHA'
+        type: string
+        default: ''
+      fixture_tuple_run:
+        description: 'Fixtures only: existing cjcj run containing same-producer native tuple and reader'
+        type: string
+        default: ''
+      fixture_tool_manifests:
+        description: 'Fixtures only: approved JSON platform -> tuple/reader manifest SHA256'
         type: string
         default: ''
       resume_run:
@@ -25,7 +37,7 @@ permissions:
   contents: read
 jobs:
   prepare:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,7 +89,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
-    if: ${{ always() && !cancelled() && !startsWith(github.ref_name, 'sym/1478-') }}
+    if: ${{ always() && !cancelled() && !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -137,7 +149,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
   pac-capability:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') }}
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -356,3 +368,81 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/bundle/
           retention-days: 3
+
+  fixtures:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.a2_batch == 'fixtures' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {platform: linux-arm64, tuple: linux_aarch64, runner: ubuntu-24.04-arm, config: default}
+          - {platform: linux-arm64, tuple: linux_aarch64, runner: ubuntu-24.04-arm, config: testable}
+          - {platform: windows-x64, tuple: windows_x86_64, runner: windows-2025, config: default}
+          - {platform: windows-x64, tuple: windows_x86_64, runner: windows-2025, config: testable}
+          - {platform: macos-arm64, tuple: darwin_aarch64, runner: macos-15, config: default}
+          - {platform: macos-arm64, tuple: darwin_aarch64, runner: macos-15, config: testable}
+          - {platform: macos-arm64, tuple: darwin_aarch64, runner: macos-15, config: pac-on}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      METADATA_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      METADATA_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
+      METADATA_RUNTIME_CHECKOUT: ${{ github.workspace }}/_fixture-source
+      METADATA_TUPLE_RUN: ${{ inputs.fixture_tuple_run }}
+      METADATA_TOOL_MANIFESTS: ${{ inputs.fixture_tool_manifests }}
+      METADATA_TUPLE_ARTIFACT: ${{ runner.temp }}/metadata-tuple
+      METADATA_PLATFORM: ${{ matrix.platform }}
+      METADATA_RESUME_RUN: ${{ inputs.resume_run }}
+      METADATA_PAC_RESUME: ${{ inputs.pac_resume }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bound dispatch before fetching inputs
+        shell: bash
+        run: python3 runtime/tests/gc_unit/metadata/platform_inputs.py
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.runtime_source_sha }}
+          path: _fixture-source
+      - uses: actions/download-artifact@v4
+        with:
+          repository: cjcj-dev/cjcj
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.fixture_tuple_run }}
+          name: fixed-llvm-tools-${{ matrix.tuple }}
+          path: ${{ runner.temp }}/metadata-tuple
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -Sc 0
+          ulimit -Hc 0
+          python3 runtime/tests/gc_unit/metadata/build.py fixtures --config ${{ matrix.config }}
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -Sc 0
+          ulimit -Hc 0
+          python3 runtime/tests/gc_unit/metadata/build.py fixtures --config ${{ matrix.config }}
+      - name: Actual cache statistics
+        if: always()
+        shell: bash
+        run: sccache --show-stats
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixtures-${{ matrix.platform }}-${{ matrix.config }}
+          path: ${{ runner.temp }}/metadata/
+          retention-days: 3
+          include-hidden-files: true

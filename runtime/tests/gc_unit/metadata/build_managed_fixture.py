@@ -23,6 +23,13 @@ p.add_argument('--arch', default=platform.machine())
 p.add_argument('--system', default=platform.system())
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
+linker = Path(a.linker)
+if not linker.is_absolute() or not linker.is_file():
+    p.error('--linker must name an existing absolute qualified tool')
+linker_name = linker.name.removesuffix('.exe')
+expected = {'Linux': ('ld.lld',), 'Windows': ('lld-link', 'ld.lld'), 'Darwin': ('ld64.lld',)}
+if linker_name not in expected[a.system]:
+    p.error('linker flavor does not match target system')
 arch = {'AMD64': 'x86_64', 'arm64': 'aarch64'}.get(a.arch, a.arch)
 system = {'Linux': 'linux', 'Windows': 'windows', 'Darwin': 'macos'}[a.system]
 if arch.startswith('armv'): arch = 'arm'
@@ -83,10 +90,11 @@ else:
          else Path(__file__).with_name('managed_input.S'), '-o', a.output / 'managed_input.o'])
     if system == 'windows':
         artifact = a.output / 'cj_managed_metadata.dll'
-        run([a.linker, '/dll', '/noentry', '/out:' + str(artifact), a.output / 'cjstart.o', a.output / 'managed_input.o'])
+        flavor = ['-flavor', 'link'] if linker_name == 'ld.lld' else []
+        run([a.linker, *flavor, '/dll', '/noentry', '/out:' + str(artifact), a.output / 'cjstart.o', a.output / 'managed_input.o'])
     else:
         artifact = a.output / 'libcj_managed_metadata.dylib'
-        run([a.cc, *flags, '-dynamiclib', a.output / 'cjstart.o', a.output / 'managed_input.o', '-o', artifact])
+        run([a.cc, *flags, '--ld-path=' + a.linker, '-dynamiclib', a.output / 'cjstart.o', a.output / 'managed_input.o', '-o', artifact])
 record['artifact'] = str(artifact)
 record['sha256'] = hashlib.sha256(artifact.read_bytes()).hexdigest()
 (a.output / 'fixture-build.json').write_text(json.dumps(record, indent=2))

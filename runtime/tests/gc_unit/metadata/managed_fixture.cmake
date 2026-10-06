@@ -1,7 +1,7 @@
 # Complete CJ metadata is a separate linked image, never a C++ header model.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(MANAGED_METADATA_LINKER "" CACHE FILEPATH "Qualified CJ linker (one tool family)")
-if(NOT MANAGED_METADATA_LINKER)
+if(NOT IS_ABSOLUTE "${MANAGED_METADATA_LINKER}" OR NOT EXISTS "${MANAGED_METADATA_LINKER}")
   message(FATAL_ERROR "Set MANAGED_METADATA_LINKER to the qualified platform CJ linker")
 endif()
 if(WIN32)

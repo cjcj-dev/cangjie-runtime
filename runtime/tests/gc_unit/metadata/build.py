@@ -13,9 +13,10 @@ import subprocess
 import time
 
 import run as supervisor
+import platform_inputs as inputs
 
 parser = argparse.ArgumentParser()
-parser.add_argument("mode", choices=["prepare", "arm", "capability", "a2", "a2-resume"])
+parser.add_argument("mode", choices=["prepare", "arm", "capability", "a2", "a2-resume", "fixtures"])
 parser.add_argument("--config", choices=["default", "testable", "pac-off", "pac-on"], default="testable")
 parser.add_argument("--arm", default="candidate")
 args = parser.parse_args()
@@ -27,10 +28,26 @@ record = {"head": os.environ.get("GITHUB_SHA"), "platform": platform.platform(),
           "machine": platform.machine(), "ImageOS": os.environ.get("ImageOS"),
           "ImageVersion": os.environ.get("ImageVersion"), "cpu_count": os.cpu_count(),
           "config": args.config, "arm": args.arm, "behavior": "NOT_RUN"}
+if args.mode == "fixtures":
+    expected_source, manifest_hashes = inputs.dispatch(os.environ)
+    source_root = Path(os.environ["METADATA_RUNTIME_CHECKOUT"]).resolve()
+    record["runtime_source_sha"] = inputs.checkout_identity(source_root, expected_source)
+    source = source_root / "runtime"
+    selected_platform = os.environ["METADATA_PLATFORM"]
+    tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
+                                 inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
+    record["workflow_sha"] = os.environ["GITHUB_SHA"]
+    record["tool_identity"] = tool_identity
 windows = platform.system() == "Windows"
 mac = platform.system() == "Darwin"
 env = dict(os.environ, GC_UNIT_GATE_SKIP="1", CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()),
            SOURCE_DATE_EPOCH="1790640000", ZERO_AR_DATE="1", SCCACHE_IDLE_TIMEOUT="0")
+
+if args.mode == "fixtures":
+    native_platform = ('windows_x86_64' if windows else 'darwin_aarch64' if mac else 'linux_aarch64')
+    if tool_identity['platform'] != native_platform:
+        raise ValueError('artifact platform differs from runner')
+    env['MANAGED_METADATA_LINKER'] = tool_identity['linker']
 
 
 def save():
@@ -226,16 +243,20 @@ else:
     build = tree / "CMakebuild"
     flags = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_ASM_COMPILER=clang",
              "-DCMAKE_C_COMPILER_LAUNCHER=sccache", "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
-             "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache", "-DCMAKE_BUILD_TYPE=Release", "-DCOPYGC_FLAG=1",
+             "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DCMAKE_BUILD_TYPE=Release", "-DCOPYGC_FLAG=1",
              "-DDOPRA_FLAG=1", "-DDISABLE_VERSION_CHECK=1", "-DRUNTIME_TRACE_FLAG=1", "-DCJ_SDK_VERSION=0.0.1",
              "-DWINDOWS_FLAG=" + str(int(windows)), "-DMACOS_FLAG=" + str(int(mac)), "-DOHOS_FLAG=0",
              "-DANDROID_FLAG=0", "-DIOS_FLAG=0", "-DIOS_SIMULATOR_FLAG=0", "-DCMAKE_AR_PATH=" + ("llvm-ar" if windows else "ar"),
              "-DMRT_TESTABLE_INTERNALS=" + ("ON" if args.config == "testable" else "OFF"),
              "-DMRT_GC_UNIT_TESTS=OFF", "-DRUNTIME_BACKWARD_PTRAUTH_CFI=" + str(int(args.config == "pac-on"))]
+    if args.mode == "fixtures":
+        flags += ["-DCMAKE_SHARED_LINKER_FLAGS=--ld-path=" + tool_identity['linker'],
+                  "-DCMAKE_EXE_LINKER_FLAGS=--ld-path=" + tool_identity['linker']]
     prefix = "-ffile-prefix-map=" + str(tree) + "=/usr/src/cangjie-runtime"
     flags += ["-DCMAKE_" + kind + "_FLAGS=" + prefix for kind in ("C", "CXX", "ASM")]
     if windows:
-        flags += ["-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-insert-timestamp"]
+        linker_flags = "--ld-path=" + tool_identity['linker'] + " " if args.mode == "fixtures" else ""
+        flags += ["-DCMAKE_SHARED_LINKER_FLAGS=" + linker_flags + "-Wl,--no-insert-timestamp"]
     checked(["cmake", "-S", tree, "-B", build, "-G", "Ninja"] + flags, "configure")
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count())], "build")
     run(["sccache", "--show-stats"], "sccache-stats")
@@ -286,6 +307,34 @@ else:
     # Capture hashes at link completion, before any arm can replace the library.
     record["linked_runtime"] = {"path": str(libs[0]), "sha256": digest(libs[0])}
     checked(["llvm-nm" if windows else "nm", "--defined-only", libs[0]], "symbols")
+    if args.mode == "fixtures":
+        testbuild = out / "fixture-test-build"
+        record['product_macros'] = inputs.configuration(build)
+        command = inputs.metadata_command(tree, build, libdir, testbuild, tool_identity['linker'])
+        command += ["-DCMAKE_SHARED_LINKER_FLAGS=--ld-path=" + tool_identity['linker'],
+                    "-DCMAKE_EXE_LINKER_FLAGS=--ld-path=" + tool_identity['linker']]
+        checked(command, 'fixture-test-configure')
+        checked(["cmake", "--build", testbuild, "--target", "metadata", "metadata-code-shape",
+                 "--parallel", str(os.cpu_count())], 'fixture-test-build')
+        bundle.mkdir()
+        for path in list(testbuild.iterdir()) + list(libdir.iterdir()):
+            if path.is_file() and (path.suffix == extension or path.name in ('metadata', 'metadata.exe',
+                                                                           'metadata-code-shape', 'metadata-code-shape.exe')):
+                shutil.copy2(path, bundle / path.name)
+        record['fixture_bundle'] = {path.name: digest(path) for path in bundle.iterdir()}
+        save()
+        managed_name = 'cj_managed_metadata.dll' if windows else 'libcj_managed_metadata' + extension
+        checked([tool_identity['reader'], '--file-headers', '--sections', bundle / managed_name], 'fixture-input')
+        env['PATH'] = str(bundle) + os.pathsep + env.get('PATH', '')
+        env['LD_LIBRARY_PATH'] = str(bundle)
+        env['DYLD_LIBRARY_PATH'] = str(bundle)
+        metadata = bundle / ('metadata.exe' if windows else 'metadata')
+        checked(['python3', tree / 'tests/gc_unit/metadata/run.py', metadata,
+                 out / 'metadata.json'], 'metadata-regression')
+        checked([bundle / ('metadata-code-shape.exe' if windows else 'metadata-code-shape')], 'code-shape-run')
+        record['behavior'] = 'PASS: original metadata targets and code shape ran'
+        save()
+        raise SystemExit(0)
     if args.mode == "a2":
         if args.arm == "candidate":
             record["fixture_generator_sha256"] = {name: digest(tree / "tests/gc_unit" / name)
