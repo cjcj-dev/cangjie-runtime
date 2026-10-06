@@ -127,6 +127,10 @@ set(GC_UNIT_SOURCES
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
+set(MANAGED_METADATA_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/metadata")
+set(MANAGED_METADATA_CONSUMER cj_gc_unit)
+set(RUNTIME "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+include(metadata/managed_fixture.cmake)
 target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src

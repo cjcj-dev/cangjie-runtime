@@ -549,6 +549,11 @@ fi
 wait "$PACKAGE_INIT_IMAGE_PID"
 wait "$PACKAGE_INIT_UNRELATED_PID"
 wait "$METADATA_OWNER_IMAGES_PID"
+# The old ManagedMetadata tests register the header of a complete linked input.
+: "${MANAGED_METADATA_LINKER:?set the qualified CJ linker for ManagedMetadata fixtures}"
+python3 "$SRC/metadata/build_managed_fixture.py" --runtime "$ROOT/runtime" \
+  --output "$OUT" --cc "$CXX" --linker "$MANAGED_METADATA_LINKER" \
+  > "$OUT/managed-metadata-build.log" 2>&1
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
