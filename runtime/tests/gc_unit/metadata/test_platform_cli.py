@@ -42,6 +42,7 @@ class CLI(unittest.TestCase):
         self.mock = self.root / 'external-mocks'
         self.mock.mkdir()
         (self.mock / 'sitecustomize.py').write_text('''import os, platform, subprocess, pathlib, json, io, urllib.request
+platform.platform = lambda: 'synthetic-offline-host'
 platform.system = lambda: os.environ.get('MOCK_SYSTEM', 'Linux')
 platform.machine = lambda: os.environ.get('MOCK_MACHINE', 'aarch64')
 original = subprocess.check_output
