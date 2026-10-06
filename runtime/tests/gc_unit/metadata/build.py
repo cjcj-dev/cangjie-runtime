@@ -48,7 +48,7 @@ if args.mode == "fixtures":
         raise ValueError('workflow driver checkout differs from event SHA')
     record['approved_artifact_id'] = inputs.verify_run(os.environ, inputs.github_request)
     tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
-                                 inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
+                                 inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform], os.environ)
     record["workflow_sha"] = actual_workflow
     record["tool_identity"] = tool_identity
 env = dict(os.environ, GC_UNIT_GATE_SKIP="1", CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()),

@@ -49,6 +49,13 @@ def tuple_environment(repo, environment):
     return env
 
 
+def pair_receipt(root, environment, logs):
+    env = inputs.paired_environment(environment)
+    head = inputs.checkout_identity(root / 'paired-runtime', inputs.PAIRED_RUNTIME, logs=logs)
+    return dict(paired_runtime_sha=head, paired_runtime_mode=env['CJCJ_LLVM_RUNTIME_MODE'],
+                paired_runtime_url=env['CJCJ_LLVM_RUNTIME_URL'])
+
+
 def main():
     repo = Path(sys.argv[1]).resolve()
     # Keep --sdk-inputs usable before native tuple configuration is supplied.
@@ -87,7 +94,7 @@ def main():
         subprocess.run([str(x) for x in argv], cwd=repo, env=env, check=True)
     checked(['bash', 'ci/platform_tuples/fetch_sources.sh'])
     checked(['bash', 'ci/platform_tuples/build_tuple.sh'])
-    paired_head = inputs.checkout_identity(root / 'paired-runtime', inputs.PAIRED_RUNTIME, logs=logs)
+    paired = pair_receipt(root, env, logs)
     # Normal dependency build in the SAME tuple CMake tree, not a second LLVM recipe.
     checked(['cmake', '--build', root / 'llvm-build', '--target', 'llvm-readobj', 'lld',
              '--parallel', str(os.cpu_count())])
@@ -102,8 +109,7 @@ def main():
                    attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_sha=os.environ['GITHUB_SHA'],
                    tools_source_sha=TOOL_SOURCE, llvm_sha=inputs.PRODUCER,
                    compiler_sha=pins['CANGJIE_COMPILER_SHA'], flatbuffers_sha=pins['FLATBUFFERS_SHA'],
-                   paired_runtime_sha=paired_head, paired_runtime_mode=env['CJCJ_LLVM_RUNTIME_MODE'],
-                   paired_runtime_url=env['CJCJ_LLVM_RUNTIME_URL'],
+                   **paired,
                    artifact='fixed-llvm-tools-' + os.environ['TUPLE_PLATFORM'], base_sdk_sha256=base_digest,
                    tuple_manifest_sha256=inputs.sha(output / 'llvm-tools.manifest'),
                    reader_manifest_sha256=inputs.sha(output / 'llvm-tools.packaged.manifest'))

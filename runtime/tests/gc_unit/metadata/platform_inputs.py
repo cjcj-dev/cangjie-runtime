@@ -190,13 +190,17 @@ def paired_environment(environment):
                 CJCJ_LLVM_RUNTIME_URL=RUNTIME_URL, CJCJ_LLVM_RUNTIME_SHA=PAIRED_RUNTIME)
 
 
-def tool_receipt(artifact, platform, hashes):
+def tool_receipt(artifact, platform, hashes, environment=None):
     receipt = json.loads((artifact / 'producer.json').read_text())
     expected = dict(tools_source_sha=TOOL_SOURCE, llvm_sha=PRODUCER,
                     paired_runtime_sha=PAIRED_RUNTIME, paired_runtime_mode='private',
                     paired_runtime_url=RUNTIME_URL, artifact='fixed-llvm-tools-' + platform,
                     tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])
-    if any(receipt.get(key) != value for key, value in expected.items()):
+    if environment is not None:
+        expected.update(repository=environment['GITHUB_REPOSITORY'], run=environment['METADATA_TUPLE_RUN'],
+                        attempt=environment['METADATA_TUPLE_ATTEMPT'],
+                        producer_sha=environment['METADATA_TOOL_PRODUCER_SHA'])
+    if any(str(receipt.get(key)) != str(value) for key, value in expected.items()):
         raise ValueError('tool producer receipt differs from approved source/pair/manifests')
     return receipt
 
@@ -224,10 +228,10 @@ def native(path, platform):
         raise ValueError('tool is not native ' + platform + ': ' + str(path))
 
 
-def tools(artifact, output, platform, hashes):
+def tools(artifact, output, platform, hashes, environment=None):
     """Consume the existing tuple layout; never select latest or generate tools."""
     artifact = artifact.resolve()
-    receipt = tool_receipt(artifact, platform, hashes)
+    receipt = tool_receipt(artifact, platform, hashes, environment)
     manifest = artifact / 'llvm-tools.manifest'
     reader_manifest = artifact / 'llvm-tools.packaged.manifest'
     if sha(manifest) != hashes['tuple'] or sha(reader_manifest) != hashes['reader']:
