@@ -62,15 +62,31 @@ def verify_run(environment, request):
             info['path'] != '.github/workflows/metadata-platform.yml' or info['conclusion'] != 'success'):
         raise ValueError('unapproved producer repository/run/attempt/checkout/workflow')
     selected = environment['METADATA_PLATFORM']
+    jobs = request(f'/repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs')['jobs']
+    producers = [job for job in jobs if job['name'] == 'metadata-tools-' + PLATFORMS[selected]]
+    if len(producers) != 1 or producers[0]['conclusion'] != 'success':
+        raise ValueError('successful same-repository tools producer job is required')
     artifact_id = str(json.loads(environment['METADATA_TOOL_ARTIFACT_IDS'])[selected])
     artifact = request(f'/repos/{repo}/actions/artifacts/{artifact_id}')
     if (str(artifact['id']) != artifact_id or artifact['expired'] or
             artifact['name'] != 'fixed-llvm-tools-' + PLATFORMS[selected] or
             str(artifact['workflow_run']['id']) != run or
             artifact['workflow_run']['head_sha'] != info['head_sha'] or
-            artifact['created_at'] < info['run_started_at']):
+            artifact['created_at'] < info['run_started_at'] or
+            artifact['created_at'] < producers[0]['started_at'] or
+            artifact['created_at'] > producers[0]['completed_at']):
         raise ValueError('unapproved producer artifact identity or attempt')
     return artifact_id
+
+
+def github_request(endpoint):
+    import os
+    import urllib.request
+    req = urllib.request.Request('https://api.github.com' + endpoint, headers={
+        'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+        'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+    with urllib.request.urlopen(req) as response:
+        return json.load(response)
 
 
 def checkout_identity(root, expected):
@@ -185,14 +201,7 @@ if __name__ == '__main__':
     if a.configuration:
         print(';'.join(configuration(a.configuration)))
     elif a.verify_run:
-        import urllib.request
-        def request(endpoint):
-            req = urllib.request.Request('https://api.github.com' + endpoint, headers={
-                'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
-                'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
-            with urllib.request.urlopen(req) as response:
-                return json.load(response)
-        artifact_id = verify_run(os.environ, request)
+        artifact_id = verify_run(os.environ, github_request)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write('artifact_id=' + artifact_id + '\n')
     else:

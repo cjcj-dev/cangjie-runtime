@@ -46,6 +46,7 @@ if args.mode == "fixtures":
         'git', '-C', str(Path(__file__).resolve().parents[4]), 'rev-parse', 'HEAD'], text=True).strip()
     if actual_workflow != os.environ['GITHUB_SHA']:
         raise ValueError('workflow driver checkout differs from event SHA')
+    record['approved_artifact_id'] = inputs.verify_run(os.environ, inputs.github_request)
     tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
                                  inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
     record["workflow_sha"] = actual_workflow

@@ -29,10 +29,7 @@ def main():
     if os.environ['GITHUB_REPOSITORY'] != 'cjcj-dev/cangjie-runtime':
         raise ValueError('same runtime repository producer required')
     configuration = json.loads(os.environ['TOOL_PREPARE_INPUTS'])
-    for prefix, permitted in [('compiler', 'https://github.com/cjcj-dev/cangjie-compiler.git'),
-                              ('flatbuffers', 'https://github.com/google/flatbuffers.git')]:
-        if configuration[prefix + '_url'] != permitted or not re.fullmatch('[0-9a-f]{40}', configuration[prefix + '_sha']):
-            raise ValueError('unapproved public fixed source: ' + prefix)
+    pins = inputs.fields(repo / 'ci/llvm_pin.env')
     sdk = configuration['base_sdk'][selected]
     if (not sdk['url'].startswith('https://github.com/') or '/releases/download/' not in sdk['url'] or
             not re.fullmatch('[0-9a-f]{64}', sdk['sha256'])):
@@ -46,8 +43,8 @@ def main():
     if base_digest != sdk['sha256']:
         raise ValueError('base SDK archive digest differs from approved input')
     env = dict(os.environ, LLVM_URL='https://github.com/cjcj-dev/cjcj-llvm.git', LLVM_SHA=inputs.PRODUCER,
-               CANGJIE_COMPILER_URL=configuration['compiler_url'], CANGJIE_COMPILER_SHA=configuration['compiler_sha'],
-               FLATBUFFERS_URL=configuration['flatbuffers_url'], FLATBUFFERS_SHA=configuration['flatbuffers_sha'],
+               CANGJIE_COMPILER_URL=pins['CANGJIE_COMPILER_URL'], CANGJIE_COMPILER_SHA=pins['CANGJIE_COMPILER_SHA'],
+               FLATBUFFERS_URL=pins['FLATBUFFERS_URL'], FLATBUFFERS_SHA=pins['FLATBUFFERS_SHA'],
                SCCACHE_PATH=shutil.which('sccache') or '')
     if not env['SCCACHE_PATH']:
         raise ValueError('C++ sccache launcher is required')
@@ -68,7 +65,7 @@ def main():
     receipt = dict(repository=os.environ['GITHUB_REPOSITORY'], run=os.environ['GITHUB_RUN_ID'],
                    attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_sha=os.environ['GITHUB_SHA'],
                    tools_source_sha=TOOL_SOURCE, llvm_sha=inputs.PRODUCER,
-                   compiler_sha=configuration['compiler_sha'], flatbuffers_sha=configuration['flatbuffers_sha'],
+                   compiler_sha=pins['CANGJIE_COMPILER_SHA'], flatbuffers_sha=pins['FLATBUFFERS_SHA'],
                    paired_runtime_sha=subprocess.check_output(['git', '-C', str(root / 'paired-runtime'), 'rev-parse', 'HEAD'], text=True).strip(),
                    artifact='fixed-llvm-tools-' + os.environ['TUPLE_PLATFORM'], base_sdk_sha256=base_digest,
                    tuple_manifest_sha256=inputs.sha(output / 'llvm-tools.manifest'),

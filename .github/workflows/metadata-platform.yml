@@ -28,7 +28,7 @@ on:
         type: string
         default: ''
       tool_prepare_inputs:
-        description: 'Tools only JSON: compiler_url/sha, flatbuffers_url/sha, base_sdk_url/sha256 by platform'
+        description: 'Tools only JSON: base_sdk map of platform to approved archive url and sha256; sources use fixed script pins'
         type: string
         default: ''
       resume_run:
@@ -395,6 +395,7 @@ jobs:
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: 'true'
+      GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
       METADATA_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       METADATA_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
@@ -467,6 +468,7 @@ jobs:
           include-hidden-files: true
 
   tools:
+    name: metadata-tools-${{ matrix.tuple }}
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.a2_batch == 'tools' && github.ref_name == 'sym/1496-fixtures-1006' && inputs.candidate_sha == github.sha && !inputs.resume_run && !inputs.pac_resume }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
