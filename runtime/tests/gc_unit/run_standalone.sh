@@ -9,6 +9,10 @@ SRC="$ROOT/runtime/tests/gc_unit"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 CXX="${CXX:-clang++}"
 
+case "${GC_UNIT_BUILD_ONLY:-0}" in
+  0|1) ;;
+  *) echo "invalid GC_UNIT_BUILD_ONLY" >&2; exit 2 ;;
+esac
 mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
@@ -754,6 +758,24 @@ if command -v nm >/dev/null 2>&1; then
   nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|RecordCrossGen|BindLiveInfo|GetRoute' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo8GetRoute|RecordCrossGenEdge' | head -40 || true
+fi
+
+# A bounded CI caller may build the real ELF without implicitly executing
+# teardown or the complete suite. Default standalone behavior remains below.
+if [[ "${GC_UNIT_BUILD_ONLY:-0}" == 1 ]]; then
+  python3 - "$OUT" "$CXX" "$RUNTIME_LIB_DIR" "$COPY_OBJECT" <<'PYRECIPE'
+import json, os, pathlib, shlex, sys
+out, compiler, library, copy = sys.argv[1:]
+path = pathlib.Path(out)
+fields = (path / 'compile-manifest.bin').read_bytes().split(b'\0')[:-1]
+rows = [[v.decode() for v in fields[i:i+3]] for i in range(0, len(fields), 3)]
+recipe = dict(compiler=shlex.split(compiler),
+              flags=os.environ['MAIN_COMPILE_FLAGS_SERIALIZED'].splitlines(),
+              rows=rows, copy_object=copy, library=library)
+(path / 'main-build-recipe.json').write_text(json.dumps(recipe, indent=2))
+PYRECIPE
+  echo "GC_UNIT_BUILD_ONLY_DONE tests_executed=0"
+  exit 0
 fi
 
 GC_UNIT_MAIN_ENV=''
