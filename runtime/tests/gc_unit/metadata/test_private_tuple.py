@@ -99,12 +99,16 @@ class PrivateTuple(unittest.TestCase):
             path.write_text(json.dumps(bad))
             error = None
             try:
-                inputs.tools(artifact, WORK / 'never-produced', 'linux_x86_64', hashes)
+                inputs.tool_receipt(artifact, 'linux_x86_64', hashes)
             except Exception as caught:
                 error = caught
             print('TARGET_RECEIPT_REJECTION_REACHED key=' + key + ' actual=' + str(error), flush=True)
             self.assertIsInstance(error, ValueError, 'TARGET_RECEIPT_REJECTION')
             self.assertIn('tool producer receipt differs', str(error), 'TARGET_RECEIPT_REJECTION')
+            # Also traverse the actual fixture consumer. Rejection must precede
+            # manifest/payload I/O; this is not a synthetic native-tool success.
+            with self.assertRaisesRegex(ValueError, 'tool producer receipt differs'):
+                inputs.tools(artifact, WORK / 'never-produced', 'linux_x86_64', hashes)
         path.unlink()
         with self.assertRaises(FileNotFoundError):
             inputs.tools(artifact, WORK / 'never-produced', 'linux_x86_64', hashes)
