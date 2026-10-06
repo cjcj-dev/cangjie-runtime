@@ -77,6 +77,8 @@ def tools(artifact, output, platform, hashes):
     reader_manifest = artifact / 'llvm-tools.packaged.manifest'
     if sha(manifest) != hashes['tuple'] or sha(reader_manifest) != hashes['reader']:
         raise ValueError('tool manifest differs from approved dispatch input')
+    if not manifest.resolve().is_relative_to(artifact) or not reader_manifest.resolve().is_relative_to(artifact):
+        raise ValueError('manifest path escapes artifact')
     values = fields(manifest)
     linker_name = 'ld64.lld' if platform.startswith('darwin_') else 'ld.lld'
     if (values['LLVM_SHA'] != PRODUCER or values['PLATFORM'] != platform or
@@ -93,6 +95,8 @@ def tools(artifact, output, platform, hashes):
     result = {}
     for name, digest, version in ((linker_name, values['LLD_SHA256'], values['LLD_VERSION']),
                                   ('llvm-readobj', matches[0][4], matches[0][3])):
+        if not re.fullmatch('[0-9a-f]{64}', digest) or not version or version == '-' or '\t' in version:
+            raise ValueError('invalid tool digest/version in manifest')
         compressed = (artifact / (name + '.gz')).resolve()
         if not compressed.is_relative_to(artifact):
             raise ValueError('tool payload escapes artifact')
@@ -106,7 +110,10 @@ def tools(artifact, output, platform, hashes):
         actual = subprocess.check_output([str(destination), '--version'], text=True).strip()
         if version not in actual:
             raise ValueError('tool version differs from manifest: ' + name)
-        result['linker' if name == linker_name else 'reader'] = str(destination.resolve())
+        role = 'linker' if name == linker_name else 'reader'
+        result[role] = str(destination.resolve())
+        result[role + '_sha256'] = digest
+        result[role + '_version'] = actual
     return dict(result, producer=PRODUCER, platform=platform,
                 tuple_manifest_sha256=hashes['tuple'], reader_manifest_sha256=hashes['reader'])
 

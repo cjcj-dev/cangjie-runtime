@@ -28,12 +28,20 @@ record = {"head": os.environ.get("GITHUB_SHA"), "platform": platform.platform(),
           "machine": platform.machine(), "ImageOS": os.environ.get("ImageOS"),
           "ImageVersion": os.environ.get("ImageVersion"), "cpu_count": os.cpu_count(),
           "config": args.config, "arm": args.arm, "behavior": "NOT_RUN"}
+windows = platform.system() == "Windows"
+mac = platform.system() == "Darwin"
 if args.mode == "fixtures":
     expected_source, manifest_hashes = inputs.dispatch(os.environ)
     source_root = Path(os.environ["METADATA_RUNTIME_CHECKOUT"]).resolve()
     record["runtime_source_sha"] = inputs.checkout_identity(source_root, expected_source)
     source = source_root / "runtime"
     selected_platform = os.environ["METADATA_PLATFORM"]
+    native_platform = 'windows-x64' if windows else 'macos-arm64' if mac else 'linux-arm64'
+    native_arches = ('amd64', 'x86_64') if windows else ('arm64', 'aarch64')
+    if selected_platform != native_platform or platform.machine().lower() not in native_arches:
+        raise ValueError('requested tuple differs from native runner, before tool execution')
+    record['tuple_run'] = os.environ['METADATA_TUPLE_RUN']
+    record['tuple_artifact'] = 'fixed-llvm-tools-' + inputs.PLATFORMS[selected_platform]
     tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
                                  inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
     actual_workflow = subprocess.check_output([
@@ -42,8 +50,6 @@ if args.mode == "fixtures":
         raise ValueError('workflow driver checkout differs from event SHA')
     record["workflow_sha"] = actual_workflow
     record["tool_identity"] = tool_identity
-windows = platform.system() == "Windows"
-mac = platform.system() == "Darwin"
 env = dict(os.environ, GC_UNIT_GATE_SKIP="1", CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()),
            SOURCE_DATE_EPOCH="1790640000", ZERO_AR_DATE="1", SCCACHE_IDLE_TIMEOUT="0")
 
