@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -16,9 +15,37 @@ import platform_inputs as inputs
 TOOL_SOURCE = 'bf788bfcb2f1b3172cebb395169b375d1656b91d'
 
 
+
+def approved_sdk_inputs(repo):
+    """Derive URLs and digests from the already identity-checked fixed provider."""
+    provider = (repo / 'build/lib/release-component-provenance.mjs').as_uri()
+    script = """
+      const {baseSdkDownload, RELEASE_HOST_TOOLCHAIN} = await import(process.argv[1]);
+      const platforms = {'linux-arm64': 'linux-aarch64', 'windows-x64': 'windows-x64',
+                         'macos-arm64': 'darwin-arm64'};
+      const base_sdk = Object.fromEntries(Object.entries(platforms).map(([key, platform]) => {
+        const {url, sha256} = baseSdkDownload(platform, RELEASE_HOST_TOOLCHAIN);
+        return [key, {url, sha256}];
+      }));
+      console.log(JSON.stringify({base_sdk}));
+    """
+    return json.loads(subprocess.check_output(
+        ['node', '--input-type=module', '-e', script, provider], cwd=repo, text=True))
+
+
+def validate_sdk_input(repo, selected, sdk):
+    expected = approved_sdk_inputs(repo)['base_sdk'][selected]
+    if sdk != expected:
+        raise ValueError('base SDK input differs from fixed approved provider URL and digest')
+    return expected
+
+
 def main():
     repo = Path(sys.argv[1]).resolve()
     inputs.checkout_identity(repo, TOOL_SOURCE)
+    if sys.argv[2:] == ['--sdk-inputs']:
+        print(json.dumps(approved_sdk_inputs(repo), indent=2))
+        return
     selected = os.environ['METADATA_PLATFORM']
     native = ('windows-x64' if platform.system() == 'Windows' else
               'macos-arm64' if platform.system() == 'Darwin' else 'linux-arm64')
@@ -29,10 +56,7 @@ def main():
         raise ValueError('same runtime repository producer required')
     configuration = json.loads(os.environ['TOOL_PREPARE_INPUTS'])
     pins = inputs.fields(repo / 'ci/llvm_pin.env')
-    sdk = configuration['base_sdk'][selected]
-    if (not sdk['url'].startswith('https://github.com/') or '/releases/download/' not in sdk['url'] or
-            not re.fullmatch('[0-9a-f]{64}', sdk['sha256'])):
-        raise ValueError('real approved base SDK archive URL and digest required')
+    sdk = validate_sdk_input(repo, selected, configuration['base_sdk'][selected])
     root = Path(os.environ['TUPLE_ROOT']).resolve()
     root.mkdir(parents=True, exist_ok=True)
     archive = root / 'base-sdk.archive'
