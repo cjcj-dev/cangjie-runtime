@@ -44,12 +44,8 @@ class Wiring(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'resume'):
             inputs.dispatch(self.environment)
 
-    def test_checkout_consumption(self):
-        with patch.object(inputs.subprocess, 'check_output', side_effect=['a' * 40 + '\n', '']):
-            self.assertEqual(inputs.checkout_identity(self.root, 'a' * 40), 'a' * 40)
-        with patch.object(inputs.subprocess, 'check_output', return_value='d' * 40 + '\n'):
-            with self.assertRaisesRegex(ValueError, 'checkout'):
-                inputs.checkout_identity(self.root, 'a' * 40)
+    # Checkout consumption is covered by the stricter real-git tests in
+    # test_checkout_identity.py, including exact dirty refusal and restoration.
 
     def test_config_consumption(self):
         recipe = self.root / 'compile_commands.json'

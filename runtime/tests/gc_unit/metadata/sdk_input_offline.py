@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Actual prepare_tools CLI, with only external runner/download/process I/O mocked.
+"""Actual prepare_tools CLI, with external runner/download/process I/O mocked.
+
+Checkout identity is isolated here; test_checkout_identity.py qualifies real git.
 
 30 frozen cases per arm: three approved download boundaries, 24 exact-input
 rejections, and three real downloaded-byte hash rejections. No native production.
@@ -71,6 +73,7 @@ def cli(selected, sdk, downloaded=False):
                 patch.object(sys, 'argv', [str(HERE / 'prepare_tools.py'), str(SOURCE)]), \
                 patch('platform.system', return_value=systems[selected][0]), \
                 patch('platform.machine', return_value=systems[selected][1]), \
+                patch.object(prepare_tools.inputs, 'checkout_identity', return_value=prepare_tools.TOOL_SOURCE), \
                 patch('subprocess.check_output', side_effect=external_read), \
                 patch('subprocess.run', side_effect=production), \
                 patch('urllib.request.urlopen', side_effect=download), \
