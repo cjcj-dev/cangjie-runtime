@@ -27,6 +27,12 @@ int main(int argc, char** argv)
 #endif
     if (argc != 2) { return 64; }
     const std::string name(argv[1]);
+    if (name == "--list") {
+        for (const auto& test : MapleRuntime::GcUnit::Registry()) {
+            std::printf("%s.%s\n", test.suite, test.name);
+        }
+        return MapleRuntime::GcUnit::Registry().empty() ? 64 : 0;
+    }
     if (name == "--timeout-control") {
         std::this_thread::sleep_for(std::chrono::seconds(2));
         return 0;

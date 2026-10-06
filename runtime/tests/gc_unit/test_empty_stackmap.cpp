@@ -15,8 +15,8 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "UnwindStack/StackInfo.h"
 #include "gc_unittest.hpp"
-#include "metadata_code_fixture.hpp"
-#if defined(__linux__)
+#include "managed_metadata_fixture.hpp"
+#if defined(__linux__) || defined(__APPLE__)
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -35,14 +35,6 @@ public:
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}
 };
-struct Metadata {
-    const uint32_t* code = nullptr;
-    int32_t descriptor[8] = {};
-    alignas(Uptr) uint8_t stackmap[64] = {};
-};
-extern "C" { Metadata emptyStackmapMetadata; }
-GC_METADATA_CODE(emptyStackmapCode, emptyStackmapMetadata, Metadata, descriptor, 1)
-
 enum class Entry { ROOTS, HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
@@ -57,26 +49,17 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        auto& image = emptyStackmapMetadata;
-        image.code = emptyStackmapCodePC(0, descriptorPresent);
-        if (stackmapPresent) {
-            image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
-        }
-        if (zeroRootRow) {
-            // Three prologue varints, then one PC=0 row with four zero indices.
-            // All small varints occupy four bits. Register/slot/line tables are empty.
-            image.stackmap[1] = 0x10; // record count = 1
-            image.stackmap[2] = 0x11; // reg/slot index widths = 1
-            image.stackmap[3] = 0x11; // line/derived index widths = 1
-        }
-        const Uptr pc = reinterpret_cast<Uptr>(image.code);
+        ManagedMetadataFixture fixture;
+        const uint32_t* code = fixture.PC(descriptorPresent, stackmapPresent, zeroRootRow);
+        const Uptr map = zeroRootRow ? fixture.zeroMap : fixture.emptyMap;
+        const Uptr pc = reinterpret_cast<Uptr>(code);
+        fixture.Register();
         if (entry == Entry::ROOTS) {
-            ElfUnloadQuiescence::LinkImage(pc);
             FrameAddress address {};
-            FrameInfo frame(image.code);
+            FrameInfo frame(code);
             frame.SetFrameType(FrameType::MANAGED);
             frame.mFrame.SetFA(&address);
-            frame.mFrame.SetIP(image.code);
+            frame.mFrame.SetIP(code);
             const std::vector<FrameInfo> recorded {frame};
             StackFrameStream frames(recorded);
             frames.Start();
@@ -85,18 +68,17 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             _exit(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED ? 0 : 3);
         }
         if (entry == Entry::CALLER_SP) {
-            std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
+            std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", code, code + 1);
         }
-        ElfUnloadQuiescence::LinkImage(pc);
         if (entry == Entry::HEAD) {
             const auto head = CompressedStackMapHead::GetStackMapHead(pc, nullptr, pc + 4);
             if (head.GetInvalidReason(pc, pc + 4) != StackMapInvalidReason::ZERO_ENTRIES) { _exit(3); }
         } else if (entry == Entry::PROLOGUE) {
-            const FramePrologue prologue(stackmapPresent ? reinterpret_cast<Uptr*>(image.stackmap) : nullptr);
+            const FramePrologue prologue(stackmapPresent ? reinterpret_cast<Uptr*>(map) : nullptr);
             if (prologue.GetFrameSize() != 0 || prologue.GetSavedRegisterCount() != 0) { _exit(3); }
         } else if (entry == Entry::EH) {
-            FrameInfo frame(image.code);
-            frame.mFrame.SetIP(image.code + 1);
+            FrameInfo frame(code);
+            frame.mFrame.SetIP(code + 1);
             FrameAddress address {};
             frame.mFrame.SetFA(&address);
             ExceptionWrapper exception;
@@ -110,7 +92,7 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             stack.frame.callerFrameAddress = &stack.anchor;
             UnwindContext context;
             context.frameInfo.mFrame.SetFA(&stack.frame);
-            context.frameInfo.mFrame.SetIP(image.code);
+            context.frameInfo.mFrame.SetIP(code);
             context.anchorFA = reinterpret_cast<uint32_t*>(entry == Entry::PROFILE ? &stack.anchor : &stack.frame);
             MutatorManager manager;
             ProfileRuntime runtime(manager);
@@ -129,9 +111,9 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             _exit(125);
 #endif
         } else if (entry == Entry::CALLER_SP) {
-            FrameInfo frame(image.code);
+            FrameInfo frame(code);
             frame.SetFrameType(FrameType::MANAGED);
-            frame.mFrame.SetIP(image.code + 1);
+            frame.mFrame.SetIP(code + 1);
             FrameAddress address {};
             frame.mFrame.SetFA(&address);
             const auto actual = frame.CallerSP();
@@ -180,14 +162,15 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
 }
 GC_TEST(ManagedMetadata, TextDescriptorIsRegistered)
 {
-    const uint32_t* pc = emptyStackmapCodePC(0, true);
-    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    ManagedMetadataFixture fixture;
+    const uint32_t* pc = fixture.PC(true);
+    fixture.RegisterText();
     ElfUnloadQuiescence::ReadScope reader;
     const auto result = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(pc));
     const bool code = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(pc), true);
     const bool data = ElfUnloadQuiescence::IsLinkedAddress(
-        reinterpret_cast<Uptr>(emptyStackmapMetadata.descriptor));
-    const bool owned = result == reinterpret_cast<FuncDescRef>(emptyStackmapMetadata.descriptor);
+        fixture.Descriptor());
+    const bool owned = result == reinterpret_cast<FuncDescRef>(fixture.Descriptor());
     std::fprintf(stderr, "METADATA_TEXT_PC_TARGET code=%d data=%d owned=%d executed=1\n",
                  code, data, owned);
     GC_EXPECT_TRUE(code && data && owned);
@@ -195,8 +178,9 @@ GC_TEST(ManagedMetadata, TextDescriptorIsRegistered)
 
 GC_TEST(ManagedMetadata, ExecutableWithoutDescriptorIsNative)
 {
-    const uint32_t* pc = emptyStackmapCodePC(0, false);
-    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    ManagedMetadataFixture fixture;
+    const uint32_t* pc = fixture.PC(false);
+    fixture.Register();
     struct FrameInput {
         ArchUInt start;
         FrameAddress frame;
@@ -238,15 +222,9 @@ GC_TEST(ManagedMetadata, UnregisteredPCIsNative)
 
 GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 {
-    struct DataPC {
-        int32_t prefix;
-        uint32_t pc[4];
-        int32_t descriptor[8];
-    };
-    static DataPC data {};
-    data.prefix = reinterpret_cast<char*>(data.descriptor) - reinterpret_cast<char*>(&data.prefix);
-    const Uptr pc = reinterpret_cast<Uptr>(data.pc);
-    ElfUnloadQuiescence::LinkImage(pc);
+    ManagedMetadataFixture fixture;
+    const Uptr pc = fixture.Descriptor();
+    fixture.Register();
     ElfUnloadQuiescence::ReadScope reader;
     const bool registeredData = ElfUnloadQuiescence::IsLinkedAddress(pc);
     const bool code = ElfUnloadQuiescence::IsLinkedAddress(pc, true);
@@ -261,7 +239,7 @@ GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 #endif
     UnwindContext context;
     context.frameInfo.mFrame.SetFA(&input.frame);
-    context.frameInfo.mFrame.SetIP(data.pc + 1);
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(pc) + 1);
     context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
     StackFrameStream frames(&context);
     frames.Start();
@@ -287,24 +265,18 @@ extern "C" __attribute__((noinline)) void A2ObserveRoots(StackFrameStream* frame
 }
 static void CheckRootsQualification(bool present)
 {
-    auto& image = emptyStackmapMetadata;
-    image.code = emptyStackmapCodePC(0, present);
-    if (present) {
-        image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
-        image.stackmap[1] = 0x10;
-        image.stackmap[2] = 0x11;
-        image.stackmap[3] = 0x11;
-    }
-    const Uptr pc = reinterpret_cast<Uptr>(image.code);
-    ElfUnloadQuiescence::LinkImage(pc);
+    ManagedMetadataFixture fixture;
+    const uint32_t* code = fixture.PC(present, present, present);
+    const Uptr pc = reinterpret_cast<Uptr>(code);
+    fixture.Register();
     FrameAddress address {};
-    FrameInfo frame(image.code);
+    FrameInfo frame(code);
     frame.SetFrameType(FrameType::MANAGED);
     frame.mFrame.SetFA(&address);
-    frame.mFrame.SetIP(image.code);
+    frame.mFrame.SetIP(code);
     const std::vector<FrameInfo> recorded {frame};
     StackFrameStream frames(recorded);
-    A2ObserveRoots(&frames, pc, present ? reinterpret_cast<Uptr>(image.stackmap) : 0);
+    A2ObserveRoots(&frames, pc, present ? fixture.zeroMap : 0);
     GC_EXPECT_TRUE(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED);
 }
 GC_TEST(ManagedMetadata, RootsMissingQualification) { CheckRootsQualification(false); }
@@ -343,20 +315,17 @@ GC_TEST(ManagedMetadata, CallerSpNative) { CheckMetadata(Entry::CALLER_SP, false
 #include <windows.h>
 #include <cstdlib>
 using namespace MapleRuntime;
-extern "C" void MetadataNoDescriptor();
-extern "C" void MetadataNoMap();
-extern "C" void MetadataPresent();
 namespace {
 void CheckWindowsMetadata(bool caller, int kind)
 {
     // These are real PE functions with .pdata/.xdata. Never execute their
     // synthetic managed code: the product's PE lookup consumes it as input.
-    auto function = kind == 0 ? MetadataNoDescriptor : kind == 1 ? MetadataNoMap : MetadataPresent;
-    const Uptr pc = reinterpret_cast<Uptr>(function);
+    ManagedMetadataFixture fixture;
+    const Uptr pc = reinterpret_cast<Uptr>(fixture.PC(kind != 0, kind == 2));
     const Uptr ip = pc + 1;
     WinModuleManager modules;
     modules.Init();
-    ElfUnloadQuiescence::LinkImage(pc);
+    fixture.Register();
     alignas(16) Uptr storage[16] {};
     FrameAddress callerFrame {};
     FrameAddress currentFrame {};
