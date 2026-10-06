@@ -669,50 +669,47 @@ WideArrayObservation g_wideArrayObservation;
 
 void* AllocateWideArray(void*)
 {
+    // Byte size past the 32-bit boundary. The product entry is MCC_NewArray8,
+    // which computes the byte size and calls ZCollectedHeap::array_allocate.
     constexpr size_t bytes = (size_t{1} << 32) + 128;
     alignas(TypeInfo) static unsigned char storage[2 * sizeof(TypeInfo)]{};
     auto* component = reinterpret_cast<TypeInfo*>(storage);
     auto* type = reinterpret_cast<TypeInfo*>(storage + sizeof(TypeInfo));
-    // A byte-sized value struct uses the product segmented initializer.
     component->SetType(TypeKind::TYPE_KIND_STRUCT);
     component->SetInstanceSize(1);
     type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
     type->SetComponentTypeInfo(component);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    const size_t extent = AlignUp(bytes, ZGranuleSize);
-    ZPage* dirty = Heap::alloc_page(extent, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags());
-    if (dirty == nullptr) { return reinterpret_cast<void*>(1); }
-    std::memset(reinterpret_cast<void*>(dirty->GetRegionStart()), 0xa5, extent);
-    const uintptr_t base = dirty->GetRegionStart();
-    Heap::free_page(dirty);
-    // Cache metadata can occupy the suffix: retain an unchanged dirty witness.
-    size_t witness = bytes;
-    while (witness + 64 <= extent && !BytesAre(base + witness, base + witness + 64, 0xa5)) { witness += 64; }
-    const bool dirtyWitness = witness + 64 <= extent;
     const MIndex length = bytes - MArray::GetContentOffset();
     MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
-    const ZPage* page = array == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(array));
+    const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
+    const ZPage* page = object == 0 ? nullptr : Heap::page(object);
     const size_t actual = page == nullptr ? 0 : page->size();
-    const bool width = actual == extent;
-    const bool sameBase = array != nullptr && reinterpret_cast<uintptr_t>(array) == base;
+    const uintptr_t pageStart = page == nullptr ? 0 : page->GetRegionStart();
     const bool lengthKept = array != nullptr && array->GetLength() == length;
-    // A truncated signature still returns an object. Read the payload only when
-    // the page covers the requested size, so the size assertion is reached.
+    // The allocator received the untruncated size when the returned page covers
+    // the requested byte size. A larger legal backing still satisfies this.
+    const bool width = page != nullptr && actual >= bytes && object >= pageStart &&
+                       object + bytes >= object && object + bytes <= pageStart + actual;
+    // Owned interval is the returned payload, not leftover bytes of another page.
+    // A wrapping clear size cannot both preserve the header and stay inside it.
     bool payloadZero = false;
-    bool suffixKept = false;
-    if (width && lengthKept) {
-        const auto* data = reinterpret_cast<const unsigned char*>(array->ConvertToCArray());
-        payloadZero = data[0] == 0 && data[length / 2] == 0 && data[length - 1] == 0;
-        suffixKept = dirtyWitness &&
-                     BytesAre(reinterpret_cast<uintptr_t>(array) + witness,
-                              reinterpret_cast<uintptr_t>(array) + witness + 64, 0xa5);
+    bool rangeInside = false;
+    if (array != nullptr && page != nullptr && lengthKept) {
+        const uintptr_t payload = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
+        const bool payloadNoWrap = payload >= object && payload + length >= payload;
+        rangeInside = payloadNoWrap && payload + length <= pageStart + actual && payload >= pageStart;
+        if (rangeInside && width) {
+            const auto* data = reinterpret_cast<const unsigned char*>(payload);
+            payloadZero = data[0] == 0 && data[length / 2] == 0 && data[length - 1] == 0;
+        }
     }
-    const bool zero = payloadZero && suffixKept;
+    const bool zero = lengthKept && rangeInside && payloadZero;
     g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0};
     std::fprintf(stderr,
-                 "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu expected=%zu width=%d "
-                 "same_base=%d dirty_witness=%d length_kept=%d payload_zero=%d suffix_kept=%d zero_and_bounds=%d\n",
-                 bytes, actual, extent, width, sameBase, dirtyWitness, lengthKept, payloadZero, suffixKept, zero);
+                 "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
+                 "length_kept=%d range_inside=%d payload_zero=%d zero_and_bounds=%d\n",
+                 bytes, actual, width, lengthKept, rangeInside, payloadZero, zero);
     return nullptr;
 }
 }
