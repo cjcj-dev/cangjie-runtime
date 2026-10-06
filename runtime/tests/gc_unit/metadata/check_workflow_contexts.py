@@ -15,6 +15,7 @@ p.add_argument('--parser', required=True, type=Path)
 p.add_argument('--old', required=True, type=Path)
 p.add_argument('--candidate', required=True, type=Path)
 p.add_argument('--out', required=True, type=Path)
+p.add_argument('--verify-existing', action='store_true', help='Verify retained arms without rerunning parser')
 a = p.parse_args()
 a.out.mkdir(parents=True, exist_ok=True)
 version = subprocess.run([str(a.parser), '-version'], capture_output=True, text=True)
@@ -39,7 +40,9 @@ for arm, source in [('old', old), ('candidate', candidate), ('cut', cut), ('rest
     workflow.write_text(source)
     command = [str(a.parser), '-shellcheck=', '-pyflakes=', '-format', '{{json .}}', str(workflow)]
     (a.out / (arm + '.command.json')).write_text(json.dumps(command))
-    run = subprocess.run(command, capture_output=True, text=True)
+    run = (subprocess.CompletedProcess(command, int((a.out / (arm + '.rc')).read_text()),
+           (a.out / (arm + '.stdout')).read_text(), (a.out / (arm + '.stderr')).read_text())
+           if a.verify_existing else subprocess.run(command, capture_output=True, text=True))
     (a.out / (arm + '.stdout')).write_text(run.stdout)
     (a.out / (arm + '.stderr')).write_text(run.stderr)
     (a.out / (arm + '.rc')).write_text(str(run.returncode) + '\n')
@@ -49,7 +52,7 @@ for arm, source in [('old', old), ('candidate', candidate), ('cut', cut), ('rest
     print(arm, 'rc=', run.returncode, 'diagnostics=', len(errors), flush=True)
 
 def target(key):
-    return key[0] == 'expression' and 'runner' in key[1] and 'not available' in key[1]
+    return key[0] == 'expression' and key[1].startswith('context "runner" is not allowed here.')
 
 for arm, expected in [('old', 2), ('candidate', 0), ('cut', 2), ('restored', 0)]:
     actual = sum(n for key, n in results[arm].items() if target(key))
