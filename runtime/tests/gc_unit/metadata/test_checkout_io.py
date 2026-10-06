@@ -35,6 +35,11 @@ class CheckoutIo(unittest.TestCase):
     def test_clean_io(self):
         self.reject(self.head, 'tool checkout required diagnostics could not be retained')
 
+    def test_normal_log_control(self):
+        self.assertEqual(inputs.checkout_identity(self.root, self.head, role='tool', logs=self.logs), self.head)
+        self.assertTrue((self.logs / 'tool-checkout.json').is_file())
+        print('TARGET_NORMAL_LOG_CONTROL_PASS', flush=True)
+
     def test_write_io(self):
         self.logs.mkdir()
         (self.logs / 'tool-checkout-head.stdout').symlink_to('/dev/full')
