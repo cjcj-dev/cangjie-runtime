@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE))
 import prepare_tools
 
 SOURCE = Path(sys.argv[1]).resolve()
-sys.argv = [sys.argv[0]]
+sys.argv = [sys.argv[0], *sys.argv[2:]]
 REAL_CHECK_OUTPUT = subprocess.check_output
 REAL_RUN = subprocess.run
 APPROVED = prepare_tools.approved_sdk_inputs(SOURCE)
@@ -127,4 +127,10 @@ for selected in APPROVED['base_sdk']:
         setattr(SdkCli, 'test_' + selected.replace('-', '_') + '_' + kind, case(selected, kind))
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--remaining']:
+        names = [name for name in unittest.defaultTestLoader.getTestCaseNames(SdkCli)
+                 if name != 'test_linux_arm64_approved']
+        result = unittest.TextTestRunner(verbosity=2).run(
+            unittest.TestSuite(SdkCli(name) for name in names))
+        sys.exit(not result.wasSuccessful())
     unittest.main(verbosity=2)
