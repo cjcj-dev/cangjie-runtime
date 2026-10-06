@@ -212,6 +212,19 @@ urllib.request.urlopen = urlopen
     def test_native_linker(self): self.invalid_native('ld.lld')
     def test_native_reader(self): self.invalid_native('llvm-readobj')
 
+    def test_workflow_transport_control(self):
+        import yaml
+        workflow = yaml.safe_load((HERE.parents[3] / '.github/workflows/metadata-platform.yml').read_text())
+        download = next(step for step in workflow['jobs']['fixtures']['steps']
+                        if step.get('uses') == 'actions/download-artifact@v4')
+        repository = download['with']['repository']
+        self.env['METADATA_TOOL_REPOSITORY'] = (self.env['GITHUB_REPOSITORY']
+            if repository == '${{ github.repository }}' else repository)
+        result = self.invoke(False, ['--verify-run'])
+        self.assertEqual(result.returncode, 0, 'TARGET workflow transport enters actual consumer CLI')
+        self.assertEqual((self.root / 'github-output').read_text(), 'artifact_id=456\n')
+        print('TARGET_EXECUTED actual_workflow_transport_consumer')
+
     def test_service_control(self):
         self.assertEqual(self.invoke(False, ['--verify-run']).returncode, 0)
         self.assertEqual((self.root / 'github-output').read_text(), 'artifact_id=456\n')
