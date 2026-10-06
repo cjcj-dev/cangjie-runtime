@@ -226,9 +226,6 @@ def build(args):
     if configure:
         output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE)
         log_output(output)
-        if output.returncode != 0:
-            LOG.fatal("configure failed")
-            sys.exit(output.returncode)
 
     output = subprocess.Popen(build_cmd, cwd=cmake_build_dir, stdout=PIPE)
     log_output(output)

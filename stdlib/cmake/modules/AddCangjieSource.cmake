@@ -4,6 +4,19 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+set(cangjie_compile_job_pool)
+if(NOT "${CANGJIE_MAX_COMPILER_PROCESSES}" STREQUAL "")
+    if(NOT "${CANGJIE_MAX_COMPILER_PROCESSES}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "CANGJIE_MAX_COMPILER_PROCESSES must be a positive integer")
+    endif()
+    if(NOT CMAKE_GENERATOR MATCHES "^Ninja")
+        message(FATAL_ERROR "CANGJIE_MAX_COMPILER_PROCESSES requires a Ninja generator")
+    endif()
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS
+        cj_compile=${CANGJIE_MAX_COMPILER_PROCESSES})
+    set(cangjie_compile_job_pool JOB_POOL cj_compile)
+endif()
+
 set(CANGJIE_NATIVE_CANGJIE_TOOLS_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CANGJIE_LIB_DIR "modules")
 set(CANGJIE_EXECUTABLE_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin)
