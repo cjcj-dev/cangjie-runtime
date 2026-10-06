@@ -660,6 +660,13 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, DebugRejectsExtentBelowHeader)
 #endif
 
 namespace {
+struct WideArrayObservation {
+    int executed = 0;
+    int width = 0;
+    int zero = 0;
+};
+WideArrayObservation g_wideArrayObservation;
+
 void* AllocateWideArray(void*)
 {
     constexpr size_t bytes = (size_t{1} << 32) + 128;
@@ -682,27 +689,38 @@ void* AllocateWideArray(void*)
     size_t witness = bytes;
     while (witness + 64 <= extent && !BytesAre(base + witness, base + witness + 64, 0xa5)) { witness += 64; }
     const bool dirtyWitness = witness + 64 <= extent;
-    MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, bytes - MArray::GetContentOffset()));
+    const MIndex length = bytes - MArray::GetContentOffset();
+    MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
     const ZPage* page = array == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(array));
     const size_t actual = page == nullptr ? 0 : page->size();
     const bool width = actual == extent;
-    // Inspect only a valid returned extent even when the signature truncates.
-    // Thus the broken arm reaches the size/range invariant instead of faulting.
-    bool zero = width && reinterpret_cast<uintptr_t>(array) == base && dirtyWitness && array->GetLength() == bytes - MArray::GetContentOffset();
-    if (zero) {
+    const bool sameBase = array != nullptr && reinterpret_cast<uintptr_t>(array) == base;
+    const bool lengthKept = array != nullptr && array->GetLength() == length;
+    // A truncated signature still returns an object. Read the payload only when
+    // the page covers the requested size, so the size assertion is reached.
+    bool payloadZero = false;
+    bool suffixKept = false;
+    if (width && lengthKept) {
         const auto* data = reinterpret_cast<const unsigned char*>(array->ConvertToCArray());
-        for (size_t i = 0; i < bytes - MArray::GetContentOffset(); ++i) {
-            if (data[i] != 0) { zero = false; break; }
-        }
-        zero = zero && BytesAre(reinterpret_cast<uintptr_t>(array) + witness,
-                               reinterpret_cast<uintptr_t>(array) + witness + 64, 0xa5);
+        payloadZero = data[0] == 0 && data[length / 2] == 0 && data[length - 1] == 0;
+        suffixKept = dirtyWitness &&
+                     BytesAre(reinterpret_cast<uintptr_t>(array) + witness,
+                              reinterpret_cast<uintptr_t>(array) + witness + 64, 0xa5);
     }
-    std::fprintf(stderr, "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu expected=%zu width=%d zero_and_bounds=%d\n",
-                 bytes, actual, extent, width, zero);
-    return reinterpret_cast<void*>(width && zero ? 0 : 2);
+    const bool zero = payloadZero && suffixKept;
+    g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0};
+    std::fprintf(stderr,
+                 "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu expected=%zu width=%d "
+                 "same_base=%d dirty_witness=%d length_kept=%d payload_zero=%d suffix_kept=%d zero_and_bounds=%d\n",
+                 bytes, actual, extent, width, sameBase, dirtyWitness, lengthKept, payloadZero, suffixKept, zero);
+    return nullptr;
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(ArrayAllocationWidth, PreservesSizeAndClearRange)
 {
+    g_wideArrayObservation = {};
     RunAllocatorCase(AllocateWideArray, false, 8 * 1024 * 1024);
+    GC_EXPECT_EQ(g_wideArrayObservation.executed, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.width, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.zero, 1);
 }
