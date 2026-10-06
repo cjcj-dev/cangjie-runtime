@@ -703,6 +703,12 @@ void* AllocateWideArray(void*)
     const auto* before = reinterpret_cast<const unsigned char*>(dirtyStart);
     for (size_t i = 0; i < backingSize; ++i) { dirty &= before[i] == 0xa5; }
     Heap::GetHeap().undo_alloc_page(dirtyPage);
+    // Cache entries legitimately occupy bytes in the final granule. Select
+    // a still-nonzero witness after free, as in AllocateFromDirtyCache.
+    uintptr_t witness = dirtyStart + bytes;
+    while (witness + 64 <= dirtyStart + backingSize &&
+           !BytesAre(witness, witness + 64, 0xa5)) { witness += 64; }
+    const bool witnessReady = witness + 64 <= dirtyStart + backingSize;
     MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
     const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
     const ZPage* page = object == 0 ? nullptr : Heap::page(object);
@@ -731,16 +737,15 @@ void* AllocateWideArray(void*)
             const auto* data = reinterpret_cast<const unsigned char*>(payload);
             payloadZero = true;
             for (size_t i = 0; i < contentSize; ++i) { payloadZero &= data[i] == 0; }
-            sentinel = true;
-            const auto* outside = reinterpret_cast<const unsigned char*>(payload + contentSize);
-            for (size_t i = 0; i < pageStart + actual - (payload + contentSize); ++i) {
-                sentinel &= outside[i] == 0xa5;
-            }
+            sentinel = witnessReady && witness >= payload + contentSize &&
+                       witness + 64 <= pageStart + actual &&
+                       BytesAre(witness, witness + 64, 0xa5);
         }
     }
     const bool zero = dirty && reused && lengthKept && rangeInside && payloadZero && sentinel;
-    std::fprintf(stderr, "ARRAY_CLEAR_TARGET dirty=%d reused=%d content_size=%zu full_zero=%d sentinel=%d zero=%d\n",
-                 dirty, reused, contentSize, payloadZero, sentinel, zero);
+    std::fprintf(stderr, "ARRAY_CLEAR_TARGET dirty=%d reused=%d content_size=%zu full_zero=%d sentinel=%d zero=%d witness_ready=%d witness_offset=%zu\n",
+                 dirty, reused, contentSize, payloadZero, sentinel, zero, witnessReady,
+                 witness >= object ? witness - object : 0);
     g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0, dirty && reused ? 1 : 0};
     std::fprintf(stderr,
                  "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
