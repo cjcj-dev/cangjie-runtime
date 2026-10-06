@@ -12,6 +12,8 @@
 #include <thread>
 #include <fstream>
 #include <iterator>
+#include <cstdlib>
+#include <limits.h>
 #include <unistd.h>
 
 #include "gc_unittest.hpp"
@@ -437,7 +439,14 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
 namespace {
 void CheckDirectorStallGate(bool waitingForOld)
 {
-    const std::string logPath = std::string("./director-stall-") + std::to_string(getpid()) + ".log";
+    // Preserve reports with the gate evidence, never relative to the source cwd.
+    // Standalone invocations without gate configuration use an independent temp directory.
+    const char* output = std::getenv("GC_UNIT_OUT");
+    char outputPath[PATH_MAX];
+    GC_EXPECT_TRUE(realpath(output != nullptr && *output != '\0' ? output : "/tmp", outputPath) != nullptr);
+    std::string directory = std::string(outputPath) + "/director-stall.XXXXXX";
+    GC_EXPECT_TRUE(mkdtemp(&directory[0]) != nullptr);
+    const std::string logPath = directory + "/director-stall-" + std::to_string(getpid()) + ".log";
     GC_EXPECT_EQ(setenv("MRT_REPORT", logPath.c_str(), 1), 0);
     // Logger::GetLogPath appends the process id to each report path.
     const std::string actualLogPath = logPath + "." + std::to_string(getpid());
