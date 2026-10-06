@@ -10,8 +10,13 @@
 #define DESCS .section .methodinfo,"dw"
 #define MAPS .section .stackmap,"dw"
 #else
+#if defined(__arm__)
+#define DESCS .section .cjmetadata.methodinfo,"aw",%progbits
+#define MAPS .section .cjmetadata.stackmap,"aw",%progbits
+#else
 #define DESCS .section .cjmetadata.methodinfo,"aw",@progbits
 #define MAPS .section .cjmetadata.stackmap,"aw",@progbits
+#endif
 #endif
 #endif
 .text

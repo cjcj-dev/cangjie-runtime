@@ -5,6 +5,8 @@
 #include <crtdbg.h>
 #elif defined(__linux__)
 #include <link.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 int main(int argc, char** argv)
 {
@@ -24,6 +26,14 @@ int main(int argc, char** argv)
         }
         return 0;
     }, nullptr);
+#endif
+#if defined(__APPLE__)
+    for (uint32_t i = 0; i != _dyld_image_count(); ++i) {
+        const char* path = _dyld_get_image_name(i);
+        if (std::strstr(path, "libcangjie-runtime.dylib") != nullptr) {
+            std::fprintf(stderr, "RUNTIME_MODULE %s\n", path);
+        }
+    }
 #endif
     if (argc != 2) { return 64; }
     const std::string name(argv[1]);

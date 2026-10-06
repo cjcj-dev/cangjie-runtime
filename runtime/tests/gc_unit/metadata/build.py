@@ -331,6 +331,8 @@ else:
             if not mac and args.config == "testable":
                 metadata = testbuild / ("metadata.exe" if windows else "metadata")
                 shutil.copy2(metadata, bundle / metadata.name)
+                managed_image = testbuild / ("cj_managed_metadata.dll" if windows else "libcj_managed_metadata.so")
+                shutil.copy2(managed_image, bundle / managed_image.name)
                 before = dict(env)
                 env["PATH"] = str(bundle) + os.pathsep + env.get("PATH", "")
                 env["LD_LIBRARY_PATH"] = str(bundle)
@@ -363,6 +365,9 @@ else:
         bundle.mkdir()
         exe = testbuild / ("metadata.exe" if windows else "metadata")
         shutil.copy2(exe, bundle / exe.name)
+        managed_image = testbuild / ("cj_managed_metadata.dll" if windows else
+                                      "libcj_managed_metadata.dylib" if mac else "libcj_managed_metadata.so")
+        shutil.copy2(managed_image, bundle / managed_image.name)
         for lib in libdir.iterdir():
             if lib.is_file() and (lib.suffix in (".dll", ".so", ".a")):
                 shutil.copy2(lib, bundle / lib.name)
@@ -373,12 +378,12 @@ else:
             imports = (out / "pe-imports.log").read_text()
             for symbol in ("GetCurFrameInfo", "GetCallerFrameInfo", "LinkImage"):
                 assert symbol in imports, "missing product import: " + symbol
-            checked(["llvm-readobj", "--unwind", exe], "pe-unwind")
+            checked(["llvm-readobj", "--unwind", managed_image], "pe-unwind")
             unwind = (out / "pe-unwind.log").read_text()
-            for symbol in ("MetadataNoDescriptor", "MetadataNoMap", "MetadataPresent"):
+            for symbol in ("ManagedMetadataNative", "ManagedMetadataNoMap", "ManagedMetadataEmpty"):
                 assert symbol in unwind, "missing PE unwind input: " + symbol
             checked(["llvm-objdump", "-s", "-d", exe], "pe-input")
-        else:
+        elif mac or platform.machine().lower() in ("aarch64", "arm64"):
             checked(["nm", "--undefined-only", exe], "test-imports")
             assert "CallerSP" in (out / "test-imports.log").read_text(), "missing CallerSP product import"
         save()

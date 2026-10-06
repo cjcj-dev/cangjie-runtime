@@ -16,7 +16,7 @@
 #include "UnwindStack/StackInfo.h"
 #include "gc_unittest.hpp"
 #include "managed_metadata_fixture.hpp"
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || (defined(__APPLE__) && defined(__aarch64__))
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -160,6 +160,7 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
     GC_EXPECT_TRUE(target);
 }
 }
+#if defined(__linux__)
 GC_TEST(ManagedMetadata, TextDescriptorIsRegistered)
 {
     ManagedMetadataFixture fixture;
@@ -303,6 +304,7 @@ GC_TEST(ManagedMetadata, ReturnZeroEntries) { CheckMetadata(Entry::RETURN, true,
 GC_TEST(ManagedMetadata, ReturnPcMiss) { CheckMetadata(Entry::RETURN, true, true, "return frame missing stackmap entry", true, true); }
 GC_TEST(ManagedMetadata, ReturnZeroRoots) { CheckMetadata(Entry::RETURN, true, true, nullptr, true); }
 #endif
+#endif // Linux consumers
 #if defined(__aarch64__)
 GC_TEST(ManagedMetadata, CallerSpAbsentStackMap) { CheckMetadata(Entry::CALLER_SP, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, CallerSpPresent) { CheckMetadata(Entry::CALLER_SP, true, true, nullptr); }

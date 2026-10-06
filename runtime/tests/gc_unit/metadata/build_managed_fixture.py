@@ -69,7 +69,7 @@ else:
     for name in names:
         extra += [name + ':']
         if name.endswith('Size'):
-            size = (3 * (56 if system == 'macos' else 48) if name == '__CJMethodInfoSize'
+            size = ((1120 if system == 'macos' else 1096) if name in ('__CJMetadataSize', '__CJMetaDataSize') else 3 * (56 if system == 'macos' else 48) if name == '__CJMethodInfoSize'
                     else 296 if name == '__CJStackMapSize' else 0)
             extra += ['.long ' + str(size), '.long 0']
         else:
