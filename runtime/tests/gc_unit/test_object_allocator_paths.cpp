@@ -664,6 +664,7 @@ struct WideArrayObservation {
     int executed = 0;
     int width = 0;
     int zero = 0;
+    int dirtyBacking = 0;
 };
 WideArrayObservation g_wideArrayObservation;
 
@@ -681,9 +682,11 @@ void* AllocateWideArray(void*)
     type->SetComponentTypeInfo(component);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MIndex length = bytes - MArray::GetContentOffset();
-    // Prime an exact large-page cache entry with nonzero bytes, including
-    // slack after the object. Reuse identity is checked separately from zeroing.
-    const size_t backingSize = AlignUp(bytes, ZGranuleSize);
+    // The mapped cache coalesces adjacent extents, then removes a size-class
+    // slice (zMappedCache.cpp:620-668). Dirty the whole available cache extent
+    // so either end selected for the array is provably nonzero beforehand.
+    const size_t backingSize = std::max(AlignUp(bytes, ZGranuleSize),
+                                       Heap::GetHeap().page_allocator().GetCachedBytes());
     ZPage* dirtyPage = Heap::alloc_page(backingSize, ZPageType::large, PageAge::eden,
                                        NonBlockingAllocationFlags());
     if (dirtyPage == nullptr) { return reinterpret_cast<void*>(10); }
@@ -692,7 +695,7 @@ void* AllocateWideArray(void*)
     bool dirty = true;
     const auto* before = reinterpret_cast<const unsigned char*>(dirtyStart);
     for (size_t i = 0; i < backingSize; ++i) { dirty &= before[i] == 0xa5; }
-    Heap::free_page(dirtyPage);
+    Heap::GetHeap().undo_alloc_page(dirtyPage);
     MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
     const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
     const ZPage* page = object == 0 ? nullptr : Heap::page(object);
@@ -703,7 +706,9 @@ void* AllocateWideArray(void*)
     // the requested byte size. A larger legal backing still satisfies this.
     const bool width = page != nullptr && actual >= bytes && object >= pageStart &&
                        object + bytes >= object && object + bytes <= pageStart + actual;
-    const bool reused = object == dirtyStart && actual == backingSize;
+    const bool reused = page != nullptr && pageStart >= dirtyStart &&
+                        pageStart + actual >= pageStart &&
+                        pageStart + actual <= dirtyStart + backingSize;
     bool payloadZero = false;
     bool rangeInside = false;
     bool sentinel = false;
@@ -729,7 +734,7 @@ void* AllocateWideArray(void*)
     const bool zero = dirty && reused && lengthKept && rangeInside && payloadZero && sentinel;
     std::fprintf(stderr, "ARRAY_CLEAR_TARGET dirty=%d reused=%d content_size=%zu full_zero=%d sentinel=%d zero=%d\n",
                  dirty, reused, contentSize, payloadZero, sentinel, zero);
-    g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0};
+    g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0, dirty && reused ? 1 : 0};
     std::fprintf(stderr,
                  "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
                  "length_kept=%d range_inside=%d payload_zero=%d zero_and_bounds=%d\n",
@@ -742,6 +747,7 @@ GC_RUNTIME_OTHER_VM_TEST(ArrayAllocationWidth, PreservesSizeAndClearRange)
     g_wideArrayObservation = {};
     RunAllocatorCase(AllocateWideArray, false, 8 * 1024 * 1024);
     GC_EXPECT_EQ(g_wideArrayObservation.executed, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.dirtyBacking, 1);
     GC_EXPECT_EQ(g_wideArrayObservation.width, 1);
     GC_EXPECT_EQ(g_wideArrayObservation.zero, 1);
 }
