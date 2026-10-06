@@ -689,20 +689,32 @@ void* AllocateWideArray(void*)
     const size_t backingSize = std::max(AlignUp(bytes, ZGranuleSize), cached);
     // A smaller preexisting cache cannot satisfy the wide allocation but may
     // coalesce with the newly committed extent on free. Keep it occupied.
-    ZPage* reservation = cached != 0 && cached < backingSize
-        ? Heap::alloc_page(cached, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags()) : nullptr;
-    if (cached != 0 && cached < backingSize && reservation == nullptr) {
-        return reinterpret_cast<void*>(11);
+    auto& heap = Heap::GetHeap();
+    auto& exportRoots = heap.cross_vm().export_roots();
+    const auto reservationRoots = cached != 0 && cached < backingSize
+        ? AllocateRootedCapacity(cached, false) : std::vector<U64>{};
+    // A real array has a valid header and remains live while its payload is
+    // scanned. Only GC owns its page after the export root is removed.
+    MArray* seed = reinterpret_cast<MArray*>(MCC_NewArray8(type, backingSize - MArray::GetContentOffset()));
+    if (seed == nullptr) { return reinterpret_cast<void*>(10); }
+    const U64 seedRoot = exportRoots.RegisterExportRoot(seed);
+    const ZPage* seedPage = Heap::page(reinterpret_cast<uintptr_t>(seed));
+    const uintptr_t dirtyStart = seedPage->GetRegionStart();
+    const uintptr_t seedPayload = reinterpret_cast<uintptr_t>(seed->ConvertToCArray());
+    const size_t seedContentSize = seed->GetContentSize();
+    const bool seedGeometry = reinterpret_cast<uintptr_t>(seed) == dirtyStart &&
+                              seedPage->size() == backingSize &&
+                              seedPayload + seedContentSize == dirtyStart + backingSize;
+    if (!seedGeometry) {
+        std::fprintf(stderr, "ARRAY_CLEAR_PRECONDITION seed_geometry=0\n");
+        return reinterpret_cast<void*>(12);
     }
-    ZPage* dirtyPage = Heap::alloc_page(backingSize, ZPageType::large, PageAge::eden,
-                                       NonBlockingAllocationFlags());
-    if (dirtyPage == nullptr) { return reinterpret_cast<void*>(10); }
-    const uintptr_t dirtyStart = dirtyPage->GetRegionStart();
-    std::memset(reinterpret_cast<void*>(dirtyStart), 0xa5, backingSize);
-    bool dirty = true;
-    const auto* before = reinterpret_cast<const unsigned char*>(dirtyStart);
-    for (size_t i = 0; i < backingSize; ++i) { dirty &= before[i] == 0xa5; }
-    Heap::GetHeap().undo_alloc_page(dirtyPage);
+    std::memset(reinterpret_cast<void*>(seedPayload), 0xa5, seedContentSize);
+    bool dirty = BytesAre(seedPayload, seedPayload + seedContentSize, 0xa5);
+    exportRoots.RemoveExportRoot(seedRoot);
+    seed = nullptr;
+    seedPage = nullptr;
+    heap.RequestGC(GC_REASON_USER);
     // Cache entries legitimately occupy bytes in the final granule. Select
     // a still-nonzero witness after free, as in AllocateFromDirtyCache.
     uintptr_t witness = dirtyStart + bytes;
@@ -710,6 +722,7 @@ void* AllocateWideArray(void*)
            !BytesAre(witness, witness + 64, 0xa5)) { witness += 64; }
     const bool witnessReady = witness + 64 <= dirtyStart + backingSize;
     MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
+    const U64 arrayRoot = array == nullptr ? 0 : exportRoots.RegisterExportRoot(array);
     const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
     const ZPage* page = object == 0 ? nullptr : Heap::page(object);
     const size_t actual = page == nullptr ? 0 : page->size();
@@ -751,7 +764,8 @@ void* AllocateWideArray(void*)
                  "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
                  "length_kept=%d range_inside=%d payload_zero=%d zero_and_bounds=%d\n",
                  bytes, actual, width, lengthKept, rangeInside, payloadZero, zero);
-    if (reservation != nullptr) { Heap::GetHeap().undo_alloc_page(reservation); }
+    if (array != nullptr) { exportRoots.RemoveExportRoot(arrayRoot); }
+    for (const U64 root : reservationRoots) { exportRoots.RemoveExportRoot(root); }
     return nullptr;
 }
 }
