@@ -295,7 +295,8 @@ else:
             checked(["cmake", "-S", tree / "tests/gc_unit/metadata", "-B", testbuild, "-G", "Ninja",
                      "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_ASM_COMPILER=clang",
                      "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache",
-                     "-DGCV2_RUNTIME_LIB_DIR=" + str(libdir), "-DPRODUCT_BUILD=" + str(build)], "a2-test-configure")
+                     "-DMANAGED_METADATA_LINKER=" + env.get("MANAGED_METADATA_LINKER", ""),
+                 "-DGCV2_RUNTIME_LIB_DIR=" + str(libdir), "-DPRODUCT_BUILD=" + str(build)], "a2-test-configure")
             targets = ["metadata-code-shape"] if mac or args.config == "default" else ["metadata-code-shape", "metadata"]
             checked(["cmake", "--build", testbuild, "--target", *targets, "--parallel", str(os.cpu_count())], "a2-test-build")
             bundle.mkdir()
@@ -356,6 +357,7 @@ else:
         checked(["cmake", "-S", tree / "tests/gc_unit/metadata", "-B", testbuild, "-G", "Ninja",
                  "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_ASM_COMPILER=clang",
                  "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache",
+                 "-DMANAGED_METADATA_LINKER=" + env.get("MANAGED_METADATA_LINKER", ""),
                  "-DGCV2_RUNTIME_LIB_DIR=" + str(libdir), "-DPRODUCT_BUILD=" + str(build)], "test-configure")
         checked(["cmake", "--build", testbuild, "--parallel", str(os.cpu_count())], "test-build")
         if not windows:
