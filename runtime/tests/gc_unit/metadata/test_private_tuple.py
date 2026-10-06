@@ -14,7 +14,7 @@ import prepare_tools as prepare
 import platform_inputs as inputs
 
 TOOL, LLVM, RUNTIME, AUX, WORK = map(lambda x: Path(x).resolve(), sys.argv[1:6])
-sys.argv = sys.argv[:1]
+sys.argv = [sys.argv[0], *sys.argv[6:]]
 
 class PrivateTuple(unittest.TestCase):
     @classmethod

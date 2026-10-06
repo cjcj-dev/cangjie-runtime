@@ -124,7 +124,6 @@ def checkout_identity(root, expected, *, role='runtime', logs=None):
             io_errors.append(str(error))
             print(role + ' checkout diagnostic write failed: ' + str(error), file=sys.stderr)
 
-
     def capture(name, args):
         result = subprocess.run([git, '-C', str(root), *args], capture_output=True)
         output = prefix.with_name(prefix.name + '-' + name)
