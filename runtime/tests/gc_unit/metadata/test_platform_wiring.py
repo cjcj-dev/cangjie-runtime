@@ -140,7 +140,7 @@ class Wiring(unittest.TestCase):
         (self.root / 'llvm-tools.packaged.manifest').write_text('\n'.join([
             'SCHEMA=packaged-v1', 'LLVM_SHA=' + inputs.PRODUCER, 'BASE_SDK_SHA256=' + '0' * 64,
             'tool\tpresent\tsource\tversion\tsha256',
-            'llvm-readobj\t1\ttuple:' + inputs.PRODUCER + '\tLLVM fixture-version\t' + digest]))
+            'llvm-readobj\tyes\ttuple:' + inputs.PRODUCER + '\tLLVM fixture-version\t' + digest]))
         return {'tuple': inputs.sha(self.root / 'llvm-tools.manifest'),
                 'reader': inputs.sha(self.root / 'llvm-tools.packaged.manifest')}
 

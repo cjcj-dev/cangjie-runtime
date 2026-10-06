@@ -87,7 +87,7 @@ def tools(artifact, output, platform, hashes):
         raise ValueError('reader requires same-producer packaged-v1 manifest')
     rows = [line.split('\t') for line in lines[4:]]
     matches = [row for row in rows if row[0] == 'llvm-readobj']
-    if len(matches) != 1 or len(matches[0]) != 5 or matches[0][1:3] != ['1', 'tuple:' + PRODUCER]:
+    if len(matches) != 1 or len(matches[0]) != 5 or matches[0][1:3] != ['yes', 'tuple:' + PRODUCER]:
         raise ValueError('missing same-producer llvm-readobj manifest row')
     output.mkdir(parents=True, exist_ok=True)
     result = {}
