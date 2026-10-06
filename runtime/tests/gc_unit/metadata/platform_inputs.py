@@ -2,6 +2,8 @@
 import gzip
 import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 import re
 import struct
@@ -89,12 +91,76 @@ def github_request(endpoint):
         return json.load(response)
 
 
-def checkout_identity(root, expected):
-    actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+def checkout_identity(root, expected, *, role='runtime', logs=None):
+    """Check the specified tree, retaining rejection inputs before raising.
+
+    Byte outputs are kept separately: JSON never substitutes for porcelain -z.
+    Diagnostic failures are recorded and cannot turn an identity failure green.
+    """
+    root = Path(root).resolve()
+    if role not in ('tool', 'runtime'):
+        raise ValueError('unknown checkout role')
+    if logs is None:
+        logs = Path(os.environ.get('RUNNER_TEMP', str(root.parent))) / 'metadata' / 'logs'
+    logs = Path(logs).resolve()
+    logs.mkdir(parents=True, exist_ok=True)
+    prefix = logs / (role + '-checkout')
+    git = shutil.which('git')
+    if git is None:
+        raise ValueError('git executable unavailable for ' + role + ' checkout')
+    git = str(Path(git).resolve())
+    record = dict(role=role, root=str(root), expected_sha=expected,
+                  git_executable=git, commands=[])
+
+    def capture(name, args):
+        result = subprocess.run([git, '-C', str(root), *args], capture_output=True)
+        output = prefix.with_name(prefix.name + '-' + name)
+        output.with_suffix('.stdout').write_bytes(result.stdout)
+        output.with_suffix('.stderr').write_bytes(result.stderr)
+        record['commands'].append(dict(name=name, argv=args, rc=result.returncode))
+        return result
+
+    head = capture('head', ['rev-parse', 'HEAD'])
+    actual = head.stdout.decode('ascii', errors='replace').strip()
+    record['actual_sha'] = actual
+    status = capture('porcelain', ['status', '--porcelain=v1', '-z'])
+    version = capture('git-version', ['--version'])
+    record['git_version'] = version.stdout.decode('utf-8', errors='replace').strip()
+    # Only checkout/EOL settings: never dump environment or all git config.
+    capture('config', ['config', '--show-origin', '--get-regexp',
+                       r'^core\.(autocrlf|eol|safecrlf|filemode|ignorecase|symlinks|attributesfile)$'])
+    dirty = status.stdout
+    paths = []
+    entries = iter(dirty.split(b'\0'))
+    for entry in entries:
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        if code != b'??':
+            paths.append(os.fsdecode(path))
+            if b'R' in code or b'C' in code:
+                paths.append(os.fsdecode(next(entries, b'')))
+    if paths:
+        # Literal pathspecs avoid treating a tracked filename as a pattern.
+        literal = [':(literal)' + path for path in paths]
+        capture('diff', ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', *literal])
+        capture('attributes', ['check-attr', '-z', '--all', '--', *paths])
+        capture('eol', ['ls-files', '--eol', '-z', '--', *literal])
+    record['tracked_paths'] = paths
+    prefix.with_suffix('.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+    if head.returncode:
+        raise ValueError(role + ' checkout HEAD query failed')
     if actual != expected:
-        raise ValueError('runtime checkout does not match runtime_source_sha')
-    if subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip():
-        raise ValueError('runtime checkout must be clean')
+        raise ValueError(role + ' checkout does not match expected source SHA')
+    if status.returncode:
+        raise ValueError(role + ' checkout cleanliness query failed')
+    if dirty:
+        raise ValueError(role + ' checkout must be clean')
+    if any(command['rc'] != 0 for command in record['commands']
+           if command['name'] != 'config'):
+        raise ValueError(role + ' checkout diagnostics failed')
+    if next(command['rc'] for command in record['commands'] if command['name'] == 'config') not in (0, 1):
+        raise ValueError(role + ' checkout config diagnostics failed')
     return actual
 
 

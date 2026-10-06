@@ -42,7 +42,10 @@ def validate_sdk_input(repo, selected, sdk):
 
 def main():
     repo = Path(sys.argv[1]).resolve()
-    inputs.checkout_identity(repo, TOOL_SOURCE)
+    root = Path(os.environ['TUPLE_ROOT']).resolve()
+    logs = root / 'logs'
+    logs.mkdir(parents=True, exist_ok=True)
+    inputs.checkout_identity(repo, TOOL_SOURCE, role='tool', logs=logs)
     if sys.argv[2:] == ['--sdk-inputs']:
         print(json.dumps(approved_sdk_inputs(repo), indent=2))
         return
@@ -57,7 +60,6 @@ def main():
     configuration = json.loads(os.environ['TOOL_PREPARE_INPUTS'])
     pins = inputs.fields(repo / 'ci/llvm_pin.env')
     sdk = validate_sdk_input(repo, selected, configuration['base_sdk'][selected])
-    root = Path(os.environ['TUPLE_ROOT']).resolve()
     root.mkdir(parents=True, exist_ok=True)
     archive = root / 'base-sdk.archive'
     with urllib.request.urlopen(sdk['url']) as response, archive.open('wb') as output:
