@@ -19,7 +19,7 @@ sys.argv = [sys.argv[0], *sys.argv[6:]]
 class PrivateTuple(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        WORK.mkdir()
+        WORK.mkdir(exist_ok=True)
         cls.root = WORK / 'tuple'
         cls.env = prepare.tuple_environment(TOOL, dict(os.environ, TUPLE_ROOT=str(cls.root),
                 TUPLE_PLATFORM='linux_x86_64', LLVM_TARGETS='X86', PYTHONDONTWRITEBYTECODE='1'))
@@ -85,7 +85,7 @@ class PrivateTuple(unittest.TestCase):
 
     def test_receipt_rejection(self):
         artifact = WORK / 'receipt-observation'
-        artifact.mkdir()
+        artifact.mkdir(exist_ok=True)
         hashes = dict(tuple='a' * 64, reader='b' * 64)
         pair = prepare.pair_receipt(self.root, self.env, WORK / 'receipt-consumer-logs')
         record = dict(pair, tools_source_sha=inputs.TOOL_SOURCE, llvm_sha=inputs.PRODUCER,

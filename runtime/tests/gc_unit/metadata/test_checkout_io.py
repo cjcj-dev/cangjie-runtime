@@ -44,10 +44,15 @@ class CheckoutIo(unittest.TestCase):
         self.logs.mkdir()
         (self.logs / 'tool-checkout-head.stdout').symlink_to('/dev/full')
         diagnostic = io.StringIO()
+        error = None
         with contextlib.redirect_stderr(diagnostic):
-            with self.assertRaisesRegex(ValueError, '^tool checkout does not match expected source SHA$'):
+            try:
                 inputs.checkout_identity(self.root, '0' * 40, role='tool', logs=self.logs)
-        print('TARGET_WRITE_IO_REACHED identity=wrong-head', flush=True)
+            except Exception as caught:
+                error = caught
+        print('TARGET_WRITE_IO_REACHED actual=' + str(error), flush=True)
+        self.assertIsInstance(error, ValueError, 'TARGET_WRITE_IDENTITY_PRIORITY')
+        self.assertEqual(str(error), 'tool checkout does not match expected source SHA', 'TARGET_WRITE_IDENTITY_PRIORITY')
         self.assertIn('checkout diagnostic write failed:', diagnostic.getvalue())
 
 if __name__ == '__main__':
