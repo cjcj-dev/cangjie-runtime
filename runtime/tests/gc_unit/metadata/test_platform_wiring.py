@@ -19,7 +19,10 @@ class Wiring(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.environment = dict(GITHUB_SHA='a' * 40, METADATA_RUNTIME_SOURCE_SHA='a' * 40,
                                 METADATA_CANDIDATE_SHA='a' * 40, GITHUB_EVENT_NAME='workflow_dispatch',
-                                GITHUB_REF_NAME='sym/1496-fixtures-1006', METADATA_TUPLE_RUN='123',
+                                GITHUB_REF_NAME='sym/1496-fixtures-1006', METADATA_TUPLE_RUN='123', GITHUB_REPOSITORY='cjcj-dev/cangjie-runtime',
+                                METADATA_TOOL_REPOSITORY='cjcj-dev/cangjie-runtime', METADATA_TUPLE_ATTEMPT='1',
+                                METADATA_TOOL_PRODUCER_SHA='a' * 40,
+                                METADATA_TOOL_ARTIFACT_IDS=json.dumps({name: '456' for name in inputs.PLATFORMS}),
                                 METADATA_TOOL_MANIFESTS=json.dumps({name: {'tuple': 'b' * 64, 'reader': 'c' * 64}
                                                                   for name in inputs.PLATFORMS}))
 

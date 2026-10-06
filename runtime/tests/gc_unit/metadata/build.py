@@ -42,12 +42,12 @@ if args.mode == "fixtures":
         raise ValueError('requested tuple differs from native runner, before tool execution')
     record['tuple_run'] = os.environ['METADATA_TUPLE_RUN']
     record['tuple_artifact'] = 'fixed-llvm-tools-' + inputs.PLATFORMS[selected_platform]
-    tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
-                                 inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
     actual_workflow = subprocess.check_output([
         'git', '-C', str(Path(__file__).resolve().parents[4]), 'rev-parse', 'HEAD'], text=True).strip()
     if actual_workflow != os.environ['GITHUB_SHA']:
         raise ValueError('workflow driver checkout differs from event SHA')
+    tool_identity = inputs.tools(Path(os.environ["METADATA_TUPLE_ARTIFACT"]), out / "qualified-tools",
+                                 inputs.PLATFORMS[selected_platform], manifest_hashes[selected_platform])
     record["workflow_sha"] = actual_workflow
     record["tool_identity"] = tool_identity
 env = dict(os.environ, GC_UNIT_GATE_SKIP="1", CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()),

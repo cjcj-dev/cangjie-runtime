@@ -5,7 +5,7 @@ on:
       a2_batch:
         description: 'Explicit A2 batch; full retains the existing platform contract'
         type: choice
-        options: [disabled, linux-windows-candidate, full, fixtures]
+        options: [disabled, linux-windows-candidate, full, fixtures, tools]
         default: disabled
       candidate_sha:
         description: 'Exact 40-character event SHA approved for this dispatch'
@@ -16,11 +16,19 @@ on:
         type: string
         default: ''
       fixture_tuple_run:
-        description: 'Fixtures only: existing cjcj run containing same-producer native tuple and reader'
+        description: 'Fixtures only: existing runtime run containing same-producer native tuple and reader'
         type: string
         default: ''
       fixture_tool_manifests:
         description: 'Fixtures only: approved JSON platform -> tuple/reader manifest SHA256'
+        type: string
+        default: ''
+      fixture_provenance:
+        description: 'Approved JSON: repository, producer_sha, attempt, artifact_ids by platform'
+        type: string
+        default: ''
+      tool_prepare_inputs:
+        description: 'Tools only JSON: compiler_url/sha, flatbuffers_url/sha, base_sdk_url/sha256 by platform'
         type: string
         default: ''
       resume_run:
@@ -35,9 +43,10 @@ on:
     branches: ['sym/1284-implement-*']
 permissions:
   contents: read
+  actions: read
 jobs:
   prepare:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' && inputs.a2_batch != 'tools' }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +98,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
-    if: ${{ always() && !cancelled() && !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
+    if: ${{ always() && !cancelled() && !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' && inputs.a2_batch != 'tools' }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -149,7 +158,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
   pac-capability:
-    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' }}
+    if: ${{ !startsWith(github.ref_name, 'sym/1478-') && inputs.a2_batch != 'fixtures' && inputs.a2_batch != 'tools' }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -391,6 +400,10 @@ jobs:
       METADATA_RUNTIME_SOURCE_SHA: ${{ inputs.runtime_source_sha }}
       METADATA_RUNTIME_CHECKOUT: ${{ github.workspace }}/_fixture-source
       METADATA_TUPLE_RUN: ${{ inputs.fixture_tuple_run }}
+      METADATA_TOOL_REPOSITORY: ${{ fromJSON(inputs.fixture_provenance).repository }}
+      METADATA_TOOL_PRODUCER_SHA: ${{ fromJSON(inputs.fixture_provenance).producer_sha }}
+      METADATA_TUPLE_ATTEMPT: ${{ fromJSON(inputs.fixture_provenance).attempt }}
+      METADATA_TOOL_ARTIFACT_IDS: ${{ toJSON(fromJSON(inputs.fixture_provenance).artifact_ids) }}
       METADATA_TOOL_MANIFESTS: ${{ inputs.fixture_tool_manifests }}
       METADATA_TUPLE_ARTIFACT: ${{ runner.temp }}/metadata-tuple
       METADATA_PLATFORM: ${{ matrix.platform }}
@@ -405,12 +418,18 @@ jobs:
         with:
           ref: ${{ inputs.runtime_source_sha }}
           path: _fixture-source
+      - name: Verify service-side producer and artifact identity
+        id: producer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 runtime/tests/gc_unit/metadata/platform_inputs.py --verify-run
       - uses: actions/download-artifact@v4
         with:
-          repository: cjcj-dev/cjcj
+          repository: ${{ github.repository }}
           github-token: ${{ github.token }}
           run-id: ${{ inputs.fixture_tuple_run }}
-          name: fixed-llvm-tools-${{ matrix.tuple }}
+          artifact-ids: ${{ steps.producer.outputs.artifact_id }}
           path: ${{ runner.temp }}/metadata-tuple
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
@@ -446,3 +465,73 @@ jobs:
           path: ${{ runner.temp }}/metadata/
           retention-days: 3
           include-hidden-files: true
+
+  tools:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.a2_batch == 'tools' && github.ref_name == 'sym/1496-fixtures-1006' && inputs.candidate_sha == github.sha && !inputs.resume_run && !inputs.pac_resume }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {platform: linux-arm64, tuple: linux_aarch64, targets: AArch64, runner: ubuntu-24.04-arm}
+          - {platform: windows-x64, tuple: windows_x86_64, targets: 'AArch64;ARM;X86', runner: windows-2025}
+          - {platform: macos-arm64, tuple: darwin_aarch64, targets: AArch64, runner: macos-15}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      TOOL_PREPARE_INPUTS: ${{ inputs.tool_prepare_inputs }}
+      TUPLE_PLATFORM: ${{ matrix.tuple }}
+      METADATA_PLATFORM: ${{ matrix.platform }}
+      LLVM_TARGETS: ${{ matrix.targets }}
+      TUPLE_ROOT: ${{ runner.temp }}/metadata-tool-sources
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: cjcj-dev/cjcj
+          ref: bf788bfcb2f1b3172cebb395169b375d1656b91d
+          path: _tool-producer
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make git gzip
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -Sc 0
+          ulimit -Hc 0
+          python3 runtime/tests/gc_unit/metadata/prepare_tools.py _tool-producer
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -Sc 0
+          ulimit -Hc 0
+          python3 runtime/tests/gc_unit/metadata/prepare_tools.py _tool-producer
+      - name: Actual cache statistics
+        if: always()
+        shell: bash
+        run: sccache --show-stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixed-llvm-tools-${{ matrix.tuple }}
+          path: _tool-producer/fixed-toolchain/${{ matrix.tuple }}/
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tool-production-logs-${{ matrix.tuple }}
+          path: ${{ runner.temp }}/metadata-tool-sources/logs/
+          retention-days: 3

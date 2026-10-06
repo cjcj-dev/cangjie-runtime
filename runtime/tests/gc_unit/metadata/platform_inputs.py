@@ -28,7 +28,17 @@ def dispatch(environment):
     if environment.get('METADATA_RESUME_RUN', '') or environment.get('METADATA_PAC_RESUME', 'false') != 'false':
         raise ValueError('fixture mode cannot consume A2/PAC resume inputs')
     if not re.fullmatch('[1-9][0-9]*', environment.get('METADATA_TUPLE_RUN', '')):
-        raise ValueError('an existing cjcj tuple run is required')
+        raise ValueError('an existing same-repository tuple run is required')
+    repository = environment.get('GITHUB_REPOSITORY', '')
+    if repository != 'cjcj-dev/cangjie-runtime' or environment.get('METADATA_TOOL_REPOSITORY') != repository:
+        raise ValueError('tool artifacts must belong to the current runtime repository')
+    if not re.fullmatch('[1-9][0-9]*', environment.get('METADATA_TUPLE_ATTEMPT', '')):
+        raise ValueError('approved producer run attempt is required')
+    if not re.fullmatch('[0-9a-f]{40}', environment.get('METADATA_TOOL_PRODUCER_SHA', '')):
+        raise ValueError('approved runtime tool producer checkout SHA is required')
+    artifacts = json.loads(environment['METADATA_TOOL_ARTIFACT_IDS'])
+    if set(artifacts) != set(PLATFORMS) or any(not re.fullmatch('[1-9][0-9]*', str(v)) for v in artifacts.values()):
+        raise ValueError('approved artifact IDs required for all native platforms')
     manifests = json.loads(environment['METADATA_TOOL_MANIFESTS'])
     if set(manifests) != set(PLATFORMS):
         raise ValueError('manifest hashes required for all three native platforms')
@@ -36,6 +46,31 @@ def dispatch(environment):
         if set(hashes) != {'tuple', 'reader'} or any(not re.fullmatch('[0-9a-f]{64}', v) for v in hashes.values()):
             raise ValueError('invalid approved tuple/reader manifest hashes')
     return source, manifests
+
+
+def verify_run(environment, request):
+    """Verify GitHub service metadata, never an artifact's self-claimed origin."""
+    dispatch(environment)
+    repo = environment['GITHUB_REPOSITORY']
+    run = environment['METADATA_TUPLE_RUN']
+    attempt = int(environment['METADATA_TUPLE_ATTEMPT'])
+    info = request(f'/repos/{repo}/actions/runs/{run}')
+    if (str(info['id']) != run or info['run_attempt'] != attempt or
+            info['repository']['full_name'] != repo or info['head_repository']['full_name'] != repo or
+            info['head_sha'] != environment['METADATA_TOOL_PRODUCER_SHA'] or
+            info['head_branch'] != 'sym/1496-fixtures-1006' or info['event'] != 'workflow_dispatch' or
+            info['path'] != '.github/workflows/metadata-platform.yml' or info['conclusion'] != 'success'):
+        raise ValueError('unapproved producer repository/run/attempt/checkout/workflow')
+    selected = environment['METADATA_PLATFORM']
+    artifact_id = str(json.loads(environment['METADATA_TOOL_ARTIFACT_IDS'])[selected])
+    artifact = request(f'/repos/{repo}/actions/artifacts/{artifact_id}')
+    if (str(artifact['id']) != artifact_id or artifact['expired'] or
+            artifact['name'] != 'fixed-llvm-tools-' + PLATFORMS[selected] or
+            str(artifact['workflow_run']['id']) != run or
+            artifact['workflow_run']['head_sha'] != info['head_sha'] or
+            artifact['created_at'] < info['run_started_at']):
+        raise ValueError('unapproved producer artifact identity or attempt')
+    return artifact_id
 
 
 def checkout_identity(root, expected):
@@ -93,6 +128,7 @@ def tools(artifact, output, platform, hashes):
         raise ValueError('missing same-producer llvm-readobj manifest row')
     output.mkdir(parents=True, exist_ok=True)
     result = {}
+    prepared = []
     for name, digest, version in ((linker_name, values['LLD_SHA256'], values['LLD_VERSION']),
                                   ('llvm-readobj', matches[0][4], matches[0][3])):
         if not re.fullmatch('[0-9a-f]{64}', digest) or not version or version == '-' or '\t' in version:
@@ -107,6 +143,8 @@ def tools(artifact, output, platform, hashes):
             raise ValueError('tool payload digest mismatch: ' + name)
         native(destination, platform)  # before any subprocess or system fallback
         destination.chmod(0o755)
+        prepared.append((name, destination, digest, version))
+    for name, destination, digest, version in prepared:
         actual = subprocess.check_output([str(destination), '--version'], text=True).strip()
         if version not in actual:
             raise ValueError('tool version differs from manifest: ' + name)
@@ -142,8 +180,20 @@ if __name__ == '__main__':
     import os
     p = argparse.ArgumentParser()
     p.add_argument('--configuration', type=Path)
+    p.add_argument('--verify-run', action='store_true')
     a = p.parse_args()
     if a.configuration:
         print(';'.join(configuration(a.configuration)))
+    elif a.verify_run:
+        import urllib.request
+        def request(endpoint):
+            req = urllib.request.Request('https://api.github.com' + endpoint, headers={
+                'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+                'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+            with urllib.request.urlopen(req) as response:
+                return json.load(response)
+        artifact_id = verify_run(os.environ, request)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('artifact_id=' + artifact_id + '\n')
     else:
         dispatch(os.environ)
