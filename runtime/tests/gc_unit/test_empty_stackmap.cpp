@@ -37,6 +37,74 @@ public:
 };
 enum class Entry { ROOTS, HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
+// ABI input only. Classification and the complete qualification token come
+// from the public product stream, never from a fabricated MANAGED FrameInfo.
+struct MetadataFrameInput {
+    Uptr descriptorSlot = 0; // Darwin fa[-2]
+    Uptr entrySlot = 0;      // ELF fa[-1]
+    FrameAddress frame {};
+    UnwindContext context;
+    MetadataFrameInput(const uint32_t* pc, Uptr descriptor)
+    {
+        descriptorSlot = descriptor;
+#if defined(__x86_64__)
+        entrySlot = reinterpret_cast<Uptr>(pc) + 9;
+#elif defined(__arm__)
+        entrySlot = reinterpret_cast<Uptr>(pc) + 12;
+#else
+        entrySlot = reinterpret_cast<Uptr>(pc);
+#endif
+        context.frameInfo.mFrame.SetFA(&frame);
+        context.frameInfo.mFrame.SetIP(pc); // qualification kind 0, exact offset 0
+        context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    }
+    FrameInfo Classify(bool descriptorPresent)
+    {
+        StackFrameStream classifier(&context);
+        // The public classifier is separate from Start's root-map consumer:
+        // EH must be able to classify a valid owner whose root map is absent.
+        classifier.AnalyseAndSetFrameType(context);
+        const FrameInfo& result = context.frameInfo;
+        const auto& token = result.GetMetadata();
+        const bool managed = result.GetFrameType() == FrameType::MANAGED;
+        bool qualified = false;
+        {
+            ElfUnloadQuiescence::ReadScope reader;
+            qualified = managed && token.owner != 0 && token.ownerGeneration != 0 &&
+                token.metadata != 0 && token.generation != 0 &&
+                token.descriptor == descriptorSlot &&
+                token.entry == reinterpret_cast<Uptr>(context.frameInfo.mFrame.GetIP()) &&
+                ElfUnloadQuiescence::ValidateFrameMetadata(token);
+        }
+        std::fprintf(stderr, "METADATA_PUBLIC_CLASSIFICATION managed=%d native=%d qualified=%d owner=%p ownerGeneration=%llu generation=%llu descriptor=%p site=%p executed=1\n",
+            managed, result.GetFrameType() == FrameType::NATIVE, qualified,
+            reinterpret_cast<void*>(token.owner), static_cast<unsigned long long>(token.ownerGeneration),
+            static_cast<unsigned long long>(token.generation), reinterpret_cast<void*>(token.descriptor),
+            reinterpret_cast<void*>(token.site));
+        GC_EXPECT_TRUE(descriptorPresent ? qualified :
+            result.GetFrameType() == FrameType::NATIVE && token.descriptor == 0);
+        return result;
+    }
+};
+
+void RestoreQualifiedEH(const FrameInfo& frame)
+{
+    ExceptionWrapper exception;
+    EHFrameInfo eh(frame, exception);
+    CalleeSavedRegisterContext context {};
+    eh.RestoreToCallerContext(context);
+#if defined(__x86_64__)
+    const bool restored = context.rbp == reinterpret_cast<Uptr>(frame.mFrame.GetFA()->callerFrameAddress);
+#elif defined(__aarch64__)
+    const bool restored = context.x29 == reinterpret_cast<Uptr>(frame.mFrame.GetFA()->callerFrameAddress);
+#else
+    const bool restored = context.r11 == reinterpret_cast<Uptr>(frame.mFrame.GetFA()->callerFrameAddress);
+#endif
+    std::fprintf(stderr, "EH_QUALIFIED_CONSUMER_TARGET restored=%d executed=1\n", restored);
+    GC_EXPECT_TRUE(restored);
+}
+
+
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
                    bool zeroRootRow = false, bool miss = false)
 {
@@ -55,36 +123,42 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         const Uptr pc = reinterpret_cast<Uptr>(code);
         fixture.Register();
         if (entry == Entry::ROOTS) {
-            FrameAddress address {};
-            FrameInfo frame(code);
-            frame.SetFrameType(FrameType::MANAGED);
-            frame.mFrame.SetFA(&address);
-            frame.mFrame.SetIP(code);
+            MetadataFrameInput input(code, descriptorPresent ? fixture.Descriptor(stackmapPresent, zeroRootRow) : 0);
+            FrameInfo frame = input.Classify(descriptorPresent);
             const std::vector<FrameInfo> recorded {frame};
             StackFrameStream frames(recorded);
             frames.Start();
             std::fprintf(stderr, "ROOTS_RECORDED_CONSUMER_TARGET returned=1 done=%d type=%d executed=1\n",
                          frames.IsDone(), int(frames.Current().GetFrameType()));
-            _exit(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED ? 0 : 3);
+            const bool target = !frames.IsDone() && frames.Current().GetFrameType() ==
+                (descriptorPresent ? FrameType::MANAGED : FrameType::NATIVE);
+            if (!target) { _exit(3); }
+            // Queue representative proves qualification -> recorded Roots -> EH.
+            if (descriptorPresent && zeroRootRow) { RestoreQualifiedEH(frames.Current()); }
+            _exit(0);
         }
         if (entry == Entry::CALLER_SP) {
             std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", code, code + 1);
         }
         if (entry == Entry::HEAD) {
+            ElfUnloadQuiescence::ReadScope reader;
+            const auto descriptor = MFuncDesc::GetFuncDesc(pc);
+            std::fprintf(stderr, "HEAD_DESCRIPTOR_INPUT descriptor=%p startPC=%p ip=%p executed=1\n",
+                descriptor, code, reinterpret_cast<void*>(pc + 4));
+            if ((descriptor != nullptr) != descriptorPresent) { _exit(3); }
             const auto head = CompressedStackMapHead::GetStackMapHead(pc, nullptr, pc + 4);
             if (head.GetInvalidReason(pc, pc + 4) != StackMapInvalidReason::ZERO_ENTRIES) { _exit(3); }
         } else if (entry == Entry::PROLOGUE) {
             const FramePrologue prologue(stackmapPresent ? reinterpret_cast<Uptr*>(map) : nullptr);
             if (prologue.GetFrameSize() != 0 || prologue.GetSavedRegisterCount() != 0) { _exit(3); }
         } else if (entry == Entry::EH) {
-            FrameInfo frame(code);
-            frame.mFrame.SetIP(code + 1);
-            FrameAddress address {};
-            frame.mFrame.SetFA(&address);
-            ExceptionWrapper exception;
-            EHFrameInfo eh(frame, exception);
-            CalleeSavedRegisterContext context {};
-            eh.RestoreToCallerContext(context);
+            MetadataFrameInput input(code, descriptorPresent ? fixture.Descriptor(stackmapPresent, zeroRootRow) : 0);
+            FrameInfo frame = input.Classify(descriptorPresent);
+            if (descriptorPresent) { RestoreQualifiedEH(frame); }
+            else {
+                // No descriptor means NATIVE; do not fabricate a legal EH frame.
+                std::fprintf(stderr, "EH_NATIVE_NO_QUALIFICATION_TARGET native=1 descriptor=0 executed=1\n");
+            }
         } else if (entry == Entry::PROFILE || entry == Entry::PROFILE_EMPTY) {
 #if defined(__x86_64__)
             struct { uintptr_t start; FrameAddress frame; FrameAddress anchor; } stack {};
@@ -154,6 +228,14 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT && transcript.find(message) != std::string::npos;
     if (message != nullptr && entry != Entry::PROLOGUE) {
         target = target && transcript.find("startPC=") != std::string::npos && transcript.find("ip=") != std::string::npos;
+        if (entry == Entry::HEAD) {
+            // Bind the rejection to the actual registered entry and supplied IP.
+            const auto begin = transcript.find("HEAD_DESCRIPTOR_INPUT ");
+            const auto start = transcript.find("startPC=", begin);
+            const auto end = transcript.find(" executed=1", start);
+            target = target && begin != std::string::npos && start != std::string::npos && end != std::string::npos &&
+                transcript.find(std::string(message) + " " + transcript.substr(start, end - start)) != std::string::npos;
+        }
     }
     std::fprintf(stderr, "METADATA_TARGET entry=%d desc=%d map=%d status=%d target=%d assertion-executed\n",
                  int(entry), descriptorPresent, stackmapPresent, status, target);
@@ -252,9 +334,8 @@ GC_TEST(ManagedMetadata, DataAddressIsNotCode)
     GC_EXPECT_TRUE(registeredData && !code && descriptor == nullptr);
 }
 
-// These exercise CheckRegisterRoots, never AnalyseAndSetFrameType. Removing
-// its descriptor guard may hit the downstream lookup's fatal assertion; that
-// alone is not evidence of the guard's read-before-map boundary.
+// Public classification precedes recorded CheckRegisterRoots. No descriptor
+// yields NATIVE and must never acquire ordinary managed-root qualification.
 // These two independent cases stay in the observed process. Existing forked
 // rejection tests remain unchanged; no child result is substituted for a probe.
 extern "C" __attribute__((noinline)) void A2ObserveRoots(StackFrameStream* frames, Uptr pc, Uptr map)
@@ -270,15 +351,13 @@ static void CheckRootsQualification(bool present)
     const uint32_t* code = fixture.PC(present, present, present);
     const Uptr pc = reinterpret_cast<Uptr>(code);
     fixture.Register();
-    FrameAddress address {};
-    FrameInfo frame(code);
-    frame.SetFrameType(FrameType::MANAGED);
-    frame.mFrame.SetFA(&address);
-    frame.mFrame.SetIP(code);
+    MetadataFrameInput input(code, present ? fixture.Descriptor(true, true) : 0);
+    FrameInfo frame = input.Classify(present);
     const std::vector<FrameInfo> recorded {frame};
     StackFrameStream frames(recorded);
     A2ObserveRoots(&frames, pc, present ? fixture.zeroMap : 0);
-    GC_EXPECT_TRUE(!frames.IsDone() && frames.Current().GetFrameType() == FrameType::MANAGED);
+    GC_EXPECT_TRUE(!frames.IsDone() && frames.Current().GetFrameType() ==
+        (present ? FrameType::MANAGED : FrameType::NATIVE));
 }
 GC_TEST(ManagedMetadata, RootsMissingQualification) { CheckRootsQualification(false); }
 GC_TEST(ManagedMetadata, RootsZeroQualification) { CheckRootsQualification(true); }
@@ -288,12 +367,12 @@ GC_TEST(ManagedMetadata, RootsRecordedDescriptorRejected)
 GC_TEST(ManagedMetadata, RootsRecordedZeroRoots)
 { CheckMetadata(Entry::ROOTS, true, true, nullptr, true); }
 
-GC_TEST(ManagedMetadata, HeadAbsentDescriptor) { CheckMetadata(Entry::HEAD, false, false, "managed frame missing funcdesc"); }
+GC_TEST(ManagedMetadata, HeadAbsentDescriptor) { CheckMetadata(Entry::HEAD, false, false, "managed map descriptor disagrees with registered entry"); }
 GC_TEST(ManagedMetadata, HeadAbsentStackMap) { CheckMetadata(Entry::HEAD, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, HeadPresent) { CheckMetadata(Entry::HEAD, true, true, nullptr); }
 GC_TEST(ManagedMetadata, PrologueAbsent) { CheckMetadata(Entry::PROLOGUE, true, false, "FramePrologue missing stackmap"); }
 GC_TEST(ManagedMetadata, ProloguePresent) { CheckMetadata(Entry::PROLOGUE, true, true, nullptr); }
-GC_TEST(ManagedMetadata, EhAbsentDescriptor) { CheckMetadata(Entry::EH, false, false, "managed frame missing funcdesc"); }
+GC_TEST(ManagedMetadata, EhAbsentDescriptor) { CheckMetadata(Entry::EH, false, false, nullptr); }
 GC_TEST(ManagedMetadata, EhAbsentStackMap) { CheckMetadata(Entry::EH, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, EhPresent) { CheckMetadata(Entry::EH, true, true, nullptr); }
 #if defined(__x86_64__)
