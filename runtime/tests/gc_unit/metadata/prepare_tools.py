@@ -42,8 +42,11 @@ def validate_sdk_input(repo, selected, sdk):
 
 def main():
     repo = Path(sys.argv[1]).resolve()
-    root = Path(os.environ['TUPLE_ROOT']).resolve()
-    logs = root / 'logs'
+    # Keep --sdk-inputs usable before native tuple configuration is supplied.
+    log_root = os.environ.get('TUPLE_ROOT')
+    if log_root is None:
+        log_root = Path(os.environ.get('RUNNER_TEMP', str(repo.parent))) / 'metadata-tool-sources'
+    logs = Path(log_root).resolve() / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     inputs.checkout_identity(repo, TOOL_SOURCE, role='tool', logs=logs)
     if sys.argv[2:] == ['--sdk-inputs']:
@@ -60,6 +63,7 @@ def main():
     configuration = json.loads(os.environ['TOOL_PREPARE_INPUTS'])
     pins = inputs.fields(repo / 'ci/llvm_pin.env')
     sdk = validate_sdk_input(repo, selected, configuration['base_sdk'][selected])
+    root = Path(os.environ['TUPLE_ROOT']).resolve()
     root.mkdir(parents=True, exist_ok=True)
     archive = root / 'base-sdk.archive'
     with urllib.request.urlopen(sdk['url']) as response, archive.open('wb') as output:
