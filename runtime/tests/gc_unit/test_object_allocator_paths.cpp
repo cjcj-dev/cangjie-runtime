@@ -697,7 +697,7 @@ void* AllocateWideArray(void*)
         zero = zero && BytesAre(reinterpret_cast<uintptr_t>(array) + witness,
                                reinterpret_cast<uintptr_t>(array) + witness + 64, 0xa5);
     }
-    std::fprintf(stderr, "ARRAY_WIDTH_RANGE_TARGET requested=%zu allocated=%zu expected=%zu width=%d zero_and_bounds=%d\n",
+    std::fprintf(stderr, "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu expected=%zu width=%d zero_and_bounds=%d\n",
                  bytes, actual, extent, width, zero);
     return reinterpret_cast<void*>(width && zero ? 0 : 2);
 }
