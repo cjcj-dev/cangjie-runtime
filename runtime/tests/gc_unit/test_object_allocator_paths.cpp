@@ -77,10 +77,10 @@ void* AllocateSizedObjects(void*)
     return nullptr;
 }
 }
-static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = false)
+static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = false, size_t heapKB = 512 * 1024)
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 512 * 1024;
+    param.heapParam.heapSize = heapKB;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     CJThreadHandle handle = RunCJTask(task, nullptr);
@@ -473,7 +473,7 @@ void CheckNoPageAllocationPacing()
     // allocating a page. Keep this workload far below capacity: it tests the
     // removed fixed pacing delay, not the legitimate allocation-stall path.
     RuntimeParam param{};
-    param.heapParam.heapSize = 512 * 1024;
+    param.heapParam.heapSize = heapKB;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     PageAllocationTiming timing;
@@ -658,3 +658,48 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, DebugRejectsExtentBelowHeader)
     GC_EXPECT_TRUE(target);
 }
 #endif
+
+namespace {
+void* AllocateWideArray(void*)
+{
+    constexpr size_t bytes = (size_t{1} << 32) + 128;
+    alignas(TypeInfo) static unsigned char storage[2 * sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(storage);
+    auto* type = reinterpret_cast<TypeInfo*>(storage + sizeof(TypeInfo));
+    // A byte-sized value struct selects the ordinary product clearing path.
+    component->SetType(TypeKind::TYPE_KIND_STRUCT);
+    component->SetInstanceSize(1);
+    type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    type->SetComponentTypeInfo(component);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const size_t extent = AlignUp(bytes, ZGranuleSize);
+    ZPage* dirty = Heap::alloc_page(extent, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags());
+    if (dirty == nullptr) { return reinterpret_cast<void*>(1); }
+    std::memset(reinterpret_cast<void*>(dirty->GetRegionStart()), 0xa5, extent);
+    Heap::free_page(dirty);
+    MArray* array = ZCollectedHeap::heap()->array_allocate(*type, bytes, bytes - MArray::GetContentOffset(), true);
+    const ZPage* page = array == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(array));
+    const size_t actual = page == nullptr ? 0 : page->size();
+    const bool width = actual == extent;
+    // Inspect only a valid returned extent even when the signature truncates.
+    // Thus the broken arm reaches the size/range invariant instead of faulting.
+    bool zero = width && array->GetLength() == bytes - MArray::GetContentOffset();
+    if (zero) {
+        const auto* data = reinterpret_cast<const unsigned char*>(array->ConvertToCArray());
+        for (size_t i = 0; i < bytes - MArray::GetContentOffset(); ++i) {
+            if (data[i] != 0) { zero = false; break; }
+        }
+        const auto* tail = reinterpret_cast<const unsigned char*>(array) + bytes;
+        for (size_t i = 0; i < extent - bytes; ++i) {
+            if (tail[i] != 0xa5) { zero = false; break; }
+        }
+    }
+    std::fprintf(stderr, "ARRAY_WIDTH_RANGE_TARGET requested=%zu allocated=%zu expected=%zu width=%d zero_and_bounds=%d\n",
+                 bytes, actual, extent, width, zero);
+    return reinterpret_cast<void*>(width && zero ? 0 : 2);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ArrayAllocationWidth, PreservesSizeAndClearRange)
+{
+    RunAllocatorCase(AllocateWideArray, false, 8 * 1024 * 1024);
+}
