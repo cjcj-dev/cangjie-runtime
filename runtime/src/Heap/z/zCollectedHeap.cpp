@@ -118,7 +118,7 @@ void ZCollectedHeap::initialize_gc_workers()
 
 
 // ZGC zCollectedHeap.cpp:137-146. Cangjie allocation sizes are bytes.
-MArray* ZCollectedHeap::array_allocate(TypeInfo& klass, MSize size, MIndex length, bool doZero)
+MArray* ZCollectedHeap::array_allocate(TypeInfo& klass, size_t size, MIndex length, bool doZero)
 {
     const ZObjArrayAllocator allocator(klass, size, length, doZero);
     return allocator.allocate();
