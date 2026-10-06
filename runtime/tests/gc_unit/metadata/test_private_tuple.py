@@ -84,35 +84,8 @@ class PrivateTuple(unittest.TestCase):
         self.assertIn('private runtime destination is not a Git worktree', result.stderr)
 
     def test_receipt_rejection(self):
-        artifact = WORK / 'receipt-observation'
-        artifact.mkdir(exist_ok=True)
-        hashes = dict(tuple='a' * 64, reader='b' * 64)
-        pair = prepare.pair_receipt(self.root, self.env, WORK / 'receipt-consumer-logs')
-        record = dict(pair, tools_source_sha=inputs.TOOL_SOURCE, llvm_sha=inputs.PRODUCER,
-                      artifact='fixed-llvm-tools-linux_x86_64', tuple_manifest_sha256=hashes['tuple'],
-                      reader_manifest_sha256=hashes['reader'])
-        path = artifact / 'producer.json'
-        path.write_text(json.dumps(record))
-        self.assertEqual(inputs.tool_receipt(artifact, 'linux_x86_64', hashes), record)
-        for key in ('tools_source_sha', 'paired_runtime_sha'):
-            bad = dict(record, **{key: '0' * 40})
-            path.write_text(json.dumps(bad))
-            error = None
-            try:
-                inputs.tool_receipt(artifact, 'linux_x86_64', hashes)
-            except Exception as caught:
-                error = caught
-            print('TARGET_RECEIPT_REJECTION_REACHED key=' + key + ' actual=' + str(error), flush=True)
-            self.assertIsInstance(error, ValueError, 'TARGET_RECEIPT_REJECTION')
-            self.assertIn('tool producer receipt differs', str(error), 'TARGET_RECEIPT_REJECTION')
-            # Also traverse the actual fixture consumer. Rejection must precede
-            # manifest/payload I/O; this is not a synthetic native-tool success.
-            with self.assertRaisesRegex(ValueError, 'tool producer receipt differs'):
-                inputs.tools(artifact, WORK / 'never-produced', 'linux_x86_64', hashes)
-        path.unlink()
-        with self.assertRaises(FileNotFoundError):
-            inputs.tools(artifact, WORK / 'never-produced', 'linux_x86_64', hashes)
-        self.assertFalse((WORK / 'never-produced').exists())
+        from test_receipt_consumer import exercise_receipt_consumer
+        exercise_receipt_consumer(self, WORK / 'receipt-observation')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
