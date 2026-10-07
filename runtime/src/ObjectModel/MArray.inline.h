@@ -26,6 +26,7 @@ constexpr MOffset MArray::GetContentOffset()
 {
     static_assert(offsetof(MArray, length) == 8, "compiler layout ArrayLengthOffset");
     static_assert(sizeof(MArray) == 16, "compiler layout ArrayHeaderSize");
+    static_assert(LARGE_ARRAY_INIT_SEGMENT_SIZE == 65536, "compiler layout ArrayInitSegmentSize");
     return sizeof(MArray);
 }
 
