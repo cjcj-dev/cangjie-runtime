@@ -45,6 +45,12 @@ class QualificationTests(unittest.TestCase):
         self.assertIn('LANGUAGE_QUALIFICATION_UNKNOWN', result.stderr)
         print('OLD_QUALIFICATION_REJECTION_ASSERT executed rc=2', flush=True)
 
+    def test_reject_old_tuple(self):
+        result = self.invoke({'GC_UNIT_LANGUAGE_SDK': str(OLD_SDK)})
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('LANGUAGE_TOOLCHAIN_INCOMPATIBLE component=cjc', result.stderr)
+        print('OLD_TUPLE_REJECTION_ASSERT executed rc=2 component=cjc', flush=True)
+
     def test_reject_each_changed_component(self):
         sdk = OUT / 'changed-sdk'
         shutil.copytree(Path(os.environ['GC_UNIT_LANGUAGE_SDK']), sdk, symlinks=True)
@@ -104,13 +110,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--old-qualification', type=Path, required=True)
+    parser.add_argument('--old-sdk', type=Path, required=True)
     parser.add_argument('--group', choices=('acceptance', 'mutations'), default='acceptance')
     args = parser.parse_args()
     UNIT = Path(__file__).resolve().parent
     OUT = args.out.resolve()
     OUT.mkdir(parents=True, exist_ok=False)
     OLD = args.old_qualification.resolve(strict=True)
-    names = (['test_accept_current_tuple', 'test_reject_old_qualification']
+    OLD_SDK = args.old_sdk.resolve(strict=True)
+    names = (['test_accept_current_tuple', 'test_reject_old_qualification', 'test_reject_old_tuple']
              if args.group == 'acceptance' else ['test_reject_each_changed_component'])
     suite = unittest.TestSuite(QualificationTests(name) for name in names)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
