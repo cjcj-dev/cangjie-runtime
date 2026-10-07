@@ -203,6 +203,9 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
     auto& young = (*ZGeneration::young());
     ASSERT(young.IsPhaseMark());
     if (is_null(address)) return address;
+    if (!Heap::IsHeapAddress(raw(address))) {
+        return address;
+    }
     if (Heap::page(raw(address))->IsYoungRegion()) {
         young.MarkObject<false, true, true, false>(address);
         return address;
@@ -219,6 +222,9 @@ zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 {
     auto& old = (*ZGeneration::old());
     if (is_null(address)) return address;
+    if (!Heap::IsHeapAddress(raw(address))) {
+        return address;
+    }
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);
         return address;
@@ -233,6 +239,9 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
     auto& young = (*ZGeneration::young());
     ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
+    if (!Heap::IsHeapAddress(raw(address))) {
+        return address;
+    }
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
         return address;
@@ -247,6 +256,9 @@ zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
     auto& old = (*ZGeneration::old());
     CHECK(old.IsPhaseMark() || ZGeneration::young()->IsPhaseMark());
     if (is_null(address)) return address;
+    if (!Heap::IsHeapAddress(raw(address))) {
+        return address;
+    }
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
         return address;

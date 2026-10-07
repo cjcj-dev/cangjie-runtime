@@ -65,6 +65,7 @@ set(GC_UNIT_SOURCES
     test_store_barrier_buffer.cpp
     test_old_to_young_1102.cpp
     test_barrier_old_atomic.cpp
+    test_mark_from_old_nonheap.cpp
     test_zPageAge.cpp
     test_zPage.cpp
     test_value_root_identity.cpp

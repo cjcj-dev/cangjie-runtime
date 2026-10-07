@@ -372,6 +372,7 @@ MAIN_SOURCES=(
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_old_to_young_1102.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
+  "$SRC/test_mark_from_old_nonheap.cpp"
   "$SRC/test_zPageAge.cpp"
   "$SRC/test_zPage.cpp"
   "$SRC/test_value_root_identity.cpp"
