@@ -39,7 +39,7 @@ inline ObjRef ObjectManager::NewPinnedObject(const TypeInfo* ti, MSize size, boo
     CHECK_DETAIL(ti != nullptr, "ti is nullptr");
     auto obj = MObject::NewPinnedObject(const_cast<TypeInfo*>(ti), size);
     if (isFinalizer && obj != nullptr) {
-        static_cast<ObjRef>(obj)->OnFinalizerCreated();
+        obj = static_cast<MObject*>(obj->OnFinalizerCreated());
     }
     return static_cast<ObjRef>(obj);
 }

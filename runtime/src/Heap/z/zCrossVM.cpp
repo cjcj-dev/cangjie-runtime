@@ -11,6 +11,7 @@
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Common/ScopedObjectAccess.h"
 
@@ -286,6 +287,25 @@ void ZCrossVM::FindUselessExternObjects(ValueRootMap& discoveredExternObjects)
     CurrentizeValueRootMap(discoveredExternObjects);
 }
 
+namespace {
+// zHeapIterator.cpp:222,433: a strong graph walk selects the reference mode
+// at the iterator closure, not in the VM's physical field-layout enumerator.
+class ExportOwnershipOopClosure final : public OopIterateClosure {
+public:
+    ExportOwnershipOopClosure(BaseObject* object, std::vector<BaseObject*>& pending)
+        : object(object), pending(pending) {}
+    ReferenceIterationMode reference_iteration_mode() override { return DO_FIELDS_EXCEPT_REFERENT; }
+    void do_oop(RefField<>* field) override
+    {
+        BaseObject* target = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::STRONG, object, *field);
+        if (target != nullptr) { pending.push_back(target); }
+    }
+private:
+    BaseObject* const object;
+    std::vector<BaseObject*>& pending;
+};
+}
+
 void ZCrossVM::ProcessExportRoots(ValueRootMap& discoveredExternObjects)
 {
     // Cross-VM ownership inventory is separate from the strong GC root walk.
@@ -334,12 +354,8 @@ void ZCrossVM::ProcessExportRoots(ValueRootMap& discoveredExternObjects)
             }
             // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
             // do not turn a weak referent into an export ownership edge.
-            object->ForEachRefField([&](RefField<>& field) {
-                BaseObject* target = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::STRONG, object, field);
-                if (target != nullptr) {
-                    pending.push_back(target);
-                }
-            });
+            ExportOwnershipOopClosure closure(object, pending);
+            ZIterator::oop_iterate_safe(object, &closure);
         }
     }
 }

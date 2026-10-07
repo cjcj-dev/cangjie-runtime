@@ -14,7 +14,7 @@
 #include <mutex>
 #include <thread>
 
-#include "finalizer_processor_test.hpp"
+#include "Heap/z/zAccess.hpp"
 
 namespace MapleRuntime {
 extern "C" U64 CJ_MCC_CreateExportHandle(BaseObject*);
@@ -23,175 +23,6 @@ extern "C" void CJ_MCC_RemoveExportedRef(U64);
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-
-GC_OTHER_VM_TEST(FnlzRoots, RegistrationPreservesSlotAndYoungEpoch)
-{
-    // A native handle is stored at creation, not recolored when its owning
-    // list changes: weakHandle.cpp:39-50, zBarrierSet.inline.hpp:258-265.
-    auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-    alignas(8) unsigned char storage[16] = {};
-    processor.RegisterFinalizer(reinterpret_cast<BaseObject*>(storage));
-    NativeSlot* originalSlot = nullptr;
-    processor.VisitFinalizers([&](NativeSlot& slot) { originalSlot = &slot; });
-    GC_EXPECT_TRUE(originalSlot != nullptr);
-    const zpointer originalWord = originalSlot->GetFieldValue();
-    ZGlobalsPointers::flip_young_mark_start();
-    size_t seen = 0;
-    processor.VisitFinalizers([&](NativeSlot& slot) {
-        ++seen;
-        std::fprintf(stderr, "B19_REGISTRATION_EPOCH_ASSERT observed=%#lx expected=%#lx\n",
-                     raw(slot.GetFieldValue()), raw(originalWord));
-        GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(originalWord));
-        GC_EXPECT_TRUE(&slot == originalSlot);
-        GC_EXPECT_FALSE(ZPointer::is_marked_young(to_zpointer(raw(slot.GetFieldValue()))));
-    });
-    GC_EXPECT_EQ(seen, size_t(1));
-}
-
-GC_TEST(FnlzRoots, RegisteredFinalizerIsRawPointerButNotStrongRoot)
-{
-    FinalizerProcessor fp;
-    alignas(8) unsigned char storage[16] = {};
-    auto* obj = reinterpret_cast<BaseObject*>(storage);
-    fp.RegisterFinalizer(obj);
-
-    size_t strongRoots = 0;
-    fp.VisitGCRoots([&](NativeSlot&) { ++strongRoots; });
-    GC_EXPECT_EQ(strongRoots, static_cast<size_t>(0));
-
-    size_t rawPointers = 0;
-    fp.VisitNativePointers([&](NativeSlot&) { ++rawPointers; });
-    GC_EXPECT_EQ(rawPointers, static_cast<size_t>(1));
-}
-
-GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
-{
-    FinalizerProcessor fp;
-    alignas(8) unsigned char a[16] = {};
-    alignas(8) unsigned char b[16] = {};
-    fp.RegisterFinalizer(reinterpret_cast<BaseObject*>(a));
-    fp.RegisterFinalizer(reinterpret_cast<BaseObject*>(b));
-
-    U32 finalizers = fp.VisitFinalizers([](NativeSlot&) {});
-    GC_EXPECT_EQ(finalizers, static_cast<U32>(2));
-}
-
-GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
-{
-    WorkerFixture worker(0);
-    GcHeapFixture fx;
-    // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
-    // reference processing operates on objects belonging to the installed heap.
-    // This test owns the synthetic reservation only inside its child VM.
-    ZAddress::OnHeapCreated(fx.heapStart);
-    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
-    GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
-    ZStatWorkers stats;
-    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(1);
-    ZWorkers pool(ZGenerationId::old, &stats);
-    FinalizerProcessor fp(&pool);
-    ReferenceProcessor& processor = fp.GetReferenceProcessor();
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
-    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
-
-    fp.ProcessReferences([](BaseObject*) { return false; });
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
-    fp.EnqueueReferences();
-
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
-    size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
-    GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(0));
-}
-
-GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
-{
-    WorkerFixture worker(0);
-    GcHeapFixture fx;
-    // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
-    // reference processing operates on objects belonging to the installed heap.
-    // This test owns the synthetic reservation only inside its child VM.
-    ZAddress::OnHeapCreated(fx.heapStart);
-    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
-    GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
-    ZStatWorkers stats;
-    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(1);
-    ZWorkers pool(ZGenerationId::old, &stats);
-    FinalizerProcessor fp(&pool);
-    ReferenceProcessor& processor = fp.GetReferenceProcessor();
-    fp.RegisterFinalizer(fx.obj0);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
-    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
-
-    fp.ProcessReferences([](BaseObject*) { return false; });
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
-    fp.EnqueueReferences();
-
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
-    size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
-    GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
-    GC_EXPECT_EQ(fp.VisitFinalizers([](NativeSlot&) {}), static_cast<U32>(0));
-}
-
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(FnlzRoots, EnqueueBetweenIdleCheckAndCommitKeepsJobVisible)
-{
-    GcHeapFixture fixture;
-    FinalizerProcessor fp;
-    BaseObject* obj = fixture.obj0;
-    fp.RegisterFinalizer(obj);
-    std::atomic<bool> start{false};
-    std::atomic<bool> accepted{false};
-    std::thread finisher([&] {
-        while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-        FinalizerProcessorTest::FinishBatch(fp);
-    });
-    std::thread producer([&] {
-        while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-        accepted.store(FinalizerProcessorTest::EnqueueRegistered(fp, obj), std::memory_order_release);
-    });
-    start.store(true, std::memory_order_release);
-    finisher.join();
-    producer.join();
-    // Both legal lock orders must preserve the registered job and its strong root.
-    GC_EXPECT_TRUE(accepted.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(FinalizerProcessorTest::HasJob(fp));
-    size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](NativeSlot& root) {
-        GC_EXPECT_TRUE(to_object(root.GetTargetObject()) == obj);
-        ++queuedRoots;
-    });
-    GC_EXPECT_EQ(queuedRoots, size_t(1));
-
-}
-#endif
-
-GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveRegistrationGrowth)
-{
-    auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-    alignas(8) unsigned char objects[130][16] = {};
-    std::vector<NativeSlot*> slots;
-    std::vector<zpointer> words;
-    for (auto& object : objects) {
-        auto* value = reinterpret_cast<BaseObject*>(object);
-        processor.RegisterFinalizer(value);
-        processor.VisitFinalizers([&](NativeSlot& slot) {
-            if (to_object(slot.GetTargetObject()) == value) { slots.push_back(&slot); }
-        });
-        words.push_back(slots.back()->GetFieldValue());
-    }
-    size_t observed = 0;
-    processor.VisitFinalizers([&](NativeSlot& slot) {
-        auto found = std::find(slots.begin(), slots.end(), &slot);
-        if (found == slots.end()) { return; }
-        const size_t index = static_cast<size_t>(found - slots.begin());
-        ++observed;
-        GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(words[index]));
-    });
-    std::fprintf(stderr, "ROOT_STORAGE_TARGET finalizer_registered=%zu expected=%zu\n", observed, slots.size());
-    GC_EXPECT_EQ(observed, slots.size());
-}
 
 GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
 {
@@ -235,4 +66,25 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
     });
     std::fprintf(stderr, "ROOT_STORAGE_TARGET export_released_remaining=%zu\n", releasedSeen);
     GC_EXPECT_EQ(releasedSeen, size_t(0));
+}
+
+// universe.cpp:619-626 and java_lang_ref_Reference pending-list exchange:
+// one strong native root holds the managed pending chain, not one per referent.
+GC_OTHER_VM_TEST(FnlzRoots, PendingTransferClearsPersistentRoot)
+{
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    GcHeapFixture fixture;
+    auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+    GC_EXPECT_TRUE(processor.SwapPendingList(fixture.obj0) == nullptr);
+    NativeSlot* pending = nullptr;
+    processor.VisitGCRoots([&](NativeSlot& slot) { pending = &slot; });
+    GC_EXPECT_TRUE(pending != nullptr);
+    BaseObject* transferred = processor.WaitPending();
+    const zpointer cleared = pending->GetFieldValue();
+    const bool same = transferred == fixture.obj0;
+    const bool released = is_null_any(cleared) && ZPointer::is_mark_good(cleared);
+    std::fprintf(stderr, "REFERENCE1356_PENDING transfer=%d cleared_store_good=%d slots=%zu\n",
+                 same, released, processor.StrongRootStorage().AllocationCount());
+    GC_EXPECT_TRUE(same && released);
+    GC_EXPECT_EQ(processor.StrongRootStorage().AllocationCount(), size_t(1));
 }

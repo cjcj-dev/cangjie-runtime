@@ -77,7 +77,24 @@ run_ohos_host_arm() {
   libc_real="$(readlink -f "$libc_real")"
   cp -f "$libc_real" "$runroot/libc.so"
 
-  if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
+  if [[ "${GC_UNIT_OHOS_ARMED:-}" == 1 && -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
+    echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
+    "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
+      -fvisibility-inlines-hidden "${TEST_DEFINES[@]}" -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
+      -DMRT_TESTABLE_INTERNALS=1 -DMRT_PRODUCT_TESTABLE_INTERNALS=1 -include string \
+      -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+      -I"$ROOT/runtime/src/Heap/z/os/linux" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include" \
+      -I"$ROOT/runtime/src/CJThread/src/base/mid/include" \
+      -I"$ROOT/runtime/include" \
+      -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
+      "${runtime_include_flags[@]}" \
+      "$SRC/gc_worker_fixture.cpp" "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" \
+      "$SRC/test_verify_fail_close.cpp" \
+      -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
+      -lcangjie-runtime -lboundscheck -o "$elf"
+  elif [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
     echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
     "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
       -fvisibility-inlines-hidden "${TEST_DEFINES[@]}" -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
@@ -85,6 +102,8 @@ run_ohos_host_arm() {
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
       -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include" \
+      -I"$ROOT/runtime/src/CJThread/src/base/mid/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
       "${runtime_include_flags[@]}" \
@@ -120,14 +139,23 @@ run_ohos_host_arm() {
       return 24
     fi
   done
-  for symbol in \
-      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
-      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
-    if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
-      echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
-      return 25
-    fi
-  done
+  if [[ "${GC_UNIT_OHOS_ARMED:-}" == 1 ]]; then
+    for symbol in 'CJThreadBuild' 'pause_verify'; do
+      if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
+        echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
+        return 25
+      fi
+    done
+  else
+    for symbol in \
+        'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
+        'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
+      if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
+        echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
+        return 25
+      fi
+    done
+  fi
 
   objdump -drC "$so" | sed -n \
     '/<MapleRuntime::ZCrossVM::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
@@ -183,6 +211,48 @@ run_ohos_host_arm() {
     printf '%s\n' "$git_status"
     echo "SOURCE_STATUS_END"
   } >"$OUT/ohos_host_lineage.txt"
+
+  if [[ "${GC_UNIT_OHOS_ARMED:-}" == 1 ]]; then
+    local -a armed_tests=(
+      ZVerifyCarrier.ScheduledCallbackChangesSharedObservation
+      ZVerifyCarrier.ArmedBadRootIsSkipped
+    )
+    set +e
+    env LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      "$elf" --gtest_list_tests >"$OUT/ohos_armed.list" 2>"$OUT/ohos_armed.list.stderr"
+    local list_rc=$?
+    set -e
+    echo "$list_rc" >"$OUT/ohos_armed.list.rc"
+    [[ $list_rc -eq 0 ]] || return "$list_rc"
+    awk '/^[A-Za-z_][A-Za-z0-9_]*\.$/ { suite=$0; sub(/\.$/, "", suite); next }
+         /^[[:space:]]+[A-Za-z0-9_]+$/ { name=$0; sub(/^[[:space:]]+/, "", name); print suite "." name }' \
+      "$OUT/ohos_armed.list" >"$OUT/ohos_armed.names"
+    for test_name in "${armed_tests[@]}"; do
+      if ! grep -Fxq "$test_name" "$OUT/ohos_armed.names"; then
+        echo "GC_UNIT_OHOS_ARMED_REJECT name=$test_name reason=not_enumerated" >&2
+        return 3
+      fi
+    done
+    for test_name in "${armed_tests[@]}"; do
+      key=${test_name##*.}
+      set +e
+      env LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$elf" "--gtest_filter=$test_name" >"$OUT/ohos_armed_$key.log" 2>&1
+      rc=$?
+      set -e
+      echo "$rc" >"$OUT/ohos_armed_$key.rc"
+      echo "GC_UNIT_OHOS_ARMED_FILTER test=$test_name rc=$rc log=$OUT/ohos_armed_$key.log"
+      [[ $rc -eq 0 ]] || return "$rc"
+    done
+    {
+      echo "SCHEMA_VERSION=1"
+      echo "CONFIGURATION=MRT_GC_UNIT_OHOS_HOST"
+      echo "MODE=ARMED"
+      echo "RESULT=PASS"
+      sha256sum "$elf" "$so" "$bounds"
+    } >"$receipt"
+    return 0
+  fi
 
   declare -a tests=(
     OHOSCycle.HandlerChainThroughMajorEntry
@@ -287,6 +357,8 @@ INC_FLAGS=(
   -I"$ROOT/runtime/src/Heap"
   -I"$ROOT/runtime/src/Heap/z/os/linux"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
+  -I"$ROOT/runtime/src/CJThread/src/runtime/util/list/include"
+  -I"$ROOT/runtime/src/CJThread/src/base/mid/include"
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
 )
@@ -300,12 +372,17 @@ fi
 # archives cannot re-export weak copies of the product symbols exercised via
 # dlsym in clear_entries_product_unit.cpp. Compile each translation unit independently so
 # kkk2 can use its cores; link in the original source order.
+EXTRA_CXXFLAGS=()
+if [[ -n "${GC_UNIT_EXTRA_CXXFLAGS:-}" ]]; then
+  read -r -a EXTRA_CXXFLAGS <<<"$GC_UNIT_EXTRA_CXXFLAGS"
+fi
 MAIN_COMPILE_FLAGS=(
   -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
   -fvisibility-inlines-hidden
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
   "${INC_FLAGS[@]}"
+  "${EXTRA_CXXFLAGS[@]}"
 )
 # A real second image for package-cache generation and code-identity tests.
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
@@ -635,8 +712,8 @@ echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 # satisfy its consumers, then require the executable to import those methods.
 REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::discover_reference('
-  'MapleRuntime::ReferenceProcessor::ProcessReferences('
-  'MapleRuntime::ReferenceProcessor::EnqueueReferences('
+  'MapleRuntime::ReferenceProcessor::process_references('
+  'MapleRuntime::ReferenceProcessor::enqueue_references('
 )
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
@@ -783,14 +860,23 @@ GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
 export GC_UNIT_MAIN_ENV
 "$CXX" -std=c++17 -pthread "$SRC/test_other_vm_exit.cpp" -o "$OUT/cj_gc_other_vm_exit_unit"
 sha256sum "$OUT/cj_gc_other_vm_exit_unit" > "$OUT/other_vm_exit.sha256"
+other_vm_exit_rc=0
+teardown_rc=0
+if [[ -z "${GC_UNIT_ONLY_TESTS+x}" ]]; then
+  set +e
+  "$OUT/cj_gc_other_vm_exit_unit" > "$OUT/other_vm_exit.log" 2>&1
+  other_vm_exit_rc=$?
+  cat "$OUT/other_vm_exit.log"
+  echo "GC_UNIT_OTHER_VM_EXIT_RC=$other_vm_exit_rc"
+  bash "$SRC/run_other_vm_teardown.sh" "$OUT/cj_gc_unit" "$RUNTIME_LIB_DIR" "$OUT"
+  teardown_rc=$?
+  echo "GC_UNIT_OTHER_VM_TEARDOWN_RC=$teardown_rc"
+  set -e
+else
+  echo "GC_UNIT_OTHER_VM_EXIT_RC=SKIPPED_ONLY_TESTS"
+  echo "GC_UNIT_OTHER_VM_TEARDOWN_RC=SKIPPED_ONLY_TESTS"
+fi
 set +e
-"$OUT/cj_gc_other_vm_exit_unit" > "$OUT/other_vm_exit.log" 2>&1
-other_vm_exit_rc=$?
-cat "$OUT/other_vm_exit.log"
-echo "GC_UNIT_OTHER_VM_EXIT_RC=$other_vm_exit_rc"
-bash "$SRC/run_other_vm_teardown.sh" "$OUT/cj_gc_unit" "$RUNTIME_LIB_DIR" "$OUT"
-teardown_rc=$?
-echo "GC_UNIT_OTHER_VM_TEARDOWN_RC=$teardown_rc"
 bash "$SRC/run_parallel_tests.sh" \
   "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
 runner_rc=$?

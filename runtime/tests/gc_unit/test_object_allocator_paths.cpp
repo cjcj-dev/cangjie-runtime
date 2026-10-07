@@ -397,7 +397,8 @@ void* AllocateFromDirtyCache(void*)
     if (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) {
         object = reinterpret_cast<uintptr_t>(MCC_NewArray8(arrayType, bytes - MArray::GetContentOffset()));
     } else if (kind == ZeroCase::Finalizer) {
-        object = reinterpret_cast<uintptr_t>(MCC_NewFinalizer(type, bytes));
+        // #1394 separates constructor-completion registration from allocation.
+        object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
     } else {
         object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
     }

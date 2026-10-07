@@ -21,11 +21,12 @@ import std.time.MonoTime
  *   }                     |  } finally { m.unlock() }
  */
 public class Mutex <: UniqueLock {
+    let carrier = ReferenceMutex()
     /*
      * @throws IllegalSynchronizationStateException if `ptr` is null
      */
     public init() {
-        var isNull = mutexInit(this)
+        let isNull = !carrier.initialize()
         if (isNull) {
             throw IllegalSynchronizationStateException("Failed to initialize mutex.")
         }
@@ -36,7 +37,7 @@ public class Mutex <: UniqueLock {
      * Support reentrant.
      */
     public func lock(): Unit {
-        mutexLock(this)
+        carrier.lock()
     }
 
     /**
@@ -45,7 +46,7 @@ public class Mutex <: UniqueLock {
      * @return returns true, otherwise.
      */
     public func tryLock(): Bool {
-        return mutexTryLock(this)
+        return carrier.tryLock()
     }
 
     /**
@@ -55,7 +56,7 @@ public class Mutex <: UniqueLock {
      */
     public func unlock(): Unit {
         checkMutexStatus()
-        mutexUnlock(this)
+        carrier.unlock()
     }
 
     /**
@@ -71,7 +72,7 @@ public class Mutex <: UniqueLock {
      * @throws IllegalSynchronizationStateException if the current thread does not hold the lock.
      */
     func checkMutexStatus(): Unit {
-        let status = mutexCheckStatus(this)
+        let status = carrier.isOwned()
         if (!status) {
             throw IllegalSynchronizationStateException("Cannot unlock mutex: not locked by current thread.")
         }
@@ -94,7 +95,7 @@ class MutexCondition <: Condition {
      */
     public func wait(): Unit {
         condition.checkMutexStatus()
-        monitorWait(condition, MAX_TIMEOUT_NS)
+        condition.carrier.wait(MAX_TIMEOUT_NS)
     }
 
     /**
@@ -107,7 +108,7 @@ class MutexCondition <: Condition {
     public func wait(timeout!: Duration): Bool {
         let timeoutNanos = getTimeoutNanos(timeout)
         condition.checkMutexStatus()
-        return monitorWait(condition, timeoutNanos)
+        return condition.carrier.wait(timeoutNanos)
     }
 
     /**
@@ -117,7 +118,7 @@ class MutexCondition <: Condition {
     public func waitUntil(predicate: () -> Bool): Unit {
         condition.checkMutexStatus()
         while (!predicate()) {
-            monitorWait(condition, MAX_TIMEOUT_NS)
+            condition.carrier.wait(MAX_TIMEOUT_NS)
         }
     }
 
@@ -136,7 +137,7 @@ class MutexCondition <: Condition {
                 return false
             }
 
-            let success = monitorWait(condition, timeoutNanos - spentTime)
+            let success = condition.carrier.wait(timeoutNanos - spentTime)
             if (!success) { // timeout
                 return false
             }
@@ -151,7 +152,7 @@ class MutexCondition <: Condition {
      */
     public func notify(): Unit {
         condition.checkMutexStatus()
-        monitorNotify(condition)
+        condition.carrier.notify()
     }
 
     /**
@@ -160,7 +161,7 @@ class MutexCondition <: Condition {
      */
     public func notifyAll(): Unit {
         condition.checkMutexStatus()
-        monitorNotifyAll(condition)
+        condition.carrier.notifyAll()
     }
 
     func getTimeoutNanos(timeout: Duration): Int64 {

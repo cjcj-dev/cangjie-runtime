@@ -18,11 +18,15 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "gc_verify_fixture.hpp"
+#include "reference_layout_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <csignal>
 #include <cstdlib>
 #include <string>
@@ -45,6 +49,7 @@
 #include "os/Processor.h"
 #include "TypeInfoManager.h"
 #include "Concurrency/ConcurrencyModel.h"
+#include "inner/cjthread.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -443,13 +448,27 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         type->SetType(TypeKind::TYPE_KIND_CLASS);
         type->SetInstanceSize(sizeof(uintptr_t));
     }
+    const bool referenceHolder = mode == VerifyFieldCase::ReferentSkippedAtMark ||
+                                 mode == VerifyFieldCase::ReferentCheckedAfterWeak;
+    static U32 referenceOffsets[4]{0, 8, 16, 24};
+    if (referenceHolder) {
+        holderType->SetFieldNum(4);
+        holderType->SetOffsets(referenceOffsets);
+        holderType->SetInstanceSize(4 * sizeof(uintptr_t));
+    }
     holderType->SetFlagHasRefField();
     GCTib tib{};
-    tib.tag = SIGN_BIT | 1;
+    tib.tag = SIGN_BIT | (referenceHolder ? 15 : 1);
     holderType->SetGCTib(tib);
-    auto* holder = MObject::NewPinnedObject(holderType, 2 * sizeof(uintptr_t));
+    auto* holder = MObject::NewPinnedObject(holderType, TYPEINFO_PTR_SIZE + holderType->GetInstanceSize());
     auto* target = MObject::NewPinnedObject(targetType, 2 * sizeof(uintptr_t));
     if (holder == nullptr || target == nullptr) { _exit(122); }
+    if (referenceHolder) {
+        for (U32 offset : referenceOffsets) {
+            HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE + offset)
+                .StoreColoured(StoreGoodPointer(nullptr));
+        }
+    }
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(target));
     auto& heap = Heap::GetHeap();
@@ -778,6 +797,78 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, HeapWalkEntersBarrierAndVisitsCarrier)
     CheckCarrierWalk(true);
 }
 
+extern "C" struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                         const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+extern "C" void CJ_CJThreadFree(struct CJThread*, bool);
+
+#ifndef CJ_ARMED_BUILD_SOURCE
+#define CJ_ARMED_BUILD_SOURCE CJTHREAD_CREATE_SOURCE_DEFAULT
+#endif
+#ifndef CJ_ARMED_SKIP_RESTORE
+#define CJ_ARMED_SKIP_RESTORE 0
+#endif
+#ifndef CJ_ARMED_SKIP_FREE
+#define CJ_ARMED_SKIP_FREE 0
+#endif
+
+namespace {
+std::atomic<unsigned> carrierExecutions{0};
+std::atomic<bool> carrierDone{false};
+struct CarrierObservation {
+    unsigned executions;
+    bool done;
+};
+CarrierObservation ObserveCarrierCallback()
+{
+    const bool done = carrierDone.load(std::memory_order_acquire);
+    return {carrierExecutions.load(std::memory_order_acquire), done};
+}
+void* SharedCarrierCallback(void*, unsigned int)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    carrierExecutions.fetch_add(1, std::memory_order_relaxed);
+    carrierDone.store(true, std::memory_order_release);
+    return nullptr;
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ScheduledCallbackChangesSharedObservation)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 512 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    bool finished = false;
+    try {
+        const auto before = ObserveCarrierCallback();
+        CJThreadAttr attr;
+        CJThreadAttrInit(&attr);
+        CJThreadAttrCjFromCSet(&attr, true);
+        LWTData data{};
+        GC_EXPECT_TRUE(CJThreadNew(
+            reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+            &attr, SharedCarrierCallback, &data, sizeof(data)) != nullptr);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!ObserveCarrierCallback().done && std::chrono::steady_clock::now() < until) {
+            std::this_thread::yield();
+        }
+        const auto after = ObserveCarrierCallback();
+        std::fprintf(stderr, "VERIFY_CALLBACK_COMPLETION_TARGET done=%d\n", after.done);
+        GC_EXPECT_TRUE(after.done);
+        std::fprintf(stderr, "VERIFY_CALLBACK_COUNT_TARGET before=%u after=%u\n", before.executions, after.executions);
+        GC_EXPECT_EQ(after.executions, before.executions + 1U);
+        const auto fini = FiniCJRuntime();
+        finished = true;
+        std::fprintf(stderr, "VERIFY_CALLBACK_FINI_TARGET rc=%d\n", static_cast<int>(fini));
+        GC_EXPECT_EQ(fini, E_OK);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, before.executions + 1U);
+    } catch (const AssertFailure& failure) {
+        const auto fini = finished ? E_OK : FiniCJRuntime();
+        std::fprintf(stderr, "VERIFY_CALLBACK_CLEANUP_TARGET rc=%d\n", static_cast<int>(fini));
+        throw failure;
+    }
+}
+
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
 {
     if (!ZVerifyRoots) {
@@ -787,28 +878,122 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     }
     RuntimeParam param{};
     param.coParam.processorNum = 1;
-    param.heapParam.heapSize = 32 * 1024;
+    param.heapParam.heapSize = 512 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    auto* thread = MCC_NewCJThread(nullptr, nullptr,
-        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
-    GC_EXPECT_TRUE(thread != nullptr);
-    {
-        DriverLocker lock;
-        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
-        Heap::GetHeap().young().pause_mark_start();
+    struct ArmedCleanup {
+        struct CJThread* thread;
+        LWTData* data;
+        BaseObject* saved;
+        bool injected;
+        bool finished;
+    } cleanup{nullptr, nullptr, nullptr, false, false};
+    const auto observationBefore = ObserveCarrierCallback();
+    try {
+        alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
+        auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
+        liveType->SetType(TypeKind::TYPE_KIND_CLASS);
+        liveType->SetInstanceSize(sizeof(uintptr_t));
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(liveStorage), sizeof(liveStorage));
+        BaseObject* live = nullptr;
+        {
+            ScopedObjectAccess access;
+            live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
+        }
+        GC_EXPECT_TRUE(live != nullptr);
+        std::unordered_set<RootSlot*> rootsBefore;
+        VisitCJThreadRoots([&](CJThreadRoot& root) {
+            root.oops_do([&](RootSlot& slot) { rootsBefore.insert(&slot); });
+        });
+        LWTData initialData{};
+        initialData.obj = live;
+        CJThreadAttr armedAttr;
+        CJThreadAttrInit(&armedAttr);
+        CJThreadAttrStackSizeSet(&armedAttr, 128U * 1024U);
+        CJThreadAttrCjFromCSet(&armedAttr, true);
+        auto* thread = CJThreadBuild(
+            reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+            &armedAttr, SharedCarrierCallback,
+            &initialData, sizeof(initialData), CJ_ARMED_BUILD_SOURCE, ZPointerStoreGoodMask);
+        GC_EXPECT_TRUE(thread != nullptr);
+        cleanup.thread = thread;
+        LWTData* data = nullptr;
+        CJThreadVisitRoots(thread, [](void* arg, void* context) {
+            *static_cast<LWTData**>(context) = static_cast<LWTData*>(arg);
+        }, &data);
+        cleanup.data = data;
+        GC_EXPECT_TRUE(data != nullptr);
+        const bool selfLinked = thread->allCJThreadDulink.next == &thread->allCJThreadDulink;
+        std::fprintf(stderr, "VERIFY_ARMED_ALLOC_TARGET self_linked=%d stack=%u\n", selfLinked,
+                     thread->stack.stackSize);
+        RootSlot* const carrierSlot = &RootSlotAt(&data->obj);
+        auto countCarrierRoots = [&]() {
+            size_t count = 0;
+            VisitCJThreadRoots([&](CJThreadRoot& root) {
+                root.oops_do([&](RootSlot& slot) { count += &slot == carrierSlot; });
+            });
+            return count;
+        };
+        const size_t rootsBeforeBuild = rootsBefore.count(carrierSlot);
+        GC_EXPECT_EQ(rootsBeforeBuild, 0u);
+        const size_t registeredRoots = countCarrierRoots();
+        std::fprintf(stderr, "VERIFY_ARMED_REGISTER_TARGET registered=%zu\n", registeredRoots);
+        GC_EXPECT_EQ(registeredRoots, 1u);
+        GC_EXPECT_FALSE(selfLinked);
+        GC_EXPECT_TRUE(thread->stack.stackSize != 64U * 1024U);
+        {
+            DriverLocker lock;
+            YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
+            Heap::GetHeap().young().pause_mark_start();
+        }
+        Heap::GetHeap().StopGCWork();
+        std::fprintf(stderr, "VERIFY_ARMED_STOP_COMPLETE\n");
+        auto* savedObject = data->obj;
+        cleanup.saved = savedObject;
+        data->obj = reinterpret_cast<BaseObject*>(0x1000);
+        cleanup.injected = true;
+        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+        Heap::GetHeap().old().pause_verify();
+        std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
+        GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
+        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+        std::fprintf(stderr, "VERIFY_ARMED_ASSERTIONS_COMPLETE value=%p\n", data->obj);
+#if !CJ_ARMED_SKIP_RESTORE
+        data->obj = savedObject;
+        cleanup.injected = false;
+#endif
+        std::fprintf(stderr, "VERIFY_ARMED_RESTORE_TARGET restored=%d\n", data->obj == savedObject);
+        GC_EXPECT_TRUE(data->obj == savedObject);
+#if !CJ_ARMED_SKIP_FREE
+        CJ_CJThreadFree(thread, false);
+        cleanup.thread = nullptr;
+#endif
+        const size_t remainingRoots = countCarrierRoots();
+        std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
+        GC_EXPECT_EQ(remainingRoots, 0u);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, observationBefore.executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().done, observationBefore.done);
+        GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+        cleanup.finished = true;
+        std::fprintf(stderr, "VERIFY_ARMED_FINI_COMPLETE executions=%u\n", ObserveCarrierCallback().executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().executions, observationBefore.executions);
+        GC_EXPECT_EQ(ObserveCarrierCallback().done, observationBefore.done);
+    } catch (const AssertFailure& failure) {
+        int cleanupRc = 0;
+        if (cleanup.injected && cleanup.data != nullptr) {
+            cleanup.data->obj = cleanup.saved;
+            cleanup.injected = false;
+        }
+        if (cleanup.thread != nullptr) {
+            CJ_CJThreadFree(cleanup.thread, false);
+            cleanup.thread = nullptr;
+        }
+        if (!cleanup.finished && FiniCJRuntime() != E_OK) {
+            cleanupRc = 1;
+        }
+        std::fprintf(stderr, "VERIFY_ARMED_CLEANUP_TARGET rc=%d\n", cleanupRc);
+        throw failure;
     }
-    auto* previous = CJThreadGetHandle();
-    ThreadLocal::SetCJThread(thread);
-    auto* data = static_cast<LWTData*>(CJThreadGetArg());
-    ThreadLocal::SetCJThread(previous);
-    auto* savedObject = data->obj;
-    data->obj = reinterpret_cast<BaseObject*>(0x1000);
-    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
-    Heap::GetHeap().old().pause_verify();
-    std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
-    GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
-    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
-    data->obj = savedObject;
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
@@ -830,8 +1015,11 @@ GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
         return;
     }
     GcVerifyFixture fixture;
+    ReferenceLayoutFixture reference;
+    reference.Place(reinterpret_cast<MAddress>(fixture.obj0), nullptr);
+    fixture.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fixture.obj0) +
+                                        RegionSpace::GetAllocSize(*fixture.obj0));
     fixture.PrepareOldSource();
-    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
     RememberedSet& remset = HeapTestRemset();

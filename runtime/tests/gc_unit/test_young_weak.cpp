@@ -262,9 +262,11 @@ struct WeakGraph {
         weakType = reinterpret_cast<TypeInfo*>(weakTypeStorage);
         weakType->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
         weakType->SetFlagHasRefField();
-        weakType->SetInstanceSize(sizeof(void*));
+        weakType->SetInstanceSize(4 * sizeof(void*));
+        weakType->SetFieldNum(4);
+        weakType->SetOffsets(weakOffsets);
         GCTib gctib {};
-        gctib.tag = SIGN_BIT | 1;
+        gctib.tag = SIGN_BIT | 15;
         weakType->SetGCTib(gctib);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
             reinterpret_cast<uintptr_t>(weakTypeStorage), sizeof(weakTypeStorage));
@@ -281,6 +283,10 @@ struct WeakGraph {
         targetOwner->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
 
         Field(strongRoot).StoreColoured(GcUnit::StoreGoodPointer(weak));
+        for (U32 offset : weakOffsets) {
+            HeapSlotAt<>(reinterpret_cast<MAddress>(weak) + TYPEINFO_PTR_SIZE + offset)
+                .StoreColoured(GcUnit::StoreGoodPointer(nullptr));
+        }
         Field(weak).StoreColoured(GcUnit::StoreGoodPointer(referent));
         Field(referent).StoreColoured(GcUnit::StoreGoodPointer(child));
         Field(child).StoreColoured(zpointer::null);
@@ -303,6 +309,7 @@ struct WeakGraph {
     BaseObject* weak = nullptr;
     BaseObject* referent = nullptr;
     BaseObject* child = nullptr;
+    U32 weakOffsets[4] {0, 8, 16, 24};
     alignas(TypeInfo) unsigned char weakTypeStorage[sizeof(TypeInfo)];
     TypeInfo* weakType = nullptr;
 };
@@ -460,6 +467,12 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     WeakClosureTestRuntime runtime(mutatorManager);
     Fixture fx;
     fx.region0()->reset(PageAge::old);
+    if (runtimeEntry) {
+        // SelectionCycleFixture allocates its first page as eden. Its directed
+        // old-page input must also own an old remembered set (zPage.cpp:64-72).
+        // reset(age) alone only changes age/epoch; promotion allocates this set.
+        fx.region0()->remset_alloc();
+    }
     WeakGraph graph(fx, fx.region0());
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
@@ -516,7 +529,12 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     }
     const size_t discovered =
         Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().Discovered(ReferenceType::WEAK);
-    const bool referentCleared = is_null(WeakGraph::Field(graph.weak).GetFieldValue());
+    // zBarrier.inline.hpp:554-560 heals the slot with color_mark_good;
+    // a cleared heap reference is a colored null, not necessarily raw zero.
+    const zpointer referentBits = WeakGraph::Field(graph.weak).GetFieldValue();
+    const bool referentCleared = is_null_any(referentBits);
+    std::fprintf(stderr, "MAJOR_WEAK_CLEAR_BITS value=%llx cleared=%d\n",
+                 static_cast<unsigned long long>(untype(referentBits)), referentCleared);
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
     const bool weakMarked = graph.IsMarked(graph.weak);
     const bool referentMarked = graph.IsMarked(graph.referent);

@@ -380,6 +380,24 @@ zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
     return ZAddress::load_good(address, previous);
 }
 
+bool ZBarrier::clean_barrier_on_weak_oop_field(volatile zpointer* p)
+{
+    DCHECK(ZResurrection::is_blocked());
+    const zpointer o = load_atomic(p);
+    auto slow_path = [=](zaddress addr) { return blocking_load_barrier_on_weak_slow_path(p, addr); };
+    return is_null(barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o, true));
+}
+
+bool ZBarrier::clean_barrier_on_final_oop_field(volatile zpointer* p)
+{
+    DCHECK(ZResurrection::is_blocked());
+    const zpointer o = load_atomic(p);
+    auto slow_path = [=](zaddress addr) { return blocking_load_barrier_on_phantom_slow_path(p, addr); };
+    const zaddress addr = barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o);
+    DCHECK(!is_null(addr));
+    return is_null(blocking_load_barrier_on_weak_slow_path(p, addr));
+}
+
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
 {
     CHECK_DETAIL(ZResurrection::is_blocked(),

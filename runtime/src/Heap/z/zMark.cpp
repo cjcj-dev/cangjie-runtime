@@ -86,21 +86,6 @@ public:
 };
 } // namespace
 
-// ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
-// 239-250). Native registration owns the original referent slot, rather than a
-// Java FinalReference object. The load barrier heals remapping before discovery.
-void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
-{
-    CHECK(Heap::GetHeap().old().IsPhaseMark());
-    BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(slot))));
-    if (object == nullptr) return;
-    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
-    if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
-    auto& processor = Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
-    (void)processor.discover_reference(object, ReferenceType::FINAL);
-    ZBarrier::MarkFinalizableBarrierOnRoot(slot);
-}
-
 
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
@@ -146,11 +131,9 @@ class MarkOldRootsTask final : public ZTask {
 public:
     explicit MarkOldRootsTask(unsigned workers)
         : ZTask("ZMarkOldRootsTask"), rootsColored(workers, ZGenerationIdOptional::old),
-          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
           rootsUncolored(ZGenerationIdOptional::old) {}
     void work() override
     {
-        finalizerRoots.OopsDo([](NativeSlot& slot) { ZMark::DiscoverFinalizableRoot(slot); });
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
         });
@@ -172,7 +155,6 @@ public:
     }
 private:
     RootsIteratorStrongColored rootsColored;
-    OopStorage::ParState<true> finalizerRoots;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkThreadClosure threadClosure;
@@ -267,7 +249,7 @@ private:
 void ZMark::ProcessFinalizers()
 {
     FinalizerProcessor& fp = Heap::GetHeap().GetFinalizerProcessor();
-    fp.ProcessReferences([](BaseObject* obj) { return RegionSpace::IsMarkedObject<Generation::Old>(obj); });
+    fp.ProcessReferences();
 }
 
 bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)

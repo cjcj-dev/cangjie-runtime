@@ -116,15 +116,6 @@ inline zpointer ZBarrier::ColorRemsetGood(zaddress address, zpointer previous)
     return ColorMarkYoungGood(address, previous);
 }
 
-// Native finalizer registrations represent the referent slot of a Java
-// FinalReference. Root/seed routing is separate from from-old field routing.
-inline void ZBarrier::MarkFinalizableBarrierOnRoot(NativeSlot& field)
-{
-    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    MarkBarrier(IsFinalizableGoodFastPath, &ZBarrier::MarkFinalizableSlowPath,
-                ColorFinalizableGood, field, observed);
-}
-
 // ZZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
 // ZBarrier::mark_barrier_on_oop_field, zBarrier.inline.hpp:591-623.
 inline void ZBarrier::MarkBarrierOnOopField(RefField<>& field, bool finalizable)

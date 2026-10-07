@@ -28,8 +28,6 @@ class ReferenceProcessor : public ReferenceDiscoverer {
 
 public:
     static constexpr size_t REFERENCE_TYPE_COUNT = static_cast<size_t>(ReferenceType::COUNT);
-    using IsStronglyLive = std::function<bool(BaseObject*)>;
-    using EnqueueFinal = std::function<bool(BaseObject*)>;
 
     explicit ReferenceProcessor(ZWorkers* workers = nullptr);
     ~ReferenceProcessor();
@@ -43,8 +41,7 @@ public:
     void reset_statistics();
     bool discover_reference(BaseObject* reference, ReferenceType type) override;
     void process_references();
-    void ProcessReferences(const IsStronglyLive& isStronglyLive);
-    void EnqueueReferences(const EnqueueFinal& enqueueFinal);
+    void enqueue_references();
     void verify_pending_references();
 
     size_t Encountered(ReferenceType type) const;
@@ -53,18 +50,11 @@ public:
     bool Empty() const;
 
 private:
-    struct Node {
-        BaseObject* reference;
-        ReferenceType type;
-        Node* next;
-    };
     using Counters = size_t[REFERENCE_TYPE_COUNT];
 
     static constexpr size_t TypeIndex(ReferenceType type) { return static_cast<size_t>(type); }
     static uint32_t worker_index();
-    static void list_append(Node*& head, Node*& tail, Node* reference);
-    static void DeleteList(Node* list);
-    static bool is_object_finalizable(BaseObject* reference);
+    static void list_append(BaseObject*& head, BaseObject*& tail, BaseObject* reference);
 
     bool is_inactive(BaseObject* reference, BaseObject* referent, ReferenceType type) const;
     bool is_strongly_live(BaseObject* referent) const;
@@ -73,116 +63,70 @@ private:
     bool try_make_inactive(BaseObject* reference, ReferenceType type) const;
     void discover(BaseObject* reference, ReferenceType type);
     void verify_empty() const;
-    void process_worker_discovered_list(Node* discovered_list);
+    void process_worker_discovered_list(BaseObject* discovered_list);
     void work();
     void collect_statistics();
     void soft_reference_update_clock();
-    bool CleanWeakReference(BaseObject* reference);
 
     ZWorkers* workers;
     bool clear_all_soft_references;
     ZPerWorker<Counters> encountered_count;
     ZPerWorker<Counters> discovered_count;
     ZPerWorker<Counters> enqueued_count;
-    ZPerWorker<Node*> discovered_list;
-    ZContended<Node*> pending_list;
-    Node* pending_list_tail;
-    IsStronglyLive isStronglyLiveFn;
+    ZPerWorker<BaseObject*> discovered_list;
+    ZContended<BaseObject*> pending_list;
+    BaseObject* pending_list_tail;
 };
 
 class Mutator;
 class FinalizerProcessor {
-    friend class FinalizerProcessorTest;
 public:
     explicit FinalizerProcessor(ZWorkers* workers = nullptr);
-    ~FinalizerProcessor() = default;
-
-    // zRootsIterator: strong queued/running roots and weak registrations
-    // share one physical enumeration, with distinct closures.
+    ~FinalizerProcessor();
     OopStorage& StrongRootStorage() { return strongStorage; }
-    OopStorage& WeakRootStorage() { return weakStorage; }
-    U32 VisitFinalizers(const NativeSlotVisitor& visitor) { return VisitRootLists({}, visitor); }
-    void VisitGCRoots(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, {}); }
-    void VisitNativePointers(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, visitor); }
-
-    // notify for finalizer processing loop, invoked after GC
-    void Notify();
-    // wait started flag set, call after create finalizerProcessor thread
-    void WaitStarted();
-
+    void VisitGCRoots(const NativeSlotVisitor& visitor) { strongStorage.OopsDo(visitor); }
     void Start();
     void Stop();
-    void Run();
-    void Init();
-    void Fini();
+    void Notify();
+    void WaitStarted();
     void WaitStop();
-
-    void RegisterFinalizer(BaseObject* obj);
+    void Run();
+    void RunReferenceHandler();
+    BaseObject* RegisterFinalizer(BaseObject* object);
     bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
-    ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
-    void ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive);
-    void EnqueueReferences();
-
-
     Mutator* GetMutator() const { return fpMutator; }
-
+    ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
+    void ProcessReferences() { referenceProcessor.process_references(); }
+    void EnqueueReferences() { referenceProcessor.enqueue_references(); }
+    void SetReferenceMethods(void* registerMethod, void* handlerMethod, void* finalizerMethod);
+    BaseObject* SwapPendingList(BaseObject* head);
+    BaseObject* WaitPending();
+    static void InvokeFinalize(BaseObject* object);
+    std::mutex& PendingLock() { return pendingLock; }
+    void NotifyPending();
 private:
-    U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
-    {
-        if (strong) { strongStorage.OopsDo(strong); }
-        U32 count = weak ? static_cast<U32>(weakStorage.OopsDo(weak)) : 0;
-        return count;
-    }
-
-    void InitFinalizerCJThread();
+    void RunWorker(bool handler);
     void NotifyStarted();
-    void Wait();
-    void Wait(U32 timeoutMilliSeconds);
-    bool EnqueueFinalizableReference(BaseObject* obj);
-    static void ReportNumDead(size_t numDead);
-    bool HasFinalizableJob();
-    void FinishFinalizableBatch();
-    void ProcessFinalizables();
-    void ProcessFinalizableList();
-
-    std::mutex wakeLock;
-    std::condition_variable wakeCondition; // notify finalizer processing continue
-
-    std::mutex startedLock;
-    std::condition_variable startedCondition; // notify finalizerProcessor thread is started
-    volatile bool started;
-
-    std::atomic<bool> running{ false };
-    U32 iterationWaitTime;
-
-    // finalization
+    static void InvokeManaged(void* entry, BaseObject* argument);
     OopStorage strongStorage;
-    OopStorage weakStorage;
-    std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
-    NativeRootHandles finalizers; // created finalizer record, accessed by mutator & GC
-
-    // a dead finalizer is moved into finalizable by GC, then run finalize method by FP thread
-    NativeRootHandles finalizables;
-
-    NativeRootHandles workingFinalizables; // FP working list, swap from finalizables
+    NativeSlot* referencePending;
     ReferenceProcessor referenceProcessor;
-
-    // Protected by listLock.  Queue non-emptiness and the cached predicate are
-    // one synchronization decision, so a worker cannot clear a later enqueue.
-    bool hasFinalizableJob = false;
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    // stats
-    void LogAfterProcess();
-#endif
-    uint64_t timeProcessorBegin;
-    uint64_t timeProcessUsed;
-    uint64_t timeCurrentProcessBegin;
-    uint32_t tid = 0;
-    pthread_t threadHandle = 0; // thread handle to thread
+    std::atomic<bool> running{false};
+    std::atomic<bool> methodsReady{false};
+    void* registerMethod = nullptr;
+    void* handlerMethod = nullptr;
+    void* finalizerMethod = nullptr;
+    std::mutex pendingLock;
+    std::condition_variable pendingCondition;
+    bool firstPending = false;
+    std::mutex startedLock;
+    std::condition_variable startedCondition;
+    unsigned started = 0;
+    pthread_t finalizerThread = 0;
+    pthread_t referenceThread = 0;
     Mutator* fpMutator = nullptr;
-    // Tracks whether the current finalizer OS thread has already been bound to a CJThread.
-    bool finalizerCJThreadInitialized = false;
+    uint32_t tid = 0;
 };
 } // namespace MapleRuntime
 #endif

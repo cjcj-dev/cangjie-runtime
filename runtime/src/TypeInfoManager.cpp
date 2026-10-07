@@ -1230,6 +1230,7 @@ U32 TypeInfoManager::GetTypeSize(TypeInfo* ti)
         case TypeKind::TYPE_KIND_CLASS:
         case TypeKind::TYPE_KIND_EXPORTED_REF:
         case TypeKind::TYPE_KIND_FOREIGN_PROXY:
+        case TypeKind::TYPE_KIND_FINALREF_CLASS:
         case TypeKind::TYPE_KIND_WEAKREF_CLASS:
         case TypeKind::TYPE_KIND_INTERFACE:
         case TypeKind::TYPE_KIND_TEMP_ENUM:
