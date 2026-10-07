@@ -1,4 +1,14 @@
 #define MRT_USE_CJTHREAD_RENAME 1
+// Observe the existing product pool getter without adding a runtime hook.
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <mutex>
+#include "Base/LogFile.h"
+#include "Heap/z/workerThread.hpp"
+#define private public
+#include "Heap/z/zWorkers.hpp"
+#undef private
 #include "gc_worker_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -34,6 +44,8 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zHeuristics.hpp"
+#include "os/Processor.h"
 #include "TypeInfoManager.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "inner/cjthread.h"
@@ -1019,6 +1031,10 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
     param.gcParam.oldGCThreads = workers;
     param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    std::fprintf(stderr, "CARRIER_WORKER_BUDGET requested=%u cpu=%u heap=%zu heuristic=%u young=%u old=%u conc=%u young_max=%u old_max=%u\n",
+                 workers, OS::InitialActiveProcessorCount(), ZHeuristics::max_heap_size(),
+                 ZHeuristics::nconcurrent_workers(), ZYoungGCThreads, ZOldGCThreads, ConcGCThreads,
+                 Heap::GetHeap().young().Workers()->_workers.max_workers(), Heap::GetHeap().old().Workers()->_workers.max_workers());
     GC_EXPECT_EQ(ZYoungGCThreads, workers);
     GC_EXPECT_EQ(ZOldGCThreads, workers);
     GC_EXPECT_TRUE(ConcGCThreads >= workers);
@@ -1056,6 +1072,8 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
                          CJThreadRootsAreArmed(oldCarrier, ZPointerStoreGoodMask);
         auto& generation = youngOnly ? static_cast<ZGeneration&>(heap.young()) : static_cast<ZGeneration&>(heap.old());
         generation.Workers()->set_active_workers(workers);
+        std::fprintf(stderr, "CARRIER_WORKER_ACTIVE requested=%u max=%u active=%u\n",
+                     workers, generation.Workers()->_workers.max_workers(), generation.Workers()->active_workers());
         GC_EXPECT_EQ(generation.Workers()->active_workers(), workers);
         if (youngOnly) { heap.young().produceYoungRoots(); }
         else { heap.old().mark_roots(); }
