@@ -6,7 +6,7 @@
 namespace MapleRuntime {
 class ZObjArrayAllocator : public ObjArrayAllocator {
 public:
-    ZObjArrayAllocator(TypeInfo& klass, MSize size, MIndex length, bool doZero)
+    ZObjArrayAllocator(TypeInfo& klass, size_t size, MIndex length, bool doZero)
         : ObjArrayAllocator(klass, size, length, doZero) {}
 private:
     MArray* initialize(MAddress address) const override;

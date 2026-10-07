@@ -100,6 +100,8 @@ protected:
     // The header is initialized separately by SetClassInfo, after the payload.
     static void ClearMemory(MAddress address, size_t size)
     {
+        DCHECK_D(address != NULL_ADDRESS, "cannot initialize null object");
+        DCHECK_D(size >= sizeof(BaseObject), "unexpected object size");
         const size_t bytes = AlignUp(size, sizeof(uintptr_t)) - sizeof(BaseObject);
         MemorySet(address + sizeof(BaseObject), bytes, 0, bytes);
     }

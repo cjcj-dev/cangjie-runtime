@@ -13,6 +13,7 @@
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "gc_unittest.hpp"
+#include "gc_capacity_objects.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -76,10 +77,10 @@ void* AllocateSizedObjects(void*)
     return nullptr;
 }
 }
-static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = false)
+static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = false, size_t heapKB = 512 * 1024)
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 512 * 1024;
+    param.heapParam.heapSize = heapKB;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     CJThreadHandle handle = RunCJTask(task, nullptr);
@@ -224,14 +225,7 @@ void* AllocateMediumBlockingFailure(void*)
     // A single cached granule can satisfy fast-medium after prime. Occupy
     // all remaining capacity so both cache and cold branches must fail.
     const size_t occupiedBytes = heap.GetMaxCapacity() - heap.page_allocator().GetAllocatedSize();
-    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
-    std::memset(storage, 0, sizeof(storage));
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
+    const auto roots = AllocateRootedCapacity(occupiedBytes, false);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = (*ZGeneration::old()).seqnum();
@@ -242,7 +236,7 @@ void* AllocateMediumBlockingFailure(void*)
     const bool valid = result == 0 && after > before;
     std::fprintf(stderr, "MEDIUM_BLOCKING_TARGET result=%#zx occupied=%zu before=%llu after=%llu valid=%d\n",
                  result, occupiedBytes, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.cross_vm().export_roots().RemoveExportRoot(root);
+    for (const U64 root : roots) { heap.cross_vm().export_roots().RemoveExportRoot(root); }
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
@@ -251,13 +245,7 @@ void* AllocateRelocationCapacity(void*)
 {
     auto& heap = Heap::GetHeap();
     const size_t occupiedBytes = heap.GetMaxCapacity() - ZGranuleSize;
-    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
+    const auto roots = AllocateRootedCapacity(occupiedBytes, false);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = (*ZGeneration::old()).seqnum();
@@ -266,7 +254,7 @@ void* AllocateRelocationCapacity(void*)
     const bool valid = result == 0 && after == before;
     std::fprintf(stderr, "RELOCATION_CAPACITY_TARGET result=%#zx before=%llu after=%llu valid=%d\n",
                  result, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.cross_vm().export_roots().RemoveExportRoot(root);
+    for (const U64 root : roots) { heap.cross_vm().export_roots().RemoveExportRoot(root); }
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
@@ -630,4 +618,164 @@ void* AllocateUntilSlowBranch(void*)
 GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, TlabSlowPathOwnsRefillSchedule)
 {
     RunAllocatorCase(AllocateUntilSlowBranch);
+}
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+// HotSpot memAllocator.cpp:366-373 checks the extent at the clearing consumer.
+// This deliberately invalid input tests only that Debug contract.
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, DebugRejectsExtentBelowHeader)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDOUT_FILENO);
+        dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        RunAllocatorCase([](void*) -> void* {
+            alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+            auto* type = reinterpret_cast<TypeInfo*>(storage);
+            type->SetType(TypeKind::TYPE_KIND_CLASS);
+            type->SetInstanceSize(0);
+            TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+            MObject::NewObject(type, 0, AllocType::MOVEABLE_OBJECT);
+            return nullptr;
+        });
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[1024];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+                        transcript.find("unexpected object size") != std::string::npos;
+    std::fprintf(stderr, "CLEAR_EXTENT_CONTRACT_TARGET status=%d target=%d\n%s", status, target, transcript.c_str());
+    GC_EXPECT_TRUE(target);
+}
+#endif
+
+namespace {
+struct WideArrayObservation {
+    int executed = 0;
+    int width = 0;
+    int zero = 0;
+    int dirtyBacking = 0;
+};
+WideArrayObservation g_wideArrayObservation;
+
+void* AllocateWideArray(void*)
+{
+    // Byte size past the 32-bit boundary. The product entry is MCC_NewArray8,
+    // which computes the byte size and calls ZCollectedHeap::array_allocate.
+    constexpr size_t bytes = (size_t{1} << 32) + 128;
+    alignas(TypeInfo) static unsigned char storage[2 * sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(storage);
+    auto* type = reinterpret_cast<TypeInfo*>(storage + sizeof(TypeInfo));
+    component->SetType(TypeKind::TYPE_KIND_STRUCT);
+    component->SetInstanceSize(1);
+    type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    type->SetComponentTypeInfo(component);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const MIndex length = bytes - MArray::GetContentOffset();
+    // The mapped cache coalesces adjacent extents, then removes a size-class
+    // slice (zMappedCache.cpp:620-668). Dirty the whole available cache extent
+    // so either end selected for the array is provably nonzero beforehand.
+    const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
+    const size_t backingSize = std::max(AlignUp(bytes, ZGranuleSize), cached);
+    // A smaller preexisting cache cannot satisfy the wide allocation but may
+    // coalesce with the newly committed extent on free. Keep it occupied.
+    auto& heap = Heap::GetHeap();
+    auto& exportRoots = heap.cross_vm().export_roots();
+    const auto reservationRoots = cached != 0 && cached < backingSize
+        ? AllocateRootedCapacity(cached, false) : std::vector<U64>{};
+    // A real array has a valid header and remains live while its payload is
+    // scanned. Only GC owns its page after the export root is removed.
+    MArray* seed = reinterpret_cast<MArray*>(MCC_NewArray8(type, backingSize - MArray::GetContentOffset()));
+    if (seed == nullptr) { return reinterpret_cast<void*>(10); }
+    const U64 seedRoot = exportRoots.RegisterExportRoot(seed);
+    const ZPage* seedPage = Heap::page(reinterpret_cast<uintptr_t>(seed));
+    const uintptr_t dirtyStart = seedPage->GetRegionStart();
+    const uintptr_t seedPayload = reinterpret_cast<uintptr_t>(seed->ConvertToCArray());
+    const size_t seedContentSize = seed->GetContentSize();
+    const bool seedGeometry = reinterpret_cast<uintptr_t>(seed) == dirtyStart &&
+                              seedPage->size() == backingSize &&
+                              seedPayload + seedContentSize == dirtyStart + backingSize;
+    if (!seedGeometry) {
+        std::fprintf(stderr, "ARRAY_CLEAR_PRECONDITION seed_geometry=0\n");
+        return reinterpret_cast<void*>(12);
+    }
+    std::memset(reinterpret_cast<void*>(seedPayload), 0xa5, seedContentSize);
+    bool dirty = BytesAre(seedPayload, seedPayload + seedContentSize, 0xa5);
+    exportRoots.RemoveExportRoot(seedRoot);
+    seed = nullptr;
+    seedPage = nullptr;
+    heap.RequestGC(GC_REASON_USER);
+    // Cache entries legitimately occupy bytes in the final granule. Select
+    // a still-nonzero witness after free, as in AllocateFromDirtyCache.
+    uintptr_t witness = dirtyStart + bytes;
+    while (witness + 64 <= dirtyStart + backingSize &&
+           !BytesAre(witness, witness + 64, 0xa5)) { witness += 64; }
+    const bool witnessReady = witness + 64 <= dirtyStart + backingSize;
+    MArray* array = reinterpret_cast<MArray*>(MCC_NewArray8(type, length));
+    const U64 arrayRoot = array == nullptr ? 0 : exportRoots.RegisterExportRoot(array);
+    const uintptr_t object = array == nullptr ? 0 : reinterpret_cast<uintptr_t>(array);
+    const ZPage* page = object == 0 ? nullptr : Heap::page(object);
+    const size_t actual = page == nullptr ? 0 : page->size();
+    const uintptr_t pageStart = page == nullptr ? 0 : page->GetRegionStart();
+    const bool lengthKept = array != nullptr && array->GetLength() == length;
+    // The allocator received the untruncated size when the returned page covers
+    // the requested byte size. A larger legal backing still satisfies this.
+    const bool width = page != nullptr && actual >= bytes && object >= pageStart &&
+                       object + bytes >= object && object + bytes <= pageStart + actual;
+    const bool reused = page != nullptr && pageStart >= dirtyStart &&
+                        pageStart + actual >= pageStart &&
+                        pageStart + actual <= dirtyStart + backingSize;
+    bool payloadZero = false;
+    bool rangeInside = false;
+    bool sentinel = false;
+    size_t contentSize = 0;
+    if (array != nullptr && page != nullptr && lengthKept && reused) {
+        // Read the product's content extent. This byte array has no tail
+        // padding, so it is exactly the complete segmented clear interval.
+        contentSize = array->GetContentSize();
+        const uintptr_t payload = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
+        rangeInside = payload >= pageStart && payload + contentSize >= payload &&
+                      payload + contentSize < pageStart + actual;
+        if (rangeInside) {
+            const auto* data = reinterpret_cast<const unsigned char*>(payload);
+            payloadZero = true;
+            for (size_t i = 0; i < contentSize; ++i) { payloadZero &= data[i] == 0; }
+            sentinel = witnessReady && witness >= payload + contentSize &&
+                       witness + 64 <= pageStart + actual &&
+                       BytesAre(witness, witness + 64, 0xa5);
+        }
+    }
+    const bool zero = dirty && reused && lengthKept && rangeInside && payloadZero && sentinel;
+    std::fprintf(stderr, "ARRAY_CLEAR_TARGET dirty=%d reused=%d content_size=%zu full_zero=%d sentinel=%d zero=%d witness_ready=%d witness_offset=%zu\n",
+                 dirty, reused, contentSize, payloadZero, sentinel, zero, witnessReady,
+                 witness >= object ? witness - object : 0);
+    g_wideArrayObservation = WideArrayObservation{1, width ? 1 : 0, zero ? 1 : 0, dirty && reused ? 1 : 0};
+    std::fprintf(stderr,
+                 "ARRAY_WIDTH_RANGE_TARGET executed=1 requested=%zu allocated=%zu width=%d "
+                 "length_kept=%d range_inside=%d payload_zero=%d zero_and_bounds=%d\n",
+                 bytes, actual, width, lengthKept, rangeInside, payloadZero, zero);
+    if (array != nullptr) { exportRoots.RemoveExportRoot(arrayRoot); }
+    for (const U64 root : reservationRoots) { exportRoots.RemoveExportRoot(root); }
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ArrayAllocationWidth, PreservesSizeAndClearRange)
+{
+    g_wideArrayObservation = {};
+    RunAllocatorCase(AllocateWideArray, false, 8 * 1024 * 1024);
+    GC_EXPECT_EQ(g_wideArrayObservation.executed, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.dirtyBacking, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.width, 1);
+    GC_EXPECT_EQ(g_wideArrayObservation.zero, 1);
 }

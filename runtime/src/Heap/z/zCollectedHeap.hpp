@@ -41,7 +41,7 @@ public:
     void collect(GCReason reason);
     void safepoint_synchronize_begin();
     void safepoint_synchronize_end();
-    MArray* array_allocate(TypeInfo& klass, MSize size, MIndex length, bool doZero);
+    MArray* array_allocate(TypeInfo& klass, size_t size, MIndex length, bool doZero);
     uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }
