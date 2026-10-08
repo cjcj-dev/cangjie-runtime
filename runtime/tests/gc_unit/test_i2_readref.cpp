@@ -52,7 +52,7 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     // zAddress_aarch64.inline.hpp:29-31 converts logical remap state to
     // physical colour bits; ColouredPointer accepts those physical bits.
-    const uintptr_t remap = ZPointerRemapped;
+    const uintptr_t remap = ZPointer::remap_bits(ZPointerRemapped);
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
     const bool loadGood = ZPointer::is_load_good(good);
     // Record input qualification before entering the barrier. GC_EXPECT throws,
