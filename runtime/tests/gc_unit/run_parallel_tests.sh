@@ -16,6 +16,11 @@ JOBS="${GC_UNIT_JOBS:-$(nproc)}"
 TEST_TIMEOUT="${GC_UNIT_TEST_TIMEOUT:-600}"
 CRASH_CAPTURE="$(cd "$(dirname "$0")" && pwd)/capture_segv.sh"
 FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
+SELECTED_FILTER="${GC_UNIT_TEST_FILTER:-}"
+# A finite request has ordered, first-failure semantics, regardless of the pool budget.
+if [[ -n "$SELECTED_FILTER" ]]; then JOBS=1; fi
+ulimit -S -c 0
+ulimit -H -c 0
 
 # This test requires at least one of its eight internal workers to steal before
 # another drains the shared stripe. Under a saturated process pool the host
@@ -38,9 +43,10 @@ fi
 LOG_DIR="$OUT/test-logs"
 RC_DIR="$OUT/test-rc"
 TALLY_DIR="$OUT/test-tallies"
+STATUS_DIR="$OUT/test-status"
 LIST_DIR="$OUT/test-lists"
-mkdir -p "$LOG_DIR" "$RC_DIR" "$TALLY_DIR" "$LIST_DIR"
-find "$LOG_DIR" "$RC_DIR" "$TALLY_DIR" "$LIST_DIR" -type f -delete
+mkdir -p "$LOG_DIR" "$RC_DIR" "$TALLY_DIR" "$LIST_DIR" "$STATUS_DIR"
+find "$LOG_DIR" "$RC_DIR" "$TALLY_DIR" "$LIST_DIR" "$STATUS_DIR" -type f -delete
 
 list_tests() {
   local kind=$1 elf=$2 output=$3
@@ -48,7 +54,7 @@ list_tests() {
   if [[ "$kind" == main && -n "${GC_UNIT_MAIN_ENV:-}" ]]; then
     mapfile -t extra_env <<<"$GC_UNIT_MAIN_ENV"
   fi
-  env "${extra_env[@]}" \
+  timeout --kill-after=5 "$TEST_TIMEOUT" env -u GC_UNIT_FILTER "${extra_env[@]}" \
     LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$elf" --gtest_list_tests >"$output" 2>"$output.stderr"
 }
@@ -140,6 +146,45 @@ done
 exec 3<&-
 exec 4<&-
 
+if [[ -n "$SELECTED_FILTER" ]]; then
+  # Validate the entire exact-name request before any test process starts.
+  # The discovered manifest is the authority, including ELF ownership.
+  cp "$MANIFEST" "$OUT/test-manifest.all.tsv"
+  : >"$MANIFEST"
+  if [[ "$SELECTED_FILTER" == :* || "$SELECTED_FILTER" == *: || "$SELECTED_FILTER" == *::* ]]; then
+    echo "GC_UNIT_FILTER_INVALID empty name" >&2; exit 2
+  fi
+  IFS=: read -r -a requested <<<"$SELECTED_FILTER"
+  declare -A seen=()
+  index=0
+  for test in "${requested[@]}"; do
+    if [[ ! "$test" =~ ^[A-Za-z_][A-Za-z0-9_/]*\.[A-Za-z0-9_][A-Za-z0-9_/]*$ ]] || [[ -n "${seen[$test]:-}" ]]; then
+      echo "GC_UNIT_FILTER_INVALID name=$test" >&2; exit 2
+    fi
+    seen[$test]=1
+    matches=$(awk -F '\t' -v test="$test" '$2 == test { print $1 }' "$OUT/test-manifest.all.tsv")
+    if [[ "$matches" != main && "$matches" != publication ]]; then
+      echo "GC_UNIT_FILTER_INVALID ownership name=$test matches=$matches" >&2; exit 2
+    fi
+    printf '%s\t%s\t%06d\n' "$matches" "$test" "$index" >>"$MANIFEST"
+    index=$((index + 1))
+  done
+fi
+
+# Both finite stop decisions and the final summary use the existing independent
+# completion tally plus exact end token; rc=0 alone cannot lend a green result.
+completed_result() {
+  local test=$1 rc=$2 log=$3 tally=$4 expected token
+  [[ -f "$tally" && $(wc -l <"$tally") -eq 1 ]] || return 1
+  /usr/bin/grep -qxF "[  RUN   ] $test" "$log" || return 1
+  if [[ "$rc" -eq 0 ]]; then
+    expected='[========] 1 tests: 1 passed, 0 failed'; token=PASS
+  else
+    expected='[========] 1 tests: 0 passed, 1 failed'; token=FAIL
+  fi
+  /usr/bin/grep -qxF "[  $token  ] $test" "$log" && /usr/bin/grep -qxF "$expected" "$tally"
+}
+
 is_serial_test() {
   local candidate=$1 serial_test
   for serial_test in "${SERIAL_TESTS[@]}"; do
@@ -185,35 +230,56 @@ run_one_test() {
     command=(bash "$CRASH_CAPTURE" "${command[@]}")
   fi
   set +e
-  timeout "$TEST_TIMEOUT" env "${extra_env[@]}" \
+  timeout --kill-after=5 "$TEST_TIMEOUT" env "${extra_env[@]}" \
     GC_UNIT_TALLY_FILE="$tally_file" \
     LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "${command[@]}" >"$log" 2>&1
   rc=$?
   set -e
   printf '%d\n' "$rc" >"$rc_file"
+  local state=INCOMPLETE
+  if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+    state=TIMEOUT
+  elif completed_result "$test" "$rc" "$log" "$tally_file"; then
+    if [[ "$rc" -eq 0 ]]; then state=PASS; else state=FAIL; fi
+  fi
+  printf '%s\n' "$state" >"$STATUS_DIR/${index}-${kind}.status"
+  if [[ -n "$SELECTED_FILTER" && "$state" != PASS ]]; then return 1; fi
   return 0
 }
-export -f run_one_test
-export MAIN_ELF PUBLICATION_ELF RUNTIME_LIB_DIR LOG_DIR RC_DIR TALLY_DIR TEST_TIMEOUT CRASH_CAPTURE
+export -f run_one_test completed_result
+export MAIN_ELF PUBLICATION_ELF RUNTIME_LIB_DIR LOG_DIR RC_DIR TALLY_DIR STATUS_DIR TEST_TIMEOUT CRASH_CAPTURE SELECTED_FILTER
 export GC_UNIT_MAIN_ENV="${GC_UNIT_MAIN_ENV:-}"
 
 START=$(date +%s%N)
-set +e
-xargs -r -d '\n' -n 1 -P "$JOBS" bash -c 'run_one_test "$1"' _ <"$PARALLEL_MANIFEST"
-parallel_xargs_rc=$?
-xargs -r -d '\n' -n 1 -P 1 bash -c 'run_one_test "$1"' _ <"$SERIAL_MANIFEST"
-serial_xargs_rc=$?
-set -e
-if [[ $parallel_xargs_rc -ne 0 || $serial_xargs_rc -ne 0 ]]; then
-  echo "GC_UNIT_XARGS_FAIL parallel_rc=$parallel_xargs_rc serial_rc=$serial_xargs_rc" >&2
-  exit 2
+if [[ -n "$SELECTED_FILTER" ]]; then
+  stopped=0
+  while IFS= read -r record; do
+    IFS=$'\t' read -r kind test index <<<"$record"
+    if [[ "$stopped" -eq 1 ]]; then
+      printf 'NOT_RUN\n' >"$STATUS_DIR/${index}-${kind}.status"
+      continue
+    fi
+    if ! run_one_test "$record"; then stopped=1; fi
+  done <"$MANIFEST"
+else
+  set +e
+  xargs -r -d '\n' -n 1 -P "$JOBS" bash -c 'run_one_test "$1"' _ <"$PARALLEL_MANIFEST"
+  parallel_xargs_rc=$?
+  xargs -r -d '\n' -n 1 -P 1 bash -c 'run_one_test "$1"' _ <"$SERIAL_MANIFEST"
+  serial_xargs_rc=$?
+  set -e
+  if [[ $parallel_xargs_rc -ne 0 || $serial_xargs_rc -ne 0 ]]; then
+    echo "GC_UNIT_XARGS_FAIL parallel_rc=$parallel_xargs_rc serial_rc=$serial_xargs_rc" >&2
+    exit 2
+  fi
 fi
 
 tests=0
 passed=0
 failed=0
 incomplete=0
+not_run=0
 main_rc=0
 publication_rc=0
 failed_tests=()
@@ -221,6 +287,11 @@ incomplete_tests=()
 suites_file="$OUT/test-suites.txt"
 : >"$suites_file"
 while IFS=$'\t' read -r kind test index; do
+  if [[ $(cat "$STATUS_DIR/${index}-${kind}.status") == NOT_RUN ]]; then
+    not_run=$((not_run + 1))
+    printf '[  NOT_RUN  ] %s first failure stopped the request\n' "$test"
+    continue
+  fi
   tests=$((tests + 1))
   printf '%s\n' "${test%%.*}" >>"$suites_file"
   log="$LOG_DIR/${index}-${kind}.log"
@@ -241,16 +312,8 @@ while IFS=$'\t' read -r kind test index; do
   # tally. Everything else is an explicit incomplete failure.
   completed_pass=0
   completed_fail=0
-  if [[ -f "$tally_file" ]] && [[ $(wc -l <"$tally_file") -eq 1 ]]; then
-    if [[ "$rc" -eq 0 ]] &&
-        /usr/bin/grep -F -q "[  PASS  ] $test" "$log" &&
-        /usr/bin/grep -qxF '[========] 1 tests: 1 passed, 0 failed' "$tally_file"; then
-      completed_pass=1
-    elif [[ "$rc" -ne 0 ]] &&
-        /usr/bin/grep -F -q "[  FAIL  ] $test" "$log" &&
-        /usr/bin/grep -qxF '[========] 1 tests: 0 passed, 1 failed' "$tally_file"; then
-      completed_fail=1
-    fi
+  if completed_result "$test" "$rc" "$log" "$tally_file"; then
+    if [[ "$rc" -eq 0 ]]; then completed_pass=1; else completed_fail=1; fi
   fi
   if [[ "$completed_pass" -eq 1 ]]; then
     passed=$((passed + 1))
@@ -300,6 +363,7 @@ printf 'GC_UNIT_PARALLEL jobs=%d tests=%d wall=%d.%03d\n' \
   "$JOBS" "$tests" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))"
 printf 'GC_UNIT_SERIAL tests=%d\n' "$(wc -l <"$SERIAL_MANIFEST")"
 printf 'GC_UNIT_INCOMPLETE tests=%d\n' "$incomplete"
+printf 'GC_UNIT_NOT_RUN tests=%d\n' "$not_run"
 rc=0
 if [[ $failed -ne 0 ]]; then
   rc=1

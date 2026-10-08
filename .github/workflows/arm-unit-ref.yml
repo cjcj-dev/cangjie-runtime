@@ -76,7 +76,8 @@ jobs:
         env:
           TEST_FILTER: ${{ steps.refs.outputs.filter }}
         run: |
-          ulimit -c 0
+          ulimit -S -c 0
+          ulimit -H -c 0
           mkdir -p evidence compiler-bin
           uptime > evidence/uptime-before.log
           git -C elf-source rev-parse HEAD > evidence/elf-ref.log
@@ -108,40 +109,20 @@ jobs:
           sha256sum "$elf_lib/libcangjie-runtime.so" "$product_lib/libcangjie-runtime.so" "$product_lib/libboundscheck.so" > evidence/products.sha256
           nm --defined-only "$product_lib/libcangjie-runtime.so" | c++filt > evidence/product-symbols.log
           set +e
-          GCV2_RUNTIME_LIB_DIR="$elf_lib" GCV2_RUNTIME_OUTPUT_ROOT="$elf_root" GC_UNIT_OUT="$PWD/evidence/standalone" \
+          GC_UNIT_BUILD_ONLY=1 GCV2_RUNTIME_LIB_DIR="$elf_lib" GCV2_RUNTIME_OUTPUT_ROOT="$elf_root" GC_UNIT_OUT="$PWD/evidence/standalone" \
             bash elf-source/runtime/tests/gc_unit/run_standalone.sh > evidence/standalone.log 2>&1
           standalone_rc=$?
           printf '%s\n' "$standalone_rc" > evidence/standalone.rc
-          if [ ! -x evidence/standalone/cj_gc_unit ]; then exit "$standalone_rc"; fi
+          if [ "$standalone_rc" -ne 0 ]; then exit "$standalone_rc"; fi
+          if ! grep -qxF "GC_UNIT_BUILD_ONLY_DONE tests_executed=0" evidence/standalone.log; then exit 2; fi
           sha256sum evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit > evidence/elf.sha256
           nm --defined-only evidence/standalone/cj_gc_unit | c++filt > evidence/elf-defined.log
           nm -u evidence/standalone/cj_gc_unit | c++filt > evidence/elf-imports.log
-          IFS=: read -r -a selected_tests <<< "$TEST_FILTER"
-          target_rc=0
-          for index in "${!selected_tests[@]}"; do
-            selected_elf=''
-            matches=0
-            for kind in main publication; do
-              if grep -Fxq -- "${selected_tests[$index]}" "evidence/standalone/test-lists/$kind.txt"; then
-                matches=$((matches+1))
-                if [ "$kind" = main ]; then selected_elf=evidence/standalone/cj_gc_unit; else selected_elf=evidence/standalone/cj_gc_forwarding_publication_unit; fi
-              fi
-            done
-            if [ "$matches" -ne 1 ]; then
-              printf 'Expected one registered ELF for %s, got %s\n' "${selected_tests[$index]}" "$matches" > "evidence/target-$index.log"
-              printf '2\n' > "evidence/target-$index.rc"
-              target_rc=1
-              continue
-            fi
-            printf '%s\n' "$selected_elf" > "evidence/target-$index-elf.log"
-            nm --defined-only "$selected_elf" | c++filt > "evidence/target-$index-defined.log"
-            nm -u "$selected_elf" | c++filt > "evidence/target-$index-imports.log"
-            LD_LIBRARY_PATH="$product_lib" "$selected_elf" "--gtest_filter=${selected_tests[$index]}" > "evidence/target-$index.log" 2>&1
-            result=$?
-            printf '%s\n' "$result" > "evidence/target-$index.rc"
-            if [ "$result" -ne 0 ]; then target_rc=1; fi
-          done
-          cat evidence/target-*.log > evidence/target.log
+          GC_UNIT_TEST_FILTER="$TEST_FILTER" GC_UNIT_JOBS=1 \
+            bash runtime/tests/gc_unit/run_parallel_tests.sh \
+              evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit \
+              evidence/standalone "$product_lib" > evidence/target.log 2>&1
+          target_rc=$?
           printf '%s\n' "$target_rc" > evidence/target.rc
           cat evidence/target.log
           uptime > evidence/uptime-after.log
@@ -154,7 +135,11 @@ jobs:
             evidence/**/*.log
             evidence/**/*.rc
             evidence/**/*.sha256
-            evidence/standalone/test-lists/*.txt
+            evidence/standalone/test-lists/*
+            evidence/standalone/test-manifest*.tsv
+            evidence/standalone/test-status/*
+            evidence/standalone/test-tallies/*
+            evidence/standalone/parallel_tally.txt
           retention-days: 7
 
   root-qualification-1411:
