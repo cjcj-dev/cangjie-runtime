@@ -164,7 +164,7 @@ void LinkManaged(ChainNode& node, FrameAddress* caller, const uint32_t* ip)
     node.before = EmptyStartPC() + 12;
 #else
     // AArch64 stores the function entry itself in the slot preceding FA.
-    node.before = EmptyStartPC();
+    node.before = EmptyStartPC() + 9;
 #endif
     node.fa.callerFrameAddress = caller;
     node.fa.returnAddress = ip;
