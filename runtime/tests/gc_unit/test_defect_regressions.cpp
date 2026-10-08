@@ -402,17 +402,44 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-// P01: mutable global value fields carry the explicit $BP=1 owner;
-// $BP=0 is reserved for plain value-type storage.
+// P01: global value fields use the compiler's architecture-specific marker.
+// The historical OwnerStaticSlot name includes ARM's field-address marker;
+// an unmarked field with $BP=0 is plain value-type storage.
 GC_TEST(DefectRegress, CompilerWriteGlobalOwnerStaticSlotUsesRootPath)
 {
     ExportHandleFixture fx;
     RefField<false> staticField(zpointer::null);
+#if defined(__aarch64__) && !defined(__ANDROID__)
+    // CompilerCalls.cpp:IsGlobalStruct classifies ARM globals by field bit 63,
+    // independently of the owner. Keep the same global storage/result contract.
+    constexpr uintptr_t globalFlag = 1ULL << 63;
+    auto* taggedField = reinterpret_cast<RefField<false>*>(
+        reinterpret_cast<uintptr_t>(&staticField) | globalFlag);
+    std::fprintf(stderr, "GLOBAL_STORE_INPUT field_marked=%d owner=0\n",
+                 (reinterpret_cast<uintptr_t>(taggedField) & globalFlag) != 0);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, taggedField);
+#else
     MCC_WriteRefField(fx.heap.obj0, reinterpret_cast<ObjectPtr>(uintptr_t(1)), &staticField);
+#endif
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
+    std::fprintf(stderr, "GLOBAL_STORE_TARGET installed=%llu expected=%llu\n",
+                 static_cast<unsigned long long>(installed),
+                 static_cast<unsigned long long>(raw(StoreGoodPointer(fx.heap.obj0))));
     GC_EXPECT_EQ(installed, raw(StoreGoodPointer(fx.heap.obj0)));
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
+    std::fprintf(stderr, "GLOBAL_STORE_TARGET_ASSERTIONS_PASSED\n");
+}
+
+GC_TEST(DefectRegress, CompilerWriteUnmarkedPlainSlotKeepsPlainValue)
+{
+    ExportHandleFixture fx;
+    RefField<false> plainField(zpointer::null);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, &plainField);
+
+    const uintptr_t installed = static_cast<uintptr_t>(raw(plainField.GetFieldValue()));
+    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_TRUE(IsPlainNonNullSlotWord(installed));
 }
 
 // The compiler's global-struct marker is paired with global storage, not a
