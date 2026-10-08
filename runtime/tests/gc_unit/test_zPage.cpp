@@ -1201,7 +1201,17 @@ GC_RUNTIME_OTHER_VM_TEST(NativeArgumentHandle, CallbackRetainsReceiverAndArgumen
 namespace {
 struct ReturnResult { uintptr_t before = 0; uintptr_t after = 0; uintptr_t encoded = 0; U64 marker = 0; };
 thread_local ReturnResult* returnResult;
-extern "C" void ReturnReflectedStruct(uintptr_t* output, TypeInfo*)
+#if defined(__aarch64__)
+// The product N2C stub passes known-struct sret in x8, not a C argument.
+extern "C" void ReturnReflectedStruct(uintptr_t*, TypeInfo*);
+extern "C" void ReturnKnownReflectedStruct(uintptr_t*, TypeInfo*);
+#endif
+extern "C" void ReturnKnownReflectedStructBody(uintptr_t* output, TypeInfo*)
+{
+    output[0] = 583;
+    output[1] = 584;
+}
+extern "C" void ReturnReflectedStructBody(uintptr_t* output, TypeInfo*)
 {
     auto& r = *returnResult;
     auto* mutator = Mutator::GetMutator();
@@ -1216,6 +1226,36 @@ extern "C" void ReturnReflectedStruct(uintptr_t* output, TypeInfo*)
     r.after = reinterpret_cast<uintptr_t>(value());
     // This is the callee's actual plain sret value, handed to the product boxer.
     output[0] = r.after; output[1] = 584;
+}
+#if !defined(__aarch64__)
+extern "C" void ReturnReflectedStruct(uintptr_t* output, TypeInfo* type)
+{
+    ReturnReflectedStructBody(output, type);
+}
+extern "C" void ReturnKnownReflectedStruct(uintptr_t* output, TypeInfo* type)
+{
+    ReturnKnownReflectedStructBody(output, type);
+}
+#endif
+struct KnownReturnResult { U64 first = 0; U64 marker = 0; };
+void* RunKnownReturn(void* context)
+{
+    auto& r = *static_cast<KnownReturnResult*>(context);
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_STRUCT); type->SetInstanceSize(16);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    MethodInfo method{}; method.SetMethodName("known_return_value");
+    auto set = [&](size_t offset, auto value) {
+        std::memcpy(reinterpret_cast<char*>(&method) + offset, &value, sizeof(value));
+    };
+    set(8, U32(MODIFIER_STATIC | MODIFIER_HAS_SRET0));
+    set(16, reinterpret_cast<Uptr>(&ReturnKnownReflectedStruct)); set(24, type);
+    auto* result = static_cast<MObject*>(MCC_ApplyCJStaticMethod(&method, nullptr, nullptr));
+    r.first = result->Load<U64>(TYPEINFO_PTR_SIZE);
+    r.marker = result->Load<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr));
+    return nullptr;
 }
 void* RunReturn(void* context)
 {
@@ -1238,6 +1278,18 @@ void* RunReturn(void* context)
     r.marker = result->Load<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr));
     return nullptr;
 }
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeReturnHandle, KnownHeaderlessResultWithoutCollection)
+{
+    RuntimeParam param{}; param.heapParam.heapSize = 512 * 1024; param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    KnownReturnResult result;
+    auto task = RunCJTask(RunKnownReturn, &result);
+    void* value = nullptr; GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK); ReleaseHandle(task);
+    std::fprintf(stderr, "RETURN_KNOWN_TARGET first=%llu marker=%llu\n",
+        (unsigned long long)result.first, (unsigned long long)result.marker);
+    GC_EXPECT_TRUE(result.first == 583 && result.marker == 584);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(NativeReturnHandle, HeaderlessResultAfterCollection)
 {

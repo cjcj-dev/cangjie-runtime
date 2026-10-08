@@ -67,6 +67,7 @@ set(GC_UNIT_SOURCES
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
     test_zPage.cpp
+    reflected_struct_return_aarch64.S
     test_value_root_identity.cpp
     test_zVirtualMemory.cpp
     test_zVirtualMemoryManager.cpp
