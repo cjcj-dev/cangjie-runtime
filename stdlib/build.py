@@ -149,6 +149,8 @@ def generate_cmake_defs(args):
 
     if args.sanitizer_support:
         result.append("-DCANGJIE_SANITIZER_SUPPORT=" + args.sanitizer_support)
+    if args.max_compiler_processes is not None:
+        result.append("-DCANGJIE_MAX_COMPILER_PROCESSES=" + str(args.max_compiler_processes))
     return result
 
 def build(args):
@@ -218,6 +220,10 @@ def build(args):
 
     if not os.path.exists(cmake_build_dir):
         os.makedirs(cmake_build_dir)
+        configure = True
+    else:
+        configure = args.max_compiler_processes is not None
+    if configure:
         output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE)
         log_output(output)
 
@@ -388,6 +394,15 @@ def main():
     )
     parser_build.add_argument(
         "--jobs","-j" , dest="jobs", type=int, default=0, help="run N jobs in parallel (0 means default)"
+    )
+    def positive_integer(value):
+        if not re.fullmatch(r"[1-9][0-9]*", value):
+            raise argparse.ArgumentTypeError("must be a positive integer")
+        return int(value)
+
+    parser_build.add_argument(
+        "--max-compiler-processes", type=positive_integer, default=None,
+        help="limit concurrent static and BC compiler processes together (Ninja only)",
     )
     parser_build.add_argument(
         "--hwasan", action="store_true", help="build with hardware asan"

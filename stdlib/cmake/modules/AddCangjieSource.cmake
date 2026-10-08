@@ -4,6 +4,19 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+set(cangjie_compile_job_pool)
+if(NOT "${CANGJIE_MAX_COMPILER_PROCESSES}" STREQUAL "")
+    if(NOT "${CANGJIE_MAX_COMPILER_PROCESSES}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "CANGJIE_MAX_COMPILER_PROCESSES must be a positive integer")
+    endif()
+    if(NOT CMAKE_GENERATOR MATCHES "^Ninja")
+        message(FATAL_ERROR "CANGJIE_MAX_COMPILER_PROCESSES requires a Ninja generator")
+    endif()
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS
+        cj_compile=${CANGJIE_MAX_COMPILER_PROCESSES})
+    set(cangjie_compile_job_pool JOB_POOL cj_compile)
+endif()
+
 set(CANGJIE_NATIVE_CANGJIE_TOOLS_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CANGJIE_LIB_DIR "modules")
 set(CANGJIE_EXECUTABLE_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin)
@@ -280,6 +293,7 @@ function(add_cangjie_library target_name)
 
     add_custom_command(
         OUTPUT ${output_full_name}
+        ${cangjie_compile_job_pool}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_dir}
         ${MKDIR_TEMP_FILES_CMD}
         COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}"  "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
@@ -304,6 +318,7 @@ function(add_cangjie_library target_name)
     if(generate_lto_bc)
         add_custom_command(
             OUTPUT ${output_lto_bc_full_name}
+            ${cangjie_compile_job_pool}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_bc_dir}
             COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}" "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
                      ${COMPILE_BC_CMD}
