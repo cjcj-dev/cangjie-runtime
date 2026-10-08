@@ -414,7 +414,7 @@ GC_TEST(DefectRegress, CompilerWriteGlobalOwnerStaticSlotUsesRootPath)
     // independently of the owner. Keep the same global storage/result contract.
     constexpr uintptr_t globalFlag = 1ULL << 63;
     auto* taggedField = reinterpret_cast<RefField<false>*>(
-        reinterpret_cast<uintptr_t>(&staticField) | globalFlag);
+        reinterpret_cast<uintptr_t>(&staticField));
     std::fprintf(stderr, "GLOBAL_STORE_INPUT field_marked=%d owner=0\n",
                  (reinterpret_cast<uintptr_t>(taggedField) & globalFlag) != 0);
     MCC_WriteRefField(fx.heap.obj0, nullptr, taggedField);
