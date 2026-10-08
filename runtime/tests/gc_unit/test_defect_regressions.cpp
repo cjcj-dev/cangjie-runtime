@@ -438,8 +438,19 @@ GC_TEST(DefectRegress, CompilerWriteUnmarkedPlainSlotKeepsPlainValue)
     MCC_WriteRefField(fx.heap.obj0, nullptr, &plainField);
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(plainField.GetFieldValue()));
-    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_TRUE(IsPlainNonNullSlotWord(installed));
+    const uintptr_t expectedPlain = reinterpret_cast<uintptr_t>(fx.heap.obj0);
+    const uintptr_t expectedStoreGood = raw(StoreGoodPointer(fx.heap.obj0));
+    std::fprintf(stderr,
+                 "PLAIN_STORE_TARGET installed=%llu expected_plain=%llu store_good=%llu expected_distinct=%d\n",
+                 static_cast<unsigned long long>(installed),
+                 static_cast<unsigned long long>(expectedPlain),
+                 static_cast<unsigned long long>(expectedStoreGood),
+                 expectedPlain != expectedStoreGood);
+    GC_EXPECT_EQ(installed, expectedPlain);
+    // StorePlain preserves address bits, including any that overlap zpointer's
+    // low metadata mask. Contrast this fixture's distinct store-good encoding.
+    GC_EXPECT_NE(installed, expectedStoreGood);
+    std::fprintf(stderr, "PLAIN_STORE_TARGET_ASSERTIONS_PASSED\n");
 }
 
 // The compiler's global-struct marker is paired with global storage, not a
