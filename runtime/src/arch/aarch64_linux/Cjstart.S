@@ -64,7 +64,7 @@ __CJ_Fini_End:                        // @__CJ_Fini_End
     .section  .cjmetadata.rw.header
     .p2align  4
     .long 0x12345678
-    .long 0x80000000
+    .long 0x80000001
     .long 0
     .long __CJMetaDataSize
     .long __CJSDKVersion

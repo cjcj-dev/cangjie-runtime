@@ -26,6 +26,12 @@
 namespace MapleRuntime {
 const int StackInfo::NEED_FILTED_FLAG = -1;
 
+U16 GetCallerFrameSiteKind(FrameType calleeType)
+{
+    if (calleeType == FrameType::SAFEPOINT || calleeType == FrameType::STACKGROW) { return 2; }
+    return calleeType == FrameType::UNKNOWN ? 0 : 1;
+}
+
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
 static uint64_t *stackFrameAlign(uint64_t *fa)
 {
@@ -37,14 +43,12 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     if (calleeFrameInfo.GetFrameType() == FrameType::MANAGED) {
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(
-            reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(
-                reinterpret_cast<FrameAddress*>(calleeFrameInfo.mFrame.GetFA()))));
+        FuncDescRef funcDesc = calleeFrameInfo.GetQualifiedDescriptor();
         CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                      reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
         CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                      reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
-        const FramePrologue prologue(funcDesc->GetStackMap());
+        const FramePrologue prologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification()));
         auto fa = calleeFrameInfo.mFrame.GetFA();
         const size_t count = prologue.GetSavedRegisterCount();
         callerFrameInfo.mFrame.SetPtrAuthRAMod(stackFrameAlign(reinterpret_cast<uint64_t*>(fa) + count));
@@ -72,7 +76,7 @@ void StackFrameStream::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
             GetContextWin64(&rip, &rsp);
             FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
             UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
 #else
             MRT_UNW_GETCALLERFRAME(uwContext.frameInfo);
 #endif
@@ -153,10 +157,20 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
         // be directly identified by the runtime library address.
         if (isReliableN2CStub) {
             frameInfo.SetFrameType(FrameType::RUNTIME);
-        } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()))) {
+        } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()), true)) {
             frameInfo.SetFrameType(FrameType::MANAGED);
             isReliableN2CStub = false;
-            frameInfo.ResolveProcInfo();
+            // CodeCache ownership precedes metadata lookup; executable bytes
+            // alone do not prove this is a managed function (codeCache.cpp:750).
+            U16 siteKind = GetCallerFrameSiteKind(lastFrameType);
+#ifdef _WIN64
+            // PE already selected the sender before reading frameSize. This
+            // token also retains the decision for an initial saved caller.
+            if (frameInfo.GetMetadata().descriptor != 0) { siteKind = frameInfo.GetMetadata().kind; }
+#endif
+            if (!frameInfo.ResolveProcInfo(siteKind, diagnostic)) {
+                frameInfo.SetFrameType(frameInfo.GetMetadata().descriptor == 0 ? FrameType::NATIVE : FrameType::UNKNOWN);
+            }
         } else {
             // C++ / runtime-transition frames are not managed. GetFuncStartPC
             // loads fa-1 and faults when that slot is not a function entry.
@@ -218,17 +232,10 @@ void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-            if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-            if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-                regSlotsMap = RegSlotsMap();
-                return;
-            }
+            const auto descriptor = frame.GetQualifiedDescriptor();
             const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
             StackPtrMap pointers = StackMapBuilder(startIP, frameIP,
-                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), reinterpret_cast<uint64_t*>(descriptor)).Build<StackPtrMap>();
             pointers.RecordCalleeSaved(regSlotsMap);
             regSlotsMap.allRegistersSaved = false;
             break;
@@ -279,13 +286,12 @@ void StackFrameStream::CheckRegisterRoots() const
     if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) { return; }
-#endif
-    HeapReferenceMap roots = StackMapBuilder(startIP, frameIP,
-        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+    const auto descriptor = frame.GetQualifiedDescriptor();
+    StackMapBuilder builder = StackMapBuilder(startIP, frameIP,
+        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), reinterpret_cast<uint64_t*>(descriptor));
+    HeapReferenceMap roots = builder.Build<HeapReferenceMap>(true);
+    CHECK_DETAIL(roots.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
+                 "managed frame missing exact ordinary root map");
     if (roots.IsValid() && roots.HasRegisterRoots()) {
         LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
             reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
@@ -349,109 +355,73 @@ void StackInfo::ProcessOnIteration(const FrameInfo& frame)
     }
 }
 
-void StackInfo::ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos, size_t steps) const
+RawTraceFrame StackInfo::CaptureRawFrame(const FrameInfo& frame)
+{
+    ElfUnloadQuiescence::AssertReaderActive();
+    RawTraceFrame raw;
+    raw.capturedPC = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+#ifdef INTERPRETER_ENABLED
+    if (frame.GetFrameType() == FrameType::INTERPRETER) {
+        INT_InterpretedFrameInfo info;
+        FillInterpretedFrameInfo(reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), raw.capturedPC, &info);
+        // Copy and release the provider result while its frame/provider is valid.
+        FillInterpretedFrameDesc(reinterpret_cast<uint64_t>(info.fuh),
+                                 reinterpret_cast<uint64_t>(info.bcPos), raw.resolved);
+        raw.interpreted = true;
+        return raw;
+    }
+#endif
+    CHECK_DETAIL(frame.GetFrameType() == FrameType::MANAGED, "Invalid raw trace frame kind");
+    FuncDescRef desc = frame.GetQualifiedDescriptor();
+    CHECK_DETAIL(desc != nullptr, "Raw trace metadata qualification failed");
+    const auto& metadata = frame.GetMetadata();
+    raw.identity = {metadata.owner, metadata.ownerGeneration, metadata.metadata, metadata.generation, metadata.entry};
+    raw.mangledName = desc->GetFuncName();
+    raw.directory = desc->GetFuncDir();
+    raw.filename = desc->GetFuncFilename();
+    raw.format = StackTraceFormatFlag(desc->GetStackTraceFormat());
+    StackMapBuilder builder(reinterpret_cast<uintptr_t>(frame.GetFuncStartPC()), raw.capturedPC, 0,
+                            reinterpret_cast<uint64_t*>(desc));
+    MethodMap map = builder.Build<MethodMap>();
+    raw.lineNumber = map.IsValid() ? map.GetLineNum() : 0;
+    return raw;
+}
+
+void StackInfo::ExtractRawFramesFromStack(std::vector<RawTraceFrame>& frames, size_t steps) const
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    size_t count = 1;
-    for (const auto& frameInfo : stack) {
-        if (count > steps) {
-            break;
-        }
-
-        switch (frameInfo.GetFrameType()) {
-            case FrameType::MANAGED: {
-                liteFrameInfos.push_back(reinterpret_cast<uint64_t>(frameInfo.mFrame.GetIP()));
-                liteFrameInfos.push_back(reinterpret_cast<uint64_t>(frameInfo.GetFuncStartPC()));
-#ifdef __APPLE__
-                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(frameInfo.mFrame.GetFA());
-#else
-                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frameInfo.GetFuncStartPC()));
-#endif
-                liteFrameInfos.push_back(reinterpret_cast<uint64_t>(funcDesc));
-                break;
-            }
-#ifdef INTERPRETER_ENABLED
-            case FrameType::INTERPRETER: {
-                auto ip = reinterpret_cast<uintptr_t>(frameInfo.mFrame.GetIP());
-                auto fp = reinterpret_cast<uintptr_t>(frameInfo.mFrame.GetFA());
-
-                INT_InterpretedFrameInfo fInfo;
-                FillInterpretedFrameInfo(fp, ip, &fInfo);
-
-                // consumed by interpreter frame description provider
-                liteFrameInfos.push_back(reinterpret_cast<uint64_t>(fInfo.fuh));
-                // consumed by interpreter frame description provider
-                liteFrameInfos.push_back(reinterpret_cast<uint64_t>(fInfo.bcPos));
-                // marks this triple as "non-cjnative"
-                liteFrameInfos.push_back(INTERPRETED_FRAME_FDESC);
-                break;
-            }
-#endif
-            default: {
-                LOG(RTLOG_FATAL, "Unknown type of method in lite frame info.");
-                break;
-            }
-        }
-
-        count++;
+    size_t count = 0;
+    for (const auto& frame : stack) {
+        if (count++ >= steps) { break; }
+        frames.emplace_back(CaptureRawFrame(frame));
     }
 }
 
-void StackInfo::GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
-                                              std::vector<StackTraceElement>& stackTrace)
+void StackInfo::DecodeRawFrame(const RawTraceFrame& raw, StackTraceElement& ste, bool filter)
 {
-    constexpr int liteFrameInfoElementSize = 3;
-    size_t decodeEnd = liteFrameInfos.size();
-    // SOF folding appends one SofStackFlag (CompilerCalls.cpp), making the vector 3n+1.
-    // Consume that schema here so the flag is not decoded as a frame.
-    if (decodeEnd % static_cast<size_t>(liteFrameInfoElementSize) == 1) {
-        uint64_t foldedFlag = liteFrameInfos.back();
-        if (foldedFlag == static_cast<uint64_t>(SofStackFlag::TOP_FOLDED) ||
-            foldedFlag == static_cast<uint64_t>(SofStackFlag::BOTTOM_FOLDED)) {
-            decodeEnd -= 1;
-        } else {
-            LOG(RTLOG_FATAL, "liteFrameInfos has a trailing element that is not a SofStackFlag.");
-        }
-    } else if (decodeEnd % static_cast<size_t>(liteFrameInfoElementSize) == 2) {
-        LOG(RTLOG_FATAL, "liteFrameInfos size %zu is not a multiple of 3 and is not the 3n+1 SOF schema.",
-            decodeEnd);
-    }
-    for (size_t i = 0; i < decodeEnd; i += static_cast<size_t>(liteFrameInfoElementSize)) {
-        // Each function stack frame is represented by a triple {ip, startPC, funcDesc}.
-        // Do not construct StackMetadataHelper here: INTERPRETED_FRAME_FDESC is 0, and the
-        // helper ctor immediately dereferences that as FuncDesc. The native path constructs
-        // its own helper inside GetStackTraceByLiteFrameInfo.
-        StackTraceElement tmpElement;
-        GetStackTraceByLiteFrameInfo(liteFrameInfos[i], liteFrameInfos[i + 1], liteFrameInfos[i + 2], tmpElement);
-        if (tmpElement.lineNumber != NEED_FILTED_FLAG) {
-            stackTrace.push_back(tmpElement);
-        }
-    }
-}
-
-void StackInfo::GetStackTraceByLiteFrameInfo(const uint64_t v1, const uint64_t v2, const uint64_t v3,
-                                             StackTraceElement& ste)
-{
-#ifdef INTERPRETER_ENABLED
-    if (v3 == INTERPRETED_FRAME_FDESC) {
-        // handle interpreter frame
-        FillInterpretedFrameDesc(v1, v2, ste);
+    if (raw.interpreted || raw.systemFrame) {
+        ste = raw.resolved;
         return;
     }
-#endif
-
-    StackMetadataHelper stackMetadataHelper(reinterpret_cast<uint32_t*>(v1), reinterpret_cast<uint32_t*>(v2),
-                                            reinterpret_cast<uint64_t*>(v3));
-    stackMetadataHelper.GetMangleNameHelper()->Demangle();
-
-    if (stackMetadataHelper.IsNeedFiltExceptionCreationLayer()) {
+    MangleNameHelper helper(raw.mangledName, raw.format);
+    helper.Demangle();
+    if (filter && helper.IsNeedFilt()) {
         ste.lineNumber = NEED_FILTED_FLAG;
         return;
     }
+    ste.lineNumber = raw.lineNumber;
+    ste.methodName = helper.GetMethodName();
+    ste.className = helper.GetPackClassName();
+    ste.fileName = raw.FilePath();
+}
 
-    ste.lineNumber = stackMetadataHelper.GetLineNumber();
-    ste.methodName = stackMetadataHelper.GetMangleNameHelper()->GetMethodName();
-    ste.className = stackMetadataHelper.GetMangleNameHelper()->GetPackClassName();
-    ste.fileName = stackMetadataHelper.GetFilePathAndName();
+void StackInfo::DecodeRawFrames(const std::vector<RawTraceFrame>& frames,
+                               std::vector<StackTraceElement>& stackTrace)
+{
+    for (const auto& frame : frames) {
+        StackTraceElement ste;
+        DecodeRawFrame(frame, ste);
+        if (ste.lineNumber != NEED_FILTED_FLAG) { stackTrace.push_back(ste); }
+    }
 }
 } // namespace MapleRuntime

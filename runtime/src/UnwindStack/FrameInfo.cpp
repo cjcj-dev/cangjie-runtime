@@ -47,11 +47,11 @@ uintptr_t FrameInfo::CallerSP() const
         case FrameType::C2N_STUB: return fp + 8 * 32;
         case FrameType::MANAGED: {
             ElfUnloadQuiescence::ReadScope reader;
-            FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
+            FuncDescRef desc = GetQualifiedDescriptor();
             if (desc == nullptr) { return 0; }
             CHECK_DETAIL(desc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                          GetStartProc(), mFrame.GetIP());
-            const FramePrologue prologue(desc->GetStackMap());
+            const FramePrologue prologue(desc->GetStackMap(), reinterpret_cast<Uptr>(desc->GetAOTQualification()));
             const size_t saved = prologue.GetSavedRegistersAboveFrameHead();
             return fp + sizeof(FrameAddress) + ((saved + 1) & ~size_t(1)) * sizeof(uintptr_t);
         }
@@ -63,26 +63,54 @@ uintptr_t FrameInfo::CallerSP() const
 #endif
 }
 
-void FrameInfo::ResolveProcInfo()
+FuncDescRef FrameInfo::GetQualifiedDescriptor() const
+{
+    ElfUnloadQuiescence::AssertReaderActive();
+    CHECK_DETAIL(ElfUnloadQuiescence::ValidateFrameMetadata(metadata), "managed frame metadata generation changed");
+    return reinterpret_cast<FuncDescRef>(metadata.descriptor);
+}
+
+bool FrameInfo::ResolveProcInfo(U16 kind, bool diagnostic)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    startProc = GetFuncStartPC();
-    if (startProc == nullptr) {
-        lsdaStart = nullptr;
-        return;
+#ifdef _WIN64
+    if (metadata.descriptor != 0) {
+        CHECK_DETAIL(metadata.site == reinterpret_cast<Uptr>(mFrame.GetIP()) && metadata.kind == kind &&
+                     ElfUnloadQuiescence::ValidateFrameMetadata(metadata),
+                     "frame qualification changed before classification");
+    } else {
+        metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
     }
-#ifdef __APPLE__
-    FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
 #else
-    FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
+    metadata = ElfUnloadQuiescence::FindFrameMetadata(reinterpret_cast<Uptr>(mFrame.GetIP()), kind);
 #endif
-    if (funcDesc == nullptr) {
-        // The frame does not start at a valid function entry (e.g. a corrupted stack
-        // while dumping a crash): no exception table can be resolved for it.
-        lsdaStart = nullptr;
-        return;
+    startProc = reinterpret_cast<const uint32_t*>(metadata.entry);
+    lsdaStart = nullptr;
+    if (metadata.descriptor == 0) { return false; }
+    // frame.cpp:1158 / codeCache.cpp:750: select compiled identity before
+    // consuming frame layout. A saved site, rather than pc-1, supplies the map.
+    if (metadata.match == ElfUnloadQuiescence::QualificationMatch::NONE) {
+        if (diagnostic) { return false; }
+        CHECK_DETAIL(false, "CJ frame missing exact site qualification");
     }
-    lsdaStart = reinterpret_cast<uint8_t*>(funcDesc->GetEHTable());
+    if (diagnostic && (metadata.bits & 2) == 0) { return false; }
+    CHECK_DETAIL((metadata.bits & 2) != 0, "CJ frame layout is not qualified at saved PC");
+#ifndef _WIN64
+    if (diagnostic && ((metadata.bits & 1) == 0 || mFrame.GetFA() == nullptr)) { return false; }
+    CHECK_DETAIL((metadata.bits & 1) != 0 && mFrame.GetFA() != nullptr, "CJ frame slot is not qualified");
+#ifdef __APPLE__
+    const Uptr savedDescriptor = *reinterpret_cast<const Uptr*>(reinterpret_cast<Uptr>(mFrame.GetFA()) - 16);
+    if (diagnostic && savedDescriptor != metadata.descriptor) { return false; }
+    CHECK_DETAIL(savedDescriptor == metadata.descriptor, "CJ frame descriptor disagrees with PC owner");
+#else
+    const Uptr savedEntry = reinterpret_cast<Uptr>(GetFuncStartPCFromFrameAddress(mFrame.GetFA()));
+    if (diagnostic && savedEntry != metadata.entry) { return false; }
+    CHECK_DETAIL(savedEntry == metadata.entry, "CJ frame entry disagrees with PC owner");
+#endif
+#endif
+    const auto descriptor = GetQualifiedDescriptor();
+    lsdaStart = reinterpret_cast<const uint8_t*>(descriptor->GetEHTable());
+    return true;
 }
 
 void FrameInfo::PrintFrameInfo(uint32_t frameIdx) const
@@ -177,15 +205,17 @@ CString FrameInfo::GetFrameInfo(uint32_t frameIdx) const
 
 FuncDescRef SigHandlerFrameinfo::GetFuncDescForSignal() const
 {
-#ifdef __APPLE__
-    return MFuncDesc::GetFuncDesc(mFrame.GetFA());
-#else
-    return MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetFuncStartPC()));
-#endif
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    const auto& frame = GetMetadata();
+    return ElfUnloadQuiescence::ValidateFrameMetadata(frame) ? reinterpret_cast<FuncDescRef>(frame.descriptor) : nullptr;
 }
 
 void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
 {
+    if (GetFrameType() == FrameType::UNKNOWN) {
+        FLOG(RTLOG_ERROR, "  #%u %p CJ metadata/layout unavailable", frameIdx, mFrame.GetIP());
+        return;
+    }
     ElfUnloadQuiescence::ReadScope metadataReader;
     if (frameIdx > 0 && fType == FrameType::NATIVE) {
         FLOG(RTLOG_ERROR, "      ...");

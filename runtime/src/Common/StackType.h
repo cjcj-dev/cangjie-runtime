@@ -8,7 +8,10 @@
 #ifndef MRT_STACK_TYPE_H
 #define MRT_STACK_TYPE_H
 
+#include "Loader/ElfUnloadQuiescence.h"
 #include <cstdint>
+#include <tuple>
+#include "UnwindStack/MangleNameHelper.h"
 
 #include "Base/CString.h"
 #include "Base/Log.h"
@@ -44,6 +47,9 @@ enum class FrameType {
     INTERPRETER_I2N = 13,
 #endif
 };
+
+// One callee-context decision shared by classification and PE pre-unwind.
+U16 GetCallerFrameSiteKind(FrameType calleeType);
 
 enum class StackMode {
     EH = 0,
@@ -86,6 +92,41 @@ struct StackTraceElement {
     CString methodName;
     CString fileName;
     int64_t lineNumber;
+};
+
+// Numeric identity only: never dereferenced by a delayed consumer.
+struct TraceFunctionIdentity {
+    Uptr owner = 0;
+    U64 ownerGeneration = 0;
+    Uptr metadata = 0;
+    U64 metadataGeneration = 0;
+    Uptr entry = 0;
+    auto Key() const { return std::tie(owner, ownerGeneration, metadata, metadataGeneration, entry); }
+    bool operator<(const TraceFunctionIdentity& other) const { return Key() < other.Key(); }
+    bool operator==(const TraceFunctionIdentity& other) const { return Key() == other.Key(); }
+};
+
+// javaClasses.cpp:2500 and threadService.cpp:593 retain klass holders.
+// System DSO metadata has no mirror root here; retain only owned bytes instead.
+struct RawTraceFrame {
+    CString mangledName;
+    CString directory;
+    CString filename;
+    int64_t lineNumber = 0;
+    StackTraceFormatFlag format = StackTraceFormatFlag::DEFAULT;
+    bool interpreted = false;
+    StackTraceElement resolved {};
+    bool systemFrame = false; // synchronous snapshot of a non-managed OS/stub frame only
+    TraceFunctionIdentity identity;
+    uintptr_t capturedPC = 0; // native exception/iOS logging only
+    CString FilePath() const
+    {
+#ifdef _WIN64
+        return directory.IsEmpty() ? filename : directory + "\\" + filename;
+#else
+        return directory.IsEmpty() ? filename : directory + "/" + filename;
+#endif
+    }
 };
 
 // Stack data structure used to return data of the arrayRef type to the cangjie code.
@@ -217,7 +258,7 @@ public:
     // caller assures this frame is a normal frame.
     // we name the direct caller frame in machine stack with "machine caller".
 #ifdef _WIN64
-    bool UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status) const;
+    bool UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status, U16 siteKind) const;
 #else
     bool UnwindToCallerMachineFrame(MachineFrame& caller) const;
 #endif
@@ -256,6 +297,7 @@ public:
         this->startProc = frame.startProc;
         this->lsdaStart = frame.lsdaStart;
         this->fType = frame.fType;
+        this->metadata = frame.metadata;
     }
 
     virtual FrameInfo& operator=(const FrameInfo& frame)
@@ -265,6 +307,7 @@ public:
             this->startProc = frame.startProc;
             this->lsdaStart = frame.lsdaStart;
             this->fType = frame.fType;
+            this->metadata = frame.metadata;
         }
         return *this;
     }
@@ -277,6 +320,7 @@ public:
         startProc = nullptr;
         lsdaStart = nullptr;
         fType = FrameType::UNKNOWN;
+        metadata = {};
     }
 
     void SetFrameType(FrameType type) { fType = type; }
@@ -290,7 +334,9 @@ public:
     MachineFrame GetMachineFrame() const { return mFrame; }
 
     // Get startProc and lsdaStart by parsing the ip.
-    void ResolveProcInfo();
+    bool ResolveProcInfo(U16 kind = 1, bool diagnostic = false);
+    const ElfUnloadQuiescence::FrameMetadata& GetMetadata() const { return metadata; }
+    FuncDescRef GetQualifiedDescriptor() const;
     uintptr_t CallerSP() const;
 
     // print this frame symbol
@@ -322,20 +368,16 @@ public:
     // low address    ...
     static uint32_t* GetFuncStartPCFromFrameAddress(FrameAddress* fa)
     {
+#if defined(__x86_64__)
+        static_assert(START_PC_OFFSET_IN_STACK == 9, "compiler layout FuncStartPCOffsetX86");
+#endif
         return reinterpret_cast<uint32_t*>(*(reinterpret_cast<uint64_t*>(fa) - 1) - START_PC_OFFSET_IN_STACK);
     }
 
     const uint32_t* GetFuncStartPC() const
     {
-#if defined(_WIN64)
+        // Identity is selected by the owner catalog, never reconstructed from FA.
         return startProc;
-#else
-        if (mFrame.fa == nullptr) {
-            return nullptr;
-        }
-        return reinterpret_cast<const uint32_t*>(*(reinterpret_cast<ArchUInt*>(mFrame.fa) - 1) -
-                                                 START_PC_OFFSET_IN_STACK);
-#endif
     }
 
     // Basic ip and fa information data structure.
@@ -345,6 +387,7 @@ protected:
     const uint32_t* startProc;
     const uint8_t* lsdaStart;
     FrameType fType;
+    ElfUnloadQuiescence::FrameMetadata metadata {};
 
 #if defined(__x86_64__)
     static constexpr uint32_t START_PC_OFFSET_IN_STACK = 9;
@@ -373,6 +416,7 @@ public:
             this->startProc = frame.GetStartProc();
             this->lsdaStart = frame.GetLsdaProc();
             this->fType = frame.GetFrameType();
+            this->metadata = frame.GetMetadata();
         }
         return *this;
     }
@@ -383,6 +427,7 @@ public:
             this->startProc = frame.GetStartProc();
             this->lsdaStart = frame.GetLsdaProc();
             this->fType = frame.GetFrameType();
+            this->metadata = frame.GetMetadata();
         }
         return *this;
     }

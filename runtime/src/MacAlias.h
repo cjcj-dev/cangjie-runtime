@@ -88,7 +88,8 @@ extern "C" MRT_EXPORT uint32_t CJ_MCC_GetExceptionTypeID();
 __asm__(".global _CJ_MCC_GetExceptionTypeID\n\t.set _CJ_MCC_GetExceptionTypeID, _MCC_GetExceptionTypeID");
 extern "C" MRT_EXPORT void CJ_MCC_EndCatch();
 __asm__(".global _CJ_MCC_EndCatch\n\t.set _CJ_MCC_EndCatch, _MCC_EndCatch");
-extern "C" MRT_EXPORT ArrayRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef exceptionMessage);
+extern "C" MRT_EXPORT ObjRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* captureInfo, const TypeInfo* frameArrayInfo,
+                                                       const TypeInfo* byteArrayInfo, ArrayRef exceptionMessage);
 __asm__(".global _CJ_MCC_FillInStackTraceImpl\n\t.set _CJ_MCC_FillInStackTraceImpl, _MCC_FillInStackTraceImpl");
 extern "C" MRT_EXPORT ArrayRef CJ_MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate);
 __asm__(".global _CJ_MCC_StringDedupCanonicalImpl\n\t.set _CJ_MCC_StringDedupCanonicalImpl, _MCC_StringDedupCanonicalImpl");

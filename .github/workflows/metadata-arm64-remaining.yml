@@ -1,0 +1,84 @@
+name: A2 fixed ARM64 remaining stages (1478)
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: 'Controller-approved exact execution commit; no source receipt rewrite'
+        type: string
+        required: true
+      absolute_deadline:
+        description: 'Controller-approved UTC deadline (ISO8601), at most 40 minutes away'
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  remaining:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.sha == inputs.approved_sha && github.run_attempt == 1 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: default
+            artifact: '11259325217'
+          - config: testable
+            artifact: '11259310233'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    env:
+      SOURCE_CONFIG: ${{ matrix.config }}
+      APPROVED_SHA: ${{ inputs.approved_sha }}
+      ABSOLUTE_DEADLINE: ${{ inputs.absolute_deadline }}
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      INPUT: ${{ runner.temp }}/1478-${{ matrix.config }}-original
+      REMAIN: ${{ runner.temp }}/1478-${{ matrix.config }}-remaining
+      LLVM_READOBJ: /usr/bin/llvm-readobj-18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.approved_sha }}
+          persist-credentials: false
+      - name: Admit execution identity and deadline before preparation
+        shell: bash
+        run: |
+          ulimit -c 0
+          python3 - <<'PY'
+          import datetime as dt, os
+          assert os.environ['GITHUB_SHA'] == os.environ['APPROVED_SHA']
+          deadline = dt.datetime.fromisoformat(os.environ['ABSOLUTE_DEADLINE'].replace('Z', '+00:00'))
+          assert deadline.tzinfo is not None
+          assert 0 < (deadline - dt.datetime.now(dt.timezone.utc)).total_seconds() <= 2400
+          PY
+      - name: Select executable LLVM18 reader (no product compilation)
+        shell: bash
+        run: |
+          ulimit -c 0
+          if [ ! -x "$LLVM_READOBJ" ]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y llvm-18
+          fi
+          test -x "$LLVM_READOBJ"
+          "$LLVM_READOBJ" --version
+          sha256sum "$(readlink -f "$LLVM_READOBJ")"
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: '37080734066'
+          artifact-ids: ${{ matrix.artifact }}
+          path: ${{ env.INPUT }}
+      - name: Check fixed source and continue each unexecuted stage once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/arm64-remaining/continue.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2-1478-remaining-${{ matrix.config }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            ${{ env.INPUT }}
+            ${{ env.REMAIN }}

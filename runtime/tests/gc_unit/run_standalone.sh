@@ -314,6 +314,36 @@ PACKAGE_INIT_IMAGE_PID=$!
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
   -o "$OUT/libcj_package_init_unrelated.so" > "$OUT/package-init-unrelated-build.log" 2>&1 &
 PACKAGE_INIT_UNRELATED_PID=$!
+# Real mapped text/data inputs for same-image and foreign-image descriptors.
+(
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_FOREIGN_IMAGE=1 \
+    "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_foreign.so" &
+  foreign_pid=$!
+  "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared -DGC_METADATA_OWNER_IMAGE=1 -DGC_METADATA_BOUNDARY_IMAGE=1 \
+    -Wl,--section-start=.a2_boundary=0x400000 \
+    "$SRC/package_init_image.cpp" -o "$OUT/libcj_metadata_owner.so" &
+  owner_pid=$!
+  (
+    mkdir -p "$OUT/contiguous-evidence"
+    cp "$SRC/package_init_image.cpp" "$SRC/a2_contiguous.ld" "$OUT/contiguous-evidence/"
+    printf '%q ' "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -DGC_METADATA_OWNER_IMAGE=1 \
+      -DGC_METADATA_CONTIGUOUS_IMAGE=1 -v -save-temps=obj -c "$SRC/package_init_image.cpp" \
+      -o "$OUT/contiguous-evidence/package_init_image.o" > "$OUT/contiguous-evidence/compile.argv"
+    "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -DGC_METADATA_OWNER_IMAGE=1 \
+      -DGC_METADATA_CONTIGUOUS_IMAGE=1 -v -save-temps=obj -c "$SRC/package_init_image.cpp" \
+      -o "$OUT/contiguous-evidence/package_init_image.o" > "$OUT/contiguous-evidence/compile.log" 2>&1
+    bash "$SRC/a2_fixture_link.sh" "$OUT/contiguous-evidence" \
+      "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared \
+      -Wl,-T,"$SRC/a2_contiguous.ld" "$OUT/contiguous-evidence/package_init_image.o" \
+      -o "$OUT/libcj_metadata_contiguous.so"
+    python3 "$SRC/a2_prefix_hole.py" "$OUT/libcj_metadata_contiguous.so" "$OUT/libcj_metadata_hole.so"
+  ) &
+  contiguous_pid=$!
+  wait "$contiguous_pid"
+  wait "$foreign_pid"
+  wait "$owner_pid"
+) > "$OUT/metadata-owner-images-build.log" 2>&1 &
+METADATA_OWNER_IMAGES_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
@@ -518,6 +548,7 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
 fi
 wait "$PACKAGE_INIT_IMAGE_PID"
 wait "$PACKAGE_INIT_UNRELATED_PID"
+wait "$METADATA_OWNER_IMAGES_PID"
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
@@ -749,6 +780,13 @@ for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
   /usr/bin/grep -q "^${producer_name}"$'\t' "$PTRCOLOUR_PRODUCER_MANIFEST"
 done
 echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows groups=4 old_group=marked_old_or_finalizable"
+
+# Explicit fixture/test-ELF construction for a controller-approved bounded
+# batch. Keep all binding/registration guards above; do not run any suite here.
+if [[ "${GC_UNIT_BUILD_ONLY:-0}" == 1 ]]; then
+  echo "GC_UNIT_BUILD_ONLY=1 behavioral_tests=NOT_RUN elf=$OUT/cj_gc_unit"
+  exit 0
+fi
 
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"

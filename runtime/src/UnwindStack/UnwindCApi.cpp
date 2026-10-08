@@ -147,13 +147,13 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
     GetContextWin64(&rip, &rsp);
     FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
     UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-    FrameInfo callerFrame = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+    FrameInfo callerFrame = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
 
     UnwindContext& uwContext = Mutator::GetMutator()->GetUnwindContext();
     uwContext.anchorFA = reinterpret_cast<uint32_t*>(callerFrame.mFrame.GetFA());
 
     for (int i = 0; i < layers; ++i) {
-        callerFrame = GetCallerFrameInfo(winModuleManager, callerFrame.mFrame, ucs);
+        callerFrame = GetCallerFrameInfo(winModuleManager, callerFrame.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(callerFrame.mFrame.GetFA());
     }
 #else

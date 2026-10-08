@@ -608,18 +608,14 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #else
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
-            caller.frameInfo.ResolveProcInfo();
             ElfUnloadQuiescence::ReadScope metadataReader;
-#ifdef __APPLE__
-            FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(caller.frameInfo.mFrame.GetFA());
-#else
-            FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(caller.frameInfo.GetFuncStartPC()));
-#endif
+            caller.frameInfo.ResolveProcInfo(2);
+            FuncDescRef funcDesc = caller.frameInfo.GetQualifiedDescriptor();
             CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                          reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
             CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                          reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
-            const uint32_t frameSize = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
+            const uint32_t frameSize = FramePrologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification())).GetFrameSize();
 #if defined(__x86_64__)
             // 8 is the slot length of returnaddr.
             uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize + 8;

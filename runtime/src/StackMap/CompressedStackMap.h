@@ -124,29 +124,21 @@ private:
 };
 class CompressedStackMapHead {
 public:
-    explicit CompressedStackMapHead(const Uptr* table) : prologue(table) {}
+    explicit CompressedStackMapHead(const Uptr* table, Uptr limit = 0) : prologue(table, limit) {}
     CompressedStackMapHead(CompressedStackMapHead&&) = default;
     ~CompressedStackMapHead() = default;
     PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
     static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr, Uptr framePC = 0)
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
-        U8 *stackmapStart = nullptr;
-        if (funcDesc)
-            stackmapStart = reinterpret_cast<U8*>(reinterpret_cast<FuncDescRef>(funcDesc)->GetStackMap());
-        else {
-#if defined(__APPLE__)
-            FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<FrameAddress*>(addr));
-#else
-            FuncDescRef desc = MFuncDesc::GetFuncDesc(addr);
-#endif
-            CHECK_DETAIL(desc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
-                         reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
-            stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
-        }
+        FuncDescRef descriptor = MFuncDesc::GetFuncDesc(addr);
+        CHECK_DETAIL(descriptor != nullptr && (funcDesc == nullptr || reinterpret_cast<FuncDescRef>(funcDesc) == descriptor),
+                     "managed map descriptor disagrees with registered entry startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
+        auto* stackmapStart = descriptor->GetStackMap();
         CHECK_DETAIL(stackmapStart != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                      reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
-        return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
+        return CompressedStackMapHead(stackmapStart, reinterpret_cast<Uptr>(descriptor->GetAOTQualification()));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept
     {

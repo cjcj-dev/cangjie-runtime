@@ -10,6 +10,7 @@
 
 #include "Heap/z/zStackWatermark.hpp"
 #include "gc_unittest.hpp"
+#include "metadata_code_fixture.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -56,8 +57,7 @@ private:
 static void ManagedFrameIp() {}
 
 struct EmptyFuncDesc {
-    int32_t descriptorOffset;
-    uint32_t pc;
+    const uint32_t* pc;
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
@@ -65,8 +65,7 @@ struct EmptyFuncDesc {
 };
 
 struct ReturnFuncDesc {
-    int32_t descriptorOffset;
-    uint32_t pc[4];
+    const uint32_t* pc;
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint32_t returnPollFlag;
@@ -78,8 +77,9 @@ struct ChainNode {
     FrameAddress fa;
 };
 
-EmptyFuncDesc gEmptyDesc;
-ReturnFuncDesc gReturnDesc;
+extern "C" { EmptyFuncDesc gEmptyDesc; ReturnFuncDesc gReturnDesc; }
+GC_METADATA_CODE(emptyReturnCode, gEmptyDesc, EmptyFuncDesc, stackMapOffset, 1)
+GC_METADATA_CODE(rootReturnCode, gReturnDesc, ReturnFuncDesc, stackMapOffset, 1)
 bool gImagesReady = false;
 
 void EnsureImages()
@@ -89,13 +89,11 @@ void EnsureImages()
     }
     std::memset(&gEmptyDesc, 0, sizeof(gEmptyDesc));
     gEmptyDesc.returnPollFlag = 1; // This fixture models return-barrier frames.
-    gEmptyDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gEmptyDesc.stackMapOffset) -
-        reinterpret_cast<char*>(&gEmptyDesc.descriptorOffset));
+    gEmptyDesc.pc = emptyReturnCodePC();
     gEmptyDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gEmptyDesc.bits) -
         reinterpret_cast<char*>(&gEmptyDesc.stackMapOffset));
     std::memset(&gReturnDesc, 0, sizeof(gReturnDesc));
-    gReturnDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gReturnDesc.stackMapOffset) -
-        reinterpret_cast<char*>(&gReturnDesc.descriptorOffset));
+    gReturnDesc.pc = rootReturnCodePC();
     gReturnDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gReturnDesc.bits) -
         reinterpret_cast<char*>(&gReturnDesc.stackMapOffset));
     size_t bit = 0;
@@ -151,7 +149,7 @@ void EnsureImages()
 uintptr_t EmptyStartPC()
 {
     EnsureImages();
-    return reinterpret_cast<uintptr_t>(&gEmptyDesc.pc);
+    return reinterpret_cast<uintptr_t>(gEmptyDesc.pc);
 }
 
 void LinkManaged(ChainNode& node, FrameAddress* caller, const uint32_t* ip)

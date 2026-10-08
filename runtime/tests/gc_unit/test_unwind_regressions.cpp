@@ -112,17 +112,15 @@ extern "C" int sprintf_s(char* dest, size_t destMax, const char* format, ...)
 GC_TEST(UnwindRegress, SofFoldFlagIsNotAFrame)
 {
     CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
-    FakeFuncDescLayout blob;
-    InitEmptyFuncDesc(&blob);
-    std::vector<uint64_t> lite;
-    lite.push_back(0x1000);
-    lite.push_back(0x1000);
-    lite.push_back(reinterpret_cast<uint64_t>(&blob));
-    lite.push_back(static_cast<uint64_t>(SofStackFlag::BOTTOM_FOLDED));
-    GC_EXPECT_EQ(lite.size() % 3, 1u);
+    RawTraceFrame raw;
+    raw.mangledName = "owned";
+    std::vector<RawTraceFrame> frames{raw};
+    const auto fold = SofStackFlag::BOTTOM_FOLDED;
+    GC_EXPECT_EQ(frames.size(), 1u);
+    GC_EXPECT_EQ(static_cast<uint64_t>(fold), 2u);
 
     std::vector<StackTraceElement> trace;
-    StackInfo::GetStackTraceByLiteFrameInfos(lite, trace);
+    StackInfo::DecodeRawFrames(frames, trace);
     GC_EXPECT_EQ(trace.size(), 1u);
 }
 

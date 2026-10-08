@@ -45,6 +45,8 @@ class EHFrameInfo : public FrameInfo, public IEHFrameInfo {
 public:
     EHFrameInfo(const FrameInfo& info, const ExceptionWrapper& eWrapper) : FrameInfo(info)
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
+        (void)GetQualifiedDescriptor();
         // Abnormal EHTable layout:
         // lsdaStart:    0x55555555
         if (!EHTable::IsAbnormalEHTable(lsdaStart)) {
@@ -55,8 +57,8 @@ public:
 #endif
             EHTable ehTable(pc, eWrapper, startProc, lsdaStart, result);
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
-            result.landingPad = reinterpret_cast<Uptr>(
-                                    PtrauthSignWithInstAkey(reinterpret_cast<Uptr>(result.landingPad),
+            result.landingPad = static_cast<Uptr>(
+                                    PtrauthSignWithInstAkey(static_cast<Uptr>(result.landingPad),
                                     reinterpret_cast<Uptr>(mFrame.GetPtrAuthRAMod())));
 #endif
         }
@@ -104,16 +106,12 @@ public:
 #endif
             return;
         }
-#ifdef __APPLE__
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
-#else
-        FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
-#endif
+        FuncDescRef funcDesc = GetQualifiedDescriptor();
         CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
                      reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(mFrame.GetIP()));
         CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
                      reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(mFrame.GetIP()));
-        const FramePrologue prologue(funcDesc->GetStackMap());
+        const FramePrologue prologue(funcDesc->GetStackMap(), reinterpret_cast<Uptr>(funcDesc->GetAOTQualification()));
         const auto& saved = prologue.GetRegisters();
         for (size_t i = 0; i < saved.calleeSaved.size(); ++i) {
             const uint32_t idx = saved.calleeSaved[i];

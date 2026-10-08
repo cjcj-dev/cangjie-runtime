@@ -196,6 +196,39 @@ target_include_directories(cj_package_init_unrelated PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
 add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(cj_metadata_foreign SHARED package_init_image.cpp)
+    add_library(cj_metadata_owner SHARED package_init_image.cpp)
+    foreach(_image cj_metadata_foreign cj_metadata_owner)
+        target_include_directories(${_image} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+    endforeach()
+    target_compile_definitions(cj_metadata_foreign PRIVATE GC_METADATA_FOREIGN_IMAGE=1)
+    target_compile_definitions(cj_metadata_owner PRIVATE
+        GC_METADATA_OWNER_IMAGE=1 GC_METADATA_BOUNDARY_IMAGE=1)
+    # Real RX PT_LOAD boundary input, qualified by readelf before acceptance.
+    set_property(TARGET cj_metadata_owner APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,--section-start=.a2_boundary=0x400000")
+    add_library(cj_metadata_contiguous SHARED package_init_image.cpp)
+    target_include_directories(cj_metadata_contiguous PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(cj_metadata_contiguous PRIVATE
+        GC_METADATA_OWNER_IMAGE=1 GC_METADATA_CONTIGUOUS_IMAGE=1)
+    # Preserve the explicit TU and driver commands; use the same link recorder as standalone.
+    target_compile_options(cj_metadata_contiguous PRIVATE -v -save-temps=obj)
+    set_property(TARGET cj_metadata_contiguous PROPERTY RULE_LAUNCH_LINK
+        "bash \"${CMAKE_CURRENT_SOURCE_DIR}/a2_fixture_link.sh\" \"${CMAKE_CURRENT_BINARY_DIR}/contiguous-evidence\"")
+    set_property(TARGET cj_metadata_contiguous APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld")
+    set_property(TARGET cj_metadata_contiguous APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/a2_contiguous.ld)
+    add_custom_command(TARGET cj_metadata_contiguous POST_BUILD
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/a2_prefix_hole.py
+            $<TARGET_FILE:cj_metadata_contiguous>
+            $<TARGET_FILE_DIR:cj_metadata_contiguous>/libcj_metadata_hole.so)
+    add_dependencies(cj_gc_unit cj_metadata_foreign cj_metadata_owner cj_metadata_contiguous)
+endif()
+
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
 

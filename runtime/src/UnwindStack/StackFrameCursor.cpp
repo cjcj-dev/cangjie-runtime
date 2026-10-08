@@ -70,6 +70,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& r
 void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots)
 {
 #if defined(__x86_64__) || defined(__aarch64__)
+    CHECK_DETAIL(frame.mFrame.GetFA() != nullptr, "return stub missing saved register area");
     RegSlotsMap saved;
     RegRoot::RecordStubAllRegister(saved, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
     saved.allRegistersSaved = false;
@@ -80,20 +81,22 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     constexpr RegisterNum startRegister = X17;
     constexpr RegisterNum siteRegister = X16;
 #endif
-    if (saved.addrMap[startRegister] == nullptr || saved.addrMap[siteRegister] == nullptr) {
-        return;
-    }
+    CHECK_DETAIL(saved.addrMap[startRegister] != nullptr && saved.addrMap[siteRegister] != nullptr,
+                 "return stub missing saved entry/site registers");
     const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(saved.addrMap[startRegister]);
     const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(saved.addrMap[siteRegister]);
-    if (startPC == 0 || sitePC == 0) {
-        return;
-    }
+    CHECK_DETAIL(startPC != 0 && sitePC != 0, "return stub missing saved entry/site");
     ElfUnloadQuiescence::ReadScope metadataReader;
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.
-    const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
+    const auto qualification = ElfUnloadQuiescence::FindFrameMetadata(sitePC, 3, startPC);
+    const auto descriptor = reinterpret_cast<FuncDescRef>(qualification.descriptor);
     CHECK_DETAIL(descriptor != nullptr, "return frame missing funcdesc startPC=%p ip=%p",
                  reinterpret_cast<const void*>(startPC), reinterpret_cast<const void*>(sitePC));
+    CHECK_DETAIL(qualification.match == ElfUnloadQuiescence::QualificationMatch::SAVED_SITE &&
+                 qualification.kind == 3 && qualification.entry == startPC && qualification.site == sitePC &&
+                 ElfUnloadQuiescence::ValidateFrameMetadata(qualification) && descriptor->HasReturnPoll(),
+                 "return frame missing exact kind3 saved site");
     StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap map = builder.Build<HeapReferenceMap>();
     CHECK_DETAIL(map.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
@@ -147,17 +150,14 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-        return;
-    }
+    const auto descriptor = frame.GetQualifiedDescriptor();
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
+    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(true);
+    CHECK_DETAIL(heapMap.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
+                 "managed frame missing exact root map startPC=%p ip=%p", reinterpret_cast<void*>(startIP),
+                 reinterpret_cast<void*>(frameIP));
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
     DerivedPtrVisitor derived =

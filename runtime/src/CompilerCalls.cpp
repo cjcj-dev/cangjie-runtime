@@ -572,92 +572,101 @@ extern "C" void CJ_MCC_RemoveSignalHandler(int signal, bool (*fn)(int, siginfo_t
 }
 #endif // _WIN64
 
-extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef excepMsg)
+static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString name);
+
+// Only native owned values enter here. Every managed reference is rooted across allocation.
+static ArrayRef CreateTraceFrames(const TypeInfo* frameArrayInfo, const TypeInfo* byteArrayInfo,
+                                  const std::vector<RawTraceFrame>& frames)
 {
-    ExceptionWrapper& eWrapper = Mutator::GetMutator()->GetExceptionWrapper();
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    ArrayRef array = ObjectManager::NewArray(frames.size(), frameArrayInfo, AllocType::MOVEABLE_OBJECT);
+    if (array == nullptr) { ExceptionManager::CheckAndThrowPendingException("Trace frame array allocation failed"); }
+    Handle arrayHandle(mutator, array);
+    const TypeInfo* frameInfo = frameArrayInfo->GetComponentTypeInfo();
+    CHECK_DETAIL(frameInfo != nullptr && frameInfo->GetFieldNum() == 7, "Invalid TraceFrame layout");
+    const TypeInfo* resolvedInfo = frameInfo->GetFieldType(3);
+    CHECK_DETAIL(resolvedInfo->GetFieldNum() == 4, "Invalid StackTraceData layout");
+    for (size_t i = 0; i < frames.size(); ++i) {
+        HandleMark frameMark(*mutator);
+        const auto& raw = frames[i];
+        Handle name(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.mangledName));
+        Handle dir(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.directory));
+        Handle file(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.filename));
+        Handle cls(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.resolved.className));
+        Handle method(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.resolved.methodName));
+        Handle resolvedFile(mutator, CreateCharArrayFromCString(byteArrayInfo, raw.resolved.fileName));
+        array = static_cast<MArray*>(arrayHandle());
+        const size_t size = array->GetElementSize();
+        std::vector<uint8_t> payload(size, 0);
+        auto putRef = [&](size_t offset, BaseObject* value) {
+            CHECK_DETAIL(offset + sizeof(ArrayRef) <= size, "Trace frame reference layout out of bounds");
+            *reinterpret_cast<ArrayRef*>(payload.data() + offset) = static_cast<MArray*>(value);
+        };
+        auto putInt = [&](size_t offset, int64_t value) {
+            CHECK_DETAIL(offset + sizeof(int64_t) <= size, "Trace frame value layout out of bounds");
+            *reinterpret_cast<int64_t*>(payload.data() + offset) = value;
+        };
+        putRef(frameInfo->GetFieldOffset(0), name());
+        putRef(frameInfo->GetFieldOffset(1), dir());
+        putRef(frameInfo->GetFieldOffset(2), file());
+        const size_t resolvedOffset = frameInfo->GetFieldOffset(3);
+        putRef(resolvedOffset + resolvedInfo->GetFieldOffset(0), cls());
+        putRef(resolvedOffset + resolvedInfo->GetFieldOffset(1), method());
+        putRef(resolvedOffset + resolvedInfo->GetFieldOffset(2), resolvedFile());
+        putInt(resolvedOffset + resolvedInfo->GetFieldOffset(3), raw.resolved.lineNumber);
+        putInt(frameInfo->GetFieldOffset(4), raw.lineNumber);
+        putInt(frameInfo->GetFieldOffset(5), static_cast<int64_t>(raw.format));
+        putInt(frameInfo->GetFieldOffset(6), raw.interpreted ? 1 : 0);
+        MAddress dst = reinterpret_cast<MAddress>(array) + MArray::GetContentOffset() + size * i;
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(payload.data()), size),
+                                 ValuePayload(dst, size, array, dst));
+    }
+    return static_cast<MArray*>(arrayHandle());
+}
+
+extern "C" ObjRef MCC_FillInStackTraceImpl(const TypeInfo* captureInfo, const TypeInfo* frameArrayInfo,
+                                            const TypeInfo* byteArrayInfo, ArrayRef excepMsg)
+{
+    ExceptionWrapper& wrapper = Mutator::GetMutator()->GetExceptionWrapper();
     MIndex msgLength = excepMsg->GetLength();
     if (msgLength != 0) {
-        eWrapper.SetExceptionMessage(reinterpret_cast<const char*>(excepMsg->ConvertToCArray()), msgLength);
+        wrapper.SetExceptionMessage(reinterpret_cast<const char*>(excepMsg->ConvertToCArray()), msgLength);
     }
-    std::vector<uint64_t>& liteFrameInfos = eWrapper.GetLiteFrameInfos();
-    liteFrameInfos.clear();
-    StackManager::RecordLiteFrameInfos(liteFrameInfos);
+    auto& frames = wrapper.GetRawFrames();
+    frames.clear();
+    wrapper.SetTraceFold(SofStackFlag::NOT_FOLDED);
+    StackManager::RecordRawFrames(frames);
 #if defined(__OHOS__) && (__OHOS__ == 1)
     auto callback = ExceptionManager::GetExceptionCallback();
-    if (callback != nullptr) {
-        callback();
-    }
+    if (callback != nullptr) { callback(); }
 #endif
-    constexpr int frameInfoPairLen = 3; // function PC and startpc form one pair in liteFrameInfos
-    if (eWrapper.IsThrowingSOFE()) {
-        constexpr int defaultSize = 32;
-        // Frames from std::core and to be filtered out, 2 in total
-        //     std$core::StackOverflowError::<init>() ()
-        //     rt$ThrowStackOverflowError$real ()
-        constexpr int coreOrFiltFuncSize = 2 * frameInfoPairLen;
-        // 2 frames need to be filtered at top
-        //     user[main]
-        //     cj_entry$
-        constexpr int topFiltFrameSize = 2 * frameInfoPairLen;
-        auto env = std::getenv("CJ_SOF_SIZE");
-        CString s(env);
-        int64_t sofSize = CString::ParseNumFromEnv(s.Str());
-        if (s.Str() == nullptr || (sofSize == 0 && s != "0")) {
-            sofSize = defaultSize;
-        }
-        sofSize *= frameInfoPairLen;
-        // When a stack is folded, an additional element is added behind liteFrameInfos to record the folding.
-        // At this time, the size of liteFrameInfos is changed to 3n+1.
-        if (sofSize > 0 &&
-            liteFrameInfos.size() > static_cast<size_t>(sofSize + coreOrFiltFuncSize + topFiltFrameSize)) {
-            liteFrameInfos.erase(liteFrameInfos.begin() + sofSize + coreOrFiltFuncSize, liteFrameInfos.end());
-            liteFrameInfos.push_back(static_cast<uint64_t>(SofStackFlag::BOTTOM_FOLDED));
-        } else if (sofSize < 0 &&
-                   liteFrameInfos.size() > static_cast<size_t>(coreOrFiltFuncSize + topFiltFrameSize - sofSize)) {
-            sofSize -= topFiltFrameSize;
-            liteFrameInfos.erase(liteFrameInfos.begin(), liteFrameInfos.end() + sofSize);
-            liteFrameInfos.push_back(static_cast<uint64_t>(SofStackFlag::TOP_FOLDED));
+    if (wrapper.IsThrowingSOFE()) {
+        constexpr int64_t defaultSize = 32;
+        constexpr int64_t coreFrames = 2;
+        constexpr int64_t topFrames = 2;
+        CString setting(std::getenv("CJ_SOF_SIZE"));
+        int64_t size = CString::ParseNumFromEnv(setting.Str());
+        if (setting.Str() == nullptr || (size == 0 && setting != "0")) { size = defaultSize; }
+        if (size > 0 && frames.size() > static_cast<size_t>(size + coreFrames + topFrames)) {
+            frames.erase(frames.begin() + size + coreFrames, frames.end());
+            wrapper.SetTraceFold(SofStackFlag::BOTTOM_FOLDED);
+        } else if (size < 0 && frames.size() > static_cast<size_t>(coreFrames + topFrames - size)) {
+            size -= topFrames;
+            frames.erase(frames.begin(), frames.end() + size);
+            wrapper.SetTraceFold(SofStackFlag::TOP_FOLDED);
         }
     }
-    MIndex size = liteFrameInfos.size();
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    if (UNLIKELY(ENABLE_LOG(EXCEPTION))) {
-        MIndex arraySize = size;
-        if (arraySize % frameInfoPairLen == 1) {
-            --arraySize;
-        }
-        DLOG(EXCEPTION, "fill in stack info");
-        DLOG(EXCEPTION, "layer\tframePC\t\tframeFuncStart\tsize : %zu", (arraySize / frameInfoPairLen));
-        for (int i = 0; i < arraySize; ++i) {
-            uint64_t framePC = liteFrameInfos[i];
-            uint64_t frameFuncStart = liteFrameInfos[++i];
-            DLOG(EXCEPTION, "#%x\t0x%x\t0x%x", ((i - 1) / frameInfoPairLen), framePC, frameFuncStart);
-        }
-    }
-#endif
-
-    // framePCs contains the following five Cangjie method pcs in sequence.
-    // #0 core::Throwable::init()
-    // #1 core::Exception::init()
-    // #2 default::Func()
-    // #3 user.main()
-    // #4 cj_entry()
-    // In the call stack visible to the user, #0 #1 #4 should be removed.
-    ArrayRef array =
-        ObjectManager::NewKnownWidthArray(size, arrayInfo, ObjectManager::ObjectManager::ArrayElemBits::ELEM_64B);
-    if (array == nullptr) {
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-        DLOG(EXCEPTION, "BuildEHFrameInfo");
-#endif
-        VLOG(REPORT, "Fill in stack trace %s length %zu failed and throw OutOfMemoryError",
-            arrayInfo->GetName(), size);
-        ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
-        return nullptr;
-    }
-    for (MIndex i = 0; i < size; ++i) {
-        array->SetPrimitiveElement(i, static_cast<int64_t>(liteFrameInfos[i]));
-    }
-    return array;
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    Handle frameArray(mutator, CreateTraceFrames(frameArrayInfo, byteArrayInfo, frames));
+    CHECK_DETAIL(captureInfo->GetFieldNum() == 2, "Invalid TraceCapture layout");
+    ObjRef capture = ObjectManager::NewObject(captureInfo,
+        MRT_ALIGN(captureInfo->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE), AllocType::MOVEABLE_OBJECT);
+    if (capture == nullptr) { ExceptionManager::CheckAndThrowPendingException("TraceCapture allocation failed"); }
+    capture->StoreRef(TYPEINFO_PTR_SIZE + captureInfo->GetFieldOffset(0), static_cast<MObject*>(frameArray()));
+    capture->Store<int64_t>(TYPEINFO_PTR_SIZE + captureInfo->GetFieldOffset(1), static_cast<int64_t>(wrapper.GetTraceFold()));
+    return capture;
 }
 
 extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
@@ -665,23 +674,63 @@ extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, Arra
     return StringDedup::Instance().Canonical(arrayInfo, candidate);
 }
 
-extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
-                                                   const TypeInfo* charArray)
+extern "C" StackTraceData MCC_DecodeStackTraceImpl(ObjRef capture, int64_t index, const TypeInfo* charArray)
 {
+    auto* mutator = Mutator::GetMutator();
+    HandleMark captureMark(*mutator);
+    Handle captureHandle(mutator, capture);
+    const TypeInfo* captureInfo = capture->GetTypeInfo();
+    CHECK_DETAIL(captureInfo->GetFieldNum() == 2, "Invalid TraceCapture layout");
+    ArrayRef frames = static_cast<MArray*>(HeapAccess<>::oop_load(
+        &capture->GetRefField(TYPEINFO_PTR_SIZE + captureInfo->GetFieldOffset(0))));
+    CHECK_DETAIL(frames != nullptr && index >= 0 && static_cast<MIndex>(index) < frames->GetLength(),
+                 "Trace frame index out of bounds");
+    const TypeInfo* frameInfo = frames->GetTypeInfo()->GetComponentTypeInfo();
+    CHECK_DETAIL(frameInfo != nullptr && frameInfo->GetFieldNum() == 7, "Invalid TraceFrame layout");
+    const TypeInfo* resolvedInfo = frameInfo->GetFieldType(3);
+    CHECK_DETAIL(resolvedInfo->GetFieldNum() == 4, "Invalid StackTraceData layout");
+    const size_t size = frames->GetElementSize();
+    MAddress src = reinterpret_cast<MAddress>(frames) + MArray::GetContentOffset() + size * index;
+    std::vector<uint8_t> payload(size, 0);
+    HeapAccess<>::value_copy(ValuePayload(src, size, frames, src),
+                             ValuePayload(reinterpret_cast<MAddress>(payload.data()), size));
+    auto getBytes = [&](size_t offset) {
+        CHECK_DETAIL(offset + sizeof(ArrayRef) <= size, "Trace frame reference layout out of bounds");
+        ArrayRef bytes = *reinterpret_cast<ArrayRef*>(payload.data() + offset);
+        CHECK_DETAIL(bytes != nullptr, "Missing owned trace bytes");
+        CString result(bytes->GetLength(), '\0');
+        const auto* data = reinterpret_cast<const char*>(bytes->ConvertToCArray());
+        for (MIndex i = 0; i < bytes->GetLength(); ++i) { result[i] = data[i]; }
+        return result;
+    };
+    auto getInt = [&](size_t offset) {
+        CHECK_DETAIL(offset + sizeof(int64_t) <= size, "Trace frame value layout out of bounds");
+        return *reinterpret_cast<int64_t*>(payload.data() + offset);
+    };
+    RawTraceFrame raw;
+    const int64_t kind = getInt(frameInfo->GetFieldOffset(6));
+    CHECK_DETAIL(kind == 0 || kind == 1, "Invalid typed trace frame kind");
+    raw.interpreted = kind == 1;
+    if (raw.interpreted) {
+        const size_t base = frameInfo->GetFieldOffset(3);
+        raw.resolved.className = getBytes(base + resolvedInfo->GetFieldOffset(0));
+        raw.resolved.methodName = getBytes(base + resolvedInfo->GetFieldOffset(1));
+        raw.resolved.fileName = getBytes(base + resolvedInfo->GetFieldOffset(2));
+        raw.resolved.lineNumber = getInt(base + resolvedInfo->GetFieldOffset(3));
+    } else {
+        raw.mangledName = getBytes(frameInfo->GetFieldOffset(0));
+        raw.directory = getBytes(frameInfo->GetFieldOffset(1));
+        raw.filename = getBytes(frameInfo->GetFieldOffset(2));
+        raw.lineNumber = getInt(frameInfo->GetFieldOffset(4));
+        const int64_t format = getInt(frameInfo->GetFieldOffset(5));
+        CHECK_DETAIL(format >= 0 && format <= 2, "Invalid trace format");
+        raw.format = static_cast<StackTraceFormatFlag>(format);
+    }
     StackTraceElement stackTrace;
     {
         ScopedEnterSaferegion checkpoint(true);
-        StackManager::GetStackTraceByLiteFrameInfo(ip, pc, funcDesc, stackTrace);
+        StackManager::DecodeRawFrame(raw, stackTrace);
     }
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    DLOG(EXCEPTION, "get stack frame info");
-    DLOG(EXCEPTION, "   framePc:0x%lx\t frameFuncStart:0x%lx", ip, pc);
-    DLOG(EXCEPTION, "get stack frame metainfo");
-    DLOG(EXCEPTION, "   ClassName  \t : \t%s", stackTrace.className.Str());
-    DLOG(EXCEPTION, "   MethodName  \t : \t%s", stackTrace.methodName.Str());
-    DLOG(EXCEPTION, "   FileName  \t : \t%s", stackTrace.fileName.Str());
-    DLOG(EXCEPTION, "   LineNumber  \t : \t%lu", stackTrace.lineNumber);
-#endif
     HandleMark handleMark(*Mutator::GetMutator());
     StackTraceData std;
     std.className = ObjectManager::NewKnownWidthArray(
@@ -743,17 +792,9 @@ static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString na
 }
 
 static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo* charArray,
-                                 const std::vector<FrameInfo*> &srcSracks)
+                                 const std::vector<RawTraceFrame>& frames)
 {
-    // fix size after discard native frame
-    MSize size = 0;
-    for (auto frame : srcSracks) {
-        // skip native frame
-        if (frame->GetFrameType() == FrameType::NATIVE) {
-            continue;
-        }
-        size++;
-    }
+    MSize size = frames.size();
 
     auto* mutator = Mutator::GetMutator();
     HandleMark handleMark(*mutator);
@@ -763,16 +804,13 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
     }
     Handle traceHandle(mutator, trace);
     int stackIndex = 0;
-    for (auto frame : srcSracks) {
-        // skip native frame
-        if (frame->GetFrameType() == FrameType::NATIVE) {
-            continue;
-        }
-
-        CString className = frame->GetPackClassName();
-        CString fileName = frame->GetFileNameForTrace();
-        CString methodName = frame->GetMethodName();
-        uint32_t lineNumber = frame->GetLineNum();
+    for (const auto& frame : frames) {
+        StackTraceElement decoded;
+        StackInfo::DecodeRawFrame(frame, decoded, false);
+        CString className = decoded.className;
+        CString fileName = (frame.interpreted || frame.systemFrame) ? decoded.fileName : frame.filename;
+        CString methodName = decoded.methodName;
+        int64_t lineNumber = decoded.lineNumber;
 
         HandleMark frameMark(*mutator);
         StackTraceData frameData;
@@ -816,7 +854,7 @@ static void CollectThreadSnapshots(std::vector<std::unique_ptr<RecordStackInfo>>
 
         auto record = std::make_unique<RecordStackInfo>(
             RecordStackInfo(&(mutator.GetUnwindContext()), threadId, threadName, state));
-        record->FillInStackTrace();
+        record->FillInStackTraceForSnapshot();
         records.emplace_back(std::move(record));
     });
 
@@ -840,7 +878,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         // fill thread snapshot
         Handle nameHandle(mutator, CreateCharArrayFromCString(charArray, record->GetThreadName()));
         snapshot.id = record->GetStackTid();
-        snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record->stacks);
+        snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record->traceFrames);
         snapshot.name = static_cast<MArray*>(nameHandle());
         snapshot.state = record->GetThreadState();
 
@@ -896,7 +934,7 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
 
     RecordStackInfo record(&(mutator->GetUnwindContext()), threadId, threadName, state);
     record.SetProcessingOwner(mutator);
-    record.FillInStackTrace();
+    record.FillInStackTraceForSnapshot();
     mutator->LeaveSaferegion();
 
     HandleMark handleMark(*mutator);
@@ -904,7 +942,7 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     // fill thread snapshot
     Handle nameHandle(mutator, CreateCharArrayFromCString(charArray, record.GetThreadName()));
     snapshot.id = record.GetStackTid();
-    snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record.stacks);
+    snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record.traceFrames);
     snapshot.name = static_cast<MArray*>(nameHandle());
     snapshot.state = record.GetThreadState();
 

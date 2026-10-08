@@ -74,7 +74,7 @@ struct UnwindInfo {
 __attribute__((__noinline__)) extern "C" void GetContextWin64(uint64_t* rip, uint64_t* rsp);
 FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp);
 FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFrame& curFrame,
-                             UnwindContextStatus& status);
+                             UnwindContextStatus& status, U16 siteKind);
 uintptr_t GetCallerRsp(WinModuleManager& winModuleManager, const MachineFrame& curFrame);
 
 } // namespace MapleRuntime

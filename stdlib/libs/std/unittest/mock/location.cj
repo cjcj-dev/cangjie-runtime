@@ -54,16 +54,16 @@ class LocationImpl <: Location {
         return LocationImpl()
     }
 
-    private let rawStackTrace: Array<UInt64>
+    private let rawStackTrace: TraceCapture
     private var entry: Option<TraceEntry>
 
-    private init(rawStackTrace: Array<UInt64>) {
+    private init(rawStackTrace: TraceCapture) {
         this.rawStackTrace = rawStackTrace
         this.entry = Option<TraceEntry>.None
     }
     
     private init() {
-        this.rawStackTrace = []
+        this.rawStackTrace = TraceCapture()
         this.entry = Option<TraceEntry>.None
     }
 
@@ -85,7 +85,7 @@ class LocationImpl <: Location {
             return this.entry
         }
 
-        let frameSize = rawStackTrace.size / 3
+        let frameSize = rawStackTrace.size
         var mockRelatedFrame = Option<StackTraceElement>.None
         for (i in 0..frameSize) {
             let frame = decodeRawStackTrace(rawStackTrace, i) ?? continue

@@ -105,9 +105,10 @@ void ExceptionManager::OutOfMemory()
 #endif
         ThrowImplicitException(OOM);
     } else {
-        std::vector<uint64_t>& liteFrameInfos = eWrapper.GetLiteFrameInfos();
-        liteFrameInfos.clear();
-        StackManager::RecordLiteFrameInfos(liteFrameInfos);
+        auto& rawFrames = eWrapper.GetRawFrames();
+        rawFrames.clear();
+        eWrapper.SetTraceFold(SofStackFlag::NOT_FOLDED);
+        StackManager::RecordRawFrames(rawFrames);
         ThrowImplicitException(OOMR);
     }
     eWrapper.SetThrowingOOME(false);
@@ -236,13 +237,13 @@ void ExceptionManager::AndroidDefaultUncaughtTask(const char* summary, const CJE
 void ExceptionManager::DumpException()
 {
     ExceptionWrapper& eWrapper = Mutator::GetMutator()->GetExceptionWrapper();
-    std::vector<uint64_t>& liteFrameInfos = eWrapper.GetLiteFrameInfos();
+    auto& rawFrames = eWrapper.GetRawFrames();
     LOG(RTLOG_ERROR, "An exception has occurred:\n");
     MObject* exceptionObject = eWrapper.GetExceptionRef();
     MangleNameHelper helper(exceptionObject->GetTypeInfo()->GetName());
     CString clsName(helper.GetSimpleClassName());
     std::vector<StackTraceElement> stackTrace;
-    StackManager::GetStackTraceByLiteFrameInfos(liteFrameInfos, stackTrace);
+    StackManager::DecodeRawFrames(rawFrames, stackTrace);
     if (stackTrace.empty()) {
         LOG(RTLOG_ERROR, "Stacetrace is empty.");
     }
@@ -317,14 +318,7 @@ void ExceptionManager::DumpException()
         PRINT_ERROR("\n");
 #endif
         LOG(RTLOG_ERROR, "\n");
-        constexpr int32_t frameInfoPairLen = 3; // function PC and startpc form one pair in liteFrameInfos
-        // When some frames are folded, arraySize is an odd number and the last frame is invalid.
-        // In this case, the last frame is discarded.
-        SofStackFlag sofFoldedFlag = SofStackFlag::NOT_FOLDED;
-        if (liteFrameInfos.size() % frameInfoPairLen == 1) {
-            sofFoldedFlag = SofStackFlag(liteFrameInfos.back());
-            liteFrameInfos.pop_back();
-        }
+        SofStackFlag sofFoldedFlag = eWrapper.GetTraceFold();
 
         if (sofFoldedFlag == SofStackFlag::TOP_FOLDED) {
 #ifdef __APPLE__

@@ -3,6 +3,10 @@
 // with Runtime Library Exception.
 #if defined(__linux__)
 #include <cstddef>
+#include <climits>
+#include <cstring>
+#include <sys/mman.h>
+#include <unistd.h>
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
 #include "ObjectModel/RefField.h"
 using namespace MapleRuntime;
@@ -19,22 +23,109 @@ struct ImageMetadata {
     // slot addresses, as LoaderManager.h:25-27 declares.
     NativeSlot root { MAddress { 0 } };
     NativeSlot* roots[1] { nullptr };
-} metadata;
+} metadata, secondaryMetadata;
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
 extern "C" void PackageInitImageSetRoot(uintptr_t value)
 {
     (void)metadata.root.Exchange(to_zpointer(static_cast<MAddress>(value)));
 }
-extern "C" void* PackageInitImageMetadata()
+static void* PrepareMetadata(ImageMetadata& value)
 {
-    metadata.roots[0] = &metadata.root;
-    metadata.header.cJFileSize = sizeof(metadata);
-    metadata.header.tables[GC_FLAGS_TABLE] = { offsetof(ImageMetadata, flags), sizeof(metadata.flags) };
-    metadata.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(ImageMetadata, entries), sizeof(metadata.entries) };
-    metadata.header.tables[GC_ROOT_TABLE] = { offsetof(ImageMetadata, roots), sizeof(metadata.roots) };
-    return &metadata;
+    value.roots[0] = &value.root;
+    value.header.magic = 0x12345678;
+    value.header.version = 0x80000001;
+    value.header.cJFileSize = sizeof(value);
+    value.header.tables[GC_FLAGS_TABLE] = { offsetof(ImageMetadata, flags), sizeof(value.flags) };
+    value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(ImageMetadata, entries), sizeof(value.entries) };
+    value.header.tables[GC_ROOT_TABLE] = { offsetof(ImageMetadata, roots), sizeof(value.roots) };
+    return &value;
 }
+extern "C" void* PackageInitImageMetadata() { return PrepareMetadata(metadata); }
+extern "C" void* PackageInitImageSecondaryMetadata() { return PrepareMetadata(secondaryMetadata); }
+
+// Real ELF records: the owner image has a link-loader relocation to data
+// supplied by the foreign image. PCs are text, descriptors are ordinary data.
+// Wrong-owner input is installed on a dedicated page, RW then RX, never W+X.
+#if defined(GC_METADATA_FOREIGN_IMAGE)
+extern "C" { int32_t PackageInitForeignDescriptor[8] {}; }
+#endif
+#if defined(GC_METADATA_OWNER_IMAGE)
+extern "C" { __attribute__((visibility("hidden"))) int32_t PackageInitOwnerDescriptor[8] {}; }
+extern "C" unsigned char PackageInitOwnerCode[];
+// A real zero-root row, not a missing descriptor or missing stack map.
+alignas(Uptr) static unsigned char ownerStackMap[64] {};
+
+asm(".pushsection .gc_unit_metadata,\"ax\",@progbits\n"
+    ".balign 65536\n.globl PackageInitOwnerCode\nPackageInitOwnerCode:\n"
+    ".long PackageInitOwnerDescriptor - .\n.zero 32\n"
+    ".long PackageInitOwnerDescriptor - .\n.zero 32\n"
+    ".long 0\n.zero 32\n.zero 65428\n.popsection\n");
+extern "C" const uint32_t* PackageInitOwnerPC(size_t row)
+{
+    ownerStackMap[1] = 0x10; // one PC=0 row
+    ownerStackMap[2] = 0x11;
+    ownerStackMap[3] = 0x11; // four zero root/table indices
+    PackageInitOwnerDescriptor[0] = reinterpret_cast<char*>(ownerStackMap) -
+        reinterpret_cast<char*>(PackageInitOwnerDescriptor);
+    return reinterpret_cast<const uint32_t*>(PackageInitOwnerCode + 36 * row + 4);
+}
+#if defined(GC_METADATA_BOUNDARY_IMAGE)
+// The dedicated Linux link recipe places this section at the first byte of
+// its own RX PT_LOAD. Before accepting this input, readelf and the actual
+// registered ranges must confirm that the preceding bytes lack owner coverage.
+asm(".pushsection .a2_boundary,\"ax\",@progbits\n"
+    ".globl PackageInitBoundaryCode\nPackageInitBoundaryCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char PackageInitBoundaryCode[];
+extern "C" const uint32_t* PackageInitBoundaryPC()
+{
+    return reinterpret_cast<const uint32_t*>(PackageInitBoundaryCode);
+}
+#endif
+#if defined(GC_METADATA_CONTIGUOUS_IMAGE)
+// The script assigns these sections to distinct R and RX PT_LOADs. The
+// four-byte compiler prefix straddles their boundary; no product map is edited.
+asm(".pushsection .a2_left,\"a\",@progbits\n"
+    ".zero 4094\n.globl PackageInitContinuousPrefix\nPackageInitContinuousPrefix:\n.short 0\n.popsection\n"
+    ".pushsection .a2_right,\"ax\",@progbits\n.short 0\n"
+    ".globl PackageInitContinuousCode\nPackageInitContinuousCode:\n.zero 32\n.popsection\n");
+extern "C" unsigned char PackageInitContinuousPrefix[], PackageInitContinuousCode[];
+extern "C" const uint32_t* PackageInitContinuousPC()
+{
+    const auto* ordinary = PackageInitOwnerPC(0); // initializes real descriptor/map
+    (void)ordinary;
+    const intptr_t delta = reinterpret_cast<intptr_t>(PackageInitOwnerDescriptor) -
+                           reinterpret_cast<intptr_t>(PackageInitContinuousPrefix);
+    if (delta < INT32_MIN || delta > INT32_MAX) { return nullptr; }
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    const uintptr_t first = reinterpret_cast<uintptr_t>(PackageInitContinuousPrefix) & ~(page - 1);
+    const uintptr_t last = reinterpret_cast<uintptr_t>(PackageInitContinuousCode) & ~(page - 1);
+    // Only fixture bytes change, while neither page is executable. Restore
+    // the actual ELF permissions before registration and product observation.
+    if (mprotect(reinterpret_cast<void*>(first), last - first + page, PROT_READ | PROT_WRITE) != 0) {
+        return nullptr;
+    }
+    const int32_t displacement = static_cast<int32_t>(delta);
+    std::memcpy(PackageInitContinuousPrefix, &displacement, sizeof(displacement));
+    if (mprotect(reinterpret_cast<void*>(first), last - first, PROT_READ) != 0 ||
+        mprotect(reinterpret_cast<void*>(last), page, PROT_READ | PROT_EXEC) != 0) { return nullptr; }
+    return reinterpret_cast<const uint32_t*>(PackageInitContinuousCode);
+}
+#endif
+extern "C" bool PackageInitOwnerSetForeign(const void* descriptor)
+{
+    const intptr_t offset = reinterpret_cast<intptr_t>(descriptor) -
+                            reinterpret_cast<intptr_t>(PackageInitOwnerCode + 36);
+    if (offset < INT32_MIN || offset > INT32_MAX) { return false; }
+    const size_t pageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    void* page = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(PackageInitOwnerCode) & ~(pageSize - 1));
+    if (mprotect(page, pageSize, PROT_READ | PROT_WRITE) != 0) { return false; }
+    const int32_t displacement = static_cast<int32_t>(offset);
+    std::memcpy(PackageInitOwnerCode + 36, &displacement, sizeof(displacement));
+    return mprotect(page, pageSize, PROT_READ | PROT_EXEC) == 0;
+}
+
+#endif
 
 namespace {
 void (*unloadNotice)() = nullptr;
