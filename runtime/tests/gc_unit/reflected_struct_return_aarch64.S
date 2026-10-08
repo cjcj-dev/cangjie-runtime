@@ -11,20 +11,8 @@
 ReturnReflectedStruct:
     .cfi_startproc
     mov x1, x0
-    // Deliberately discard the test output into a safe writable carrier.
-    // The real calloc'ed sret remains null/zero for the product boxer.
-    stp x29, x30, [sp, #-32]!
-    .cfi_def_cfa_offset 32
-    .cfi_offset x29, -32
-    .cfi_offset x30, -24
-    mov x29, sp
-    add x0, sp, #16
-    bl ReturnReflectedStructBody
-    ldp x29, x30, [sp], #32
-    .cfi_def_cfa_offset 0
-    .cfi_restore x29
-    .cfi_restore x30
-    ret
+    mov x0, x8
+    b ReturnReflectedStructBody
     .cfi_endproc
 .size ReturnReflectedStruct, .-ReturnReflectedStruct
 
