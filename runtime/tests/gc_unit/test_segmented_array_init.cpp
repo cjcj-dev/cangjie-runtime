@@ -801,6 +801,9 @@ void* RunBufferedEntryFlip1508(void*)
     MArray* holder = MCC_NewArray(GetBufferedEntryArrayInfos1508().array, length);
     const U64 holderRoot = heap.cross_vm().export_roots().RegisterExportRoot(holder);
     heap.RequestGC(GC_REASON_USER);
+    // Hold the normal driver lock across setup, the one product collect, and
+    // all observations, so an automatic cycle cannot erase the flip evidence.
+    DriverLocker driverLock;
     holder = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(holderRoot));
     auto* const p = reinterpret_cast<volatile zpointer*>(holder->ConvertToCArray() +
                                                         offsetof(BufferedEntry1508, value));
@@ -821,7 +824,6 @@ void* RunBufferedEntryFlip1508(void*)
     {
         // Exclude unrelated automatic driver cycles during this finite setup.
         // Allocation is bounded to three dedicated large pages, below capacity.
-        DriverLocker locker;
         MArray* control = MCC_NewArray8(GetByteArrayTypeInfos().array, targetLength);
         controlRoot = heap.cross_vm().export_roots().RegisterExportRoot(control);
         deadAddress = reinterpret_cast<uintptr_t>(MCC_NewArray8(GetByteArrayTypeInfos().array, targetLength));
@@ -862,7 +864,10 @@ void* RunBufferedEntryFlip1508(void*)
 
     // ZGC zGeneration.cpp:538-576: the real collect entry owns the flip,
     // root processing, mark completion, selector, and age transition.
-    heap.RequestGC(GC_REASON_YOUNG);
+    {
+        ScopedEnterSaferegion safe(false);
+        heap.young().collect(ZYoungType::minor);
+    }
     ZPage* const targetAfter = Heap::page(targetAddress);
     const bool survived = targetAfter != nullptr;
     const bool implicit = survived && targetAfter->IsAllocating();
@@ -881,16 +886,17 @@ void* RunBufferedEntryFlip1508(void*)
     std::fprintf(stderr, "BUFFER_FLIP1508_CONTROL_ASSERT_EXECUTED rooted_live=%d native_dead_released=%d "
                         "primitive_intact=%d\n", controlLive, deadReleased, primitiveIntact);
     std::fprintf(stderr, "BUFFER_FLIP1508_TARGET_ASSERT_EXECUTED survived=%d marked=%d implicit=%d "
-        "strongly_live=%d remembered=%d flipped=%d consumed=%d before=%zx after=%zx\n",
+        "strongly_live=%d remembered=%d flipped=%d consumed=%d before=%zx after=%zx seq_before=%llu seq_after=%llu\n",
         survived, marked, implicit, stronglyLive, remembered, flipped, consumed,
-        beforeColor, buffer.lastProcessedColor);
+        beforeColor, buffer.lastProcessedColor, static_cast<unsigned long long>(beforeSequence),
+        static_cast<unsigned long long>(heap.young().seqnum()));
     std::fflush(stderr);
     const bool targetInvariant = survived && (marked || implicit) && stronglyLive && remembered && flipped && consumed;
     const bool controlInvariant = controlLive && deadReleased && primitiveIntact;
     heap.cross_vm().export_roots().RemoveExportRoot(controlRoot);
     heap.cross_vm().export_roots().RemoveExportRoot(holderRoot);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>(!controlInvariant ? 2 : targetInvariant ? 0 : 1);
+    return reinterpret_cast<void*>(!flipped ? 20 : !controlInvariant ? 2 : targetInvariant ? 0 : 1);
 }
 
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
