@@ -15,7 +15,7 @@ import subprocess
 import sys
 from check_other_vm_teardown import runtime_workers, teardown_before_sentinel
 
-TRACEME, PEEKTEXT, PEEKUSER, POKEUSER, CONT, SYSCALL = 0, 1, 3, 6, 7, 24
+TRACEME, PEEKTEXT, PEEKUSER, POKEUSER, CONT, SINGLESTEP, SYSCALL = 0, 1, 3, 6, 7, 9, 24
 SETOPTIONS, GETEVENTMSG, GETSIGINFO = 0x4200, 0x4201, 0x4202
 GETREGSET, SETREGSET, GET_SYSCALL_INFO = 0x4204, 0x4205, 0x420e
 WALL = 0x40000000
@@ -122,7 +122,7 @@ class ABI:
             iov = Iovec(ctypes.addressof(state), ctypes.sizeof(state))
             trace(GETREGSET, tid, 0x402, ctypes.addressof(iov))  # NT_ARM_HW_BREAK
             count = state.info & 0xff
-            if count < len(addresses) or iov.length < 8 + 16 * count:
+            if not 0 < count <= 16 or count < len(addresses) or iov.length < 8 + 16 * count:
                 raise RuntimeError('insufficient actual A64 hardware breakpoints')
             for i in range(count):
                 state.registers[i].address = addresses[i] if i < len(addresses) else 0
@@ -133,8 +133,19 @@ class ABI:
             observed = A64DebugState()
             check = Iovec(ctypes.addressof(observed), ctypes.sizeof(observed))
             trace(GETREGSET, tid, 0x402, ctypes.addressof(check))
-            if bytes(observed.registers)[:16*count] != bytes(state.registers)[:16*count]:
-                raise RuntimeError('A64 hardware breakpoint readback mismatch')
+            if observed.info != state.info or check.length < 8 + 16 * count:
+                raise RuntimeError('incomplete A64 hardware breakpoint readback')
+            slots = [dict(address=r.address, control=r.control) for r in observed.registers[:count]]
+            for i, slot in enumerate(slots):
+                ctrl = slot['control']
+                if i < len(addresses):
+                    if (slot['address'] != addresses[i] or addresses[i] % 4
+                            or ctrl != (15 << 5) | (2 << 1) | 1):
+                        raise RuntimeError('A64 enabled execution breakpoint mismatch')
+                elif ctrl & 1:
+                    raise RuntimeError('A64 unused hardware breakpoint enabled')
+                # v6.8 preserves LEN4/EL0 when disabled (control=0x1e4).
+                # Address/length/type are not active when enabled is clear.
         else:
             offset = X64User.debugreg.offset
             trace(POKEUSER, tid, offset + 7 * 8, 0)
@@ -145,9 +156,33 @@ class ABI:
                     raise RuntimeError('x64 hardware breakpoint address mismatch')
             control = sum(1 << (2*i) for i in range(len(addresses)))
             trace(POKEUSER, tid, offset + 7 * 8, control)
-            if trace(PEEKUSER, tid, offset + 7 * 8) != control:
+            observed_control = trace(PEEKUSER, tid, offset + 7 * 8)
+            if observed_control != control:
                 raise RuntimeError('x64 hardware breakpoint control mismatch')
-        emit('HARDWARE_BREAKPOINTS', tid=tid, addresses=addresses)
+            slots = [dict(address=trace(PEEKUSER, tid, offset + i * 8),
+                          control=((observed_control >> (2*i)) & 3)
+                          | (((observed_control >> (16+4*i)) & 15) << 2)) for i in range(4)]
+        emit('HARDWARE_BREAKPOINTS', tid=tid, addresses=addresses,
+             machine='aarch64' if self.arm else 'x86_64', slots=slots)
+
+    def step_over(self, tid, pc, addresses, wait):
+        # Ptrace's overflow handler does not automatically step an ARM exec
+        # breakpoint. Disable, execute the original instruction, then rearm.
+        # PTRACE_SINGLESTEP changes debug state, never inferior text/registers.
+        self.breakpoints(tid, [])
+        trace(SINGLESTEP, tid)
+        who, status = wait(tid)
+        if who != tid or not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTRAP or status >> 16:
+            raise RuntimeError('entry single-step did not reach a trace stop')
+        siginfo = ctypes.create_string_buffer(128)
+        trace(GETSIGINFO, tid, data=ctypes.addressof(siginfo))
+        code = struct.unpack_from('<i', siginfo.raw, 8)[0]
+        after = getattr(self.regset(tid), self.pc_name)
+        if code != 2 or after == pc:  # TRAP_TRACE, with actual instruction progress
+            raise RuntimeError('entry single-step did not execute original instruction')
+        self.breakpoints(tid, addresses)
+        emit('BREAKPOINT_STEP', tid=tid, pc=pc, after=after, si_code=code, addresses=addresses,
+             text_written=False, registers_written=False)
 
     def clone_arguments(self, tid, entry):
         nr, args = entry
@@ -460,6 +495,7 @@ def main():
                         raise RuntimeError('pthread_join target lacks actual creation identity')
                 else:
                     raise RuntimeError('unexpected function breakpoint before construction')
+                abi.step_over(tid, pc, [symbols['pthread_create'], symbols['pthread_join'], address], wait)
                 trace(SYSCALL, tid)
             else:
                 if tid != pid and sig == signal.SIGSTOP:

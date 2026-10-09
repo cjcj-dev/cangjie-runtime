@@ -3,8 +3,12 @@ from contextlib import redirect_stdout
 import io
 import struct
 import unittest
+import ctypes
+import signal
+from unittest.mock import patch
 
-from check_teardown_records import verify_join_identity
+import check_teardown_exit as observer
+from check_teardown_records import verify_join_identity, verify_observer
 
 
 def observed_records(machine='x86_64', clone3=False, expected=1):
@@ -100,6 +104,89 @@ class JoinIdentityRecords(unittest.TestCase):
             ws, records = observed_records()
             records['JOIN_CLEARED'][0][field] = value
             self.check(records, ws, 'nonreap-kernel-clear')
+
+
+class ArmObserverControls(unittest.TestCase):
+    """Non-native kernel ABI controls through the actual apparatus methods."""
+    def run_breakpoints(self, addresses, corrupt=None, short=False):
+        kernel = observer.A64DebugState()
+        kernel.info = 6 | (8 << 8)
+        for r in kernel.registers[:6]:
+            r.control = 0x1e4
+        def ptrace(request, tid, address=0, data=0):
+            iov = ctypes.cast(data, ctypes.POINTER(observer.Iovec)).contents
+            state = ctypes.cast(iov.base, ctypes.POINTER(observer.A64DebugState)).contents
+            if request == observer.GETREGSET:
+                ctypes.memmove(iov.base, ctypes.addressof(kernel), ctypes.sizeof(kernel))
+                iov.length = 8 + 16 * (5 if short else 6)
+            elif request == observer.SETREGSET:
+                self.assertEqual(iov.length, 8 + 16 * 6)
+                for i in range(6):
+                    kernel.registers[i].address = state.registers[i].address
+                    kernel.registers[i].control = state.registers[i].control or 0x1e4
+                if corrupt:
+                    corrupt(kernel)
+            else:
+                self.fail(f'unexpected ptrace request {request}')
+            return 0
+        output = io.StringIO()
+        with patch.object(observer, 'trace', ptrace), redirect_stdout(output):
+            observer.ABI('aarch64').breakpoints(1700, addresses)
+        return json_records(output.getvalue())
+
+    def test_normalized_disabled_slots_and_final_disable(self):
+        for addresses in ([0x700000, 0x700004, 0x700008], []):
+            record = self.run_breakpoints(addresses)['HARDWARE_BREAKPOINTS'][0]
+            self.assertEqual(record['addresses'], addresses)
+            self.assertTrue(all(r['control'] == 0x1e4 for r in record['slots'][len(addresses):]))
+
+    def test_wrong_active_address_type_privilege_and_length_rejected(self):
+        for field, value in (('address', 0x700004), ('control', 0x1ed),
+                             ('control', 0x1e3), ('control', 0x65)):
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(RuntimeError, 'enabled execution'):
+                self.run_breakpoints([0x700000], lambda state: setattr(state.registers[0], field, value))
+
+    def test_unused_enabled_slot_and_short_readback_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'unused hardware breakpoint enabled'):
+            self.run_breakpoints([], lambda state: setattr(state.registers[5], 'control', 0x1e5))
+        with self.assertRaisesRegex(RuntimeError, 'insufficient actual'):
+            self.run_breakpoints([], short=True)
+
+    def test_actual_step_method_disables_steps_and_rearms(self):
+        for machine in ('aarch64', 'x86_64'):
+            abi, operations = observer.ABI(machine), []
+            regs = abi.register_type()
+            setattr(regs, abi.pc_name, 0x700004)
+            def ptrace(request, tid, address=0, data=0):
+                operations.append(request)
+                if request == observer.GETSIGINFO:
+                    ctypes.c_int.from_address(data + 8).value = 2
+            output = io.StringIO()
+            with patch.object(abi, 'breakpoints', side_effect=lambda tid, addresses: operations.append(list(addresses))), \
+                    patch.object(abi, 'regset', return_value=regs), patch.object(observer, 'trace', ptrace), redirect_stdout(output):
+                abi.step_over(1700, 0x700000, [0x700000], lambda tid: (tid, (signal.SIGTRAP << 8) | 0x7f))
+            self.assertEqual(operations, [[], observer.SINGLESTEP, observer.GETSIGINFO, [0x700000]])
+            self.assertEqual(json_records(output.getvalue())['BREAKPOINT_STEP'][0]['after'], 0x700004)
+
+    def test_single_step_without_progress_rejected(self):
+        abi = observer.ABI('aarch64')
+        regs = abi.register_type()
+        regs.pc = 0x700000
+        def ptrace(request, tid, address=0, data=0):
+            if request == observer.GETSIGINFO:
+                ctypes.c_int.from_address(data + 8).value = 2
+        with patch.object(abi, 'breakpoints'), patch.object(abi, 'regset', return_value=regs), \
+                patch.object(observer, 'trace', ptrace), self.assertRaisesRegex(RuntimeError, 'original instruction'):
+            abi.step_over(1700, regs.pc, [regs.pc], lambda tid: (tid, (signal.SIGTRAP << 8) | 0x7f))
+
+
+def json_records(text):
+    import json
+    records = {}
+    for line in text.splitlines():
+        kind, _, raw = line.partition(' ')
+        records.setdefault(kind, []).append(json.loads(raw))
+    return records
 
 
 if __name__ == '__main__':

@@ -68,6 +68,73 @@ def verify_join_identity(records, ws, phase):
     print(f'ASSERT_TEARDOWN_JOIN_IDENTITY phase={phase} PASS')
 
 
+def verify_observer(lines, records, ws, phase):
+    """Check observed ABI state and entry progress, not configuration counts."""
+    def require(condition, reason):
+        if not condition:
+            print(f'ASSERT_TEARDOWN_OBSERVER phase={phase} FAIL reason={reason}')
+            raise ValueError(f'{phase}: hardware observer: {reason}')
+    machine = records('CONSTRUCTION_DOMAIN')[0]['machine']
+    providers = records('PTHREAD_PROVIDER')
+    require(sorted(r['symbol'] for r in providers) == ['pthread_create', 'pthread_join'], 'providers')
+    bindings = {r['name']: r['address'] for r in records('ELF_BINDING')}
+    require('main' in bindings and 'MapleRuntime::GcUnit::CompleteTestRun(int)' in bindings, 'elf-bindings')
+    completion = bindings['MapleRuntime::GcUnit::CompleteTestRun(int)']
+    entries = [next(r['address'] for r in providers if r['symbol'] == symbol)
+               for symbol in ('pthread_create', 'pthread_join')]
+    configured, pending, disabled, completion_seen = None, None, False, False
+    steps, calls = 0, 0
+    for line in lines:
+        kind, _, raw = line.partition(' ')
+        if kind not in ('HARDWARE_BREAKPOINTS', 'PTHREAD_CREATE_ENTRY', 'PTHREAD_JOIN_ENTRY', 'BREAKPOINT_STEP'):
+            continue
+        r = json.loads(raw)
+        if kind == 'HARDWARE_BREAKPOINTS':
+            addresses, slots = r['addresses'], r['slots']
+            require(r['machine'] == machine and len(set(addresses)) == len(addresses)
+                    and len(addresses) <= 4 and len(addresses) <= len(slots)
+                    and (0 < len(slots) <= 16 if machine == 'aarch64' else len(slots) == 4), 'slot-domain')
+            for i, slot in enumerate(slots):
+                if i < len(addresses):
+                    require(slot['address'] == addresses[i]
+                            and slot['control'] == (0x1e5 if machine == 'aarch64' else 1)
+                            and (machine != 'aarch64' or addresses[i] % 4 == 0), 'enabled-slot')
+                else:
+                    require(not slot['control'] & (1 if machine == 'aarch64' else 3), 'unused-slot-enabled')
+            if r['tid'] != ws['tgid']:
+                require(r['tid'] in {c['child'] for c in records('CLONE')} and addresses == [], 'child-disabled')
+                continue
+            require(addresses in ([], [bindings['main']], entries + [completion], [completion]), 'configured-addresses')
+            if configured is None:
+                require(addresses == [bindings['main']], 'initial-main')
+            if pending is not None:
+                if addresses == []:
+                    disabled = True
+                else:
+                    require(disabled and addresses == entries + [completion], 'step-rearm')
+            if addresses == [completion]:
+                require(pending is None, 'unfinished-step')
+                completion_seen = True
+            configured = addresses
+        elif kind in ('PTHREAD_CREATE_ENTRY', 'PTHREAD_JOIN_ENTRY'):
+            expected = entries[0 if kind == 'PTHREAD_CREATE_ENTRY' else 1]
+            require(r['caller'] == ws['tgid'] and r['pc'] == expected
+                    and configured == entries + [completion] and pending is None
+                    and not completion_seen, 'entry-configuration')
+            pending, disabled = r['pc'], False
+            calls += 1
+        else:
+            require(r['tid'] == ws['tgid'] and pending == r['pc'] and disabled
+                    and configured == r['addresses'] == entries + [completion]
+                    and r['si_code'] == 2 and r['after'] != r['pc']
+                    and not r['text_written'] and not r['registers_written'], 'entry-progress')
+            pending = None
+            steps += 1
+    require(calls > 1 and steps == calls and pending is None and completion_seen
+            and configured == [] and not records('BREAKPOINT_TEXT'), 'final-disabled')
+    print(f'ASSERT_TEARDOWN_OBSERVER phase={phase} PASS entries={calls} steps={steps}')
+
+
 def verify(directory, cut=False):
     directory = Path(directory)
     results = {}
@@ -176,10 +243,7 @@ def verify(directory, cut=False):
             restores = records('BREAKPOINT_RESTORED')
             if len(restores) != 1 or restores[0]['text_written'] or restores[0]['registers_written']:
                 raise ValueError(f'{phase}: non-mutating breakpoint cleanup missing')
-            hardware = records('HARDWARE_BREAKPOINTS')
-            main_hw = [r for r in hardware if r['tid'] == ws['tgid']]
-            if len(main_hw) != 4 or main_hw[-1]['addresses'] != [] or records('BREAKPOINT_TEXT'):
-                raise ValueError(f'{phase}: hardware observer cleanup missing')
+            verify_observer(lines, records, ws, phase)
             providers = records('PTHREAD_PROVIDER')
             if sorted(r['symbol'] for r in providers) != ['pthread_create', 'pthread_join']:
                 raise ValueError(f'{phase}: actual loaded pthread providers missing')
