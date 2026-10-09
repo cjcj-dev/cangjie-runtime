@@ -130,6 +130,7 @@ export class Qualification {
       }
       aggregate=this.run(label,['python3',join(scripts,'check_teardown_records.py'),out]); cpSync(join(this.evidence,label+'.log'),join(out,'teardown-records.log')); writeFileSync(join(out,'teardown-aggregate.rc'),aggregate+'\n');
     }
+    this.providers(label);
     this.inspectChildren(out); const log=text(join(out,'teardown-records.log'));
     if(reason) {requireThat(aggregate===1 && log.includes('ASSERT_TEARDOWN_OBSERVER phase=exited FAIL reason='+reason) && log.includes('TEARDOWN_RECORDS_REJECT exited: hardware observer: '+reason),'cut must reject exactly at observer '+reason); this.stages[label]='EXPECTED_REJECT:'+reason;}
     else {requireThat(aggregate===0 && log.split('\n').some(l=>l.startsWith('TEARDOWN_RECORDS_ACCEPT ')),'normal records rejected; NOT_QUALIFIED'); this.stages[label]='PASS';}
@@ -147,20 +148,30 @@ export class Qualification {
     this.arm('restored',this.scripts);
     requireThat(JSON.stringify(this.scriptIdentity(this.scripts))===JSON.stringify(JSON.parse(text(join(this.evidence,'scripts.json')))),'restored script identity changed');
   }
-  providers() {
-    const directory=join(this.evidence,'providers'); mkdirSync(directory); const entities=new Map();
-    for(const label of ['candidate','progress-cut','configuration-cut','restored']) for(const phase of ['exited','live']) {
-      const lines=text(join(this.evidence,label,'teardown-'+phase+'.log')).split('\n'),records=k=>lines.filter(l=>l.startsWith(k+' ')).map(l=>JSON.parse(l.slice(k.length+1)));
-      const providers=records('PTHREAD_PROVIDER'); requireThat(providers.length===2,'actual provider records missing');
-      for(const p of providers) {requireThat(hash(readFileSync(p.path))===p.sha256,'loaded provider entity changed'); entities.set(p.path,p.sha256);}
+  providers(current=null) {
+    const directory=join(this.evidence,'providers'); mkdirSync(directory,{recursive:true}); const entities=new Map();
+    for(const label of current?[current]:['candidate','progress-cut','configuration-cut','restored']) for(const phase of ['exited','live']) {
+      const path=join(this.evidence,label,'teardown-'+phase+'.log');
+      if(current && !existsSync(path)) continue;
+      const lines=text(path).split('\n'),records=k=>lines.filter(l=>l.startsWith(k+' ')).map(l=>JSON.parse(l.slice(k.length+1)));
+      const providers=records('PTHREAD_PROVIDER');
+      if(!current) requireThat(providers.length===2,'actual provider records missing');
+      for(const p of providers) {
+        if(current && !p.path) continue; // Partial records remain diagnostic; final qualification requires entities.
+        requireThat(hash(readFileSync(p.path))===p.sha256,'loaded provider entity changed'); entities.set(p.path,p.sha256);
+      }
       for(const r of records('PRODUCT_MAPS')) for(const line of r.maps.split('\n')) {
         const path=line.trim().split(/\s+/).slice(5).join(' ');
         if(path.startsWith('/') && /^(libc(?:-[\d.]+)?\.so(?:\.\d+)*|libpthread(?:-[\d.]+)?\.so(?:\.\d+)*|ld-linux[^/]*\.so(?:\.\d+)*|ld-[\d.]+\.so)$/.test(basename(path))) entities.set(path,hash(readFileSync(path)));
       }
     }
-    requireThat([...entities.keys()].some(p=>basename(p).startsWith('ld-')),'actual loader maps entity missing'); const saved=[];
-    for(const [path,sha256] of entities) {const dest=join(directory,sha256+'-'+basename(path)); cpSync(path,dest); this.need('provider-'+saved.length,['readelf','-n','-V',dest]); saved.push({path,sha256,entity:dest});}
-    this.save('providers.json',saved); this.stages.providers='PASS';
+    if(!current) requireThat([...entities.keys()].some(p=>basename(p).startsWith('ld-')),'actual loader maps entity missing'); const saved=[];
+    for(const [path,sha256] of entities) {
+      const dest=join(directory,sha256+'-'+basename(path));
+      if(!existsSync(dest)) {cpSync(path,dest); this.need('provider-'+sha256,['readelf','-n','-V',dest]);}
+      saved.push({path,sha256,entity:dest});
+    }
+    this.save(current?current+'-providers.json':'providers.json',saved); if(!current) this.stages.providers='PASS';
   }
   execute() {
     try {
