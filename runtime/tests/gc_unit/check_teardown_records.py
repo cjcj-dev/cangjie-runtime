@@ -4,9 +4,68 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
+import struct
 
 TEST = 'RuntimeWorkers.ActivePoolBeforeHarnessShutdown'
 SENTINEL = 'GC_UNIT_OTHER_VM_OKIDOKI ' + TEST
+
+
+def verify_join_identity(records, ws, phase):
+    """Consume the actual create -> clone -> join -> wait -> clear chain."""
+    def require(condition, reason):
+        if not condition:
+            print(f'ASSERT_TEARDOWN_JOIN_IDENTITY phase={phase} FAIL reason={reason}')
+            raise ValueError(f'{phase}: join identity: {reason}')
+    joins = records('JOIN_ABI')
+    require(len(joins) == 1, 'unique-wait')
+    join = joins[0]
+    bindings = [r for r in records('PTHREAD_CLONE') if r['tid'] == ws['held']]
+    require(len(bindings) == 1, 'unique-held-creation')
+    binding = bindings[0]
+    require(join['tid'] == ws['held'] and join['caller'] == ws['tgid']
+            and join['handle'] == binding['handle'], 'join-target-handle')
+    require(join['parent_tid'] == binding['parent_tid']
+            and join['child_tid'] == binding['child_tid'] == join['uaddr'] == join['args'][0],
+            'wait-clear-address')
+    require(join['value'] == join['args'][2] and join['value'] > 0
+            and join['args'][1] in (9, 265) and join['args'][3:] == [0, 0, 0xffffffff],
+            'actual-shared-wait-value')
+    calls = records('PTHREAD_JOIN_ENTRY')
+    require(any(r['caller'] == ws['tgid'] and r['handle'] == join['handle']
+                and r['target'] == ws['held'] for r in calls), 'public-join-call')
+    require(any(r['parent'] == binding['caller'] and r['child'] == binding['tid']
+                for r in records('CLONE')) and binding['parent_value'] == ws['held'],
+            'kernel-clone-tid')
+    require(any(r['caller'] == binding['caller'] and r['output'] == binding['output']
+                for r in records('PTHREAD_CREATE_ENTRY')), 'public-create-output')
+    clones = records('CLONE_ABI')
+    require(any(all(r[k] == binding[k] for k in ('caller', 'syscall', 'args', 'flags',
+                                                'parent_tid', 'child_tid', 'clone3_raw'))
+                for r in clones), 'actual-clone-arguments')
+    domain = records('CONSTRUCTION_DOMAIN')
+    require(len(domain) == 1 and domain[0]['machine'] in ('x86_64', 'aarch64'), 'actual-abi')
+    arm = domain[0]['machine'] == 'aarch64'
+    if binding['syscall'] == 435:
+        require(binding['args'][1] >= 64, 'clone3-size')
+        raw = bytes.fromhex(binding['clone3_raw'])
+        require(len(raw) == 64, 'clone3-raw-size')
+        flags, _, child_tid, parent_tid, *_ = struct.unpack('<8Q', raw)
+    else:
+        require(binding['syscall'] == (220 if arm else 56), 'clone-syscall-abi')
+        flags, _, parent_tid = binding['args'][:3]
+        child_tid = binding['args'][4] if arm else binding['args'][3]
+    require((flags, parent_tid, child_tid) == (binding['flags'], binding['parent_tid'], binding['child_tid'])
+            and flags & 0x310100 == 0x310100, 'kernel-clear-contract')
+    entries = records('SYSCALL_ENTRY')
+    require(any(r['tid'] == binding['caller'] and r['nr'] == binding['syscall']
+                and r['args'] == binding['args'] and r['length'] >= 80 for r in entries), 'raw-clone-entry')
+    require(any(r['tid'] == join['caller'] and r['nr'] == join['syscall']
+                and r['args'] == join['args'] and r['length'] >= 80 for r in entries)
+            and join['syscall'] == (98 if arm else 202), 'raw-wait-entry')
+    cleared = records('JOIN_CLEARED')
+    require(cleared == [dict(tid=ws['held'], handle=join['handle'], child_tid=join['uaddr'], value=0)],
+            'nonreap-kernel-clear')
+    print(f'ASSERT_TEARDOWN_JOIN_IDENTITY phase={phase} PASS')
 
 
 def verify(directory, cut=False):
@@ -79,17 +138,18 @@ def verify(directory, cut=False):
             ready = records('HELD_EXIT_READY')
             if len(ready) != 1 or ready[0] != dict(tid=ws['held'], si_pid=ws['held'], si_code=1, si_status=0, state='Z', reaped=False):
                 raise ValueError(f'{phase}: exact non-reap exit readiness missing')
+            verify_join_identity(records, ws, phase)
             lines = log.splitlines()
             def position(prefix):
                 hits = [i for i, line in enumerate(lines) if line.startswith(prefix)]
                 if len(hits) != 1:
                     raise ValueError(f'{phase}: missing/duplicate ordered event {prefix}')
                 return hits[0]
-            sequence = ['WORKER_SET ', 'HELD_EXIT_READY ', 'COMPLETE_AFTER_JOIN ',
+            sequence = ['JOIN_ABI ', 'WORKER_SET ', 'HELD_EXIT_READY ', 'JOIN_CLEARED ', 'COMPLETE_AFTER_JOIN ',
                         'AFTER_TRACER_REAP task_exists=False', 'BREAKPOINT_RESTORED ',
                         SENTINEL, 'TEARDOWN_CONSTRUCT_EXECUTED product_rc=0', 'CONSTRUCTION_CLEANUP ']
             if phase == 'live':
-                sequence.insert(1, 'TEARDOWN_CONSTRUCT_PRE_EXIT ')
+                sequence.insert(2, 'TEARDOWN_CONSTRUCT_PRE_EXIT ')
             positions = list(map(position, sequence))
             if positions != sorted(positions):
                 raise ValueError(f'{phase}: exit readiness/completion order invalid')
@@ -109,14 +169,24 @@ def verify(directory, cut=False):
             if len(domain) != 1:
                 raise ValueError(f'{phase}: ABI domain missing')
             length = 272 if domain[0]['machine'] == 'aarch64' else 216
-            if len(regsets) != 3 or any(r['length'] != length or len(bytes.fromhex(r['raw'])) != length for r in regsets):
-                raise ValueError(f'{phase}: full register read/write/restore missing')
-            entries, joins = records('SYSCALL_ENTRY'), records('JOIN_ABI')
-            if len(joins) != 1 or not any(r['args'] == joins[0]['args'] and r['nr'] == joins[0]['syscall'] and r['length'] >= 80 for r in entries):
-                raise ValueError(f'{phase}: raw syscall entry/join missing')
-            texts, restores = records('BREAKPOINT_TEXT'), records('BREAKPOINT_RESTORED')
-            if len(texts) != 1 or len(restores) != 1 or texts[0]['patched'] != texts[0]['readback'] or restores[0]['word'] != texts[0]['original']:
-                raise ValueError(f'{phase}: breakpoint text restore missing')
+            if len(regsets) < 3 or any(r['writing'] or r['length'] != length or len(bytes.fromhex(r['raw'])) != length for r in regsets):
+                raise ValueError(f'{phase}: complete read-only register observations missing')
+            if regsets[-1]['raw'] != regsets[-2]['raw']:
+                raise ValueError(f'{phase}: inferior registers changed at completion')
+            restores = records('BREAKPOINT_RESTORED')
+            if len(restores) != 1 or restores[0]['text_written'] or restores[0]['registers_written']:
+                raise ValueError(f'{phase}: non-mutating breakpoint cleanup missing')
+            hardware = records('HARDWARE_BREAKPOINTS')
+            main_hw = [r for r in hardware if r['tid'] == ws['tgid']]
+            if len(main_hw) != 4 or main_hw[-1]['addresses'] != [] or records('BREAKPOINT_TEXT'):
+                raise ValueError(f'{phase}: hardware observer cleanup missing')
+            providers = records('PTHREAD_PROVIDER')
+            if sorted(r['symbol'] for r in providers) != ['pthread_create', 'pthread_join']:
+                raise ValueError(f'{phase}: actual loaded pthread providers missing')
+            for kind, symbol in [('PTHREAD_CREATE_ENTRY', 'pthread_create'), ('PTHREAD_JOIN_ENTRY', 'pthread_join')]:
+                provider = next(r for r in providers if r['symbol'] == symbol)
+                if any(r['pc'] != provider['address'] for r in records(kind)):
+                    raise ValueError(f'{phase}: public pthread entry/provider mismatch')
             cleanup = records('CONSTRUCTION_CLEANUP')
             if len(cleanup) != 1 or set(cleanup[0]['owned']) != set(cleanup[0]['reaped']):
                 raise ValueError(f'{phase}: owned process cleanup incomplete')
