@@ -219,31 +219,44 @@ jobs:
   teardown-qualification-1426:
     permissions:
       contents: read
-      actions: read
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.teardown_qualification_1426 && !inputs.root_qualification_1411 }}
     strategy:
       fail-fast: false
       matrix:
-        host: [ubuntu-24.04-arm, ubuntu-24.04]
+        host: [ubuntu-24.04-arm, ubuntu-26.04]
     runs-on: ${{ matrix.host }}
     timeout-minutes: 40
     env:
-      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-1426-${{ matrix.host }}
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-1452-${{ matrix.host }}
+      PRODUCT_REF: '0d6e0888216481c55d1e8b2a0fc2685672289b6a'
+      OBSERVER_REF: '9c6d610e9d1b79e7b46025f62617dc6263129d7a'
+      CANDIDATE: ${{ github.sha }}
+      TEST_FILTER: ${{ inputs.filter }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Validate fixed candidate and teardown-only entry
+          path: scheduler-source
+      - uses: actions/checkout@v4
+        with:
+          ref: '0d6e0888216481c55d1e8b2a0fc2685672289b6a'
+          path: product-source
+      - uses: actions/checkout@v4
+        with:
+          ref: '9c6d610e9d1b79e7b46025f62617dc6263129d7a'
+          path: observer-source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install zx entry runtime
+        run: npm install --global zx@8.8.0
+      - name: Validate fixed identities and teardown-only entry
         env:
-          CANDIDATE: ${{ github.sha }}
           ELF_REF: ${{ inputs.elf_ref }}
-          PRODUCT_REF: ${{ inputs.product_ref }}
-          TEST_FILTER: ${{ inputs.filter }}
+          REQUEST_PRODUCT_REF: ${{ inputs.product_ref }}
         run: |
-          test "$ELF_REF" = "$CANDIDATE"
-          test "$PRODUCT_REF" = "$CANDIDATE"
-          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+          mkdir -p evidence
+          python3 scheduler-source/runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --product-ref "$REQUEST_PRODUCT_REF" --elf-ref "$ELF_REF" --observer-ref "$OBSERVER_REF" --filter "$TEST_FILTER" --host '${{ matrix.host }}' --product-source product-source --observer-source observer-source --scheduler-source scheduler-source --evidence evidence/preflight --validate-only
       - name: Install native tools
         run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build binutils libssl-dev libffi-dev gdb
       - uses: mozilla-actions/sccache-action@v0.0.10
@@ -267,23 +280,15 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
-          restore-keys: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
-      - uses: actions/download-artifact@v4
-        with:
-          name: teardown-qualification-1426-${{ matrix.host }}-37322917803
-          run-id: 37322917803
-          github-token: ${{ github.token }}
-          path: retained
-      - name: Build once and execute finite teardown batch
-        env:
-          CANDIDATE: ${{ github.sha }}
-          TEST_FILTER: ${{ inputs.filter }}
+          key: teardown1452-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-0d6e0888216481c55d1e8b2a0fc2685672289b6a
+          restore-keys: teardown1452-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+      - name: Build new product once and execute finite observer batch
         run: |
           ulimit -S -c 0
           ulimit -H -c 0
+          mkdir -p evidence
           set +e
-          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence --reuse retained > evidence/qualification.log 2>&1
+          python3 scheduler-source/runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --product-ref "$PRODUCT_REF" --elf-ref "$PRODUCT_REF" --observer-ref "$OBSERVER_REF" --filter "$TEST_FILTER" --host '${{ matrix.host }}' --product-source product-source --observer-source observer-source --scheduler-source scheduler-source --evidence evidence/native > evidence/qualification.log 2>&1
           result=$?
           printf '%s\n' "$result" > evidence/qualification.rc
           cat evidence/qualification.log
@@ -292,6 +297,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: teardown-qualification-1426-${{ matrix.host }}-${{ github.run_id }}
+          name: teardown-qualification-1452-${{ matrix.host }}-${{ github.run_id }}
           path: evidence/
           retention-days: 7
