@@ -417,7 +417,13 @@ def main():
                     # Bind the public pthread_join argument to this clone's
                     # output handle and kernel clear-child-tid address. expected
                     # is the value loaded by libc, never a task identity.
-                    if current_join and current_join['tid'] == held and params[0] == current_join['child_tid']:
+                    target_name = None
+                    if current_join and params[0] == current_join['child_tid']:
+                        target_name, _ = task_record(pid, current_join['tid'])
+                    # The join syscall can precede delivery of the worker's
+                    # PTRACE_EVENT_EXIT. Hold main at this entry while collecting
+                    # that exit event; do not let it block before held is known.
+                    if target_name == 'RuntimeWorker#0':
                         if params[1] not in (9, 9 | 256) or params[3:6] != [0, 0, 0xffffffff]:
                             raise RuntimeError(f'unsupported actual glibc join args={params}')
                         uaddr = params[0]
