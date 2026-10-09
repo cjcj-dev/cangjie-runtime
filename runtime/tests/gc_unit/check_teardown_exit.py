@@ -224,7 +224,9 @@ def symbol_address(elf, pid, abi, symbol, dynamic=False):
         start = int(fields[0].split('-')[0], 16)
         offset = int(fields[2], 16)
         for _, flags, fileoff, vaddr, _, filesz, _, _ in loads:
-            if offset == fileoff // page * page and ('x' in fields[1]) == bool(flags & 1):
+            # RELRO/data PT_LOADs can share a file page at different virtual
+            # pages. Only executable mappings bind our function entries.
+            if flags & 1 and 'x' in fields[1] and offset == fileoff // page * page:
                 biases.add(start - vaddr // page * page)
     if len(biases) != 1:
         raise RuntimeError(f'ambiguous PT_LOAD/maps bias {biases}')
