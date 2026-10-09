@@ -61,6 +61,10 @@ export class Qualification {
     this.scripts=join(this.evidence,'scripts'); mkdirSync(this.scripts);
     for(const f of SCRIPTS) cpSync(join(o,f),join(this.scripts,f));
     cpSync(join(p,'run_standalone.sh'),join(this.scripts,'run_standalone.sh'));
+    const schedulerScripts=['runtime/tests/teardown_qualification.py','runtime/tests/teardown_qualification.mjs','.github/workflows/arm-unit-ref.yml'];
+    const directory=join(this.evidence,'scheduler-scripts'); mkdirSync(directory);
+    for(const f of schedulerScripts) cpSync(join(this.scheduler,f),join(directory,basename(f)));
+    this.save('scheduler-scripts.json',{checkout:Object.fromEntries(schedulerScripts.map(f=>[f,hash(readFileSync(join(this.scheduler,f)))])),executed:{path:fileURLToPath(import.meta.url),sha256:hash(readFileSync(fileURLToPath(import.meta.url)))}});
     this.save('scripts.json',this.scriptIdentity(this.scripts)); this.stages.identity='PASS';
   }
   scriptIdentity(d){return Object.fromEntries(readdirSync(d).filter(f=>statSync(join(d,f)).isFile()).sort().map(f=>[f,hash(readFileSync(join(d,f)))]));}
@@ -160,7 +164,9 @@ export class Qualification {
   }
   execute() {
     try {
-      this.identities(); if(this.args.validateOnly) return 0; this.domain(); this.prepare(); this.batch(); this.providers();
+      this.identities();
+      requireThat(readFileSync(fileURLToPath(import.meta.url)).equals(readFileSync(join(this.scheduler,'runtime/tests/teardown_qualification.mjs'))),'identity: executed scheduler script byte mismatch');
+      if(this.args.validateOnly) return 0; this.domain(); this.prepare(); this.batch(); this.providers();
       for(const source of [this.product,this.observer,this.scheduler]) requireThat(!this.git(source,'status','--porcelain','--untracked-files=all'),'checkout dirtied during qualification');
       this.save('summary.json',{status:'QUALIFIED',stages:this.stages,checkouts:JSON.parse(text(join(this.evidence,'checkouts.json')))});
       writeFileSync(join(this.evidence,'QUALIFICATION_DONE'),'new native product; original child semantics; observer cuts qualified\n'); return 0;

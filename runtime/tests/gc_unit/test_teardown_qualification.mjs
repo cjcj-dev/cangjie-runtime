@@ -68,7 +68,7 @@ function exitLog(live=false,progress=true) {
  const clone={caller:pid,syscall:56,args:[0x3d0f00,0x801000,ptid,ctid,0x901000,0],flags:0x3d0f00,parent_tid:ptid,child_tid:ctid,clone3_raw:null};
  const waitArgs=[ctid,265,1,0,0,0xffffffff];
  emit('CONSTRUCTION_DOMAIN',{machine:'x86_64'});emit('CLONE_ABI',clone);emit('CLONE',{parent:pid,child:tid});emit('PTHREAD_CLONE',{...clone,tid,handle,output,parent_value:tid,child_value:1});
- emit('SYSCALL_ENTRY',{tid:pid,nr:56,args:clone.args,length:80});emit('SYSCALL_ENTRY',{tid:pid,nr:202,args:waitArgs,length:80});
+ emit('SYSCALL_ENTRY',{tid:pid,nr:56,args:clone.args,length:80});emit('SYSCALL_ENTRY',{tid:pid,nr:202,args:waitArgs,length:80});emit('WAIT_EVENT',{tid,event:6});
  for(const state of ['t','Z']) emit('TASK_STATE',{pid,tid,name:'RuntimeWorker#0',tgid:pid,state});
  for(let i=0;i<3;i++) emit('REGSET',{writing:false,length:216,raw:'00'.repeat(216)});
  emit('ELF_BINDING',{name:'main',address:main});emit('ELF_BINDING',{name:'MapleRuntime::GcUnit::CompleteTestRun(int)',address:complete});
