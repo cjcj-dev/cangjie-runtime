@@ -74,7 +74,7 @@ export class Qualification {
     this.need('glibc-version',['ldd','--version']); this.stages.domain='PASS';
   }
   plan() {
-    const cache=spawnSync('which',['sccache'],{encoding:'utf8'}); requireThat(cache.status===0 && cache.stdout.trim(),'sccache executable unavailable'); this.cache=realpathSync(cache.stdout.trim());
+    const cache=spawnSync('which',['sccache'],{encoding:'utf8',env:this.env}); requireThat(cache.status===0 && cache.stdout.trim(),'sccache executable unavailable'); this.cache=realpathSync(cache.stdout.trim());
     const cxx=this.env.CXX; requireThat(cxx && existsSync(cxx),'standalone compiler-bin CXX wrapper required');
     const wrapper=text(cxx); requireThat(wrapper.includes('exec sccache /usr/bin/clang++ "$@"'),'standalone CXX must use existing sccache wrapper recipe');
     this.save('compiler-wrapper.json',{path:cxx,sha256:hash(readFileSync(cxx)),bytes:wrapper,cache:this.cache});

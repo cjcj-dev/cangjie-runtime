@@ -111,11 +111,12 @@ runCase('prepare.success',()=>{
  const calls=readFileSync(join(work,'prepare-success.dispatch'),'utf8').trim().split('\n').map(JSON.parse),standalone=calls.find(c=>c.cmd==='bash' && c.a[0].endsWith('/run_standalone.sh'));
  check('prepare.dispatch.flags',standalone?.buildOnly==='1' && standalone?.gateSkip==='1' && !!standalone?.lib && !!standalone?.root && !!standalone?.out,JSON.stringify(standalone));
  check('prepare.success',!error && q.stages.prepare==='PASS' && existsSync(join(q.evidence,'entities-before-run.json')),String(error));
- q.arm('candidate',q.scripts);check('arm.original-normal-live',q.stages.candidate==='PASS' && readFileSync(join(q.evidence,'candidate/teardown-live.rc'),'utf8')==='1\n');
+ if(!error) {q.arm('candidate',q.scripts);check('arm.original-normal-live',q.stages.candidate==='PASS' && readFileSync(join(q.evidence,'candidate/teardown-live.rc'),'utf8')==='1\n');}
 });
 for(const mode of ['build-fail','missing-so','missing-elf','missing-marker','wrong-cache']) runCase('prepare.'+mode,()=>{
  const q=qualify('prepare-'+mode,mode);q.identities();let error=null;try{q.prepare();}catch(e){error=e.message;}
- check('prepare.reject.'+mode,!!error && q.stages.prepare==='NOT_RUN' && !existsSync(join(q.evidence,'QUALIFICATION_DONE')),String(error));
+ const expected={'build-fail':'product-build: child rc=9','missing-so':'libboundscheck.so','missing-elf':'cj_gc_unit','missing-marker':'build-only completion not observed','wrong-cache':'effective sccache cache/launcher mismatch'}[mode];
+ check('prepare.reject.'+mode,!!error && error.includes(expected) && q.stages.prepare==='NOT_RUN' && !existsSync(join(q.evidence,'QUALIFICATION_DONE')),String(error));
  const calls=readFileSync(join(work,'prepare-'+mode+'.dispatch'),'utf8');if(mode==='build-fail')check('prepare.build-fail.no-standalone',!calls.includes('run_standalone.sh') && readFileSync(join(q.evidence,'product-build.rc'),'utf8')==='9\n');
 });
 for(const mode of ['child77','child124']) runCase('arm.'+mode,()=>{
