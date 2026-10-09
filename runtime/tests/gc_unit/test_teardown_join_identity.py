@@ -1,6 +1,7 @@
 """Offline record controls; these do not qualify an executed product arm."""
 from contextlib import redirect_stdout
 import io
+import json
 import struct
 import unittest
 import ctypes
@@ -181,12 +182,83 @@ class ArmObserverControls(unittest.TestCase):
 
 
 def json_records(text):
-    import json
     records = {}
     for line in text.splitlines():
         kind, _, raw = line.partition(' ')
         records.setdefault(kind, []).append(json.loads(raw))
     return records
+
+
+def observer_lines(machine='aarch64', extra_disabled=False):
+    pid, main, create, join, complete = 1700, 0x600000, 0x700000, 0x700004, 0x600004
+    watched = [create, join, complete]
+    def hardware(addresses):
+        slots = [dict(address=a, control=0x1e5 if machine == 'aarch64' else 1) for a in addresses]
+        slots += [dict(address=0, control=0x1e4 if machine == 'aarch64' else 0)] * (6 - len(addresses) if machine == 'aarch64' else 4 - len(addresses))
+        return ('HARDWARE_BREAKPOINTS', dict(tid=pid, machine=machine, addresses=addresses, slots=slots))
+    records = [('CONSTRUCTION_DOMAIN', dict(machine=machine)),
+               ('ELF_BINDING', dict(name='main', address=main)),
+               ('ELF_BINDING', dict(name='MapleRuntime::GcUnit::CompleteTestRun(int)', address=complete)),
+               ('PTHREAD_PROVIDER', dict(symbol='pthread_create', address=create)),
+               ('PTHREAD_PROVIDER', dict(symbol='pthread_join', address=join)),
+               hardware([main]), hardware(watched)]
+    for kind, pc in [('PTHREAD_CREATE_ENTRY', create), ('PTHREAD_JOIN_ENTRY', join), ('PTHREAD_CREATE_ENTRY', create)]:
+        records += [(kind, dict(caller=pid, pc=pc)), hardware([])]
+        if extra_disabled:
+            records.append(hardware([]))
+        records += [hardware(watched), ('BREAKPOINT_STEP', dict(tid=pid, pc=pc, after=pc + 4, si_code=2,
+                    addresses=watched, text_written=False, registers_written=False))]
+    records += [hardware([complete]), hardware([])]
+    return [kind + ' ' + json.dumps(record) for kind, record in records]
+
+
+class ObserverRecords(unittest.TestCase):
+    def check(self, lines, reason=None):
+        records = json_records('\n'.join(lines))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            if reason is None:
+                verify_observer(lines, lambda k: records.get(k, []), {'tgid': 1700}, 'offline')
+            else:
+                with self.assertRaisesRegex(ValueError, reason):
+                    verify_observer(lines, lambda k: records.get(k, []), {'tgid': 1700}, 'offline')
+        self.assertIn('ASSERT_TEARDOWN_OBSERVER phase=offline ' + ('PASS' if reason is None else 'FAIL reason=' + reason), output.getvalue())
+
+    def test_abi_state_accepts_variable_configuration_counts(self):
+        for machine in ('aarch64', 'x86_64'):
+            for extra in (False, True):
+                self.check(observer_lines(machine, extra))
+
+    def test_enabled_binding_and_unused_slots_are_checked(self):
+        for field, value, index, reason in [('address', 0x800000, 0, 'enabled-slot'),
+                                           ('control', 0x1ed, 0, 'enabled-slot'),
+                                           ('control', 0x1e3, 0, 'enabled-slot'),
+                                           ('control', 0x65, 0, 'enabled-slot'),
+                                           ('control', 0x1e5, 5, 'unused-slot-enabled')]:
+            lines = observer_lines()
+            record = json.loads(lines[6].partition(' ')[2])
+            record['slots'][index][field] = value
+            lines[6] = 'HARDWARE_BREAKPOINTS ' + json.dumps(record)
+            self.check(lines, reason)
+
+    def test_original_instruction_progress_is_required(self):
+        lines = observer_lines()
+        index = next(i for i, line in enumerate(lines) if line.startswith('BREAKPOINT_STEP '))
+        record = json.loads(lines[index].partition(' ')[2])
+        record['after'] = record['pc']
+        lines[index] = 'BREAKPOINT_STEP ' + json.dumps(record)
+        self.check(lines, 'entry-progress')
+
+    def test_step_requires_disabling_and_rearming(self):
+        lines = observer_lines()
+        del lines[8]  # Actual disabled-state observation before the first step.
+        self.check(lines, 'step-rearm')
+        lines = observer_lines()
+        del lines[9]  # Actual rearmed-state observation before the first step.
+        self.check(lines, 'entry-progress')
+
+    def test_final_disabled_state_is_required(self):
+        self.check(observer_lines()[:-1], 'final-disabled')
 
 
 if __name__ == '__main__':
