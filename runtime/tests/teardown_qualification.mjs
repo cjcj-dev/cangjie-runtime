@@ -192,6 +192,15 @@ function main(argv) {
     validate(args); requireThat(args.productSource && args.observerSource,'separate product and observer checkouts required'); return new Qualification(args).execute();
   } catch(error) {console.error(error.message); return 1;}
 }
-// zx imports the script and keeps its CLI in argv[1]; node puts the script there.
-const scriptIndex=process.argv[1] && /[/\\]zx[/\\]build[/\\]cli\.(?:c?js|mjs)$/.test(realpathSync(process.argv[1])) ? 2 : 1;
-if(process.argv[scriptIndex] && resolve(process.argv[scriptIndex])===fileURLToPath(import.meta.url)) process.exitCode=main(process.argv.slice(scriptIndex+1));
+// Node passes this module as argv[1]; zx keeps its CLI there and passes the
+// module as argv[2]. Only inspect that CLI after the module path matches, so
+// library imports never treat a caller's filter or missing path as a file.
+const modulePath=fileURLToPath(import.meta.url);
+let mainArgs;
+if(process.argv[1] && resolve(process.argv[1])===modulePath) mainArgs=process.argv.slice(2);
+else if(process.argv[2] && resolve(process.argv[2])===modulePath) {
+  try {
+    if(/[/\\]zx[/\\]build[/\\]cli\.(?:c?js|mjs)$/.test(realpathSync(process.argv[1]))) mainArgs=process.argv.slice(3);
+  } catch { /* A library caller need not have a filesystem entry in argv[1]. */ }
+}
+if(mainArgs) process.exitCode=main(mainArgs);

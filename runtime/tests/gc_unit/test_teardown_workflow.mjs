@@ -1,11 +1,11 @@
-#!/usr/bin/env zx
+#!/usr/bin/env node
 // Execute the existing workflow's actual validation/qualification shell context.
 // A foreign host must stop before any native build, even with valid fixed refs.
 import {readFileSync,writeFileSync,mkdirSync,existsSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const [rootArg,sourcesArg]=process.argv.slice(2);
-if(!rootArg || !sourcesArg) throw new Error('usage: zx test_teardown_workflow.mjs EVIDENCE SOURCES');
+if(!rootArg || !sourcesArg) throw new Error('usage: node test_teardown_workflow.mjs EVIDENCE SOURCES');
 const work=resolve(rootArg),sources=resolve(sourcesArg),scheduler=join(sources,'scheduler');mkdirSync(work,{recursive:true});
 const records=[],checks=[];
 function run(name,cmd,args,cwd=work,env=process.env) {
@@ -38,6 +38,14 @@ for(const [name,wrong] of [['normal',false],['wrong-ref',true]]) {
  const entered=existsSync(identity) && Object.keys(JSON.parse(readFileSync(identity))).length===3;
  check('workflow.'+name+'.identity-entry',p.status===(wrong?1:0) && (wrong || entered) && !existsSync(join(cwd,'evidence/preflight/QUALIFICATION_DONE')),`rc=${p.status} entered=${entered}`);
  if(!wrong) {
+   // Real Node direct entry must also reach checkout/summary production.
+   const args=['--candidate',candidate,'--product-ref',fixed,'--elf-ref',fixed,'--observer-ref',observer,'--filter',env.TEST_FILTER,'--host','ubuntu-26.04','--product-source','product-source','--observer-source','observer-source','--scheduler-source','scheduler-source'];
+   const direct=run('node-preflight','node',['scheduler-source/runtime/tests/teardown_qualification.mjs',...args,'--evidence','evidence/node-preflight','--validate-only'],cwd,env);
+   const nodeIdentity=join(cwd,'evidence/node-preflight/checkouts.json');
+   check('node.identity-entry',direct.status===0 && existsSync(nodeIdentity) && Object.keys(JSON.parse(readFileSync(nodeIdentity))).length===3,`rc=${direct.status}`);
+   const nodeNative=run('node-foreign-domain','node',['scheduler-source/runtime/tests/teardown_qualification.mjs',...args,'--evidence','evidence/node-native'],cwd,env);
+   const nodeSummary=JSON.parse(readFileSync(join(cwd,'evidence/node-native/summary.json')));
+   check('node.domain-rejected-before-build',nodeNative.status===1 && nodeSummary.status==='NOT_QUALIFIED' && nodeSummary.reason.startsWith('domain:') && nodeSummary.stages.prepare==='NOT_RUN',JSON.stringify(nodeSummary));
    const body=native.run.replaceAll('${{ matrix.host }}','ubuntu-26.04');writeFileSync(join(work,'native-command.txt'),body);
    const p=run('native-foreign-domain','/bin/bash',['-e','-o','pipefail','-c',body],cwd,env);
    const summary=JSON.parse(readFileSync(join(cwd,'evidence/native/summary.json')));

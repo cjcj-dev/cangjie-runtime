@@ -1,11 +1,11 @@
-#!/usr/bin/env zx
+#!/usr/bin/env node
 // Real qualification orchestration with bounded subprocess fixtures. NOT native qualification.
 import {readFileSync,writeFileSync,mkdirSync,cpSync,chmodSync,existsSync} from 'node:fs';
 import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 const [workArg,moduleArg,only]=process.argv.slice(2);
-if(!workArg) throw new Error('usage: zx test_teardown_qualification.mjs WORK [MODULE] [CASE]');
+if(!workArg) throw new Error('usage: node test_teardown_qualification.mjs WORK [MODULE] [CASE]');
 const work=resolve(workArg),root=resolve(dirname(fileURLToPath(import.meta.url)),'../../..');
 const {Qualification,PRODUCT,OBSERVER,TEST,validate}=await import(pathToFileURL(moduleArg??join(root,'runtime/tests/teardown_qualification.mjs')));
 mkdirSync(work,{recursive:true});

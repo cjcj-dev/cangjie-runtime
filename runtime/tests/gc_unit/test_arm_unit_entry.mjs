@@ -1,4 +1,4 @@
-#!/usr/bin/env zx
+#!/usr/bin/env node
 // Controlled integration of the real workflow shell and its real filtered runner.
 // Native builds are recorded at the subprocess boundary, never performed here.
 import { readFileSync, writeFileSync, mkdirSync, cpSync, chmodSync, existsSync, readdirSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const evidence = resolve(process.argv[2] ?? '');
-if (!process.argv[2]) throw new Error('usage: zx test_arm_unit_entry.mjs EVIDENCE_DIR');
+if (!process.argv[2]) throw new Error('usage: node test_arm_unit_entry.mjs EVIDENCE_DIR');
 mkdirSync(evidence, {recursive: true});
 const records = [], checks = [];
 function run(name, cmd, args, cwd, extra = {}) {
@@ -105,10 +105,15 @@ const sha='0d6e0888216481c55d1e8b2a0fc2685672289b6a';
 const rootFilter='ZRootTask.YoungCarrierPublishesOnlyYoung:ZRootTask.YoungCarrierParallelDispatch:ZRootTask.OldCarrierPublishesBothGenerations:ZRootTask.OldCarrierParallelDispatch';
 for(const [script, valid] of [['arm_root_qualification.py',rootFilter],['teardown_qualification.py','RuntimeWorkers.ActivePoolBeforeHarnessShutdown']]) {
  const args=['--candidate',sha,'--validate-only','--filter'];
- const entry=script==='teardown_qualification.py' ? ['node',['--input-type=module','-e',`import {validate,PRODUCT,OBSERVER} from ${JSON.stringify(join(root,'runtime/tests/teardown_qualification.mjs'))}; validate({candidate:${JSON.stringify(sha)},productRef:PRODUCT,elfRef:PRODUCT,observerRef:OBSERVER,host:'ubuntu-26.04',filter:process.argv[1]});`]] : ['python3',[join(root,'runtime/tests',script),...args]];
+ const entry=script==='teardown_qualification.py' ? ['node',['--input-type=module','-e',`import {validate,PRODUCT,OBSERVER} from ${JSON.stringify(join(root,'runtime/tests/teardown_qualification.mjs'))}; validate({candidate:${JSON.stringify(sha)},productRef:PRODUCT,elfRef:PRODUCT,observerRef:OBSERVER,host:'ubuntu-26.04',filter:process.argv[1]}); console.log('TEARDOWN_FILTER_VALIDATED '+process.argv[1]);`]] : ['python3',[join(root,'runtime/tests',script),...args]];
  const good=run(script+'.valid',entry[0],[...entry[1],valid],root);
  const bad=run(script+'.invalid',entry[0],[...entry[1],'Publication.One:Main.One'],root);
  check('specialized.'+script,good.status===0 && bad.status===1,`valid=${good.status} unrelated=${bad.status}`);
+ if(script==='teardown_qualification.py') check('specialized.teardown.validate-target',good.stdout.includes('TEARDOWN_FILTER_VALIDATED '+valid) && bad.stderr.includes('exact teardown filter required') && !bad.stderr.includes('ENOENT'),`valid=${good.status} unrelated=${bad.status} diagnostic=${bad.stderr.trim()}`);
+}
+for(const [name,args] of [['no-argv',[]],['missing-path',['missing-caller']],['existing-caller',[join(root,'runtime/tests/gc_unit/test_arm_unit_entry.mjs'),join(root,'runtime/tests/teardown_qualification.mjs')]]]) {
+ const p=run('import.'+name,'node',['--input-type=module','-e',`await import(${JSON.stringify(join(root,'runtime/tests/teardown_qualification.mjs'))}); console.log('LIBRARY_IMPORT_ONLY');`,...args],root);
+ check('import.'+name,p.status===0 && p.stdout.trim()==='LIBRARY_IMPORT_ONLY' && !p.stderr,`rc=${p.status} stderr=${p.stderr.trim()}`);
 }
 check('workflow.native_arm',workflow.jobs.unit['runs-on']==='ubuntu-24.04-arm');
 check('workflow.sccache',workflow.jobs.unit.steps.some(s=>s.uses==='mozilla-actions/sccache-action@v0.0.10'));
