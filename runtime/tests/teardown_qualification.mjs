@@ -54,7 +54,7 @@ export class Qualification {
     for(const [name,source,expected] of [['product',this.product,PRODUCT],['observer',this.observer,OBSERVER],['scheduler',this.scheduler,this.args.candidate]]) {
       const actual=this.git(source,'rev-parse','HEAD'),tree=this.git(source,'rev-parse','HEAD^{tree}'),dirty=this.git(source,'status','--porcelain','--untracked-files=all');
       identities[name]={source,expected,actual,tree,clean:dirty==='',dirty}; this.save('checkouts.json',identities);
-      requireThat(actual===expected && !dirty,'identity: '+name+' SHA/clean mismatch');
+      requireThat(actual===expected && !dirty && source===realpathSync(this.git(source,'rev-parse','--show-toplevel')),'identity: '+name+' SHA/clean/root mismatch');
     }
     const p=join(this.product,'runtime/tests/gc_unit'),o=join(this.observer,'runtime/tests/gc_unit');
     for(const f of ['run_other_vm_teardown.sh','check_other_vm_teardown.py']) requireThat(readFileSync(join(p,f)).equals(readFileSync(join(o,f))),'identity: shared runner/import byte mismatch '+f);
@@ -100,7 +100,7 @@ export class Qualification {
     const p=this.publication(),sos=['libcangjie-runtime.so','libboundscheck.so'].map(n=>join(p.root,p.subdir,n));
     for(const so of sos) requireThat(statSync(so).size>0,'missing product entity '+so);
     this.save('product-at-link.json',Object.fromEntries(sos.map(p=>[p,hash(readFileSync(p))])));
-    cpSync(p.root,join(this.evidence,'publication'),{recursive:true}); this.library=join(this.evidence,'publication',p.subdir);
+    cpSync(p.root,join(this.evidence,'publication'),{recursive:true,dereference:true}); this.library=join(this.evidence,'publication',p.subdir);
     this.env={...this.env,GCV2_RUNTIME_LIB_DIR:this.library,GCV2_RUNTIME_OUTPUT_ROOT:join(this.evidence,'publication'),LD_LIBRARY_PATH:this.library,GC_UNIT_OUT:join(this.evidence,'standalone')};
     this.need('standalone-build-only',['bash',join(this.product,'runtime/tests/gc_unit/run_standalone.sh')]);
     requireThat(text(join(this.evidence,'standalone-build-only.log')).split('\n').includes('GC_UNIT_BUILD_ONLY_DONE tests_executed=0'),'build-only completion not observed');
