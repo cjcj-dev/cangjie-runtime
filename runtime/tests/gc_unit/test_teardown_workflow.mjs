@@ -34,7 +34,9 @@ for(const [name,wrong] of [['normal',false],['wrong-ref',true]]) {
  const env={...process.env,CANDIDATE:candidate,PRODUCT_REF:fixed,OBSERVER_REF:observer,TEST_FILTER:'RuntimeWorkers.ActivePoolBeforeHarnessShutdown',ELF_REF:wrong?observer:fixed,REQUEST_PRODUCT_REF:fixed};
  const body=preflight.run.replaceAll('${{ matrix.host }}','ubuntu-26.04');writeFileSync(join(work,name+'-preflight-command.txt'),body);
  const p=run(name+'-preflight','/bin/bash',['-e','-o','pipefail','-c',body],cwd,env);
- check('workflow.'+name+'.identity-entry',p.status===(wrong?1:0) && !existsSync(join(cwd,'evidence/preflight/QUALIFICATION_DONE')),`rc=${p.status}`);
+ const identity=join(cwd,'evidence/preflight/checkouts.json');
+ const entered=existsSync(identity) && Object.keys(JSON.parse(readFileSync(identity))).length===3;
+ check('workflow.'+name+'.identity-entry',p.status===(wrong?1:0) && (wrong || entered) && !existsSync(join(cwd,'evidence/preflight/QUALIFICATION_DONE')),`rc=${p.status} entered=${entered}`);
  if(!wrong) {
    const body=native.run.replaceAll('${{ matrix.host }}','ubuntu-26.04');writeFileSync(join(work,'native-command.txt'),body);
    const p=run('native-foreign-domain','/bin/bash',['-e','-o','pipefail','-c',body],cwd,env);

@@ -184,12 +184,14 @@ export class Qualification {
     } catch(error) {this.save('summary.json',{status:'NOT_QUALIFIED',reason:error.message,stages:this.stages,commands:this.commands}); console.error(error.message); return 1;}
   }
 }
-function main() {
+function main(argv) {
   const args={evidence:'evidence',schedulerSource:resolve(dirname(fileURLToPath(import.meta.url)),'../..')};
-  const names={'--candidate':'candidate','--product-ref':'productRef','--elf-ref':'elfRef','--observer-ref':'observerRef','--product-source':'productSource','--observer-source':'observerSource','--scheduler-source':'schedulerSource','--filter':'filter','--host':'host','--evidence':'evidence'},argv=process.argv.slice(2);
+  const names={'--candidate':'candidate','--product-ref':'productRef','--elf-ref':'elfRef','--observer-ref':'observerRef','--product-source':'productSource','--observer-source':'observerSource','--scheduler-source':'schedulerSource','--filter':'filter','--host':'host','--evidence':'evidence'};
   try {
     for(let i=0;i<argv.length;i++) {if(argv[i]==='--validate-only') args.validateOnly=true; else {requireThat(names[argv[i]] && argv[i+1],'unsupported/missing argument '+argv[i]); args[names[argv[i]]]=argv[++i];}}
     validate(args); requireThat(args.productSource && args.observerSource,'separate product and observer checkouts required'); return new Qualification(args).execute();
   } catch(error) {console.error(error.message); return 1;}
 }
-if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) process.exitCode=main();
+// zx imports the script and keeps its CLI in argv[1]; node puts the script there.
+const scriptIndex=process.argv[1] && /[/\\]zx[/\\]build[/\\]cli\.(?:c?js|mjs)$/.test(realpathSync(process.argv[1])) ? 2 : 1;
+if(process.argv[scriptIndex] && resolve(process.argv[scriptIndex])===fileURLToPath(import.meta.url)) process.exitCode=main(process.argv.slice(scriptIndex+1));
