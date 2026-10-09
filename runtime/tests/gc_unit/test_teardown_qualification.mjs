@@ -91,7 +91,7 @@ for(const [name,content] of [['gdb',gdb],['exited',exitLog()],['live',exitLog(tr
 const args={candidate,productRef:PRODUCT,elfRef:PRODUCT,observerRef:OBSERVER,filter:TEST,host:'ubuntu-26.04',productSource:join(sources,'product'),observerSource:join(sources,'observer'),schedulerSource:scheduler};
 const checks=[];
 function check(n,v,detail=''){checks.push({name:n,pass:!!v,detail});console.log('ASSERT '+n+' '+(v?'PASS':'FAIL')+' '+detail);}
-function runCase(name,body){if(only && only!==name)return;try{body();}catch(e){check(name+'.unexpected',false,e.stack);}}
+function runCase(name,body){if(only==='remaining' ? name==='prepare.success' : only && only!==name)return;try{body();}catch(e){check(name+'.unexpected',false,e.stack);}}
 function qualify(name,mode='success',patch={}) {
  const evidence=join(work,name);const q=new Qualification({...args,...patch,evidence});
  q.env={...q.env,PATH:bin+':'+process.env.PATH,CXX:wrapper,CONTROL_MODE:mode,CONTROL_DISPATCH:join(work,name+'.dispatch'),CONTROL_GDB:join(work,'gdb.txt'),CONTROL_EXITED:join(work,'exited.txt'),CONTROL_LIVE:join(work,'live.txt'),PYTHONDONTWRITEBYTECODE:'1'};
@@ -130,4 +130,4 @@ runCase('records.progress',()=>{
  check('records.exact-progress-rejection',!!error && readFileSync(join(q.evidence,'candidate/teardown-records.log'),'utf8').includes('FAIL reason=entry-progress'),String(error));writeFileSync(join(work,'exited.txt'),exitLog());
 });
 jsonResult();
-function jsonResult(){writeFileSync(join(work,'assertions.json'),JSON.stringify({scope:'APPARATUS_ONLY; native qualification NOT_RUN',checks},null,2));console.log('CONTROL_ASSERTIONS total='+checks.length+' passed='+checks.filter(c=>c.pass).length+' failed='+checks.filter(c=>!c.pass).length);process.exitCode=checks.every(c=>c.pass)?0:1;}
+function jsonResult(){writeFileSync(join(work,'assertions.json'),JSON.stringify({scope:'APPARATUS_ONLY; native qualification NOT_RUN',checks},null,2));console.log('CONTROL_ASSERTIONS total='+checks.length+' passed='+checks.filter(c=>c.pass).length+' failed='+checks.filter(c=>!c.pass).length);process.exitCode=checks.length>0 && checks.every(c=>c.pass)?0:1;}

@@ -105,8 +105,9 @@ const sha='0d6e0888216481c55d1e8b2a0fc2685672289b6a';
 const rootFilter='ZRootTask.YoungCarrierPublishesOnlyYoung:ZRootTask.YoungCarrierParallelDispatch:ZRootTask.OldCarrierPublishesBothGenerations:ZRootTask.OldCarrierParallelDispatch';
 for(const [script, valid] of [['arm_root_qualification.py',rootFilter],['teardown_qualification.py','RuntimeWorkers.ActivePoolBeforeHarnessShutdown']]) {
  const args=['--candidate',sha,'--validate-only','--filter'];
- const good=run(script+'.valid','python3',[join(root,'runtime/tests',script),...args,valid],root);
- const bad=run(script+'.invalid','python3',[join(root,'runtime/tests',script),...args,'Publication.One:Main.One'],root);
+ const entry=script==='teardown_qualification.py' ? ['node',['--input-type=module','-e',`import {validate,PRODUCT,OBSERVER} from ${JSON.stringify(join(root,'runtime/tests/teardown_qualification.mjs'))}; validate({candidate:${JSON.stringify(sha)},productRef:PRODUCT,elfRef:PRODUCT,observerRef:OBSERVER,host:'ubuntu-26.04',filter:process.argv[1]});`]] : ['python3',[join(root,'runtime/tests',script),...args]];
+ const good=run(script+'.valid',entry[0],[...entry[1],valid],root);
+ const bad=run(script+'.invalid',entry[0],[...entry[1],'Publication.One:Main.One'],root);
  check('specialized.'+script,good.status===0 && bad.status===1,`valid=${good.status} unrelated=${bad.status}`);
 }
 check('workflow.native_arm',workflow.jobs.unit['runs-on']==='ubuntu-24.04-arm');
