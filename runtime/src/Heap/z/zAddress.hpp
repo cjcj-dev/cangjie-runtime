@@ -23,6 +23,7 @@
 
 #pragma once
 #include <cassert>
+#include <vector>
 #include <type_traits>
 #include "Base/Types.h"
 #include "Heap/z/zGenerationId.hpp"
@@ -305,7 +306,19 @@ public:
   static uintptr_t remap_bits(uintptr_t colored);
 };
 
+struct HeapSlotAddressRange;
 class ZAddress {
+public:
+  // Cangjie unheaded slot records use compiler-published range metadata.
+  static uintptr_t GetHeapStartAddress();
+  static void OnHeapCreated(uintptr_t startAddr);
+  static void OnHeapCreated(uintptr_t startAddr, const std::vector<HeapSlotAddressRange>& reservations);
+  static void OnHeapExtended(uintptr_t newEnd);
+  static uintptr_t heapCurrentEnd;
+private:
+  static void PublishCompilerHeapRanges();
+  static uintptr_t heapStartAddr;
+  static std::vector<HeapSlotAddressRange> heapReservations;
 public:
   static zpointer color(zaddress addr, uintptr_t color);
   static zpointer color(zaddress_unsafe addr, uintptr_t color);

@@ -1,3 +1,4 @@
+#include "LoaderManager.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -137,7 +138,7 @@ void* Exercise(void*)
         const auto& young = Heap::GetHeap().young();
         const auto& old = Heap::GetHeap().old();
         Expect(young.is_phase_mark(), "young_mark_start_active");
-        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
+        if ((*ZGeneration::young()).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOldSequence = old.seqnum();
             preludeOldColor = ::g_cjMarkBadMask & ZPointerMarkedOldMask;
@@ -145,7 +146,7 @@ void* Exercise(void*)
                    "prelude_starts_old_mark");
             StoreBarrierBuffer buffer;
             RootSlot slot;
-            buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+            buffer.add(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(&slot)), zpointer::null);
             Expect(buffer.Pending() == 1u, "prelude_store_buffer_old_obligation");
             buffer.Flush();
         } else {
@@ -175,13 +176,13 @@ void* Exercise(void*)
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
         RootSlot slot;
-        buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+        buffer.add(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(&slot)), zpointer::null);
         const auto storedPending = buffer.Pending();
         const bool young = Heap::GetHeap().young().Workers()->is_active();
-        ZWorkers& current = *Heap::GetHeap().GetZGeneration(
-            young ? ZGenerationId::young : ZGenerationId::old).Workers();
-        ZWorkers& other = *Heap::GetHeap().GetZGeneration(
-            young ? ZGenerationId::old : ZGenerationId::young).Workers();
+        ZWorkers& current = *(*ZGeneration::generation(static_cast<ZGenerationId>(
+            young ? ZGenerationId::young : ZGenerationId::old))).Workers();
+        ZWorkers& other = *(*ZGeneration::generation(static_cast<ZGenerationId>(
+            young ? ZGenerationId::old : ZGenerationId::young))).Workers();
         std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
                     young ? "young" : "old", current.is_active(), other.is_active(), current.active_workers());
         Expect(current.active_workers() == concurrent, "worker_prepared_concurrent_budget");
@@ -219,7 +220,7 @@ void* Exercise(void*)
         };
         size_t expected = 0;
         bool included = true;
-        Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
+        LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
             auto* object = to_object(slot.GetTargetObject());
             if (object != nullptr && Heap::IsHeapAddress(object)) {
                 ++expected;
@@ -280,17 +281,17 @@ void* Exercise(void*)
     // Do not start subsequent driver cycles with incomplete marking state.
     if (failures != 0) return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 #endif
-    auto y0 = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
-    auto o0 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    auto y0 = (*ZGeneration::young()).seqnum();
+    auto o0 = (*ZGeneration::old()).seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_USER);
     Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
            "worker_major_phase_budget");
     Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_major_completion");
     // ZStatCycle::at_end (zStat.cpp:1252-1253) reset the old generation's
     // worker accounting at the end of the major; a minor must not add to it.
-    const auto oldWorkerStats1 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
-    auto y1 = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
-    auto o1 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    const auto oldWorkerStats1 = (*ZGeneration::old()).StatWorkers()->stats();
+    auto y1 = (*ZGeneration::young()).seqnum();
+    auto o1 = (*ZGeneration::old()).seqnum();
     // Explicit user GC precleans young, then runs full roots: two young
     // cycles (ZGC zDriver.cpp:270-279,416-428).
     Expect(y1 == y0 + 2, "major_prelude_young_sequence");
@@ -298,12 +299,12 @@ void* Exercise(void*)
     Expect(ZDriver::major()->gc_cause() == GC_REASON_INVALID, "major_reason_completion");
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     Expect(youngWorkers.active_workers() == concurrent && !youngWorkers.is_active(), "worker_minor_phase_budget");
-    const auto oldWorkerStats2 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    const auto oldWorkerStats2 = (*ZGeneration::old()).StatWorkers()->stats();
     Expect(oldWorkerStats2._accumulated_duration == oldWorkerStats1._accumulated_duration &&
            oldWorkerStats2._accumulated_time == oldWorkerStats1._accumulated_time &&
            oldWorkers.active_workers() == concurrent && !oldWorkers.is_active(), "worker_minor_preserves_old");
-    auto y2 = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
-    auto o2 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    auto y2 = (*ZGeneration::young()).seqnum();
+    auto o2 = (*ZGeneration::old()).seqnum();
     Expect(y2 == y1 + 1, "minor_sequence");
     Expect(o1 == o2, "minor_preserves_old_state");
     Expect(ZDriver::minor()->gc_cause() == GC_REASON_INVALID, "minor_reason_completion");

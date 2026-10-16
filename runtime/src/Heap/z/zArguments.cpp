@@ -13,9 +13,6 @@
 #include "RuntimeConfig.h"
 
 namespace MapleRuntime {
-namespace {
-bool g_gcEnabled = true;
-}
 
 void ZArguments::initialize_alignments() {}
 
@@ -81,22 +78,9 @@ void ZArguments::select_max_gc_threads()
                  "ZOldGCThreads must be in [1, ConcGCThreads]");
 }
 
-bool ZArguments::gc_enabled() { return g_gcEnabled; }
-
 void ZArguments::initialize()
 {
     initialize_alignments();
-    const char* enableGC = GetRuntimeConfigValue("cjEnableGC");
-    if (enableGC != nullptr) {
-        if (std::strlen(enableGC) == 1 && enableGC[0] == '0') {
-            g_gcEnabled = false;
-        } else if (std::strlen(enableGC) == 1 && enableGC[0] == '1') {
-            g_gcEnabled = true;
-        } else {
-            LOG(RTLOG_ERROR, "Unsupported cjEnableGC, cjEnableGC should be 0 or 1.\n");
-            g_gcEnabled = true;
-        }
-    }
     select_max_gc_threads();
 
     // zArguments.cpp: medium sizing precedes relocation-headroom ergonomics.

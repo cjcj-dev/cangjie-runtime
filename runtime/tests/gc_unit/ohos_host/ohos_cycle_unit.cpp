@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -159,7 +160,7 @@ void FillSparsePages(std::vector<Handle>& roots)
 void ObserveHandler(BaseObject* owner, BaseObject* proxy)
 {
     auto& heap = Heap::GetHeap();
-    BaseObject* expectedOwner = heap.GetExportObject(gExportHandle);
+    BaseObject* expectedOwner = heap.cross_vm().export_roots().GetExportRoot(gExportHandle);
     BaseObject* expectedProxy = expectedOwner == nullptr ? nullptr :
         HeapAccess<>::oop_load(&(expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
     BaseObject* otherProxy = !gRelocateInCallback || expectedOwner == nullptr ? nullptr :
@@ -187,7 +188,7 @@ void ObserveHandler(BaseObject* owner, BaseObject* proxy)
         std::vector<Handle> roots;
         FillSparsePages(roots);
         heap.RequestGC(GC_REASON_USER);
-        gCallbackRelocated = heap.GetExportObject(gExportHandle) != expectedOwner;
+        gCallbackRelocated = heap.cross_vm().export_roots().GetExportRoot(gExportHandle) != expectedOwner;
         std::printf("OHOS_CALLBACK_RELOCATE moved=%u\n", gCallbackRelocated);
     }
 }
@@ -225,7 +226,7 @@ void* RunHandlerChain(void* argument)
     }
     const CrossRefHandler handler = &ObserveHandler;
     std::memcpy(reinterpret_cast<char*>(objects[3]) + kPayload, &handler, sizeof(handler));
-    gExportHandle = heap.RegisterExportRoot(objects[0]);
+    gExportHandle = heap.cross_vm().export_roots().RegisterExportRoot(objects[0]);
     const U32 index = ExportRootTable::ExportHandleIndex(gExportHandle);
     std::memcpy(reinterpret_cast<char*>(objects[0]) + kPayload, &index, sizeof(index));
 
@@ -245,7 +246,7 @@ void* RunHandlerChain(void* argument)
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     if (argument != nullptr) {
-        BaseObject* currentOwner = heap.GetExportObject(gExportHandle);
+        BaseObject* currentOwner = heap.cross_vm().export_roots().GetExportRoot(gExportHandle);
         BaseObject* currentProxy = currentOwner == nullptr ? nullptr :
             HeapAccess<>::oop_load(&(currentOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
         gRelocatedOwner = reinterpret_cast<uintptr_t>(currentOwner) != ownerBefore;
@@ -259,10 +260,10 @@ void* RunHandlerChain(void* argument)
     if (started && postedTask != nullptr) {
         reinterpret_cast<void(*)()>(postedTask)();
     }
-    BaseObject* current = heap.GetExportObject(gExportHandle);
-    gOwnerInactive = current != nullptr && !heap.CheckExportObjState(gExportHandle, current);
+    BaseObject* current = heap.cross_vm().export_roots().GetExportRoot(gExportHandle);
+    gOwnerInactive = current != nullptr && !heap.cross_vm().export_roots().CheckActiveState(gExportHandle, current);
     ZGenerationRootTest::Clear(heap);
-    heap.RemoveExportObject(gExportHandle);
+    heap.cross_vm().export_roots().RemoveExportRoot(gExportHandle);
     return nullptr;
 }
 } // namespace

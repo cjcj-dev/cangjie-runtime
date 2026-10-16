@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocationSet.cpp
++++ b/runtime/src/Heap/z/zRelocationSet.cpp
+@@ -182,7 +182,7 @@
+         return;
+     }
+     std::lock_guard<std::mutex> locker(_promotion_lock);
+-    for (int i = 0; i < pages.length(); ++i) {
++    for (int i = 0; i < pages.length(); ++i) { _relocate_promoted_pages.push(pages.at(i));
+         CHECK(!_relocate_promoted_pages.contains(pages.at(i)));
+         _relocate_promoted_pages.push(pages.at(i));
+     }

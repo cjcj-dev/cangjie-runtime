@@ -14,6 +14,7 @@
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -80,7 +81,7 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadStoreMask, YoungPhasePublishesToOwners)
     young.Workers()->set_active_workers(1);
     young.pause_mark_start();
     const uintptr_t published = ZPointerStoreBadMask;
-    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    ZMark::VisitMinorRoots();
     const uintptr_t after = current->GetGCData().storeBadMask;
     // Consume the carrier slot and field through the fixed target ABI, as the
     // paired compiler lowering does. Do not derive either offset from offsetof.
@@ -132,7 +133,7 @@ GC_OTHER_VM_TEST(TLABUsage, NativeFrameDerivedScan)
 // and promote_used, not ZPage::reset()'s youngRegionBytes side counter.
 GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     const size_t beforeYoung = manager.used_generation(ZGenerationId::young);
     const size_t beforeOld = manager.used_generation(ZGenerationId::old);
     const size_t small = ZGranuleSize;
@@ -160,7 +161,7 @@ void* AllocateThroughCycle(void*)
     type->SetInstanceSize(256);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MSize objectSize = 256 + TYPEINFO_PTR_SIZE;
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t maximum = ZObjectSizeLimitSmall;
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
@@ -537,7 +538,14 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
+    param.gcParam.youngGCThreads = workers;
+    param.gcParam.youngGCThreadsSet = true;
+    param.gcParam.oldGCThreads = workers;
+    param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(ZYoungGCThreads, workers);
+    GC_EXPECT_EQ(ZOldGCThreads, workers);
+    GC_EXPECT_TRUE(ConcGCThreads >= workers);
     const int allocationCpu = sched_getcpu();
     GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
     // memAllocator.cpp:273-278 retains useful tails. Use objects that fit the
@@ -556,6 +564,7 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
            state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
     auto& heap = Heap::GetHeap();
     heap.young().Workers()->set_active_workers(workers);
+    GC_EXPECT_EQ(heap.young().Workers()->active_workers(), workers);
     heap.young().pause_mark_start();
     const auto initialTLABSize = [] {
         size_t size = 0;
@@ -581,7 +590,7 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     last->MutatorLock();
     state.refillOwner.store(first, std::memory_order_release);
     state.epoch.store(StackWatermark::epoch_id(), std::memory_order_release);
-    std::thread roots([&] { ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {}); });
+    std::thread roots([&] { ZMark::VisitMinorRoots(); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!state.refilled.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
@@ -728,7 +737,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
     young.pause_mark_start();
     state.flipped.store(true, std::memory_order_release);
     while (!state.refilled.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    ZMark::VisitMinorRoots();
     const size_t parkedAfter = state.parkedOwner->tlab()->TLABSize();
     state.rootsDone.store(true, std::memory_order_release);
     void* result = nullptr;
@@ -796,21 +805,18 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     young.Workers()->set_active_workers(1);
     young.pause_mark_start();
     const uint32_t epoch = StackWatermark::epoch_id();
-    std::atomic<bool> rootObserved{false};
-    std::atomic<bool> releaseRoot{false};
+    std::atomic<SMRThread*> rootExecutor{nullptr};
+    std::atomic<bool> releaseExecutor{false};
+    // Hold an existing watermark lock across the root task's snapshot lifetime.
+    // Its published executor hazard proves the product handle has been acquired.
+    auto& blockedWatermark = state.owner[0].load()->GetStackWatermark();
+    blockedWatermark.BeginGrowFlush();
     std::atomic<bool> innerDone{false};
     std::atomic<bool> releaseOuter{false};
-    // The real root task has already constructed its ThreadsListHandle when
-    // the first product root value reaches this existing result consumer.
-    const auto consumeRoots = [&] {
-        ZMark::VisitMinorRoots([&](BaseObject* object) {
-            if (object == state.marker.load()) {
-                rootObserved.store(true, std::memory_order_release);
-                while (!releaseRoot.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-            }
-        }, [](BaseObject*) {});
-    };
+    const auto consumeRoots = [&] { ZMark::VisitMinorRoots(); };
     std::thread roots([&] {
+        SMRThread executor;
+        rootExecutor.store(&executor, std::memory_order_release);
         if (nested) {
             ThreadsListHandle outer;
             consumeRoots();
@@ -819,8 +825,14 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         } else {
             consumeRoots();
         }
+        while (!releaseExecutor.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     });
-    const bool observed = WaitForSMR([&] { return rootObserved.load(std::memory_order_acquire); });
+    const bool observed = WaitForSMR([&] {
+        auto* executor = rootExecutor.load(std::memory_order_acquire);
+        if (executor == nullptr) { return false; }
+        const uintptr_t hazard = executor->hazard.load(std::memory_order_acquire);
+        return hazard != 0 && (hazard & 1) == 0;
+    });
     bool removed = false;
     bool exitSettled = false;
     if (exitDuringRoots && observed) {
@@ -842,7 +854,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     bool retained = false;
     bool statsPreserved = !exitDuringRoots;
     size_t allocated = 0;
-    // The root callback remains inside the product's old ThreadsListHandle.
+    // The blocked root worker remains inside the product's old ThreadsListHandle.
     // A fresh thread list intentionally excludes the removed identity
     // (HotSpot runtime/threads.cpp:238-262). Observe its protected state, and
     // do not dereference it if the exit already returned on a broken SO.
@@ -863,7 +875,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         std::fflush(stderr);
         _exit(1);
     }
-    releaseRoot.store(true, std::memory_order_release);
+    blockedWatermark.EndGrowFlush();
     if (nested) {
         const bool consumed = WaitForSMR([&] { return innerDone.load(std::memory_order_acquire); });
         // Give the exit thread a definite chance to report premature completion,
@@ -889,6 +901,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         }
         releaseOuter.store(true, std::memory_order_release);
     }
+    releaseExecutor.store(true, std::memory_order_release);
     roots.join();
     state.finish.store(true, std::memory_order_release);
     state.exitTarget.store(true, std::memory_order_release);
@@ -1166,7 +1179,7 @@ void TailMarkOwner(TailMarkCase& state)
 }
 
 // #826: the NW256 crash consumer chain. A slot naming the TLAB tail reaches
-// the real mark consumer ZMark::MarkEntryObject (zMark.cpp:620-634; the crash
+// the real mark consumer ZMark::MarkAndFollow (zMark.cpp:620-634; the crash
 // instruction was GetSize+0x12 reading TypeInfo+8 on a zero head). After the
 // retire above the tail is a filler with a valid header, so the same entry
 // must complete. Red arm: revert the retire coverage and the tail stays raw,
@@ -1192,11 +1205,9 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
     GC_EXPECT_TRUE(CollectedHeap::is_filler_object(tailObj));
     BaseObject* obj = reinterpret_cast<BaseObject*>(state.object.load(std::memory_order_acquire));
     // Positive control: the live object takes the same entry without faulting.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(obj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr));
+    { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false)); consumer.context.Cache().Flush(); }
     // Target: the retired tail filler through the same consumer.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(tailObj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false), nullptr));
+    { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false)); consumer.context.Cache().Flush(); }
     std::fprintf(stderr, "TLAB_TAIL_TARGET executed=1 tail=%#zx bound=%#zx tail_size=%zu obj_size=%zu\n",
                  tail, bound, tailObj->GetSize(), obj->GetSize());
     state.release.store(true, std::memory_order_release);

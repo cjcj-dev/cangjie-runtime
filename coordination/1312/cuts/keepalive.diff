@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -516,7 +516,7 @@
+         NotifyWork();
+         return candidate;
+     }
+-    auto* found = static_cast<MArray*>(value.resolve());
++    auto* found = static_cast<MArray*>(value.peek());
+     CHECK_DETAIL(found != nullptr, "dedup resolved entry must remain live");
+     NotifyWork();
+     return found;

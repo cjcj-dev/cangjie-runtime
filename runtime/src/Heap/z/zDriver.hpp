@@ -72,6 +72,8 @@ public:
     ZDriverMinor();
     bool is_busy() const;
     void collect(const ZDriverRequest& request);
+    void set_used_at_start(size_t used) { _used_at_start = used; }
+    size_t used_at_start() const { return _used_at_start; }
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
@@ -80,6 +82,7 @@ private:
     void handle_alloc_stalls() const;
     void gc(const ZDriverRequest& request);
     ZDriverPort _port;
+    size_t _used_at_start = 0;
 };
 
 class ZDriverMajor final : public ZDriver {
@@ -87,6 +90,8 @@ public:
     ZDriverMajor();
     bool is_busy() const;
     void collect(const ZDriverRequest& request);
+    void set_used_at_start(size_t used) { _used_at_start = used; }
+    size_t used_at_start() const { return _used_at_start; }
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
@@ -97,6 +102,7 @@ private:
     void collect_old();
     void gc(const ZDriverRequest& request);
     ZDriverPort _port;
+    size_t _used_at_start = 0;
 };
 
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.

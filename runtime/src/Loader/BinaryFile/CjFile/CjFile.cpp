@@ -1,3 +1,4 @@
+#include "LoaderManager.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -18,7 +19,7 @@ void CJFile::RegisterFile() { LoadCJFileMeta(); }
 void CJFile::UnregisterFile()
 {
     // unregist gcroot
-    Heap::GetHeap().UnregisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
 }
 
 #if defined(_WIN64)
@@ -61,7 +62,7 @@ void CJFile::LoadWinCJFileMeta()
     cJFileMeta.packageInfoTbl.packageInfoTotalSize = *header->tables[PACKINFO_TABLE].tableSize;
     cJFileMeta.typeExtTbl.typeExtBasePtr = reinterpret_cast<TypeExt*>(*header->tables[TYPE_EXT_TABLE].tableAddr);
     cJFileMeta.typeExtTbl.typeExtTotalSize = *header->tables[TYPE_EXT_TABLE].tableSize;
-    Heap::GetHeap().RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
+    LoaderManager::GetInstance()->RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
 }
 #elif defined(__APPLE__)
 void CJFile::LoadMacCJFileMeta()
@@ -103,7 +104,7 @@ void CJFile::LoadMacCJFileMeta()
     cJFileMeta.packageInfoTbl.packageInfoTotalSize = *header->tables[PACKINFO_TABLE].tableSize;
     cJFileMeta.typeExtTbl.typeExtBasePtr = reinterpret_cast<TypeExt*>(*header->tables[TYPE_EXT_TABLE].tableAddr);
     cJFileMeta.typeExtTbl.typeExtTotalSize = *header->tables[TYPE_EXT_TABLE].tableSize;
-    Heap::GetHeap().RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
+    LoaderManager::GetInstance()->RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
 }
 #else
 void CJFile::LoadLinuxCJFileMeta()
@@ -150,7 +151,7 @@ void CJFile::LoadLinuxCJFileMeta()
     cJFileMeta.typeExtTbl.typeExtBasePtr =
         reinterpret_cast<TypeExt*>(begin + header->tables[TYPE_EXT_TABLE].tableOffset);
     cJFileMeta.typeExtTbl.typeExtTotalSize = header->tables[TYPE_EXT_TABLE].tableSize;
-    Heap::GetHeap().RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
+    LoaderManager::GetInstance()->RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
 }
 #endif
 
@@ -163,10 +164,8 @@ void CJFile::LoadCJFileMeta()
 #else
     LoadLinuxCJFileMeta();
 #endif
-    if (Heap::GetHeap().IsGCEnabled()) {
-        if (cJFileMeta.gcFlagsTbl.withSafepoint != 1 || cJFileMeta.gcFlagsTbl.withBarrier != 1) {
-            LOG(RTLOG_FATAL, "no safepoint or barrier defined in file %s \n", GetBaseName().Str());
-        }
+    if (cJFileMeta.gcFlagsTbl.withSafepoint != 1 || cJFileMeta.gcFlagsTbl.withBarrier != 1) {
+        LOG(RTLOG_FATAL, "no safepoint or barrier defined in file %s \n", GetBaseName().Str());
     }
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::UNDEF) {
         if (cJFileMeta.gcFlagsTbl.hasStackPointerMap == 0) {

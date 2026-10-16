@@ -1,3 +1,6 @@
+#include "Heap/z/zRootsIterator.hpp"
+#include "gc_worker_fixture.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "gc_generation_test.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -15,6 +18,7 @@
 #include "TypeInfoManager.h"
 #include "Inspector/ProfilerAgentImpl.h"
 #include "gc_unittest.hpp"
+#include "gc_capacity_objects.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -130,15 +134,10 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
     auto& heap = Heap::GetHeap();
     auto& manager = MutatorManager::Instance();
     manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t size = heap.GetMaxCapacity() / 2;
-    type->SetInstanceSize(size);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.RegisterExportRoot(MObject::NewPinnedObject(type, size));
+        AllocateRootedCapacity(size, true);
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
@@ -169,9 +168,9 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
 {
     // zGeneration.cpp:600,637: the total lives on the heap; a major start
     // snapshots it on ZGenerationOld (zGeneration.cpp:1248,1526).
-    const uint32_t prior = Heap::GetHeap().total_collections();
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+    const uint32_t prior = ZCollectedHeap::heap()->total_collections();
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 1);
     ZStatCycle young;
     ZStatCycle old;
     young.Initialize(0);
@@ -184,14 +183,14 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
     old.AtStart(2);
     old.AtEnd(3, &oldWorkers, true, true);
     // Cycle/worker accounting does not move the collection count.
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 1);
 
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 2);
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 3);
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 4);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 2);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 3);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 4);
 }
 
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
@@ -203,8 +202,8 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     };
     Probe young(ZGenerationId::young);
     Probe old(ZGenerationId::old);
-    young.InitializeWorkers(2);
-    old.InitializeWorkers(2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 2);
     young.set_phase(ZGenerationPhase::Mark);
     young.Workers()->set_active_workers(1);
     const auto before = young.seqnum();
@@ -278,14 +277,14 @@ void* CollectWithTenuringFlags(void* context)
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
+    const U64 root = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(MCC_NewObject(type, 4096));
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     auto& result = *static_cast<TenuringCollectionResult*>(context);
     if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER); }
     result.threshold = Heap::GetHeap().young().tenuring_threshold();
-    auto* survivor = Heap::GetHeap().GetExportObject(root);
+    auto* survivor = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
 }
@@ -522,15 +521,10 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     auto& heap = Heap::GetHeap();
     auto& manager = MutatorManager::Instance();
     manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
-    type->SetInstanceSize(firstSize - TYPEINFO_PTR_SIZE);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
+        AllocateRootedCapacity(firstSize, true);
     }
     std::fprintf(stderr, "CAUSE_FIRST_ALLOCATION_READY scenario=%s\n", scenario);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -541,14 +535,9 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG);
     if (allocationRate || proactive) {
         const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
-        alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
-        auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
-        secondType->SetType(TypeKind::TYPE_KIND_CLASS);
-        secondType->SetInstanceSize(nextSize - TYPEINFO_PTR_SIZE);
-        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
         {
             ScopedObjectAccess access;
-            heap.RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
+            AllocateRootedCapacity(nextSize, true);
         }
         std::fprintf(stderr, "CAUSE_SECOND_ALLOCATION_READY scenario=%s\n", scenario);
     }
@@ -568,7 +557,8 @@ void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool pre
     ZDriverPort& port = minor ? collected->driver_minor()->port() : collected->driver_major()->port();
     {
         ScopedEnterSaferegion safe(false);
-        const ZDriverRequest request(cause, 2, minor ? 0 : 2);
+        // ZGC zDriver.cpp:183,399-400 consumes the request without truncation.
+        const ZDriverRequest request(cause, ZYoungGCThreads, minor ? 0 : ZOldGCThreads);
         if (minor) collected->driver_minor()->collect(request);
         else collected->driver_major()->collect(request);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -661,6 +651,40 @@ GC_RUNTIME_TEST(PrecleanWithoutShutdown, WhiteBox) { CheckPrecleanWithoutShutdow
 GC_RUNTIME_TEST(PrecleanWithoutShutdown, Timer) { CheckPrecleanWithoutShutdown(GC_REASON_TIMER, false, false); }
 GC_RUNTIME_TEST(PrecleanWithoutShutdown, AllocationStall) { CheckPrecleanWithoutShutdown(GC_REASON_ALLOCATION_STALL, true, true); }
 GC_RUNTIME_TEST(PrecleanWithoutShutdown, User) { CheckPrecleanWithoutShutdown(GC_REASON_USER, false, true); }
+
+extern "C" const void* CJ_MRT_RuntimeNewSubScheduler();
+
+GC_RUNTIME_TEST(RuntimeStartup, SubSchedulerIsolation)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        try {
+            RuntimeParam params{};
+            params.heapParam.heapSize = 64 * 1024;
+            params.coParam.processorNum = 1;
+            GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+            const void* scheduler = CJ_MRT_RuntimeNewSubScheduler();
+            GC_EXPECT_TRUE(scheduler != nullptr);
+            CJThreadHandle task = RunCJTaskToSchedule(
+                [](void* argument) -> void* { return argument; }, nullptr, const_cast<void*>(scheduler));
+            GC_EXPECT_TRUE(task != nullptr);
+            void* result = nullptr;
+            GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+            ReleaseHandle(task);
+            std::fprintf(stderr, "STARTUP_SUBSCHEDULER_TASK_COMPLETED scheduler=%p\n", scheduler);
+            std::fflush(nullptr);
+            _exit(0);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "STARTUP_SUBSCHEDULER_FAILED %s\n", error.what());
+            std::fflush(nullptr);
+            _exit(1);
+        }
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
 
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
@@ -832,7 +856,7 @@ void* CollectForGenerationState(void* context)
         const auto address = heap.object_allocator().alloc_for_relocation(size, PageAge::old);
         auto* object = reinterpret_cast<BaseObject*>(address);
         object->SetClassInfo(type);
-        if (i % (ZPageSizeSmall / size) == 0) roots.push_back(heap.RegisterExportRoot(object));
+        if (i % (ZPageSizeSmall / size) == 0) roots.push_back(heap.cross_vm().export_roots().RegisterExportRoot(object));
     }
     mutator->SetManagedContext(false);
     result.youngBefore = heap.young().seqnum();
@@ -841,7 +865,7 @@ void* CollectForGenerationState(void* context)
     heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
-    for (U64 root : roots) heap.RemoveExportObject(root);
+    for (U64 root : roots) heap.cross_vm().export_roots().RemoveExportRoot(root);
     mutator->SetManagedContext(true);
     return nullptr;
 }
@@ -1236,4 +1260,165 @@ GC_TEST(SoftMemoryTable, MemoryRangeBounds)
                      entry.value, entry.minimum, entry.maximum, actual, entry.expected);
         GC_EXPECT_EQ(actual, entry.expected);
     }
+}
+
+#include "gclog_capture.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include <regex>
+#include <sstream>
+namespace {
+void CheckCollectionLog(const char* target)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    // A deterministic unrooted large object makes the minor's used-at-start
+    // positive; the separately rooted pinned object then changes the major input.
+    alignas(TypeInfo) static unsigned char largeStorage[sizeof(TypeInfo)]{};
+    auto* largeType = reinterpret_cast<TypeInfo*>(largeStorage);
+    constexpr size_t largeBytes = 4 * 1024 * 1024;
+    largeType->SetType(TypeKind::TYPE_KIND_CLASS);
+    largeType->SetInstanceSize(largeBytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
+    {
+        ScopedObjectAccess access;
+        const uintptr_t address = heap.object_allocator().alloc(largeBytes);
+        GC_EXPECT_TRUE(address != 0);
+        reinterpret_cast<BaseObject*>(address)->SetClassInfo(largeType);
+    }
+    GcLogCapture capture;
+    size_t before[2], after[2];
+    before[0] = heap.GetUsedPageSize();
+    heap.RequestGC(GC_REASON_YOUNG);
+    after[0] = heap.GetUsedPageSize();
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(void*));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    U64 root;
+    {
+        ScopedObjectAccess access;
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+    }
+    before[1] = heap.GetUsedPageSize();
+    heap.RequestGC(GC_REASON_USER);
+    after[1] = heap.GetUsedPageSize();
+    const std::string text = capture.Finish();
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::istringstream lines(text);
+    std::string line;
+    size_t count = 0;
+    const std::regex end(".*name=(Minor|Major)_Collection cause=[^ ]+ event=end start_ns=[0-9]+ dur_ns=[0-9]+ used_at_start=([0-9]+) used_at_end=([0-9]+)");
+    bool values = true;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=cycle ") == std::string::npos || line.find(std::string("event=") + target) == std::string::npos) continue;
+        ++count;
+        values = values && line.find("gc_tag=- ") != std::string::npos;
+        values = values && (line.find("name=Minor_Collection cause=young ") != std::string::npos ||
+                            line.find("name=Major_Collection cause=user ") != std::string::npos);
+        if (std::strcmp(target, "end") == 0) {
+            std::smatch match;
+            if (!std::regex_match(line, match, end)) { values = false; continue; }
+            const size_t i = match[1] == "Minor" ? 0 : 1;
+            values = values && std::stoull(match[2]) == before[i] && std::stoull(match[3]) == after[i];
+        }
+    }
+    std::fprintf(stderr, "GCLOG_TARGET event=%s count=%zu values=%d used0=%zu used1=%zu\n",
+                 target, count, values, before[0], before[1]);
+    // Each event has its own entry so cutting start cannot hide the end assertion.
+    GC_EXPECT_EQ(count, size_t{2});
+    GC_EXPECT_TRUE(values);
+    GC_EXPECT_TRUE(before[0] > 0 && before[1] > 0 && before[0] != before[1]);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionStart) { CheckCollectionLog("start"); }
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionEnd) { CheckCollectionLog("end"); }
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionAbort)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    ZAbort::abort();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    // Aborted drivers return before AtAfterGC; join via the real stop entry,
+    // rather than waiting for a normal-completion breakpoint notification.
+    Heap::GetHeap().StopGCWork();
+    const std::string text = capture.Finish();
+    size_t collectionAbort = 0, generationAbort = 0, collectionEnd = 0;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=cycle ") != std::string::npos) {
+            collectionAbort += line.find("event=abort") != std::string::npos;
+            collectionEnd += line.find("event=end") != std::string::npos;
+        }
+        if (line.find("rec=generation ") != std::string::npos) generationAbort += line.find("event=abort") != std::string::npos;
+    }
+    std::fprintf(stderr, "GCLOG_TARGET event=abort collection=%zu generation=%zu end=%zu reached=%d\n",
+                 collectionAbort, generationAbort, collectionEnd, reached);
+    GC_EXPECT_EQ(collectionAbort, size_t{1});
+    GC_EXPECT_EQ(generationAbort, size_t{1});
+    GC_EXPECT_EQ(collectionEnd, size_t{0});
+    GC_EXPECT_TRUE(reached);
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationUsed)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    auto& heap = Heap::GetHeap();
+    heap.RequestGC(GC_REASON_YOUNG);
+    const size_t expectedStart = heap.young().StatHeap()->UsedAtCollectionStart();
+    const size_t expectedEnd = heap.young().StatHeap()->UsedAtCollectionEnd();
+    const std::string text = capture.Finish();
+    const std::regex record(".*rec=generation seq=[0-9]+ gc_tag=y name=Young_Generation event=end start_ns=[0-9]+ dur_ns=[0-9]+ used_at_collection_start=([0-9]+) used_at_collection_end=([0-9]+)");
+    std::smatch match;
+    std::istringstream lines(text);
+    std::string line;
+    size_t count = 0;
+    bool values = true;
+    while (std::getline(lines, line)) {
+        if (!std::regex_match(line, match, record)) continue;
+        ++count;
+        values = values && std::stoull(match[1]) == expectedStart && std::stoull(match[2]) == expectedEnd;
+    }
+    std::fprintf(stderr, "GCLOG_GENERATION_USED_TARGET count=%zu values=%d expected_start=%zu expected_end=%zu\n",
+                 count, values, expectedStart, expectedEnd);
+    GC_EXPECT_TRUE(values);
+    GC_EXPECT_EQ(count, size_t{1});
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationStart)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+    const std::string text = capture.Finish();
+    size_t count = 0;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=generation ") != std::string::npos &&
+            line.find("gc_tag=y name=Young_Generation event=start") != std::string::npos) ++count;
+    }
+    std::fprintf(stderr, "GCLOG_TARGET generation_start_records=%zu expected=1\n", count);
+    GC_EXPECT_EQ(count, size_t{1});
 }

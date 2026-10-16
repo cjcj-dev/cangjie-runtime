@@ -99,12 +99,12 @@ class MarkWindowScope final {
 public:
     MarkWindowScope()
     {
-        phase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+        phase = (*ZGeneration::old()).GcPhase();
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phase);
+        (*ZGeneration::old()).set_phase(phase);
     }
 
 private:

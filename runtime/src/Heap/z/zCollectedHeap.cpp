@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zObjArrayAllocator.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 
 #include <atomic>
@@ -23,7 +24,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -53,7 +54,8 @@ void ZCollectedHeap::create(const HeapParam& param, double garbageThreshold)
 }
 
 ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
-    : _initializer(nullptr),
+    : _barrier_set(),
+      _initializer(&_barrier_set),
       _heap(param, garbageThreshold),
       _driver_minor(new ZDriverMinor()),
       _driver_major(new ZDriverMajor()),
@@ -65,9 +67,19 @@ ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
 
 ZCollectedHeap::~ZCollectedHeap() = default;
 
+// ZGC zCollectedHeap.cpp:80-92: consume construction failure at the owner.
+bool ZCollectedHeap::initialize()
+{
+    if (!_heap.is_initialized()) {
+        LOG(RTLOG_ERROR, "%s", ZInitialize::error_message());
+        return false;
+    }
+    ZInitialize::finish();
+    return true;
+}
+
 void ZCollectedHeap::initialize_gc()
 {
-    ZAbort::reset();
     ZStat::Initialize();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
@@ -96,8 +108,8 @@ void ZCollectedHeap::initialize_gc_workers()
         _concurrent_gc_threads = static_cast<int32_t>(ConcGCThreads);
         VLOG(REPORT, "concurrent gc thread count %u, young %u, old %u",
              ConcGCThreads, ZYoungGCThreads, ZOldGCThreads);
-        _heap.young().InitializeWorkers(ZYoungGCThreads);
-        _heap.old().InitializeWorkers(ZOldGCThreads);
+        _heap.young().InitializeWorkers();
+        _heap.old().InitializeWorkers();
     }
 
 
@@ -106,6 +118,12 @@ void ZCollectedHeap::initialize_gc_workers()
 
 
 // ZGC zCollectedHeap.cpp:137-146. Cangjie allocation sizes are bytes.
+MArray* ZCollectedHeap::array_allocate(TypeInfo& klass, size_t size, MIndex length, bool doZero)
+{
+    const ZObjArrayAllocator allocator(klass, size, length, doZero);
+    return allocator.allocate();
+}
+
 uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize)
 {
     (void)minSize;
@@ -116,7 +134,6 @@ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize
 
 void ZCollectedHeap::collect(GCReason reason)
 {
-    if (!_heap.IsGCEnabled()) return;
     // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
     // budgets here; only the driver decides how to enqueue the request.
     switch (reason) {

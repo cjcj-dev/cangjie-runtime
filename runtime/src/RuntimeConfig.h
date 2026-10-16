@@ -51,7 +51,6 @@ struct BinLoadApi {
 
 MRT_EXPORT uintptr_t MRT_StopGCWork();
 MRT_EXPORT uintptr_t MRT_GetThreadLocalData();
-MRT_EXPORT void MRT_VisitorCaller(void* argPtr, void* handle);
 MRT_EXPORT uintptr_t* MRT_BindUncoloredVisitColor(uintptr_t* slot);
 MRT_EXPORT void MRT_DumpLog(const char* message);
 uintptr_t MRT_GetSafepointProtectedPage();

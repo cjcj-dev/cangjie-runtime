@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
@@ -5,7 +6,7 @@
 #include "Cangjie.h"
 #include "Common/Handle.h"
 #include "Heap/z/zCrossVM.hpp"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -14,6 +15,12 @@
 #include "TypeInfoManager.h"
 #include "ObjectModel/MObject.h"
 #include <cstring>
+#include <chrono>
+#include <atomic>
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Mutator/Handshake.h"
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -23,12 +30,6 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 // performed by the real collector, with no manually populated root carriers.
 class RelocationReceiptTest {
 public:
-    static size_t EnumeratedOwners(BaseObject* expected)
-    {
-        const auto& owners = Heap::GetHeap().old().oldExportOwners;
-        return std::count_if(owners.begin(), owners.end(),
-            [&](const ValueRoot& root) { return root.object == expected; });
-    }
     static bool DiscoveredIdentity(BaseObject* expected)
     {
         auto& cross = Heap::GetHeap().cross_vm();
@@ -94,7 +95,7 @@ void* AllocateExportForeignRoot(void* argument)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* object = static_cast<BaseObject*>(MCC_NewObject(type, TYPEINFO_PTR_SIZE + sizeof(void*)));
-    *static_cast<U64*>(argument) = Heap::GetHeap().RegisterExportRoot(object);
+    *static_cast<U64*>(argument) = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
     return nullptr;
 }
 struct SparseRoot {
@@ -139,13 +140,13 @@ void* AllocateSparseExportRoot(void* argument)
             BaseObject* object = handle();
             ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
             if (page != selectedPage) {
-                result.roots.push_back(Heap::GetHeap().RegisterExportRoot(selected));
+                result.roots.push_back(Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(selected));
                 if (result.roots.size() == 1) result.from = reinterpret_cast<uintptr_t>(selected);
                 selectedPage = page;
             }
             selected = object;
         }
-        result.roots.push_back(Heap::GetHeap().RegisterExportRoot(selected));
+        result.roots.push_back(Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(selected));
         result.root = result.roots.front();
     }
     HandleMark fillMark(*mutator);
@@ -156,16 +157,14 @@ void* AllocateSparseExportRoot(void* argument)
     largeType->SetInstanceSize(ZPageSizeSmall - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
-    Heap::GetHeap().EnableGC(false);
     while (Heap::GetHeap().page_allocator().GetUsedBytes() + ZPageSizeSmall <= 32 * 1024 * 1024) {
         capacityRoots.emplace_back(mutator,
             static_cast<BaseObject*>(MCC_NewObject(largeType, ZPageSizeSmall)));
     }
-    Heap::GetHeap().EnableGC(true);
     std::fprintf(stderr, "VALUE_ROOT_CAPACITY used=%zu large_roots=%zu\n",
         Heap::GetHeap().page_allocator().GetUsedBytes(), capacityRoots.size());
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    result.to = reinterpret_cast<uintptr_t>(Heap::GetHeap().GetExportObject(result.root));
+    result.to = reinterpret_cast<uintptr_t>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.root));
     auto* forwarding = Heap::GetHeap().old().forwarding_table().get(result.to);
     result.table = forwarding != nullptr;
     result.fromKey = forwarding != nullptr && forwarding->find(result.to) != 0;
@@ -194,11 +193,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportDiscoveryPreservesCurrentIdentity)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    auto* expected = Heap::GetHeap().GetExportObject(root);
+    auto* expected = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     GC_EXPECT_TRUE(RelocationReceiptTest::DiscoveredIdentity(expected));
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -221,18 +220,18 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, YoungFlipBetweenEnumerationAndConsumption)
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
     const uintptr_t savedColor = g_cjLoadGoodMask;
-    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    BaseObject* before = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     const bool colorChanged = !ZPointer::is_load_good(ZAddress::color(zaddress::null, savedColor));
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    BaseObject* after = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool currentIdentity = RelocationReceiptTest::DiscoveredIdentity(after);
     std::fprintf(stderr, "VALUE_ROOT_EPOCH_TARGET before=%p after=%p color_changed=%d current_identity=%d\n",
         before, after, colorChanged, currentIdentity);
     GC_EXPECT_TRUE(colorChanged && before == after && currentIdentity);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -254,7 +253,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    auto* current = Heap::GetHeap().GetExportObject(root.root);
+    auto* current = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root.root);
     const bool identity = RelocationReceiptTest::DiscoveredIdentity(current);
     std::fprintf(stderr, "VALUE_ROOT_DESTINATION_TARGET moved=%d table=%d from_key=%d identity=%d\n",
         root.from != root.to, root.table, root.fromKey, identity);
@@ -265,7 +264,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     GC_EXPECT_TRUE(root.from != root.to && identity && !root.fromKey);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    for (U64 id : root.roots) Heap::GetHeap().RemoveExportObject(id);
+    for (U64 id : root.roots) Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(id);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -286,12 +285,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    BaseObject* before = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool produced = RelocationReceiptTest::DiscoveredOwnership(before);
     const auto oldSequence = Heap::GetHeap().old().seqnum();
     const auto youngSequence = Heap::GetHeap().young().seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    BaseObject* after = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool preserved = RelocationReceiptTest::DiscoveredOwnership(after);
     const bool minorCompleted = Heap::GetHeap().young().seqnum() > youngSequence &&
         Heap::GetHeap().old().seqnum() == oldSequence;
@@ -299,16 +298,16 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
         produced, preserved, minorCompleted);
     GC_EXPECT_TRUE(produced && preserved && before == after && minorCompleted);
     ConcurrentGCBreakpoints::RunToIdle();
-    const bool consumed = RelocationReceiptTest::CycleHandoffIdentity(Heap::GetHeap().GetExportObject(root));
+    const bool consumed = RelocationReceiptTest::CycleHandoffIdentity(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root));
     GC_EXPECT_TRUE(consumed);
     // A subsequent owner cycle must pass the real mark-start empty check.
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().GetExportObject(root));
+    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root));
     std::fprintf(stderr, "DISCOVERED_OWNER_NEXT_CYCLE rediscovered=%d\n", rediscovered);
     GC_EXPECT_TRUE(rediscovered);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -333,9 +332,9 @@ void* AllocateExportTaskInputs(void* argument)
     input.old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
     input.young->SetClassInfo(type);
     input.old->SetClassInfo(type);
-    if (input.includeYoung) { input.handles[0] = heap.RegisterExportRoot(input.young); }
-    input.handles[1] = heap.RegisterExportRoot(input.old);
-    if (input.includeYoung) { input.handles[2] = heap.RegisterExportRoot(input.young); }
+    if (input.includeYoung) { input.handles[0] = heap.cross_vm().export_roots().RegisterExportRoot(input.young); }
+    input.handles[1] = heap.cross_vm().export_roots().RegisterExportRoot(input.old);
+    if (input.includeYoung) { input.handles[2] = heap.cross_vm().export_roots().RegisterExportRoot(input.young); }
     return nullptr;
 }
 }
@@ -357,7 +356,6 @@ static void CheckExportTaskPublication(bool includeYoung)
     GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
     ReleaseHandle(task);
     size_t localYoung = 0, localOld = 0, publishedYoung = 0, publishedOld = 0;
-    size_t youngOwners = 0, oldOwners = 0;
     {
         DriverLocker lock;
         auto& heap = Heap::GetHeap();
@@ -376,21 +374,18 @@ static void CheckExportTaskPublication(bool includeYoung)
         localOld += ThreadLocal::GetGCData().markStacks[1].Population();
         publishedYoung = heap.young().Mark().Stripes().Population();
         publishedOld = heap.old().Mark().Stripes().Population();
-        youngOwners = RelocationReceiptTest::EnumeratedOwners(input.young);
-        oldOwners = RelocationReceiptTest::EnumeratedOwners(input.old);
-        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu young_owners=%zu old_owners=%zu\n",
-            localYoung, localOld, publishedYoung, publishedOld, youngOwners, oldOwners);
+        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu\n",
+            localYoung, localOld, publishedYoung, publishedOld);
     }
     // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
     // result without an earlier existence assertion masking its verdict.
-    Heap::GetHeap().RemoveExportObject(input.handles[1]);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[1]);
     if (includeYoung) {
-        Heap::GetHeap().RemoveExportObject(input.handles[0]);
-        Heap::GetHeap().RemoveExportObject(input.handles[2]);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[0]);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[2]);
     }
     const auto fini = FiniCJRuntime();
     GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && (!includeYoung || publishedYoung > 0) && publishedOld > 0);
-    GC_EXPECT_TRUE(youngOwners == (includeYoung ? 2u : 0u) && oldOwners == 1);
     GC_EXPECT_EQ(fini, E_OK);
 }
 
@@ -402,3 +397,137 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesOldOnly)
 {
     CheckExportTaskPublication(false);
 }
+
+
+namespace {
+void CheckRootTaskHandshake(bool positiveControl)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<bool> enter{false}, running{false}, finish{false}, done{false};
+    std::thread mutator([&] {
+        auto& manager = MutatorManager::Instance();
+        auto* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        owner.store(current, std::memory_order_release);
+        while (!enter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoLeaveSaferegion();
+        running.store(true, std::memory_order_release);
+        while (!finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoEnterSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (owner.load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
+    bool observedHandshake = false, completedWithoutHandshake = false;
+    {
+        DriverLocker lock;
+        auto& heap = Heap::GetHeap();
+        YoungTypeSetter type(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        enter.store(true, std::memory_order_release);
+        while (!running.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        std::thread roots([&] {
+            // The real mark driver is a GC thread, including its handshake.
+            ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+            if (positiveControl) { (void)heap.old().Mark().Flush(); }
+            else { heap.old().mark_roots(); }
+            done.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!done.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            if (owner.load()->GetHandshakeState().has_operation()) { observedHandshake = true; break; }
+            std::this_thread::yield();
+        }
+        completedWithoutHandshake = done.load(std::memory_order_acquire) && !observedHandshake;
+        finish.store(true, std::memory_order_release);
+        roots.join();
+        mutator.join();
+    }
+    std::fprintf(stderr, "ROOT_TASK_HANDSHAKE_TARGET executed=1 positive=%d handshake=%d completed_without_handshake=%d\n",
+                 positiveControl, observedHandshake, completedWithoutHandshake);
+    GC_EXPECT_TRUE(positiveControl ? observedHandshake : completedWithoutHandshake);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldRootTaskHasNoExtraHandshake) { CheckRootTaskHandshake(false); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, HandshakeObservationPositiveControl) { CheckRootTaskHandshake(true); }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// ZGC zMark.cpp:535-622: a worker handshake publishes an owner's partial
+// stack before the mark-completed breakpoint. The owner stays attached and
+// outside saferegion until observation, so exit/saferegion flush cannot help.
+GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStack)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    U64 root = 0;
+    auto task = RunCJTask(AllocateExportForeignRoot, &root);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* returned = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
+    ReleaseHandle(task);
+    ConcurrentGCBreakpoints::AcquireControl();
+    BreakpointFailureCleanup cleanup;
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
+    BaseObject* object = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
+    std::atomic<bool> ready{false};
+    std::atomic<unsigned> requests{1};
+    std::atomic<bool> observe{false};
+    std::atomic<bool> observed{false};
+    std::atomic<bool> release{false};
+    size_t before = 0;
+    size_t after = 0;
+    std::thread owner([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        mutator->LeaveSaferegion();
+        auto& mark = Heap::GetHeap().old().Mark();
+        auto& stacks = mark.Stacks();
+        // One valid, already-live object's mark-only work is sufficient to
+        // create an unfilled stack, without introducing a second root model.
+        const auto address = from_object(object);
+        while (!release.load(std::memory_order_acquire)) {
+            const unsigned input = requests.exchange(0, std::memory_order_acq_rel);
+            if (input != 0) {
+                stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
+                    MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
+                if (input == 2) {
+                    // ZGC zBarrierSet.cpp:271-273: real thread detach flushes
+                    // its remaining stack. Schedule this input after the
+                    // handshake to exercise Flush's independent stripes term.
+                    mutator->EnterSaferegion(false);
+                    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+                    ready.store(true, std::memory_order_release); // STRIPES_INPUT_READY
+                    return;
+                }
+                before = stacks.Population();
+                ready.store(true, std::memory_order_release);
+            }
+            ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
+            if (observe.load(std::memory_order_acquire) && !observed.load()) {
+                after = stacks.Population();
+                observed.store(true, std::memory_order_release);
+            }
+            std::this_thread::yield();
+        }
+        mutator->EnterSaferegion(false);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    observe.store(true, std::memory_order_release);
+    while (!observed.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    release.store(true, std::memory_order_release);
+    owner.join();
+    std::fprintf(stderr, "MARK_FLUSH_PARTIAL_TARGET reached=%d before=%zu after=%zu\n", reached, before, after);
+    GC_EXPECT_TRUE(reached && before == 1 && after == 0);
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif

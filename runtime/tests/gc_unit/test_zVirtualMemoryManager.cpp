@@ -328,7 +328,7 @@ GC_COMPONENT_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEver
         for (size_t i = 0; i < count; ++i) {
             ranges.push_back({domain + 2 * i * granule, domain + (2 * i + 1) * granule});
         }
-        Heap::OnHeapCreated(domain, ranges);
+        ZAddress::OnHeapCreated(domain, ranges);
         std::fprintf(stderr, "P04_RANGE_PUBLICATION_TARGET input=%zu published=%zu\n",
                      count, static_cast<size_t>(g_cjHeapRangeCount));
         GC_EXPECT_EQ(g_cjHeapRangeCount, count);
@@ -357,7 +357,7 @@ GC_COMPONENT_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTableRejectsOversi
             ranges.push_back({ZAddressHeapBase + 2 * i * ZGranuleSize,
                               ZAddressHeapBase + (2 * i + 1) * ZGranuleSize});
         }
-        Heap::OnHeapCreated(ZAddressHeapBase, ranges);
+        ZAddress::OnHeapCreated(ZAddressHeapBase, ranges);
         _exit(0);
     }
     int status = 0;

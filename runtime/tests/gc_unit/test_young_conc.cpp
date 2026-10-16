@@ -1,3 +1,5 @@
+#include "gc_vm_producer.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -65,6 +67,12 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// The phase-dispatch test shares this executable. Keep its producer bound to
+// the existing product instantiation (ZGC zMark.inline.hpp:48-87), even when
+// the generation policy tests instantiate their inline callers below.
+namespace MapleRuntime {
+extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
+}
 
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -82,8 +90,8 @@ public:
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                auto& cycle = Heap::GetHeap().GetZGeneration(generation);
-                if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
+                auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(generation)));
+                if (cycle.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 2);
             }
         }
     }
@@ -100,7 +108,7 @@ public:
 
     static void RunCollectionDispatch(Heap& collector)
     {
-        auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        auto& cycle = (*ZGeneration::young());
         Heap::GetHeap().young().collect(ZYoungType::minor);
     }
 };
@@ -118,9 +126,15 @@ public:
         manager.Init();
         const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
         concurrency.Init(concurrencyParam);
+        VMThread::create();
     }
 
-    ~YoungConcTestRuntime() override { runtime = nullptr; }
+    ~YoungConcTestRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
 
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}
@@ -143,12 +157,12 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegistrationDoesNotMarkIncomingValue)
     GcHeapFixture fx;
     MarkPublicationFixture mark;
     fx.region1()->reset(PageAge::eden);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
+    const U64 handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(fx.obj1);
     std::vector<BaseObject*> work;
     mark.DrainObjects(work);
     GC_EXPECT_TRUE(work.empty());
-    GC_EXPECT_TRUE(Heap::GetHeap().GetExportObject(handle) == fx.obj1);
-    Heap::GetHeap().RemoveExportObject(handle);
+    GC_EXPECT_TRUE(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(handle) == fx.obj1);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
 }
 
 // Positive counterpart: deleting a pre-mark root preserves its previous value.
@@ -160,14 +174,14 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
     GcHeapFixture fx;
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture mark;
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
+    const U64 handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(fx.obj1);
     RelocationReceiptTest::FlipYoungMarkForNativeBarrier(mark.collector);
-    Heap::GetHeap().RemoveExportObject(handle);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
     std::vector<BaseObject*> work;
     mark.DrainObjects(work);
     GC_EXPECT_EQ(work.size(), 1u);
     GC_EXPECT_TRUE(work.front() == fx.obj1);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetExportObject(handle) == nullptr);
+    GC_EXPECT_TRUE(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(handle) == nullptr);
 }
 
 // 3. young→young overwrite is not remset (ZGC remember only if slot old; zBarrier:729-733).
@@ -294,8 +308,8 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     MarkPublicationFixture markFixture;
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::young()).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     HeapAccess<>::oop_store(&(field), nullptr);
@@ -324,7 +338,7 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
     fx.region0()->reset(PageAge::eden);
     MarkPublicationFixture markFixture;
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
-    Heap::GetHeap().MarkYoungObjectIfActive(fx.obj0);
+    ZGeneration::young()->MarkObjectIfActive<false, false, true, false>(from_object(fx.obj0));
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
     GC_EXPECT_EQ(markFixture.OldPending(), 0u);
 }
@@ -345,7 +359,7 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();
-    buffer.add(slot, previous);
+    buffer.add(reinterpret_cast<volatile zpointer*>(slot), previous);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     GC_EXPECT_EQ(buffer.Pending(), 1u);
     buffer.Flush();
@@ -424,8 +438,8 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     if (young && finalizable) continue;
                     GcHeapFixture fx;
                     MarkPublicationFixture publication;
-                    auto& cycle = Heap::GetHeap().GetZGeneration(
-                        young ? ZGenerationId::young : ZGenerationId::old);
+                    auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(
+                        young ? ZGenerationId::young : ZGenerationId::old)));
                     fx.region0()->reset(young ? PageAge::eden : PageAge::old);
                     fx.region0()->ResetPageSequence();
                     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
@@ -475,10 +489,12 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     fx.region0()->reset(PageAge::eden);
     fx.region0()->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::Mark);
+    ProduceOnVMThread([&] {
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
+    });
     Heap::GetHeap().young().mark_follow();
     std::fprintf(stderr, "P1_CONSUMER_ASSERT live=%zu marked=%d\n",
                  static_cast<size_t>(fx.region0()->live_bytes()),
@@ -492,7 +508,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
 {
     GcHeapFixture fx;
     MarkPublicationFixture publication;
-    auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& cycle = (*ZGeneration::old());
     auto& domain = *Heap::GetHeap().old().MarkPtr();
     fx.region0()->reset(PageAge::old);
     fx.region0()->ResetPageSequence();

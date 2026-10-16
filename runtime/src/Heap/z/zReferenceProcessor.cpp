@@ -32,8 +32,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatCriticalPhase PFinalizer("Finalizer");
-static const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
 
 static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
                                                                 ZGenerationId::old);
@@ -475,7 +473,7 @@ extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
 
 void FinalizerProcessor::Start()
 {
-    Heap::GetHeap().GetAllocator().GetRegionManager().StartUncommitters();
+    Heap::GetHeap().page_allocator().StartUncommitters();
     pthread_t thread;
     pthread_attr_t attr;
     size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB; // default 1MB stacksize
@@ -505,7 +503,7 @@ void FinalizerProcessor::Start()
 void FinalizerProcessor::Stop()
 {
     CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
-    Heap::GetHeap().GetAllocator().GetRegionManager().StopUncommitters();
+    Heap::GetHeap().page_allocator().StopUncommitters();
     running.store(false, std::memory_order_release);
     Notify();
     WaitStop();
@@ -530,7 +528,6 @@ void FinalizerProcessor::Run()
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         {
-            ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 if (hasPendingFinalizableJob) {
@@ -767,7 +764,6 @@ void FinalizerProcessor::ProcessFinalizableList()
 
 void FinalizerProcessor::ProcessFinalizables()
 {
-    ZStatTimer zstatTimer(PFinalizer);
     {
         // we leave saferegion to avoid GC visit those changing queues.
         ScopedObjectAccess soa;

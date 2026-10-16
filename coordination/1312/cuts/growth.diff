@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -319,7 +319,7 @@
+     CHECK_DETAIL(dead <= numberOfEntries, "dedup dead count exceeds entries");
+     const size_t adjusted = numberOfEntries - dead;
+     if (force || adjusted > DedupConfig::GrowThreshold(numberOfBuckets)) {
+-        return StartResizer(growOnly, adjusted);
++        return false; // Controlled cut: omit requested growth.
+     }
+     if (growOnly) return false;
+     if (adjusted < DedupConfig::ShrinkThreshold(numberOfBuckets)) return StartResizer(false, adjusted);

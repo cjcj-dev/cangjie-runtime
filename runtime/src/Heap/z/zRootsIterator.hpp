@@ -24,6 +24,7 @@
 #include "Mutator/ThreadSMR.h"
 namespace MapleRuntime {
 class Mutator;
+class CJThreadRoot;
 
 class HandleMark {
     Mutator& mutator;
@@ -63,7 +64,7 @@ public:
         : OopStorageSetIteratorStrong(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    std::array<OopStorage::ParState<true>, 1> states;
+    std::array<OopStorage::ParState<true>, 2> states;
     ZGenerationIdOptional generation;
 };
 class OopStorageSetIteratorWeak {
@@ -138,53 +139,35 @@ private:
     ParallelApply<StaticRootsAdapterIterator> statics;
 };
 
+// ZGC zRootsIterator.hpp:130-160. Cangjie has no class unloading:
+// all live carriers participate in both Strong and All; no weak-only set.
+class CJThreadRootsIterator {
+public:
+    void Apply(const std::function<void(CJThreadRoot&)>& visitor);
+private:
+    std::atomic<bool> claimed{false};
+};
 class RootsIteratorStrongUncolored {
 public:
     explicit RootsIteratorStrongUncolored(ZGenerationIdOptional generation = ZGenerationIdOptional::none)
         : javaThreads(generation) {}
-    void Apply(const std::function<void()>& visitor)
-    {
-        std::function<void()> copy = visitor;
-        uncolored.apply(&copy);
-    }
-    void ApplyThreads(const std::function<void(Mutator&)>& visitor)
-    {
-        std::function<void(Mutator&)> copy = visitor;
-        javaThreads.apply(&copy);
-    }
+    void Apply(const std::function<void(Mutator&)>& threadVisitor,
+               const std::function<void(CJThreadRoot&)>& carrierVisitor);
 private:
-    struct Once {
-        void Apply(const std::function<void()>& visitor)
-        {
-            if (!claimed.exchange(true, std::memory_order_relaxed)) {
-                visitor();
-            }
-        }
-        std::atomic<bool> claimed{false};
-    };
-    ParallelApply<Once> uncolored;
     ParallelApply<JavaThreadsIterator> javaThreads;
+    ParallelApply<CJThreadRootsIterator> carriersStrong;
 };
-using RootsIteratorAllUncolored = RootsIteratorStrongUncolored;
-
-class StaticRootTable {
+class RootsIteratorAllUncolored {
 public:
-    struct StaticRootArray {
-        NativeSlot* content[0];
-    };
-
-    StaticRootTable() { totalRootsCount = 0; }
-    ~StaticRootTable() = default;
-    void RegisterRoots(StaticRootArray* addr, U32 size);
-    void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const NativeSlotVisitor& visitor);
-
-
+    explicit RootsIteratorAllUncolored(ZGenerationIdOptional generation = ZGenerationIdOptional::none)
+        : javaThreads(generation) {}
+    void Apply(const std::function<void(Mutator&)>& threadVisitor,
+               const std::function<void(CJThreadRoot&)>& carrierVisitor);
 private:
-    std::mutex gcRootsLock;                         // lock gcRootsBuckets
-    std::map<StaticRootArray*, U32> gcRootsBuckets; // record gc roots entry of CFile
-    USize totalRootsCount;
+    ParallelApply<JavaThreadsIterator> javaThreads;
+    ParallelApply<CJThreadRootsIterator> carriersAll;
 };
+
 
 class ExportObject : public BaseObject {
 public:
@@ -213,6 +196,7 @@ public:
 
     U64 RegisterExportRoot(BaseObject* exportObj)
     {
+        if (!is_heap_address(exportObj)) { return std::numeric_limits<U64>::max(); }
         std::lock_guard<std::mutex> lg(tableMutex);
         if (accessableId.empty()) {
             exportRoots.emplace_back(true);

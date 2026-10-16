@@ -43,15 +43,12 @@ class BaseObject;
 // (zGeneration.inline.hpp:131-140 has no "lookup miss ⇒ return from" exit); detected shapes are:
 //   Forwarded   header stateCode=3, a to-version exists and must be found
 //   ZeroHeader  object header not yet initialized -- nothing to resolve
-enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 
 // Provenance is captured by the runtime entry that owns the slot.  Resolution
 // carries it down to the fail-closed exit instead of trying to reconstruct a
 // holder from an address after the forwarding lookup has failed.
 // Central garbage identification algorithm.
 
-
-using RegionLifeId = uint64_t;
 
 class ZLiveMap;
 class ZRelocateQueue;
@@ -62,60 +59,13 @@ class ZRelocateQueue;
 // Forwarding storage belongs to the generation relocation set.
 class ZForwarding {
 public:
-    using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
+    using AttachedArray = ZAttachedArray<ZForwarding, ZForwardingEntry>;
 
-    enum class Retire : uint32_t {
-        DISPEL_GHOST = 0,
-        TAKE_GARBAGE = 1,
-        RECLAIM_DIRTY = 2,
-        RELEASE_REGION = 4,
-    };
-
-    class PageWorkScope {
-    public:
-        explicit PageWorkScope(ZForwarding* forwarding, bool complete = false);
-        ~PageWorkScope();
-        PageWorkScope(const PageWorkScope&) = delete;
-        PageWorkScope& operator=(const PageWorkScope&) = delete;
-    private:
-        ZForwarding* previous;
-        ZForwarding* forwarding;
-        bool complete;
-    };
-    static ZForwarding* CurrentPageWork();
-    static void WaitPageDone(ZForwarding* forwarding);
     static constexpr uint32_t kAlignShift = 3;
-
-    struct Receipt {
-        enum class Status : uint8_t {
-            INSTALLED,
-            EXISTING,
-        };
-
-        MAddress address;
-        bool installed;
-        Status status;
-    };
 
     static size_t nentries(size_t objectCountUpperBound);
     static uint32_t nentries(const ZPage* page);
     static ZForwarding* alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age);
-
-    static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              ZPage* page, RegionLifeId pageLifeId = 0,
-                              ForwardingAllocator* arena = nullptr);
-
-    // Standalone storage for focused forwarding tests. Product objects use the set arena.
-    static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
-    {
-        return alloc(liveObjects, start, heapBase, regionSize, nullptr);
-    }
-
-    void Destroy()
-    {
-        this->~ZForwarding();
-        AttachedArray::free(this);
-    }
 
     MAddress start() const;
     size_t size() const;
@@ -125,22 +75,14 @@ public:
     PageAge to_age() const { return _to_age; }
     bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
-    RegionLifeId page_life_id() const { return _page_life_id; }
-    bool page_life_current() const;
     void verify() const;
     size_t length() const { return _entries.length(); }
-
-    // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
-    // Record the to-region start+regionLifeSeq at insert; consume rejects when
-    // InitZPage has bumped that seq (ZPage.h:InitZPage).
-    static bool DestUsable(MAddress to);
-
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 
     uintptr_t index(MAddress from) const;
 
-    std::atomic<uint64_t>* entries() const;
+    ZForwardingEntry* entries() const;
 
     ForwardingEntry at(ForwardingCursor* cursor) const;
 
@@ -150,17 +92,18 @@ public:
 
     // zForwarding.inline.hpp:230-245 plus a bound: our nentries estimate can undersize
     // (REPORT-fwdentries). A miss is a state every caller already handles.
-    ForwardingEntry find(uintptr_t fromIndex, ForwardingCursor* cursor) const;
+    ForwardingEntry find_index(uintptr_t fromIndex, ForwardingCursor* cursor) const;
 
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.
     MAddress find(MAddress from) const;
+    MAddress find(MAddress from, ForwardingCursor* cursor) const;
 
     template<typename Fn>
     void for_each_from(Fn&& fn) const
     {
-        auto* words = entries();
         for (size_t i = 0; i < _entries.length(); ++i) {
-            const ForwardingEntry entry = ForwardingEntry::FromRaw(words[i].load(std::memory_order_acquire));
+            ForwardingCursor cursor = i;
+            const ForwardingEntry entry = at(&cursor);
             if (entry.populated()) {
                 fn(_start + (static_cast<MAddress>(entry.from_index()) << object_alignment_shift()));
             }
@@ -168,29 +111,8 @@ public:
 
     }
 
-    size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr);
-
-    Receipt insert_receipt(MAddress from, MAddress to)
-    {
-        // zForwarding.inline.hpp:267-300: one attached array and one CAS winner.
-        ForwardingCursor cursor = 0;
-        const uintptr_t fromIndex = index(from);
-        if (fromIndex > ForwardingEntry::kMaxFromIndex) {
-            return Receipt{ 0, false, Receipt::Status::EXISTING };
-        }
-        const size_t toOffset = static_cast<size_t>(to - _heapBase);
-        const ForwardingEntry existing = find(fromIndex, &cursor);
-        if (existing.populated()) {
-            return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
-                            Receipt::Status::EXISTING };
-        }
-        bool installed = false;
-        const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
-        return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed,
-                        installed ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
-    }
-
-    MAddress insert(MAddress from, MAddress to);
+    size_t insert_index(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor);
+    MAddress insert(MAddress from, MAddress to, ForwardingCursor* cursor);
 
     enum class ZPublishState : int8_t {
         none,
@@ -198,11 +120,6 @@ public:
         reject,
         accept,
     };
-
-    static bool young_marking()
-    {
-        return ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
-    }
 
     void relocated_remembered_fields_register(MAddress field);
 
@@ -236,15 +153,11 @@ public:
     void in_place_relocation_finish();
     bool in_place_relocation_is_below_top_at_start(MAddress offset) const;
 
-    std::atomic<int32_t>& ref_count() { return _ref_count; }
-    std::atomic<bool>& claimed() { return _claimed; }
-    std::atomic<bool>& done() { return _done; }
-    std::mutex& ref_lock() const { return _ref_lock; }
 
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift);
+                PageAge from_age, PageAge to_age, size_t object_alignment_shift);
 
     const MAddress _start;
     const size_t _size;
@@ -254,9 +167,6 @@ private:
     ZPage* const _page;
     const PageAge _from_age;
     const PageAge _to_age;
-    const RegionLifeId _page_life_id;
-    // Monotonic per-region-span generation. Written before the table pointer is
-    // published, then immutable for the table's lifetime.
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
     MAddress _in_place_top_at_start;
@@ -268,7 +178,6 @@ private:
     std::atomic<ZPublishState> _relocated_remembered_fields_state;
     std::vector<MAddress> _relocated_remembered_fields_array;
     uint32_t _relocated_remembered_fields_publish_young_seqnum;
-    mutable std::mutex _relocated_fields_lock;
 };
 
 // Attached-entry spelling used by existing consumers.

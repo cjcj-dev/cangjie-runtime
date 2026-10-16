@@ -30,6 +30,11 @@ MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeo
 };
 thread_local CleanThreadLocalData cleaner;
 
+ThreadGCData& ThreadLocal::GetNativeGCData()
+{
+    return cleaner.nativeData;
+}
+
 void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
     ThreadLocal::InitializeCleaner();
@@ -47,7 +52,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 #ifdef INTERPRETER_ENABLED
     interpreterCJThreadData = newMutator != nullptr ? newMutator->interpreterCJThreadData : nullptr;
 #endif
-    UpdatePollValues(this);
+    if (newMutator != nullptr) {
+        ArmThreadPoll(this);
+    }
 }
 
 ThreadLocalData* ThreadLocal::GetThreadLocalData()
@@ -142,7 +149,9 @@ void CleanThreadLocalData::AddToList(ThreadLocalData* tls)
     auto& list = TheList();
     std::lock_guard<std::mutex> lock(list.mutex);
     if (registered) { return; }
-    ZBarrierSet::on_thread_attach(nativeData, nullptr, tls, nullptr);
+    BarrierSet* barrier_set = BarrierSet::barrier_set();
+    if (barrier_set == nullptr) { return; }
+    barrier_set->on_thread_attach(nativeData, nullptr, tls);
     // Bootstrap may run before colors are published; retry on the next attach.
     if (nativeData.storeGoodMask == 0) { return; }
     nativeTLS = tls;
@@ -156,12 +165,8 @@ void CleanThreadLocalData::RemoveFromList()
     if (!registered) { return; }
     auto& list = TheList();
     {
-        // ZGC zMark.cpp:910-917 keeps native final publication inside STS.
-        // Our workers return and have TLS cleanup after the task's joiner.
-        // Join before the list lock, and leave before waiting for readers.
-        SuspendibleThreadSetJoiner sts;
         std::lock_guard<std::mutex> lock(list.mutex);
-        ZBarrierSet::on_thread_detach(nativeData);
+        BarrierSet::barrier_set()->on_thread_detach(nativeData);
         auto* link = &list.head;
         for (auto* node = link->load(std::memory_order_relaxed); node != nullptr;
              link = &node->next, node = link->load(std::memory_order_relaxed)) {
@@ -179,6 +184,10 @@ void CleanThreadLocalData::RemoveFromList()
 
 CleanThreadLocalData::CleanThreadLocalData()
 {
+    BarrierSet* barrier_set = BarrierSet::barrier_set();
+    if (barrier_set != nullptr) {
+        barrier_set->on_thread_create(nativeData);
+    }
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
@@ -195,6 +204,9 @@ CleanThreadLocalData::~CleanThreadLocalData()
         RemoveFromList();
         local->gcData = nullptr;
         local->nativeGCData = nullptr;
+        if (nativeData.storeBarrierBuffer != nullptr) {
+            BarrierSet::barrier_set()->on_thread_destroy(nativeData);
+        }
         return;
     }
     if (Runtime::CurrentRef() != nullptr) {
@@ -216,6 +228,9 @@ CleanThreadLocalData::~CleanThreadLocalData()
         delete reinterpret_cast<ThreadCache*>(cache);
     }
     ThreadLocal::UnlockRdLock();
+    if (nativeData.storeBarrierBuffer != nullptr) {
+        BarrierSet::barrier_set()->on_thread_destroy(nativeData);
+    }
 }
 
 extern "C" void MCC_CheckThreadLocalDataOffset()

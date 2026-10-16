@@ -26,6 +26,7 @@
 #include "Mutator/MutatorManager.h"
 #include "RuntimeConfig.h"
 #include "Heap/shared/gcArguments.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "schedule.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "ExceptionManager.h"
@@ -919,7 +920,7 @@ int8_t MRT_StopSubScheduler(void* schedule)
 
 static void ResolveCycleRefImpl()
 {
-    Heap::GetHeap().ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
 }
 extern "C" void CJ_MRT_RolveCycleRef()
 {

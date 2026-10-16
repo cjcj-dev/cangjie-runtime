@@ -9,6 +9,7 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    test_vmthread.cpp
     gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_colour_address.cpp
@@ -23,6 +24,7 @@ set(GC_UNIT_SOURCES
     test_align.cpp
     test_used_generation.cpp
     test_zstat.cpp
+    test_gc_totals.cpp
     test_zstat_heap.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
@@ -58,6 +60,8 @@ set(GC_UNIT_SOURCES
     test_native_root_current.cpp
     test_concurrency_root_color.cpp
     test_relocation_set_selector.cpp
+    test_relocation_request_queue.cpp
+    test_barrier_remap_no_relocate.cpp
     test_store_barrier_buffer.cpp
     test_old_to_young_1102.cpp
     test_barrier_old_atomic.cpp
@@ -84,7 +88,6 @@ set(GC_UNIT_SOURCES
     test_generation_mark_free.cpp
 
     test_exempt_unlock.cpp
-    test_isfromreg.cpp
     test_current_object_ref.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
@@ -96,12 +99,16 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_storage.cpp
     test_mark_port_203_entries.cpp
     test_mark_discovery.cpp
+    test_mark_termination_1329.cpp
     test_mark_port_203_engine.cpp
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
+    test_barrier_owner_1391.cpp
+    test_shutdown_1459.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp
+    test_global_gc_requests.cpp
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
@@ -115,6 +122,7 @@ set(GC_UNIT_SOURCES
     test_arraycopy.cpp
     test_cycle_ref_saferegion.cpp
     test_watermark_iteration.cpp
+    test_binding_poll.cpp
     test_thread_smr_reclaim.cpp
 )
 
@@ -253,6 +261,7 @@ add_test(NAME cj_gc_cycle_saferegion_unit COMMAND cj_gc_cycle_saferegion_unit)
 # process because ForwardingTable::Initialize is deliberately one-shot and the
 # main suite already owns that process-global table.
 add_executable(cj_gc_clear_entries_unit
+    gc_worker_fixture.cpp
     gc_unit_main.cpp
     gc_cycle_sequence_fixture.cpp
     clear_entries_product_unit.cpp
@@ -287,6 +296,7 @@ add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
 
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
+    gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp

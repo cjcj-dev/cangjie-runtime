@@ -82,9 +82,10 @@ public:
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
-    MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     ZPage* GetRegion() const;
     size_t TLABSize() const { return tlab.end - tlab.start; }
+    // gc/shared/threadLocalAllocBuffer.hpp:141 free().
+    size_t TLABFree() const { return tlab.end - tlab.top; }
     void FillTLAB(uintptr_t start, size_t size);
     void ClearRegion();
 

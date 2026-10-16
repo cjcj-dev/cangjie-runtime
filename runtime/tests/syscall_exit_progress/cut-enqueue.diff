@@ -1,0 +1,6 @@
+diff --git a/runtime/src/CJThread/src/syscall/src/syscall_impl.cpp b/runtime/src/CJThread/src/syscall/src/syscall_impl.cpp
+--- a/runtime/src/CJThread/src/syscall/src/syscall_impl.cpp
++++ b/runtime/src/CJThread/src/syscall/src/syscall_impl.cpp
+@@ -78,1 +78,1 @@
+-        ScheduleGlobalWrite(&cjthread, 1);
++        (void)cjthread;

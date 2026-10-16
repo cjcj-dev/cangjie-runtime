@@ -1,3 +1,4 @@
+#include "Heap/z/zInitialize.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -5,8 +6,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // ZGC os/linux/gc/z/zPhysicalMemoryBacking_linux.cpp:53-707. Differences
-// that are HotSpot infrastructure: ZInitialize::error → LOG + _initialized
-// stays false; is_init_completed() (no VM init flag: the hugetlbfs ENOSPC
+// that are HotSpot infrastructure: is_init_completed() (no VM init flag: the hugetlbfs ENOSPC
 // retry always runs its three attempts); SafeFetch32 (no signal-handler
 // safe fetch: the tmpfs compat touch is a plain volatile read); os::Linux
 // NUMA/THP helpers are the underlying syscalls.
@@ -123,7 +123,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   // Create backing file
   _fd = create_fd(ZFILENAME_HEAP);
   if (_fd == -1) {
-    LOG(RTLOG_ERROR, "Failed to create heap backing file");
+    ZInitialize::error("Failed to create heap backing file");
     return;
   }
 
@@ -131,7 +131,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   while (ftruncate(_fd, static_cast<off_t>(max_capacity)) == -1) {
     if (errno != EINTR) {
       ZErrno err;
-      LOG(RTLOG_ERROR, "Failed to truncate backing file (%s)", err.to_string());
+      ZInitialize::error("Failed to truncate backing file (%s)", err.to_string());
       return;
     }
   }
@@ -142,7 +142,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   struct statfs buf;
   if (fstatfs(_fd, &buf) == -1) {
     ZErrno err;
-    LOG(RTLOG_ERROR, "Failed to determine filesystem type for backing file (%s)", err.to_string());
+    ZInitialize::error("Failed to determine filesystem type for backing file (%s)", err.to_string());
     return;
   }
 
@@ -156,38 +156,38 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
 
   // Make sure the filesystem type matches requested large page type
   if (ZLargePages::is_transparent() && !is_tmpfs()) {
-    LOG(RTLOG_ERROR, "cjUseTransparentHugePages can only be enabled when using a %s filesystem",
+    ZInitialize::error("cjUseTransparentHugePages can only be enabled when using a %s filesystem",
         ZFILESYSTEM_TMPFS);
     return;
   }
 
   if (ZLargePages::is_transparent() && !tmpfs_supports_transparent_huge_pages()) {
-    LOG(RTLOG_ERROR, "cjUseTransparentHugePages on a %s filesystem not supported by kernel",
+    ZInitialize::error("cjUseTransparentHugePages on a %s filesystem not supported by kernel",
         ZFILESYSTEM_TMPFS);
     return;
   }
 
   if (ZLargePages::is_explicit() && !is_hugetlbfs()) {
-    LOG(RTLOG_ERROR, "cjUseLargePages (without cjUseTransparentHugePages) can only be enabled "
+    ZInitialize::error("cjUseLargePages (without cjUseTransparentHugePages) can only be enabled "
         "when using a %s filesystem", ZFILESYSTEM_HUGETLBFS);
     return;
   }
 
   if (!ZLargePages::is_explicit() && is_hugetlbfs()) {
-    LOG(RTLOG_ERROR, "cjUseLargePages must be enabled when using a %s filesystem",
+    ZInitialize::error("cjUseLargePages must be enabled when using a %s filesystem",
         ZFILESYSTEM_HUGETLBFS);
     return;
   }
 
   // Make sure the filesystem block size is compatible
   if (ZGranuleSize % _block_size != 0) {
-    LOG(RTLOG_ERROR, "Filesystem backing the heap has incompatible block size (%zu)",
+    ZInitialize::error("Filesystem backing the heap has incompatible block size (%zu)",
         _block_size);
     return;
   }
 
   if (is_hugetlbfs() && _block_size != ZGranuleSize) {
-    LOG(RTLOG_ERROR, "%s filesystem has unexpected block size %zu (expected %zu)",
+    ZInitialize::error("%s filesystem has unexpected block size %zu (expected %zu)",
         ZFILESYSTEM_HUGETLBFS, _block_size, ZGranuleSize);
     return;
   }

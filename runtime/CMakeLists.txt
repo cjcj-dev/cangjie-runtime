@@ -126,8 +126,8 @@ if (MRT_GC_UNIT_TESTS)
 endif()
 
 
-# The standalone suite selects its GC-unit shape when the testable SO exposes
-# its array hook. Compile the complete observer/layout contract into that SO:
+# The standalone suite selects its GC-unit shape from the product build stamp.
+# Compile the complete observer/layout contract into the testable SO:
 # enabling individual hooks would leave GCDriverPort and CollectorResources
 # with different layouts in the product and the standalone executable.
 # Keep the CMake option unchanged: MRT_TESTABLE_INTERNALS alone must not add

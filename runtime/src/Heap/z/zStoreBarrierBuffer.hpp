@@ -35,7 +35,7 @@ public:
     static constexpr size_t Capacity() { return kStoreBarrierBufferLength; }
     static StoreBarrierBuffer* buffer_for_store(bool heal);
 
-    void add(MAddress p, zpointer prev);
+    void add(volatile zpointer* p, zpointer prev);
     void Flush();
     void install_base_pointers();
     void on_new_phase();

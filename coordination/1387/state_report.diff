@@ -1,0 +1,7 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -277,3 +277,3 @@ void StringDedup::Table::NumDeadCallback(size_t count)
+         case DeadState::wait2:
+-            table.deadState.store(DeadState::wait1, std::memory_order_release);
++            table.deadState.store(DeadState::wait2, std::memory_order_release);
+             break;

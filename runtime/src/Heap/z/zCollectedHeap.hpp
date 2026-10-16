@@ -9,6 +9,7 @@
 #define MRT_COLLECTOR_H
 
 #include "Heap/z/zInitialize.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRuntimeWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -18,6 +19,8 @@
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
+class TypeInfo;
+class MArray;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;
@@ -31,12 +34,14 @@ public:
     ZCollectedHeap(const HeapParam& param, double garbageThreshold);
     ~ZCollectedHeap();
     static void stop();
+    bool initialize();
     void initialize_gc_workers();
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason);
     void safepoint_synchronize_begin();
     void safepoint_synchronize_end();
+    MArray* array_allocate(TypeInfo& klass, size_t size, MIndex length, bool doZero);
     uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }
@@ -51,6 +56,7 @@ public:
 
 private:
     static ZCollectedHeap* _collected_heap;
+    ZBarrierSet _barrier_set;
     ZInitializer _initializer;
     Heap _heap;
     ZDriverMinor* _driver_minor;

@@ -40,11 +40,6 @@ bool ThreadGCData::FlushMarkStacks(ZMark& domain)
     return markStacks[index].Flush(domain.Stripes());
 }
 
-ThreadGCData::~ThreadGCData()
-{
-    delete storeBarrierBuffer;
-}
-
 void ThreadGCData::VisitOwners(
     const std::function<void(ThreadGCData&, Mutator*, ThreadLocalData*)>& visitor)
 {

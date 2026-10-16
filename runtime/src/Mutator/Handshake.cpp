@@ -9,6 +9,7 @@
 #include "MutatorManager.h"
 #include "ThreadLocal.h"
 #include "ThreadSMR.h"
+#include "VMOperation.h"
 #include "Common/Runtime.h"
 
 namespace MapleRuntime {
@@ -197,19 +198,43 @@ void WaitHandshakeOperation(HandshakeOperation& op, const ThreadsListHandle& thr
 }
 } // namespace
 
+namespace {
+// HotSpot handshake.cpp:245-314: global handshakes are concurrent VM ops.
+class VM_HandshakeAllThreads final : public VMOperation {
+public:
+    explicit VM_HandshakeAllThreads(HandshakeOperation* op) : op_(op) {}
+    const char* name() const override { return op_->closure()->name(); }
+    bool evaluate_at_safepoint() const override { return false; }
+    void doit() override
+    {
+        ThreadsListHandle threads;
+        size_t issued = 0;
+        for (size_t i = 0; i < threads.length(); ++i) {
+            threads.thread_at(i)->GetHandshakeState().add_operation(op_);
+            ++issued;
+        }
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (issued == 0) { return; }
+        // handshake.cpp:274-280: count after arming; pending starts at one.
+        op_->add_target_count(issued - 1);
+        do {
+            for (size_t i = 0; i < threads.length(); ++i) {
+                (void)threads.thread_at(i)->GetHandshakeState().try_process();
+            }
+            if (!op_->is_completed()) { std::this_thread::yield(); }
+        } while (!op_->is_completed());
+    }
+private:
+    HandshakeOperation* const op_;
+};
+} // namespace
+
 void Handshake::execute(HandshakeClosure* cl)
 {
     if (cl == nullptr) { return; }
-    // HotSpot handshake.cpp:257-260: pin and enqueue every logical thread,
-    // including unmounted Cangjie tasks, not only the current carrier owners.
-    ThreadsListHandle threads;
-    if (threads.length() == 0) { return; }
     HandshakeOperation op(cl, nullptr);
-    op.add_target_count(threads.length() - 1);
-    for (size_t i = 0; i < threads.length(); ++i) {
-        threads.thread_at(i)->GetHandshakeState().add_operation(&op);
-    }
-    WaitHandshakeOperation(op, threads);
+    VM_HandshakeAllThreads handshake(&op);
+    VMThread::execute(&handshake);
 }
 
 void Handshake::execute(HandshakeClosure* cl, Mutator* target)

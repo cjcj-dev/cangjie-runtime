@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 #define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
@@ -32,8 +33,14 @@ public:
         concurrencyModel = &concurrency;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
     }
-    ~ConcurrencyRootRuntime() override { runtime = nullptr; }
+    ~ConcurrencyRootRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:
@@ -49,9 +56,9 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     auto& heap = Heap::GetHeap();
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-        auto& cycle = heap.GetZGeneration(gen);
+        auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(gen)));
         if (cycle.Workers() == nullptr) {
-            cycle.InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }
@@ -97,7 +104,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     MAddress observed = 0;
@@ -108,7 +115,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     };
     MAddress storedExpected = 0;
     if (updateThreadObject) {
-        storedExpected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(second));
+        storedExpected = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(second));
         auto* previous = CJThreadGetHandle();
         ThreadLocal::SetCJThread(thread);
         MCC_SetCurrentCJThreadObject(reinterpret_cast<void*>(storedExpected));
@@ -117,7 +124,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     if (remap) {
         Heap::GetHeap().old().remap_young_roots();
     } else {
-        runtime.GetConcurrencyModel().VisitGCRoots();
+        runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
     }
     observed = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr,
@@ -152,9 +159,9 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     auto& heap = Heap::GetHeap();
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-        auto& cycle = heap.GetZGeneration(gen);
+        auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(gen)));
         if (cycle.Workers() == nullptr) {
-            cycle.InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }
@@ -196,16 +203,17 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.old().relocate().relocate(&heap.old().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     // The saved store-good color is from the previous epoch, so the group is armed.
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     if (healBeforeRead) {
-        runtime.GetConcurrencyModel().VisitGCRoots();
-        // zNMethod.cpp:392-398: the GC partial color is mark good but never
-        // store good, so the group stays armed for the mutator entry.
-        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+        RootVisitor visitor = [](RootSlot&) {};
+        runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+        // ZGC zBarrierSetNMethod.cpp:53-97: inspection enters the barrier
+        // before observing slots and disarms after healing.
+        GC_EXPECT_FALSE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     }
     auto* previous = CJThreadGetHandle();
     ThreadLocal::SetCJThread(thread);

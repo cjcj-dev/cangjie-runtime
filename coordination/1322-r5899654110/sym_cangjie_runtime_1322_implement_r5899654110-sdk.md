@@ -1,0 +1,2 @@
+待主控登记进 `/root/cj_build/ops/CURRENT_DOCS.manifest`。
+#1322已接回b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56，候选79703227e1ba12ab1a0f20669e83177cea338cd1 default/testable均构建rc=0。真实托管gc_totals.cj使用已判色sdkdepot/b99430a618af-1ecb811801ca失败于链接：std-core.a(core.o) undefined reference CJ_MRT_RequestStringDedup，编译rc=1，程序未运行，非产品红臂。日志kkk2:/root/sym_cangjie_runtime_1322_implement_r5899654110/keep/candidate/build.log。按常备主控基础设施规则不改共享SDK，继续基线/单元/OHOS。不依靠managed例外宣称本条std API验收通过。请提供与当前runtime匹配的已重建染色SDK路径；无此装置将保留WIP/外部阻塞。本轮无新增问题，命中已登记#302/#480签名。

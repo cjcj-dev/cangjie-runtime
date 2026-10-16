@@ -1,12 +1,13 @@
+#include "Heap/z/zInitialize.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemoryManager.cpp:39-358. ZNMT registration has no counterpart
-// (no native memory tracker, PLAN infra I16). ZForceDiscontiguousHeapReservations
-// is a HotSpot debug flag and is not carried.
+// ZGC zVirtualMemoryManager.cpp:39-358; zNMT.cpp:38-65.
+// Native memory tracking has no host consumer, so no registration is carried.
+// ZForceDiscontiguousHeapReservations is a HotSpot debug flag and is not carried.
 
 #include "Heap/z/zVirtualMemoryManager.inline.hpp"
 
@@ -201,7 +202,7 @@ ZVirtualMemoryManager::ZVirtualMemoryManager(size_t max_capacity)
   VLOG(REPORT, "Reserved Space: limit %zuM, desired %zuM, requested %zuM", limit / MB, desired / MB, requested / MB);
 
   if (reserved < max_capacity) {
-    LOG(RTLOG_ERROR, "Failed to reserve %zuM address space for Cangjie heap", max_capacity / MB);
+    ZInitialize::error("Failed to reserve %zuM address space for Cangjie heap", max_capacity / MB);
     reserver.unreserve_all();
     return;
   }

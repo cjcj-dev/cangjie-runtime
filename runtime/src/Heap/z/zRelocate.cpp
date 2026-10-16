@@ -85,9 +85,8 @@
 #include "Heap/z/zGeneration.hpp"
 
 
-
-
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseRelocationStall("Relocation Stall");
 
 // ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
 class ZRelocateStoreBufferInstallBasePointersThreadClosure {
@@ -111,6 +110,70 @@ public:
     }
 };
 
+bool ZRelocate::IsFromObject(BaseObject* obj)
+    {
+        if (!Heap::IsHeapAddress(obj)) {
+            return false;
+        }
+        const MAddress addr = reinterpret_cast<MAddress>(obj);
+        return (*ZGeneration::young()).forwarding_table().get(addr) != nullptr ||
+               (*ZGeneration::old()).forwarding_table().get(addr) != nullptr;
+    }
+
+void ZRelocate::StartRelocationTasks(ZGenerationId generation)
+{
+    ZWorkers& workers = *(*ZGeneration::generation(static_cast<ZGenerationId>(generation))).Workers();
+    auto& queue = *(*ZGeneration::generation(static_cast<ZGenerationId>(generation))).relocate().queue();
+    CHECK(!queue.is_active());
+    queue.activate(workers.active_workers());
+}
+
+// ZGC zRelocate.cpp:350-352.
+void ZRelocate::add_remset(volatile zpointer* p)
+{
+    ZGeneration::young()->remember(p);
+}
+
+// ZGC zRelocate.cpp:1227-1255.
+static void RemapAndMaybeAddRemset(RefField<>& field)
+{
+    volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer ptr = field.GetFieldValue();
+    if (ZPointer::is_store_good(ptr)) {
+        // ZGC zRelocate.cpp:1230-1232: store-good already has a remset entry.
+        return;
+    }
+    const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(p, ptr);
+    if (is_null(address)) {
+        return;
+    }
+    if (Heap::is_old(untype(address))) {
+        return;
+    }
+    ZRelocate::add_remset(p);
+}
+
+class ZRelocateAddRemsetForFlipPromoted final : public ZRestartableTask {
+public:
+    explicit ZRelocateAddRemsetForFlipPromoted(ZArray<ZPage*>* pages)
+        : ZRestartableTask("ZRelocateAddRemsetForFlipPromoted"), iter(pages) {}
+    void work() override
+    {
+        SuspendibleThreadSetJoiner stsJoiner;
+        for (ZPage* page; iter.next(&page);) {
+            page->object_iterate([&](BaseObject* object) {
+                ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), RemapAndMaybeAddRemset);
+            });
+            SuspendibleThreadSet::yield();
+            if (ZGeneration::young()->Workers()->should_worker_resize()) {
+                return;
+            }
+        }
+    }
+private:
+    ZArrayParallelIterator<ZPage*> iter;
+};
+
 // ZGC zRelocate.cpp:1289: both generations submit their installed set.
 void ZRelocate::relocate(ZRelocationSet* relocation_set)
 {
@@ -130,165 +193,13 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
         ForwardTask<Generation::Old> task(manager, relocation_set);
         workers.run(&task);
     }
-}
-
-bool ZRelocate::IsFromObject(BaseObject* obj)
-    {
-        if (!Heap::IsHeapAddress(obj)) {
-            return false;
-        }
-        const MAddress addr = reinterpret_cast<MAddress>(obj);
-        return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-               Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
-    }
-
-void ZRelocate::StartRelocationTasks(ZGenerationId generation)
-{
-    ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
-    auto& queue = *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
-    CHECK(!queue.IsActive());
-    queue.BeginWorkers(workers.active_workers());
-}
-
-// ZGC zRelocate.cpp:733-740.
-static bool AddRemsetIfYoung(volatile zpointer* field, zaddress address)
-{
-    if (Heap::page(untype(address))->IsYoungRegion()) {
-        Heap::page(reinterpret_cast<MAddress>(field))->remember(field);
-        return true;
-    }
-    return false;
-}
-
-// ZGC zRelocate.cpp:742-794: defer unresolved young relocation; eagerly
-// remap null and old targets so they do not need a remembered-set entry.
-static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
-{
-    volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
-    const zpointer ptr = field.GetFieldValue();
-    CHECK_DETAIL(ZPointer::is_old_load_good(ptr), "promoted field must be old load-good");
-    if (ZPointer::is_store_good(ptr)) {
-        // ZGC zRelocate.cpp:747-749: store-good already has a remset entry.
-        return;
-    }
-    if (ZPointer::is_load_good(ptr)) {
-        if (!is_null_any(ptr)) {
-            AddRemsetIfYoung(p, ZPointer::uncolor(ptr));
-        }
-        return;
-    }
-    if (is_null_any(ptr)) {
-        ZBarrier::remap_young_relocated(p, ptr);
-        return;
-    }
-    const zaddress_unsafe address = ZPointer::uncolor_unsafe(ptr);
-    ZForwarding* const forwarding = generation_forwarding_table(Generation::Young).get(untype(address));
-    if (forwarding == nullptr) {
-        if (!AddRemsetIfYoung(p, safe(address))) {
-            ZBarrier::remap_young_relocated(p, ptr);
-        }
-        return;
-    }
-    const MAddress to = forwarding->find(untype(address));
-    if (to != 0) {
-        if (!AddRemsetIfYoung(p, to_zaddress(to))) {
-            ZBarrier::remap_young_relocated(p, ptr);
-        }
-        return;
-    }
-    Heap::page(reinterpret_cast<MAddress>(p))->remember(p);
-}
-
-void RegionManager::RememberPromotedObject(BaseObject* object)
-{
-    ZIterator::basic_oop_iterate(object, UpdateRemsetPromotedFilterAndRemapPerField);
-}
-
-// ZGC zRelocate.cpp:1227-1255.
-static void RemapAndMaybeAddRemset(RefField<>& field)
-{
-    volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
-    const zpointer ptr = field.GetFieldValue();
-    if (ZPointer::is_store_good(ptr)) {
-        // ZGC zRelocate.cpp:1230-1232: store-good already has a remset entry.
-        return;
-    }
-    const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(p, ptr);
-    if (is_null(address)) {
-        return;
-    }
-    if (Heap::is_old(untype(address))) {
-        return;
-    }
-    Heap::page(reinterpret_cast<MAddress>(p))->remember(p);
-}
-
-void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
-{
-    ZArray<ZPage*>* pages = Heap::GetHeap().GetZGeneration(ZGenerationId::young)
-                                .relocation_set().flip_promoted_pages();
-    class PageTask final : public ZRestartableTask {
-    public:
-        explicit PageTask(ZArray<ZPage*>* pages)
-            : ZRestartableTask("ZRelocateAddRemsetForFlipPromoted"), iter(pages) {}
-        void work() override
-        {
-            SuspendibleThreadSetJoiner stsJoiner;
-            for (ZPage* page; iter.next(&page);) {
-                page->object_iterate([&](BaseObject* object) {
-                    ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), RemapAndMaybeAddRemset);
-                });
-                SuspendibleThreadSet::yield();
-                if (ZGeneration::young()->Workers()->should_worker_resize()) {
-                    return;
-                }
-            }
-        }
-    private:
-        ZArrayParallelIterator<ZPage*> iter;
-    } task(pages);
-    workers.run(&task);
-}
-
-void ZRelocate::UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
-{
-    // ZGC zRelocate.cpp:652-738: the forwarding retains the source identity;
-    // the young sequence selects the face active when old relocation started.
-    ZPage* const fromPage = forwarding->page();
-    ZPage* const toPage = Heap::page(reinterpret_cast<MAddress>(to));
-    const uintptr_t fromLocal = fromPage->local_offset(reinterpret_cast<MAddress>(from));
-    const size_t size = RegionSpace::GetAllocSize(*to);
-    const bool iterateCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent() && !forwarding->in_place();
-    auto iter = iterateCurrent
-        ? fromPage->remset_iterator_limited_current(fromLocal, size)
-        : fromPage->remset_iterator_limited_previous(fromLocal, size);
-    BitMap::idx_t index;
-    while (iter.next(&index)) {
-        const uintptr_t offset = ZRememberedSet::to_offset(index) - fromLocal;
-        const MAddress field = reinterpret_cast<MAddress>(to) + offset;
-        if (ZGeneration::young()->is_phase_mark()) {
-            forwarding->relocated_remembered_fields_register(field);
-        } else {
-            toPage->remember(reinterpret_cast<volatile zpointer*>(field));
-        }
+    if (relocation_set->generation()->is_young()) {
+        ZRelocateAddRemsetForFlipPromoted task(relocation_set->flip_promoted_pages());
+        workers.run(&task);
     }
 }
 
-void ZRelocate::UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
-{
-    // ZGC zRelocate.cpp:801-815: use the immutable relocation plan, including
-    // when an in-place destination has already replaced the source page table entry.
-    if (forwarding->to_age() != PageAge::old) {
-        return;
-    }
-    if (forwarding->from_age() == PageAge::old) {
-        UpdateRemsetOldToOld(forwarding, from, to);
-        return;
-    }
-    RegionManager::RememberPromotedObject(to);
-}
-
-BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject* obj)
+BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject* obj, ForwardingCursor* cursor)
 {
     // ZGC zRelocate.cpp:354-380: allocation, disjoint copy, insert, undo.
     assert(Heap::GetHeap().IsSurvivedObject(obj) && "Should be live");
@@ -305,7 +216,7 @@ BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject
     // Cangjie has no return statepoint; the new copy needs a normal header.
     toObj->SetStateCode(ObjectState::NORMAL);
     BaseObject* result = reinterpret_cast<BaseObject*>(forwarding->insert(
-        reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj)));
+        reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj), cursor));
     if (result != toObj) {
         Heap::GetHeap().undo_alloc_object_for_relocation(reinterpret_cast<MAddress>(toObj), size);
     }
@@ -404,6 +315,102 @@ void ZRelocateMediumAllocator::undo_alloc_object(ZPage* page, uintptr_t addr, si
 template<class Allocator>
 class ZRelocateWork {
 public:
+    // ZGC zRelocate.cpp:733-740.
+    static bool AddRemsetIfYoung(volatile zpointer* field, zaddress address)
+    {
+        if (Heap::page(untype(address))->IsYoungRegion()) {
+            ZRelocate::add_remset(field);
+            return true;
+        }
+        return false;
+    }
+
+    // ZGC zRelocate.cpp:742-794: defer unresolved young relocation; eagerly
+    // remap null and old targets so they do not need a remembered-set entry.
+    static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
+    {
+        volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
+        const zpointer ptr = field.GetFieldValue();
+        CHECK_DETAIL(ZPointer::is_old_load_good(ptr), "promoted field must be old load-good");
+        if (ZPointer::is_store_good(ptr)) {
+            // ZGC zRelocate.cpp:747-749: store-good already has a remset entry.
+            return;
+        }
+        if (ZPointer::is_load_good(ptr)) {
+            if (!is_null_any(ptr)) {
+                AddRemsetIfYoung(p, ZPointer::uncolor(ptr));
+            }
+            return;
+        }
+        if (is_null_any(ptr)) {
+            ZBarrier::remap_young_relocated(p, ptr);
+            return;
+        }
+        const zaddress_unsafe address = ZPointer::uncolor_unsafe(ptr);
+        ZForwarding* const forwarding = ZGeneration::young()->forwarding_table().get(untype(address));
+        if (forwarding == nullptr) {
+            if (!AddRemsetIfYoung(p, safe(address))) {
+                ZBarrier::remap_young_relocated(p, ptr);
+            }
+            return;
+        }
+        const MAddress to = forwarding->find(untype(address));
+        if (to != 0) {
+            if (!AddRemsetIfYoung(p, to_zaddress(to))) {
+                ZBarrier::remap_young_relocated(p, ptr);
+            }
+            return;
+        }
+        ZRelocate::add_remset(p);
+    }
+
+    static void UpdateRemsetPromoted(BaseObject* object)
+    {
+        ZIterator::basic_oop_iterate(object, UpdateRemsetPromotedFilterAndRemapPerField);
+    }
+
+    void UpdateRemsetOldToOld(BaseObject* from, BaseObject* to)
+    {
+        // ZGC zRelocate.cpp:652-738: the forwarding retains the source identity;
+        // the young sequence selects the face active when old relocation started.
+        ZPage* const fromPage = forwarding->page();
+        ZPage* const toPage = Heap::page(reinterpret_cast<MAddress>(to));
+        const uintptr_t fromLocal = fromPage->local_offset(reinterpret_cast<MAddress>(from));
+        const size_t size = RegionSpace::GetAllocSize(*to);
+        const bool iterateCurrent = ZGeneration::old()->active_remset_is_current() && !forwarding->in_place();
+        auto iter = iterateCurrent
+            ? fromPage->remset_iterator_limited_current(fromLocal, size)
+            : fromPage->remset_iterator_limited_previous(fromLocal, size);
+        BitMap::idx_t index;
+        while (iter.next(&index)) {
+            const uintptr_t offset = ZRememberedSet::to_offset(index) - fromLocal;
+            const MAddress field = reinterpret_cast<MAddress>(to) + offset;
+            if (ZGeneration::young()->is_phase_mark()) {
+                forwarding->relocated_remembered_fields_register(field);
+            } else {
+                auto* p = reinterpret_cast<volatile zpointer*>(field);
+                toPage->remember(p);
+                if (forwarding->in_place()) {
+                    ASSERT(toPage->is_remembered(p));
+                }
+            }
+        }
+    }
+
+    void UpdateRemsetForFields(BaseObject* from, BaseObject* to)
+    {
+        // ZGC zRelocate.cpp:801-815: use the immutable relocation plan, including
+        // when an in-place destination has already replaced the source page table entry.
+        if (forwarding->to_age() != PageAge::old) {
+            return;
+        }
+        if (forwarding->from_age() == PageAge::old) {
+            UpdateRemsetOldToOld(from, to);
+            return;
+        }
+        UpdateRemsetPromoted(to);
+    }
+
     ZRelocateWork(Allocator* allocator, ZRelocationTargets* targets, ZGeneration* generation)
         : allocator(allocator), targets(targets), generation(generation) {}
     ~ZRelocateWork()
@@ -423,7 +430,6 @@ public:
     void do_forwarding(ZForwarding* owner)
     {
         forwarding = owner;
-        ZForwarding::PageWorkScope scope(owner);
         ZPage* page = owner->page();
         ZVerify::BeforeRelocation(owner);
         iterate_objects(page);
@@ -434,19 +440,15 @@ public:
         if (inPlace) { owner->in_place_relocation_finish(); }
         if (owner->from_age() == PageAge::old) { owner->relocated_remembered_fields_after_relocate(); }
         owner->release_page();
-        ZPage* source = owner->detach_page();
         if (inPlace) {
+            ZPage* source = owner->detach_page();
             clear_remset_before_in_place_reuse(source);
             const uint32_t partition = source->partition_id();
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
             allocator->share_target_page(target, partition);
-            // ZGC zRelocate.cpp:1026-1037: the in-place page is retained as the
-            // relocation target and stays live; route it out of the From role
-            // at this completion branch so no later role scan can reclaim it.
-            ZPageRole expect = ZPageRole::From;
-            (void)source->CASRegionRole(expect, ZPageRole::None);
         } else {
+            ZPage* source = owner->detach_page();
             Heap::free_page(source);
         }
     }
@@ -470,7 +472,8 @@ private:
         const uintptr_t from = reinterpret_cast<uintptr_t>(object);
         const size_t size = object->GetSize();
         ZPage* target = targets->get(partition, forwarding->to_age());
-        if (const uintptr_t hit = forwarding->find(from)) {
+        ForwardingCursor cursor;
+        if (const uintptr_t hit = forwarding->find(from, &cursor)) {
             increase_other_forwarded(size);
             return hit;
         }
@@ -482,8 +485,7 @@ private:
             ZUtils::object_copy_disjoint(to_zaddress(from), to_zaddress(addr), size);
         }
         reinterpret_cast<BaseObject*>(addr)->SetStateCode(ObjectState::NORMAL);
-        std::atomic_thread_fence(std::memory_order_release);
-        const uintptr_t result = forwarding->insert(from, addr);
+        const uintptr_t result = forwarding->insert(from, addr, &cursor);
         if (result != addr) {
             allocator->undo_alloc_object(target, addr, size);
             increase_other_forwarded(size);
@@ -494,7 +496,7 @@ private:
     {
         const uintptr_t result = try_relocate_object_inner(object, partition);
         if (result == 0) { return false; }
-        ZRelocate::UpdateRemsetForFields(forwarding, object, reinterpret_cast<BaseObject*>(result));
+        UpdateRemsetForFields(object, reinterpret_cast<BaseObject*>(result));
         return true;
     }
     ZPage* start_in_place_relocation(MAddress watermark)
@@ -506,7 +508,7 @@ private:
             ? source->clone_for_promotion() : source->reset(forwarding->to_age());
         target->reset_top_for_allocation();
         if (forwarding->from_age() == PageAge::old) {
-            if (Heap::GetHeap().OldActiveRemsetIsCurrent()) {
+            if (ZGeneration::old()->active_remset_is_current()) {
                 target->verify_remset_cleared_previous();
                 source->swap_remset_bitmaps();
             } else {
@@ -591,19 +593,19 @@ void ZRelocateQueue::dec_needs_attention()
 
 void ZRelocateQueue::activate(uint32_t workers)
 {
-    isActive.store(true, std::memory_order_release);
+    _is_active.store(true, std::memory_order_release);
     join(workers);
 }
 
 void ZRelocateQueue::deactivate()
 {
-    isActive.store(false, std::memory_order_release);
+    _is_active.store(false, std::memory_order_release);
     clear();
 }
 
 bool ZRelocateQueue::is_active() const
 {
-    return isActive.load(std::memory_order_acquire);
+    return _is_active.load(std::memory_order_acquire);
 }
 
 void ZRelocateQueue::join(uint32_t workers)
@@ -636,6 +638,7 @@ void ZRelocateQueue::leave()
 
 void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
 {
+    ZStatTimer timer(ZCriticalPhaseRelocationStall);
     std::unique_lock<std::mutex> guard(lock);
     if (forwarding->is_done()) {
         return;
@@ -661,7 +664,6 @@ bool ZRelocateQueue::prune()
         if (forwarding->is_done()) {
             done = true;
             queue.delete_at(i);
-            completionCount.fetch_add(1, std::memory_order_relaxed);
         } else {
             i++;
         }
@@ -725,9 +727,15 @@ ZForwarding* ZRelocateQueue::synchronize_poll()
 
 void ZRelocateQueue::clear()
 {
+    assert(nworkers == 0 && "Invalid state");
     if (queue.is_empty()) {
         return;
     }
+    ZArrayIterator<ZForwarding*> iter(&queue);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        assert(forwarding->is_done() && "All should be done");
+    }
+    assert(false && "Clear was not empty");
     queue.clear();
     dec_needs_attention();
 }
@@ -748,99 +756,6 @@ void ZRelocateQueue::desynchronize()
     synchronizeFlag = false;
     dec_needs_attention();
     attention.notify_all();
-}
-
-ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
-{
-    auto owner = forwarding_for_page(static_cast<ZPage*>(region));
-    CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
-    return Add(owner);
-}
-
-ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
-{
-    if (forwarding == nullptr) {
-        return { nullptr, false, false, nullptr };
-    }
-    std::lock_guard<std::mutex> guard(lock);
-    if (forwarding->is_done()) {
-        return { forwarding, false, true, forwarding };
-    }
-    if (!isActive.load(std::memory_order_acquire) && !forwarding->claimed().load(std::memory_order_acquire)) {
-        return { nullptr, false, false, nullptr };
-    }
-    for (int i = 0; i < queue.length(); i++) {
-        if (queue.at(i) == forwarding) {
-            return { forwarding, false, true, forwarding };
-        }
-    }
-    queue.append(forwarding);
-    if (queue.length() == 1) {
-        inc_needs_attention();
-    }
-    attention.notify_all();
-    return { forwarding, true, true, forwarding };
-}
-
-void ZRelocateQueue::Wait(ZForwarding* forwarding)
-{
-    add_and_wait(forwarding);
-}
-
-size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    (void)forwarding;
-    const bool done = prune();
-    attention.notify_all();
-    return done ? 1 : 0;
-}
-
-ZForwarding* ZRelocateQueue::PruneAndClaim()
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return prune_and_claim();
-}
-
-ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
-{
-    std::unique_lock<std::mutex> guard(lock);
-    if (ZForwarding* forwarding = prune_and_claim()) {
-        return { forwarding, nullptr, false };
-    }
-    CHECK_DETAIL(nworkers != 0 && nsynchronized < nworkers,
-                 "invalid relocation worker synchronization workers=%u synchronized=%u",
-                 nworkers, nsynchronized);
-    ++nsynchronized;
-    if (nsynchronized == nworkers) {
-        isActive.store(false, std::memory_order_release);
-        nworkers = 0;
-        nsynchronized = 0;
-        attention.notify_all();
-        return { nullptr, nullptr, true };
-    }
-    for (;;) {
-        attention.wait(guard);
-        if (!isActive.load(std::memory_order_acquire)) {
-            return { nullptr, nullptr, true };
-        }
-        if (ZForwarding* forwarding = prune_and_claim()) {
-            --nsynchronized;
-            return { forwarding, nullptr, false };
-        }
-    }
-}
-
-size_t ZRelocateQueue::PendingCount() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return static_cast<size_t>(queue.length());
-}
-
-size_t ZRelocateQueue::SynchronizedWorkerCount() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return nsynchronized;
 }
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)
@@ -946,14 +861,14 @@ BaseObject* ZRelocate::forward_object(ZForwarding* forwarding, BaseObject* objec
 BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object)
 {
     const MAddress from = reinterpret_cast<MAddress>(object);
-    if (const MAddress to = forwarding->find(from)) {
+    ForwardingCursor cursor;
+    if (const MAddress to = forwarding->find(from, &cursor)) {
         return reinterpret_cast<BaseObject*>(to);
     }
-    ZPage::RetainScope lease{forwarding};
-    if (lease.ok()) {
+    if (forwarding->retain_page(&relocateQueue)) {
         DCHECK(generation->is_phase_relocate());
-        BaseObject* to = relocate_object_inner(forwarding, object);
-        lease.Release();
+        BaseObject* to = relocate_object_inner(forwarding, object, &cursor);
+        forwarding->release_page();
         if (to != nullptr) {
             return to;
         }
@@ -965,9 +880,6 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     return forward_object(forwarding, object);
 }
 }
-
-
-
 
 
 namespace MapleRuntime {

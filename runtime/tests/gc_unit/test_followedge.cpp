@@ -99,8 +99,6 @@ struct LargeArrayFixture {
         // ~ZPage: release P02 livemaps before the P04 heap mapping.
         
         
-        delete region0->_scratch.retiredLivemap;
-        delete region1->_scratch.retiredLivemap;
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
     ZPage* committedSpan = nullptr;

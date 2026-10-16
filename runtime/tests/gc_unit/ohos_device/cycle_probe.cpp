@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -51,7 +52,7 @@ bool gOwnerInactive = false;
 void ObserveHandler(void*, BaseObject* owner, BaseObject* proxy)
 {
     auto& heap = Heap::GetHeap();
-    BaseObject* expectedOwner = heap.GetExportObject(gExportHandle);
+    BaseObject* expectedOwner = heap.cross_vm().export_roots().GetExportRoot(gExportHandle);
     BaseObject* expectedProxy = expectedOwner == nullptr ? nullptr :
         HeapAccess<>::oop_load(&(expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
     ++gHandlerCalls;
@@ -93,7 +94,7 @@ void* RunHandlerChain(void*)
     }
     const auto handler = &ObserveHandler;
     std::memcpy(reinterpret_cast<char*>(objects[3]) + kPayload, &handler, sizeof(handler));
-    gExportHandle = heap.RegisterExportRoot(objects[0]);
+    gExportHandle = heap.cross_vm().export_roots().RegisterExportRoot(objects[0]);
     const U32 index = ExportRootTable::ExportHandleIndex(gExportHandle);
     std::memcpy(reinterpret_cast<char*>(objects[0]) + kPayload, &index, sizeof(index));
 
@@ -107,9 +108,9 @@ void* RunHandlerChain(void*)
     if (started && task != nullptr) {
         reinterpret_cast<void(*)()>(task)();
     }
-    BaseObject* current = heap.GetExportObject(gExportHandle);
-    gOwnerInactive = current != nullptr && !heap.CheckExportObjState(gExportHandle, current);
-    heap.RemoveExportObject(gExportHandle);
+    BaseObject* current = heap.cross_vm().export_roots().GetExportRoot(gExportHandle);
+    gOwnerInactive = current != nullptr && !heap.cross_vm().export_roots().CheckActiveState(gExportHandle, current);
+    heap.cross_vm().export_roots().RemoveExportRoot(gExportHandle);
     return nullptr;
 }
 } // namespace

@@ -1,0 +1,12 @@
+/root/diff_c2af46ec7605
+/root/diff_c2af46ec7605/unit-default/run.log:98:diff_c2af46ec7605/default/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+/root/diff_c2af46ec7605/unit-default/run.log:202:diff_c2af46ec7605/default/runtime/tests/gc_unit/test_native_root_current.cpp:789:83: error: use of undeclared identifier 'from'
+/root/diff_c2af46ec7605/unit-default/run.log:1596:diff_c2af46ec7605/default/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/diff_c2af46ec7605/unit-testable/run.log:85:diff_c2af46ec7605/testable/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+/root/diff_c2af46ec7605/unit-testable/run.log:427:diff_c2af46ec7605/testable/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/diff_c2af46ec7605/unit-testable/run.log:1124:diff_c2af46ec7605/testable/runtime/tests/gc_unit/test_native_root_current.cpp:789:83: error: use of undeclared identifier 'from'
+/root/diff_b4dd9a5a7484
+/root/diff_b4dd9a5a7484/unit-default/run.log:192:diff_b4dd9a5a7484/default/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/diff_b4dd9a5a7484/unit-default/run.log:989:diff_b4dd9a5a7484/default/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+/root/diff_b4dd9a5a7484/unit-testable/run.log:1037:diff_b4dd9a5a7484/testable/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/diff_b4dd9a5a7484/unit-testable/run.log:1053:diff_b4dd9a5a7484/testable/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'

@@ -1,0 +1,5 @@
+# slot build0 acquired 2026-09-30T05:59:04+08:00 need=24G 已占[ ] 声明和=24G MemAvailable=160G load=105
+{"event":"lock-acquired","path":"/root/sharedbuild/.locks/d9e5bbf044680102c5dbaf3cb9d9ea9fed77bb7d33db4ca3e7709079c5c4823f.lock","wait_seconds":4.739966243505478e-06}
+{"event":"cache-miss","key":"runtime-default/b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56/fec1194aab2884392dc86442c5a05e8d1230d384772f57bc1fa78f38c02e9ea4","reason":"absent-or-invalid"}
+{"event":"build-start","key":"runtime-default/b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56/fec1194aab2884392dc86442c5a05e8d1230d384772f57bc1fa78f38c02e9ea4"}
+SHAREDBUILD_ERROR BUILD_FAILED rc=1 evidence=/root/sym_cangjie_runtime_1322_implement_r5899654110/work/failed-d9e5bbf044680102c5dbaf3cb9d9ea9fed77bb7d33db4ca3e7709079c5c4823f-1790719191798238253

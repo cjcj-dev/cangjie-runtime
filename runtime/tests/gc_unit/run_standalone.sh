@@ -9,6 +9,10 @@ SRC="$ROOT/runtime/tests/gc_unit"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 CXX="${CXX:-clang++}"
 
+case "${GC_UNIT_BUILD_ONLY:-0}" in
+  0|1) ;;
+  *) echo "invalid GC_UNIT_BUILD_ONLY" >&2; exit 2 ;;
+esac
 mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
@@ -76,7 +80,7 @@ run_ohos_host_arm() {
   if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
     echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
     "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
-      -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
+      -fvisibility-inlines-hidden "${TEST_DEFINES[@]}" -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
       -I"$ROOT/runtime/src/Heap/z/os/linux" \
@@ -242,8 +246,14 @@ TEST_DEFINES=()
 # configuration. The published recipe is bound to both selected SO hashes;
 # a deleted test hook is not a configuration interface.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
-  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST <<<"$PRODUCT_CONFIGURATION"
+  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT" --with-debug)
+read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG SO_MRT_DEBUG <<<"$PRODUCT_CONFIGURATION"
+if [[ "$SO_MRT_DEBUG" == 1 ]]; then
+    TEST_DEFINES+=(-DMRT_DEBUG=1)
+fi
+if [[ "$SO_NDEBUG" == 1 ]]; then
+    TEST_DEFINES+=(-DNDEBUG)
+fi
 if [[ "$SO_OHOS_HOST" == 1 ]]; then
     run_ohos_host_arm
     exit $?
@@ -260,13 +270,10 @@ else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-if /usr/bin/grep -Eq 'PendingStalledAllocations' \
-    "$OUT/runtime-dynamic-symbols.txt"; then
-  STALL_PRODUCT_OBSERVE=1
-else
-  STALL_PRODUCT_OBSERVE=0
+if [[ "$SO_TESTABLE" == "1" ]]; then
+  python3 "$SRC/testable_product_hooks.py" --source "$ROOT/runtime/src" \
+    --so "$RUNTIME_LIB_DIR/libcangjie-runtime.so"
 fi
-echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
@@ -310,6 +317,7 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
+  "$SRC/test_vmthread.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
@@ -322,6 +330,7 @@ MAIN_SOURCES=(
   "$SRC/test_align.cpp"
   "$SRC/test_used_generation.cpp"
   "$SRC/test_zstat.cpp"
+  "$SRC/test_gc_totals.cpp"
   "$SRC/test_zstat_heap.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
@@ -343,6 +352,8 @@ MAIN_SOURCES=(
   "$SRC/test_remap_young_roots.cpp"
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
+  "$SRC/test_relocation_request_queue.cpp"
+  "$SRC/test_barrier_remap_no_relocate.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
@@ -383,7 +394,6 @@ MAIN_SOURCES=(
   "$SRC/test_generation_mark_free.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
-  "$SRC/test_isfromreg.cpp"
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"
@@ -396,12 +406,16 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"
   "$SRC/test_mark_discovery.cpp"
+  "$SRC/test_mark_termination_1329.cpp"
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_exit_detach_mark_end.cpp"
   "$SRC/test_native_thread_detach.cpp"
+  "$SRC/test_barrier_owner_1391.cpp"
+  "$SRC/test_shutdown_1459.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_package_init.cpp"
+  "$SRC/test_global_gc_requests.cpp"
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
   "$SRC/test_weak_roots.cpp"
@@ -414,6 +428,7 @@ MAIN_SOURCES=(
   "$SRC/test_write_generic.cpp"
   "$SRC/test_cycle_ref_saferegion.cpp"
   "$SRC/test_watermark_iteration.cpp"
+  "$SRC/test_binding_poll.cpp"
   "$SRC/test_thread_smr_reclaim.cpp"
 )
 
@@ -520,7 +535,9 @@ STANDALONE_SYMBOLS=(
 )
 STANDALONE_FULL_SYMBOLS=(
   _ZNK12MapleRuntime5ZPage19clone_for_promotionEv
-  _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
+  _ZN12MapleRuntime5ZMark13MarkAndFollowERNS_11MarkContextERKNS_14MarkStackEntryE
+  _ZN12MapleRuntime5ZMark5DrainERNS_11MarkContextEm
+  _ZN12MapleRuntime5ZMark10MarkObjectILb0ELb0ELb0ELb0EEEvNS_8zaddressE
   _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb1ELb0EEEvNS_8zaddressE
   _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb0ELb0EEEvNS_8zaddressE
 )
@@ -741,6 +758,24 @@ if command -v nm >/dev/null 2>&1; then
   nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|RecordCrossGen|BindLiveInfo|GetRoute' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo8GetRoute|RecordCrossGenEdge' | head -40 || true
+fi
+
+# A bounded CI caller may build the real ELF without implicitly executing
+# teardown or the complete suite. Default standalone behavior remains below.
+if [[ "${GC_UNIT_BUILD_ONLY:-0}" == 1 ]]; then
+  python3 - "$OUT" "$CXX" "$RUNTIME_LIB_DIR" "$COPY_OBJECT" <<'PYRECIPE'
+import json, os, pathlib, shlex, sys
+out, compiler, library, copy = sys.argv[1:]
+path = pathlib.Path(out)
+fields = (path / 'compile-manifest.bin').read_bytes().split(b'\0')[:-1]
+rows = [[v.decode() for v in fields[i:i+3]] for i in range(0, len(fields), 3)]
+recipe = dict(compiler=shlex.split(compiler),
+              flags=os.environ['MAIN_COMPILE_FLAGS_SERIALIZED'].splitlines(),
+              rows=rows, copy_object=copy, library=library)
+(path / 'main-build-recipe.json').write_text(json.dumps(recipe, indent=2))
+PYRECIPE
+  echo "GC_UNIT_BUILD_ONLY_DONE tests_executed=0"
+  exit 0
 fi
 
 GC_UNIT_MAIN_ENV=''

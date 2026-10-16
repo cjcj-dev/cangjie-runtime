@@ -128,7 +128,7 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size)
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -151,7 +151,7 @@ extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool is
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewPinnedObject return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -164,7 +164,7 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
             klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewFinalizer return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -182,7 +182,7 @@ extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -196,7 +196,7 @@ extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -210,7 +210,7 @@ extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -224,7 +224,7 @@ extern "C" ArrayRef MCC_NewArray16(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -238,7 +238,7 @@ extern "C" ArrayRef MCC_NewArray32(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -252,7 +252,7 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -281,7 +281,6 @@ static void WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<fal
         return;
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
-        VLOG(REPORT, "found and writing a global struct ref field");
         NativeAccess<>::oop_store(&(NativeSlotAt(static_cast<void*>(plainField))), plainRef); // Global field is root storage.
         return;
     }
@@ -377,21 +376,29 @@ extern "C" bool MCC_IsWrapperClassForAutoEnv(const TypeInfo* ti)
 extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, size_t dstSize, const ObjectPtr srcObj,
                                     MAddress srcField, size_t srcSize)
 {
-    if (dstSize == 0) {
+    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
+    const size_t length = std::min(srcSize, dstSize) / sizeof(zpointer);
+    // RefArrayKlass::copy_array: establish the nonempty precondition before access barriers.
+    if (length == 0) {
         return;
     }
-    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+    HeapAccess<>::oop_arraycopy(srcObj, srcField, dstObj, dstField, length);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
                                        const ObjectPtr srcObj, MAddress srcField, size_t srcSize)
 {
-    if (dstSize == 0) {
+    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
+    CHECK(srcSize <= dstSize);
+    auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dstField) ? dstObj : srcObj);
+    // Headerless native payloads have no array metadata; retain their byte-sized elements.
+    const size_t stride = layout == nullptr ? 1 : layout->GetElementSize();
+    CHECK(stride != 0 && srcSize % stride == 0);
+    const size_t length = srcSize / stride;
+    if (length == 0) {
         return;
     }
-    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+    HeapAccess<>::value_arraycopy(layout, srcField, dstField, length);
 }
 template<typename Operation>
 static auto ReferenceAccessOrder(MemoryOrder order, Operation operation)
@@ -468,11 +475,21 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return Heap::GetHeap().total_collections(); }
+extern "C" size_t MCC_GetGCCount() { return ZCollectedHeap::heap()->total_collections(); }
 
-extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
+extern "C" uint64_t MCC_GetGCTimeUs()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_time_us() +
+           heap.serviceability_cycle_memory_manager(false)->gc_time_us();
+}
 
-extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
+extern "C" size_t MCC_GetGCFreedSize()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_freed_size() +
+           heap.serviceability_cycle_memory_manager(false)->gc_freed_size();
+}
 
 extern "C" bool MCC_StartCpuProfiling()
 {
@@ -2232,7 +2249,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            CJ_MCC_ArrayCopyRef(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         case TypeKind::TYPE_KIND_UNIT:
@@ -2264,7 +2281,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             // VArray may embed managed refs (HasRefField recurses via component flag /
             // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
             if (componentTypeInfo->HasRefField()) {
-                HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+                CJ_MCC_ArrayCopyStruct(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             } else {
                 CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                        reinterpret_cast<void*>(srcField), srcSize) == EOK,
@@ -2275,7 +2292,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_ENUM: {
-            HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            CJ_MCC_ArrayCopyStruct(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         default:
@@ -2296,22 +2313,22 @@ extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBase
 
 void CJ_MCC_CrossAccessBarrier(U64 cjExport)
 {
-    Heap::GetHeap().CrossAccessBarrier(cjExport);
+    Heap::GetHeap().cross_vm().CrossAccessBarrier(cjExport);
 }
 
 U64 CJ_MCC_CreateExportHandle(BaseObject *obj)
 {
-    U64 id = Heap::GetHeap().RegisterExportRoot(obj);
+    U64 id = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(obj);
     return id;
 }
 
 BaseObject* CJ_MCC_GetExportedRef(U64 id)
 {
-    return Heap::GetHeap().GetExportObject(id);
+    return Heap::GetHeap().cross_vm().export_roots().GetExportRoot(id);
 }
 void CJ_MCC_RemoveExportedRef(U64 id)
 {
-    Heap::GetHeap().RemoveExportObject(id);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(id);
 }
 
 extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)

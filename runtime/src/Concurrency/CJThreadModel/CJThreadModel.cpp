@@ -34,61 +34,53 @@ extern "C" uintptr_t* MRT_BindUncoloredVisitColor(uintptr_t* slot)
     return previous;
 }
 
-extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
-{
-    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
-    // Bound by CJThreadVisitRoots while holding the group's lock. No current-color fallback.
-    const uintptr_t color = *g_uncoloredVisitColor;
-    const uintptr_t nextColor = ZPointerMarkGoodMask | ZPointerRememberedMask;
-    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
-    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
-    ObjectRef& execute = RootSlotAt(&data->execute);
-    if (color != ZPointerStoreGoodMask) {
-        ZUncoloredRootProcessOopClosure closure(color);
-        OopClosure& process = closure;
-        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&ref)));
-        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&map)));
-        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&execute)));
-        // zNMethod.cpp:379-398: only an armed group may be processed and
-        // receive the partial GC guard. Never re-arm a disarmed group.
-        __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
-    }
-    if (handle != nullptr) {
-        (*reinterpret_cast<RootVisitor*>(handle))(ref);
-        (*reinterpret_cast<RootVisitor*>(handle))(map);
-        (*reinterpret_cast<RootVisitor*>(handle))(execute);
-    }
-}
-
 namespace {
 // zBarrierSetNMethod.cpp:53-91: mutator entry slow path. Runs under the group
 // lock via CJThreadVisitRoots; heals with process_weak (keep-alive) and fully
 // disarms by publishing the store-good guard.
 void MutatorEntryCaller(void* argPtr, void* handle)
 {
-    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
-    // zBarrierSetNMethod.cpp:53-57: recheck the guard under the group lock.
-    const uintptr_t color = *g_uncoloredVisitColor;
-    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
-    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
-    ObjectRef& execute = RootSlotAt(&data->execute);
-    if (color != ZPointerStoreGoodMask) {
-        // zBarrierSetNMethod.cpp:78-84: ZUncoloredRootProcessWeakOopClosure.
-        ZUncoloredRootProcessWeakOopClosure closure(color);
-        OopClosure& processWeak = closure;
-        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&ref)));
-        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&map)));
-        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&execute)));
-        // zBarrierSetNMethod.cpp:88-97: disarm by publishing store good.
-        __atomic_store_n(g_uncoloredVisitColor, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
-    }
+    CJThreadRoot root(*static_cast<LWTData*>(argPtr), *g_uncoloredVisitColor);
+    root.entry_barrier();
     if (handle != nullptr) {
-        (*reinterpret_cast<RootVisitor*>(handle))(ref);
-        (*reinterpret_cast<RootVisitor*>(handle))(map);
-        (*reinterpret_cast<RootVisitor*>(handle))(execute);
+        root.oops_do(*static_cast<RootVisitor*>(handle));
     }
 }
 } // namespace
+
+bool CJThreadRoot::is_armed() const
+{
+    return color != ZPointerStoreGoodMask;
+}
+
+void CJThreadRoot::oops_do(const RootVisitor& visitor)
+{
+    visitor(RootSlotAt(&data.obj));
+    visitor(RootSlotAt(&data.threadObject));
+    visitor(RootSlotAt(&data.execute));
+}
+
+void CJThreadRoot::entry_barrier()
+{
+    // ZGC zBarrierSetNMethod.cpp:53-97: recheck under the carrier lock.
+    if (is_armed()) {
+        ZUncoloredRootProcessWeakOopClosure closure(color);
+        OopClosure& processWeak = closure;
+        oops_do([&](RootSlot& slot) {
+            processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
+        });
+        __atomic_store_n(&color, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
+    }
+}
+
+void VisitCJThreadRoots(const std::function<void(CJThreadRoot&)>& visitor)
+{
+    auto copy = visitor;
+    ScheduleAllCJThreadVisit([](void* data, void* handle) {
+        CJThreadRoot root(*static_cast<LWTData*>(data), *g_uncoloredVisitColor);
+        (*static_cast<std::function<void(CJThreadRoot&)>*>(handle))(root);
+    }, &copy);
+}
 
 void CJThreadRootEntryBarrier()
 {
@@ -209,16 +201,14 @@ void CJThreadModel::Init(const ConcurrencyParam param, ScheduleType scheduleType
     RegisterCJThreadHooks();
 }
 
-void ConcurrencyModel::VisitGCRoots()
-{
-    // A null handle selects the ZUncoloredRoot process closure in
-    // MRT_VisitorCaller, matching zNMethod.cpp:384-395.
-    VisitGCRoots(nullptr);
-}
-
 void CJThreadModel::VisitGCRoots(RootVisitor* visitorHandle)
 {
-    ScheduleAllCJThreadVisit(MRT_VisitorCaller, visitorHandle);
+    // ZGC zHeapIterator.cpp:364-371: heap inspection enters the barrier
+    // before observing the carrier's roots. GC tasks use their own closures.
+    VisitCJThreadRoots([&](CJThreadRoot& root) {
+        root.entry_barrier();
+        root.oops_do(*visitorHandle);
+    });
 }
 
 // Get current mutator from tls

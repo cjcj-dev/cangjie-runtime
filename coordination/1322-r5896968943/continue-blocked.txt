@@ -1,0 +1,21 @@
+$ git status --short
+?? coordination/1322-r5896968943/continue-blocked.txt
+rc=0
+$ git rev-parse HEAD
+7d38ec50cc8834b02fe22888a3ece66fb9d4a528
+rc=0
+$ git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main
+6f75e652e7025a50235670e9f9e00a8e2c6f10ed
+rc=0
+$ bash /root/cj_build/tools/box.sh kkk2 ulimit -c 0; df -B1 /; uptime; if test -d /root/sym_cangjie_runtime_1322_implement_r5896968943; then du -sh /root/sym_cangjie_runtime_1322_implement_r5896968943; else echo LANE_DIRECTORY_ABSENT; fi
+文件系统             1B的块         已用        可用 已用% 挂载点
+/dev/nvme0n1p5 474899824640 435539443712 15161556992   97% /
+ 03:22:43 up 20 days,  3:31,  1 user,  load average: 23.26, 33.08, 32.89
+LANE_DIRECTORY_ABSENT
+rc=0
+$ /root/.local/bin/cjcj-bot exec gh pr view 1366 --repo cjcj-dev/cangjie-runtime --json headRefOid,state,isDraft
+{"headRefOid":"7d38ec50cc8834b02fe22888a3ece66fb9d4a528","isDraft":true,"state":"OPEN"}
+rc=0
+$ /root/.local/bin/cjcj-bot exec gh issue view 1309 --repo cjcj-dev/cangjie-runtime --json state
+{"state":"OPEN"}
+rc=0

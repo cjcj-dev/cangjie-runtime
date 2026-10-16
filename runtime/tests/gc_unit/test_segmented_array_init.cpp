@@ -4,6 +4,8 @@
 
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -12,7 +14,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "Heap/z/concurrentGCBreakpoints.hpp"
 #include <memory>
+#include "LoaderManager.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.hpp"
 #if defined(__linux__)
@@ -32,7 +36,7 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
@@ -50,6 +54,7 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems);
 }
 
 #include "Heap/z/zAccess.hpp"
@@ -117,34 +122,125 @@ ByteArrayTypeInfos& GetByteArrayTypeInfos()
 }
 
 
+struct PlainStructArrayTypeInfos : ByteArrayTypeInfos {
+    PlainStructArrayTypeInfos()
+    {
+        component->SetType(TypeKind::TYPE_KIND_STRUCT);
+        component->SetInstanceSize(sizeof(uint64_t));
+    }
+};
+PlainStructArrayTypeInfos& GetPlainStructArrayTypeInfos()
+{
+    static PlainStructArrayTypeInfos infos;
+    return infos;
+}
+
+// External controller: a real collection is already waiting for the mutator
+// when allocation starts. The first product yield lets mark-start proceed.
+// Neither initialization nor a synthetic payload is compiled into this test.
+class ArrayGCWindow {
+public:
+    ArrayGCWindow(Mutator* target, bool enabled, bool young, size_t requests)
+        : target(target), enabled(enabled), young(young), requests(requests) {}
+    void start()
+    {
+        if (!enabled) { return; }
+        // Existing root-observer ownership keeps HandleSuspensionRequest from
+        // returning while the external thread reads the initialization window.
+        // No product callback or allocation wrapper is installed.
+        target->VisitMutatorRoots([&](ObjectRef& root) {
+            ordinarySlots.push_back(reinterpret_cast<uintptr_t>(&root));
+        });
+        target->IncObserver();
+        requester = std::thread([&] {
+            for (size_t i = 0; i < requests; ++i) {
+                Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_FORCE);
+                target->MutatorLock();
+                zaddress_unsafe* slot = target->GetGCData().invisible_root();
+                MArray* array = slot == nullptr ? nullptr : static_cast<MArray*>(to_object(safe(*slot)));
+                if (array != nullptr) {
+                    windowAddress.store(reinterpret_cast<uintptr_t>(array), std::memory_order_release);
+                    windowSlot.store(reinterpret_cast<uintptr_t>(slot), std::memory_order_release);
+                    const uint64_t sequence =
+                        (*ZGeneration::generation(young ? ZGenerationId::young : ZGenerationId::old)).seqnum();
+                    windowSequence.store(sequence, std::memory_order_release);
+                    size_t fields = 0;
+                    auto visit = [&](RefField<>&) { ++fields; };
+                    ZBasicOopIterateClosure<decltype(visit)> closure(visit);
+                    ZIterator::oop_iterate_safe(array, &closure);
+                    if (!array->IsInvisibleObject() || fields != 0) {
+                        headerInvalid.store(true, std::memory_order_release);
+                    }
+                }
+                target->MutatorUnlock();
+                std::vector<uintptr_t> observed;
+                target->VisitMutatorRoots([&](ObjectRef& root) {
+                    observed.push_back(reinterpret_cast<uintptr_t>(&root));
+                });
+                ordinaryPreserved.store(observed == ordinarySlots, std::memory_order_release);
+            }
+            target->DecObserver();
+        });
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!MutatorManager::Instance().SyncTriggered() && std::chrono::steady_clock::now() < limit) {
+            std::this_thread::yield();
+        }
+        armed = MutatorManager::Instance().SyncTriggered();
+    }
+    void finish()
+    {
+        if (!enabled) { return; }
+        // The returned array is checked before entering a saferegion. Do not
+        // keep a native unregistered array pointer across the remaining GC.
+        ScopedEnterSaferegion saferegion(true);
+        requester.join();
+    }
+    Mutator* target;
+    bool enabled;
+    bool young;
+    size_t requests;
+    uint64_t before = 0;
+    bool armed = false;
+    std::atomic<uint64_t> windowSequence{0};
+    std::atomic<bool> headerInvalid{false};
+    std::atomic<uintptr_t> windowAddress{0};
+    std::atomic<uintptr_t> windowSlot{0};
+    std::atomic<bool> ordinaryPreserved{true};
+    std::vector<uintptr_t> ordinarySlots;
+    std::thread requester;
+};
+
 constexpr MIndex kLargeRefLength = 1024 * 1024;
 
 void* RunArrayCase(void* argument)
 {
     const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
-    const bool primitive = (mode & 1) != 0;
+    const bool plainStruct = (mode & 64) != 0;
+    const bool primitive = (mode & 1) != 0 || plainStruct;
     const bool small = (mode & 2) != 0;
     const bool young = (mode & 4) != 0;
     const bool full = (mode & 8) != 0;
     const bool twice = (mode & 16) != 0;
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    if (young || full) {
-        setenv("MRT_GC_UNIT_MANAGED_SEGMENTED", young ? "young" : twice ? "full2" : "full", 1);
-    } else {
-        unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
-    }
-    const MIndex length = small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
+    const MIndex length = plainStruct ? (1024 * 1024 / sizeof(uint64_t)) :
+        small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
     auto& heap = Heap::GetHeap();
     const ZGenerationId generation = young ? ZGenerationId::young : ZGenerationId::old;
-    const uint64_t before = heap.GetZGeneration(generation).seqnum();
-    const uint64_t youngBefore = heap.GetZGeneration(ZGenerationId::young).seqnum();
-    const uint64_t oldBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t before = (*ZGeneration::generation(generation)).seqnum();
+    const uint64_t youngBefore = (*ZGeneration::young()).seqnum();
+    const uint64_t oldBefore = (*ZGeneration::old()).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
-    MArray* array = primitive ? MCC_NewArray8(GetByteArrayTypeInfos().array, length) :
-                               MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
-    unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
-    if (array == nullptr) { return reinterpret_cast<void*>(1); }
+    // Initialize fixture metadata before a GC is queued.
+    TypeInfo* arrayType = plainStruct ? GetPlainStructArrayTypeInfos().array :
+        primitive ? GetByteArrayTypeInfos().array : GetReferenceArrayTypeInfos().array;
+    ArrayGCWindow window(mutator, young || full, young, twice ? 2 : 1);
+    window.before = before;
+    const bool emptyBefore = mutator->GetGCData().invisible_root() == nullptr;
+    window.start();
+    MArray* array = plainStruct ? MCC_NewArray64(arrayType, length) :
+        primitive ? MCC_NewArray8(arrayType, length) : MCC_NewObjArray(arrayType, length);
+    if (array == nullptr) { window.finish(); return reinterpret_cast<void*>(1); }
     size_t mismatches = 0;
     const uintptr_t expected = primitive || small ? 0 :
         (::g_cjStoreGoodMask | ((young || full) ? ZPointerRememberedMask : 0));
@@ -166,17 +262,33 @@ void* RunArrayCase(void* argument)
         }
     }
     const bool uninterrupted = young || full ||
-        (youngBefore == heap.GetZGeneration(ZGenerationId::young).seqnum() &&
-         oldBefore == heap.GetZGeneration(ZGenerationId::old).seqnum() && colorBefore == ::g_cjStoreGoodMask);
-    const bool published = !array->IsInvisibleObject() && mutator->LoadInvisibleRoot() == nullptr;
-    const uint64_t after = heap.GetZGeneration(generation).seqnum();
-    const bool gc = !(young || full) || after > before;
+        (youngBefore == (*ZGeneration::young()).seqnum() &&
+         oldBefore == (*ZGeneration::old()).seqnum() && colorBefore == ::g_cjStoreGoodMask);
+    const bool published = !array->IsInvisibleObject() && mutator->GetGCData().invisible_root() == nullptr;
+    const uint64_t after = (*ZGeneration::generation(generation)).seqnum();
+    const uint64_t inWindow = window.windowSequence.load(std::memory_order_acquire);
+    const bool gc = !(young || full) || (window.armed && inWindow >= before + (twice ? 2 : 1));
+    const bool header = !window.headerInvalid.load(std::memory_order_acquire);
     const bool lengthValid = array->GetLength() == length;
-    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu gc=%d expected=0x%zx uninterrupted=%d\n",
+    const bool ordinary = window.ordinaryPreserved.load(std::memory_order_acquire);
+    const bool windowResult = !(young || full) ||
+        (window.windowSlot.load(std::memory_order_acquire) != 0 &&
+         window.windowAddress.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(array));
+    std::fprintf(stderr, "INVISIBLE_WINDOW_TARGET mode=%zu before_empty=%d after_empty=%d window_result=%d ordinary_preserved=%d slot=%zx result=%zx\n",
+                 mode, emptyBefore, mutator->GetGCData().invisible_root() == nullptr, windowResult, ordinary,
+                 window.windowSlot.load(), reinterpret_cast<uintptr_t>(array));
+    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu window=%llu gc=%d header=%d expected=0x%zx uninterrupted=%d\n",
                  mode, array->GetContentSize(), lengthValid, published, mismatches,
-                 (unsigned long long)before, (unsigned long long)after, gc, expected, uninterrupted);
+                 (unsigned long long)before, (unsigned long long)after, (unsigned long long)inWindow,
+                 gc, header, expected, uninterrupted);
+    if (!primitive && (young || full) && gc && mismatches == 0) {
+        // All slots have 11 after the observed GC; the first-pass prefix was
+        // therefore rewritten by the product's second pass.
+        std::fprintf(stderr, "SEGMENTED_PASSES=2\n");
+    }
+    window.finish();
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && uninterrupted) ? 0 : 2);
+    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted && emptyBefore && windowResult && ordinary) ? 0 : 2);
 }
 
 void* RunLargePageIdentityCase(void*)
@@ -206,19 +318,19 @@ void* RunYoungSelectionLifetimeCase(void*)
     const bool distinctYoungPages = deadPage != livePage && deadPage->IsYoungRegion() &&
         livePage->IsYoungRegion() && deadPage->is_large() && livePage->is_large();
     const PageAge beforeAge = livePage->age();
-    const U64 root = heap.RegisterExportRoot(live);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(live);
     Mutator::GetMutator()->SetManagedContext(false);
     heap.RequestGC(GC_REASON_YOUNG);
     // Read through the page table, never through either saved descriptor.
     const bool emptyReleased = Heap::page(deadAddress) == nullptr;
-    BaseObject* const survivor = heap.GetExportObject(root);
+    BaseObject* const survivor = heap.cross_vm().export_roots().GetExportRoot(root);
     ZPage* const current = survivor == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(survivor));
     const bool liveProcessed = current != nullptr && current->age() != beforeAge &&
         reinterpret_cast<uintptr_t>(survivor) == liveAddress;
     std::fprintf(stderr,
         "YOUNG_SELECTION_LIFETIME_TARGET distinct_young_pages=%d empty_released=%d live_processed=%d\n",
         distinctYoungPages, emptyReleased, liveProcessed);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return reinterpret_cast<void*>((distinctYoungPages && emptyReleased && liveProcessed) ? 0 : 1);
 }
@@ -237,7 +349,7 @@ void* RunFlipPromotionCase(void* argument)
         return reinterpret_cast<void*>(10);
     }
     const uintptr_t address = reinterpret_cast<uintptr_t>(array);
-    const U64 root = heap.RegisterExportRoot(array);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(array);
     auto* fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
     const zpointer before = fields[0].GetFieldValue();
     // A non-null field is already colored by marking, independently of the
@@ -252,13 +364,13 @@ void* RunFlipPromotionCase(void* argument)
             for (size_t i = 0; i < 40; ++i) {
                 (void)MCC_NewArray8(GetByteArrayTypeInfos().array, 64 * 1024);
             }
-            extraRoots.push_back(heap.RegisterExportRoot(
+            extraRoots.push_back(heap.cross_vm().export_roots().RegisterExportRoot(
                 MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16)));
         }
     }
     Mutator::GetMutator()->SetManagedContext(false);
     heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG);
-    array = static_cast<MArray*>(heap.GetExportObject(root));
+    array = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(root));
     fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
     const zpointer after = fields[0].GetFieldValue();
     const bool sameAddress = reinterpret_cast<uintptr_t>(array) == address;
@@ -284,9 +396,9 @@ void* RunFlipPromotionCase(void* argument)
                      remembered, raw(field.GetFieldValue()));
     }
     for (U64 extraRoot : extraRoots) {
-        heap.RemoveExportObject(extraRoot);
+        heap.cross_vm().export_roots().RemoveExportRoot(extraRoot);
     }
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return reinterpret_cast<void*>(((relocate || sameAddress) && old == promote && target && remembered) ? 0 : 1);
 }
@@ -302,10 +414,10 @@ void* RunOldRelocationStatisticsCase(void*)
         return reinterpret_cast<void*>(10);
     }
     const size_t minimumLive = survivor->GetContentSize();
-    const U64 root = heap.RegisterExportRoot(survivor);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
     heap.RequestGC(GC_REASON_USER);
-    auto* current = heap.GetExportObject(root);
+    auto* current = heap.cross_vm().export_roots().GetExportRoot(root);
     const bool retainedOld = current != nullptr &&
         !Heap::page(reinterpret_cast<uintptr_t>(current))->IsYoungRegion();
     const auto input = ZGeneration::old()->StatHeap()->Stats();
@@ -315,7 +427,7 @@ void* RunOldRelocationStatisticsCase(void*)
     std::fprintf(stderr,
         "OLD_RELOCATION_STATS_TARGET retained_old=%d live=%zu minimum_live=%zu live_account=%d\n",
         retainedOld, live, minimumLive, liveAccount);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>((retainedOld && liveAccount) ? 0 : 1);
 }
@@ -330,7 +442,7 @@ void* RunOrdinaryBirthCase(void*)
     MObject* survivor = MObject::NewPinnedObject(type, size);
     ZPage* oldPage = Heap::page(reinterpret_cast<uintptr_t>(dead));
     const bool shared = Heap::page(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
-    const U64 root = heap.RegisterExportRoot(survivor);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
     heap.RequestGC(GC_REASON_USER);
     mutator->SetManagedContext(true);
@@ -338,7 +450,7 @@ void* RunOrdinaryBirthCase(void*)
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
     // ZGC zGeneration.cpp:205-259 permits relocation; reload the live object
     // through its root before checking that fresh eden allocation is separate.
-    BaseObject* currentSurvivor = heap.GetExportObject(root);
+    BaseObject* currentSurvivor = heap.cross_vm().export_roots().GetExportRoot(root);
     const bool fromNewPage = currentSurvivor != nullptr &&
         page != Heap::page(reinterpret_cast<uintptr_t>(currentSurvivor));
     const bool noExplicitMark = !page->is_marked();
@@ -347,7 +459,7 @@ void* RunOrdinaryBirthCase(void*)
         currentSurvivor->GetSize() == size;
     std::fprintf(stderr, "P1_ORDINARY_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",
                  shared, fromNewPage, allocating, noExplicitMark, retained);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     return reinterpret_cast<void*>((shared && fromNewPage && allocating && noExplicitMark && retained) ? 0 : 1);
 }
 
@@ -358,7 +470,7 @@ void* RunVisibleArrayGraph(void*)
     NativeSlot root(zpointer::null);
     NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::vector<size_t> visits(array->GetLength(), 0);
     size_t invalid = 0;
     size_t objects = 0;
@@ -378,7 +490,7 @@ void* RunVisibleArrayGraph(void*)
                 }
             });
     }
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     for (size_t count : visits) { invalid += count != 1; }
     const bool complete = objects == 1 && invalid == 0;
     std::fprintf(stderr, "SEGMENTED_GRAPH_RANGE_ASSERT objects=%zu fields=%zu invalid=%zu pass=%d\n",
@@ -435,7 +547,7 @@ void* RunConcreteFieldYoungMark(void*)
         HeapAccess<>::oop_store(&(field), targets[i]);
     }
     auto& heap = Heap::GetHeap();
-    const U64 root = heap.RegisterExportRoot(holder);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(holder);
     Mutator::GetMutator()->SetManagedContext(false);
     unsigned liveMask = 0;
     bool holderLive = false;
@@ -450,7 +562,7 @@ void* RunConcreteFieldYoungMark(void*)
         std::fprintf(stderr, "FIELD_ITERATOR_YOUNG_RESULT holder_live=%d live_mask=%u expected=3\n",
                      holderLive, liveMask);
     }
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return reinterpret_cast<void*>(holderLive && liveMask == 3 ? 0 : 1);
 }
@@ -464,7 +576,7 @@ void* RunLargeYoungClosureCase(void*)
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     HeapAccess<>::oop_store(&(field), target);
     const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
-    const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
+    const U64 holderRoot = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(holder);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     bool live;
@@ -476,7 +588,7 @@ void* RunLargeYoungClosureCase(void*)
         std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d live=%d followed=%d\n",
                      holderYoung, live, followed);
     }
-    Heap::GetHeap().RemoveExportObject(holderRoot);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(holderRoot);
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>((holderYoung && live && followed) ? 0 : 1);
 }
@@ -495,10 +607,10 @@ void* RunMarkAllocationCase(void* rawExisting)
     auto& collector = heap;
     Mutator* mutator = Mutator::GetMutator();
     MArray* beforeSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
-    const U64 beforeSmallRoot = heap.RegisterExportRoot(beforeSmall);
+    const U64 beforeSmallRoot = heap.cross_vm().export_roots().RegisterExportRoot(beforeSmall);
     ZPage* beforeSmallPage = Heap::page(reinterpret_cast<uintptr_t>(beforeSmall));
     MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
-    const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
+    const U64 targetRoot = target != nullptr ? heap.cross_vm().export_roots().RegisterExportRoot(target) : 0;
     mutator->SetManagedContext(false);
     auto markPhase = std::make_unique<YoungMarkPhase>();
     MArray* afterSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
@@ -510,7 +622,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(afterSmallPage->generation()->seqnum()));
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
-    const U64 holderRoot = heap.RegisterExportRoot(holder);
+    const U64 holderRoot = heap.cross_vm().export_roots().RegisterExportRoot(holder);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     HeapAccess<>::oop_store(&(field), target);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(holder));
@@ -536,13 +648,13 @@ void* RunMarkAllocationCase(void* rawExisting)
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n",                   existing, static_cast<unsigned>(phase),
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
-    heap.RemoveExportObject(beforeSmallRoot);
-    if (existing) heap.RemoveExportObject(targetRoot);
+    heap.cross_vm().export_roots().RemoveExportRoot(beforeSmallRoot);
+    if (existing) heap.cross_vm().export_roots().RemoveExportRoot(targetRoot);
     mutator->SetManagedContext(false);
     markPhase.reset();
     // The next real driver cycle resamples allocation watermarks and relocates.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
+    holder = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     BaseObject* completedTarget = HeapAccess<>::oop_load(&(completedField));
@@ -560,7 +672,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
                  static_cast<unsigned long long>(during),
                  static_cast<unsigned long long>(after), resampled);
-    heap.RemoveExportObject(holderRoot);
+    heap.cross_vm().export_roots().RemoveExportRoot(holderRoot);
     mutator->SetManagedContext(true);
     const uintptr_t status = (retiredTLAB ? 0 : 1024) | ((noExplicitMark && noPublication) ? 0 : 512) | (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
@@ -621,7 +733,7 @@ void* RunNativeTaskRootCase(void*)
     NativeSlot root(zpointer::null);
     NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     size_t objects = 0;
     {
         ScopedEnterSaferegion saferegion(false);
@@ -629,7 +741,7 @@ void* RunNativeTaskRootCase(void*)
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
     }
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::fprintf(stderr, "NATIVE_TASK_HEAP_TARGET managed_visits=%zu gc_returned=1\n", objects);
     Mutator::GetMutator()->SetManagedContext(true);
     return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
@@ -713,6 +825,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, OddPrimitiveTailUsesSegmentedCleari
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 33), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, PlainStructArrayYieldsToYoungGc)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 64 | 4), 0);
+}
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8), 0);

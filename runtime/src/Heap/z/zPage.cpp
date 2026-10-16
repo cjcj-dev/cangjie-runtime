@@ -73,14 +73,7 @@ ZPage* ZPage::NullRegion()
 
 uintptr_t ZPage::heapStartAddress = 0;
 std::vector<ZPage::ReservedSegment> ZPage::reservedSegments;
-ZSafeDelete<ZPage> ZPage::safeDestroy;
 
-ZPage::~ZPage()
-{
-    if (_retireHook) {
-        _retireHook();
-    }
-}
 
 std::atomic<size_t> ZPage::youngRegionCount { 0 };
 namespace {
@@ -163,7 +156,6 @@ void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) co
 }
 
 } // namespace MapleRuntime
-
 
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -316,16 +308,6 @@ bool ZPage::undo_alloc_object_atomic(uintptr_t addr, size_t size)
         }
     }
 }
-
-ZForwarding* ZPage::GetFromPageCarrier() const
-    {
-        const MAddress start = GetRegionStart();
-        if (start == 0) {
-            return nullptr;
-        }
-        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
-        return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
-    }
 
 
 }

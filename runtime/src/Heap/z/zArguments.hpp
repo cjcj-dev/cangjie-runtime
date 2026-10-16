@@ -11,6 +11,5 @@ public:
     static void initialize();
     static Heap* create_heap();
     static bool is_supported();
-    static bool gc_enabled();
 };
 }

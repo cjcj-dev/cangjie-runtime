@@ -79,7 +79,7 @@ void AllocBuffer::Init()
     static_assert(offsetof(TLAB, end) == 8, "compiler TLAB end ABI");
     tlab = TLAB{};
     ThreadLocal::InitializeCleaner();
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     manager.InitializeTLAB(*this);
 }
 
@@ -180,31 +180,4 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     (void)allocType;
     return AllocateInTLAB(totalSize);
 }
-
-MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
-{
-    (void)allocType;
-    // HotSpot memAllocator.cpp:273-278: preserve a useful tail and let the
-    // allocation entry continue outside the TLAB.
-    if (tlab.end - tlab.top > RefillWasteLimit()) {
-        RecordSlowAllocation(totalSize);
-        return 0;
-    }
-    // HotSpot memAllocator.cpp:282-296: retire before computing the refill;
-    // the caller owns the outside-TLAB fallback for every slow-path failure.
-    RetireTLAB(false);
-    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
-    if (tlabSize == 0) { return 0; }
-    // Cangjie tasks can migrate while page allocation enters a saferegion.
-    CJThreadPreemptOffCntAdd();
-    size_t actualSize = 0;
-    const uintptr_t start = ZCollectedHeap::heap()->allocate_new_tlab(totalSize, tlabSize, &actualSize);
-    CJThreadPreemptOffCntSub();
-    if (start == 0) { return 0; }
-    // HotSpot memAllocator.cpp:312-324: initialize the refill before publishing its bounds.
-    MemorySet(start, actualSize, 0, actualSize);
-    FillTLAB(start, actualSize);
-    return AllocateInTLAB(totalSize);
-}
-
 } // namespace MapleRuntime

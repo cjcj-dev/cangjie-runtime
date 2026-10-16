@@ -1,7 +1,9 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "Heap/z/zAbort.inline.hpp"
 #include "Common/BaseObject.inline.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zVerify.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -34,7 +36,7 @@ namespace { BaseObject* brokenObject = nullptr; }
 // ZGC zVerify.cpp:63-110.
 void z_verify_safepoints_are_blocked()
 {
-    if (ThreadLocal::GetThreadType() == ThreadType::GC_THREAD) { return; }
+    if (ThreadLocal::GetThreadType() == ThreadType::GC_THREAD || VMThread::is_VM_thread()) { return; }
     Mutator* const mutator = ThreadLocal::GetMutator();
     DCHECK(MutatorManager::Instance().WorldStopped() ||
            (mutator != nullptr && !mutator->InSaferegion()));
@@ -42,21 +44,6 @@ void z_verify_safepoints_are_blocked()
 #endif
 
 namespace {
-// VM adapter: the first WeakRef payload slot is outside Cangjie's ordinary
-// strong-field bitmap. HotSpot's reference Klass dispatch owns that layout.
-// This is raw iteration, as at zVerify.cpp:632 and 737, not a safe split.
-template <typename Function>
-void IterateVerifyFields(BaseObject* object, Function function)
-{
-    const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
-    if (object->IsWeakRef()) { function(HeapSlotAt<>(referent)); }
-    object->ForEachRefField([&](RefField<>& field) {
-        if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
-            function(field);
-        }
-    });
-}
-
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
 constexpr bool trueInDebug = true;
 #else
@@ -145,6 +132,20 @@ public:
 };
 }
 
+namespace {
+class ZVerifyNMethodClosure {
+    const RootVisitor& closure;
+public:
+    explicit ZVerifyNMethodClosure(const RootVisitor& closure) : closure(closure) {}
+    void do_nmethod(CJThreadRoot& root)
+    {
+        // ZGC zVerify.cpp:354-360: verification only observes disarmed carriers.
+        if (root.is_armed()) { return; }
+        root.oops_do(closure);
+    }
+};
+} // namespace
+
 void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
@@ -152,11 +153,13 @@ void ZVerify::RootsStrong(bool afterOldMark)
     RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_oop(root); });
     ZVerifyUncoloredRootClosure uncolored;
     RootVisitor plain = [&](ObjectRef& root) { uncolored.do_oop(root); };
-    ZMark::VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
+    RootsIteratorStrongUncolored roots;
+    ZVerifyNMethodClosure carrier(plain);
+    roots.Apply([&](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, plain);
         });
-    });
+    }, [&](CJThreadRoot& root) { carrier.do_nmethod(root); });
 }
 void ZVerify::RootsWeak()
 {
@@ -257,6 +260,10 @@ public:
         if (verifyWeaks) { z_verify_possibly_weak_oop(field); }
         else { z_verify_old_oop(field); }
     }
+    ReferenceIterationMode reference_iteration_mode() override
+    {
+        return verifyWeaks ? DO_FIELDS : DO_FIELDS_EXCEPT_REFERENT;
+    }
 };
 
 class ZVerifyObjectClosure : public ObjectClosure, public OopFieldClosure {
@@ -282,15 +289,7 @@ public:
     void verify_live_object(BaseObject* object)
     {
         ZVerifyOldOopClosure oopClosure(verifyWeaks);
-        const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
-        if (object->IsWeakRef() && verifyWeaks) { oopClosure.do_oop(&HeapSlotAt<>(referent)); }
-        auto fields = [&](RefField<>& field) {
-            if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
-                oopClosure.do_oop(&field);
-            }
-        };
-        ZBasicOopIterateClosure<decltype(fields)> closure(fields);
-        ZIterator::oop_iterate_safe(object, &closure);
+        ZIterator::oop_iterate_safe(object, &oopClosure);
     }
 
     void do_object(BaseObject* object) override
@@ -346,6 +345,7 @@ class ZVerifyRemsetBeforeOopClosure : public BasicOopIterateClosure {
     ZForwarding* const forwarding;
     MAddress from = 0;
 public:
+    ReferenceIterationMode reference_iteration_mode() override { return DO_FIELDS; }
     explicit ZVerifyRemsetBeforeOopClosure(ZForwarding* value) : forwarding(value) {}
     void set_from_addr(MAddress value) { from = value; }
     void do_oop(RefField<>* pointer) override
@@ -356,7 +356,7 @@ public:
         if (IntentionallyUnremembered(field.GetFieldValue())) { return; }
         if (kBufferStoreBarriers && bufferedStores.count(slot) != 0) { return; }
         if (forwarding->find(from) != 0) { return; }
-        CHECK_DETAIL(Heap::GetHeap().OldActiveRemsetIsCurrent()
+        CHECK_DETAIL(ZGeneration::old()->active_remset_is_current()
                          ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot))
                          : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot)),
                      "Missing remembered field %p in source %p", &field, reinterpret_cast<BaseObject*>(from));
@@ -369,6 +369,7 @@ class ZVerifyRemsetAfterOopClosure : public BasicOopIterateClosure {
     MAddress from = 0;
     MAddress to = 0;
 public:
+    ReferenceIterationMode reference_iteration_mode() override { return DO_FIELDS; }
     explicit ZVerifyRemsetAfterOopClosure(ZForwarding* value) : forwarding(value) {}
     void set_from_addr(MAddress value) { from = value; }
     void set_to_addr(MAddress value) { to = value; }
@@ -390,7 +391,7 @@ public:
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
-        CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);
+        CHECK_DETAIL(ZGeneration::young()->is_phase_mark(), "Missing remembered field outside young marking: %p", &field);
         CHECK_DETAIL(forwarding->relocated_remembered_fields_published_contains(slot),
                      "Missing published remembered field %p in destination %p", &field, reinterpret_cast<BaseObject*>(to));
 
@@ -401,12 +402,12 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr || forwarding->from_age() != PageAge::old) { return; }
     ZPage* page = forwarding->page();
-    if (Heap::GetHeap().OldActiveRemsetIsCurrent()) { page->verify_remset_cleared_previous(); }
+    if (ZGeneration::old()->active_remset_is_current()) { page->verify_remset_cleared_previous(); }
     else { page->verify_remset_cleared_current(); }
     ZVerifyRemsetBeforeOopClosure closure(forwarding);
     page->object_iterate([&](BaseObject* object) {
         closure.set_from_addr(reinterpret_cast<MAddress>(object));
-        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
+        OopIteratorClosureDispatch::oop_oop_iterate(&closure, object, object->GetTypeInfo());
     });
 }
 void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
@@ -418,14 +419,14 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
         BaseObject* object = generation->remap_object(reinterpret_cast<BaseObject*>(from));
         closure.set_from_addr(from);
         closure.set_to_addr(reinterpret_cast<MAddress>(object));
-        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
+        OopIteratorClosureDispatch::oop_oop_iterate(&closure, object, object->GetTypeInfo());
     });
 }
 void ZVerify::AfterRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr) { return; }
     if (forwarding->to_age() != PageAge::old) { return; }
-    if (ZForwarding::young_marking() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
+    if (ZGeneration::young()->is_phase_mark() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
     AfterRelocationInternal(forwarding);
 }
 void ZVerify::AfterScan(ZForwarding* forwarding)

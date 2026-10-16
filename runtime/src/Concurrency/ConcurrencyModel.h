@@ -35,6 +35,20 @@ using LWTData = struct {
     BaseObject* threadObject;   // Cangjie class Thread in std/core; never TypeInfo
 };
 static_assert(sizeof(LWTData) <= 32, "LWTData must fit COARGS_SIZE_MAX");
+// CJThread carrier counterpart of ZNMethod: iteration holds the carrier lock.
+class CJThreadRoot {
+public:
+    CJThreadRoot(LWTData& data, uintptr_t& color) : data(data), color(color) {}
+    bool is_armed() const;
+    uintptr_t saved_color() const { return color; }
+    void guard_with(uintptr_t value) { __atomic_store_n(&color, value, __ATOMIC_RELEASE); }
+    void entry_barrier();
+    void oops_do(const RootVisitor& visitor);
+private:
+    LWTData& data;
+    uintptr_t& color;
+};
+void VisitCJThreadRoots(const std::function<void(CJThreadRoot&)>& visitor);
 void CJThreadRootEntryBarrier();
 void StoreCJThreadObject(void* object);
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
@@ -52,7 +66,6 @@ public:
     virtual void Init(const ConcurrencyParam, ScheduleType) {}
     virtual void Fini() {}
     virtual void VisitGCRoots(RootVisitor* visitorHandle) = 0;
-    void VisitGCRoots();
     virtual void* GetThreadScheduler() const
     {
         std::abort();

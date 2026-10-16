@@ -1,0 +1,97 @@
+{
+  "keepalive": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "auto* found = static_cast<MArray*>(value.resolve());",
+      "auto* found = static_cast<MArray*>(value.peek());"
+    ]
+  ],
+  "peek": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "auto* value = static_cast<MArray*>(values[index].peek());",
+      "auto* value = static_cast<MArray*>(values[index].resolve());"
+    ]
+  ],
+  "young": [
+    [
+      "runtime/src/Heap/z/zRootsIterator.cpp",
+      "    weak.apply(&copy);",
+      "    // Controlled cut: omit weak storage roots."
+    ]
+  ],
+  "phase": [
+    [
+      "runtime/src/Heap/z/zGeneration.cpp",
+      "    Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();",
+      "    // Controlled cut: omit old weak processing."
+    ]
+  ],
+  "report": [
+    [
+      "runtime/src/Heap/z/zWeakRootsProcessor.cpp",
+      "        rootsWeakColored.report_num_dead();",
+      "        // Controlled cut: omit owner notification."
+    ]
+  ],
+  "resize_find": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "WeakHandle value = cleanupState->Find(object, hash);",
+      "WeakHandle value; // Controlled cut: omit old buckets."
+    ]
+  ],
+  "growth": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "return StartResizer(growOnly, adjusted);",
+      "return false; // Controlled cut: omit requested growth."
+    ]
+  ],
+  "wait2": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "case DeadState::wait2:\n            table.deadState.store(DeadState::wait1, std::memory_order_release);",
+      "case DeadState::wait2:\n            table.deadState.store(DeadState::wait2, std::memory_order_release);"
+    ]
+  ],
+  "blocked": [
+    [
+      "runtime/src/Heap/z/zBarrier.inline.hpp",
+      "inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {",
+      "inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {"
+    ],
+    [
+      "runtime/src/Heap/z/zBarrier.inline.hpp",
+      "inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {",
+      "inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {"
+    ]
+  ],
+  "compiler": [
+    [
+      "runtime/src/CompilerCalls.cpp",
+      "    return StringDedup::Instance().Canonical(arrayInfo, candidate);",
+      "    return candidate; // Controlled cut: omit canonical consumer."
+    ]
+  ],
+  "registration": [
+    [
+      "runtime/src/Heap/z/zRootsIterator.cpp",
+      "{StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}",
+      "{[]() -> OopStorage& { static OopStorage omitted; return omitted; }(), workers}}}, generation(generation) {}"
+    ]
+  ],
+  "strong_registration": [
+    [
+      "runtime/src/Heap/z/zRootsIterator.cpp",
+      "Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers",
+      "StringDedup::Instance().WeakStorage(), workers"
+    ],
+    [
+      "runtime/src/Heap/z/zRootsIterator.cpp",
+      "{StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}",
+      "{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation) {}"
+    ]
+  ],
+  "restored": []
+}

@@ -5,26 +5,22 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/zMark.hpp"
 #include "Base/Log.h"
 #include "Common/SuspendibleThreadSet.h"
 namespace MapleRuntime {
-void MarkTerminate::Reset(size_t workers)
+void MarkTerminate::Reset(uint32_t workers)
 {
     CHECK_DETAIL(workers != 0, "mark termination needs a worker");
-    std::lock_guard<std::mutex> lock(mutex);
     workerCount = workers;
-    working = workers;
-    awakening = 0;
+    working.store(workers, std::memory_order_relaxed);
+    awakening.store(0, std::memory_order_relaxed);
 }
 
 void MarkTerminate::Leave()
 {
     SuspendibleThreadSetLeaver stsLeaver;
     std::lock_guard<std::mutex> lock(mutex);
-    CHECK_DETAIL(working != 0, "mark worker left twice");
-    --working;
-    if (working == 0) {
+    if (working.fetch_sub(1, std::memory_order_relaxed) == 1) {
         condition.notify_all();
     }
 }
@@ -41,42 +37,45 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 {
     SuspendibleThreadSetLeaver stsLeaver;
     std::unique_lock<std::mutex> lock(mutex);
-    CHECK_DETAIL(working != 0, "mark worker left termination twice");
-    --working;
-    if (working == 0) {
+    if (working.fetch_sub(1, std::memory_order_relaxed) == 1) {
 
         condition.notify_all();
         return true;
     }
     MaybeReduceStripes(stripes, usedNStripes);
     condition.wait(lock);
-    if (awakening != 0) {
-        --awakening;
+    if (awakening.load(std::memory_order_relaxed) != 0) {
+        awakening.fetch_sub(1, std::memory_order_relaxed);
     }
-    if (working == 0) {
+    if (working.load(std::memory_order_relaxed) == 0) {
         return true;
     }
-    ++working;
+    working.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
 
 void MarkTerminate::Wake()
 {
+    const uint32_t nworking = working.load(std::memory_order_relaxed);
+    const uint32_t nawakening = awakening.load(std::memory_order_relaxed);
+    if (nworking + nawakening == workerCount) {
+        return;
+    }
+    if (nworking == 0) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex);
-    if (working == 0) {
-        return;
+    if (working.load(std::memory_order_relaxed) + awakening.load(std::memory_order_relaxed) != workerCount) {
+        awakening.fetch_add(1, std::memory_order_relaxed);
+        condition.notify_one();
     }
-    if (working + awakening == workerCount) {
-        return;
-    }
-    ++awakening;
-    condition.notify_one();
 }
 
 bool MarkTerminate::Saturated() const
 {
-    std::lock_guard<std::mutex> lock(mutex);
-    return working + awakening == workerCount;
+    const uint32_t nworking = working.load(std::memory_order_relaxed);
+    const uint32_t nawakening = awakening.load(std::memory_order_relaxed);
+    return nworking + nawakening == workerCount;
 }
 
 } // namespace MapleRuntime

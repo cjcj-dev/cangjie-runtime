@@ -1,0 +1,164 @@
+{
+  "rawObject": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "rawObject",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:184:    ZBarrierSet::on_thread_attach(gcData, this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:196:    StorePlain(rawObject, zaddress::null);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:321:    zaddress_unsafe rootValue = rawObject.LoadPlain(std::memory_order_acquire);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:324:        func(rawObject);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:357:                                         const RootVisitor& rawObjectVisitor, bool young)\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:363:        VisitRawObjects(rawObjectVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:370:    VisitRawObjects(rawObjectVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:385:                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor,\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:388:    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor, young);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:356:                             const RootVisitor& rawObjectVisitor, bool young = false);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:411:        CHECK_DETAIL(is_null(rawObject.LoadPlain(std::memory_order_acquire)),\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:413:        StorePlain(rawObject, from_object(obj), std::memory_order_release);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:418:        zaddress_unsafe value = rawObject.LoadPlain(std::memory_order_acquire);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:428:        StorePlain(rawObject, zaddress::null, std::memory_order_release);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:517:                                    const RootVisitor& rawObjectVisitor, bool young = false);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:550:    ObjectRef rawObject{};\n"
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "rawObject",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  },
+  "PublishInvisibleRoot": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "PublishInvisibleRoot",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zObjArrayAllocator.cpp:51:    mutator->PublishInvisibleRoot(array);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:319:    // Pairs with PublishInvisibleRoot's release store: a scanner that sees the\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:408:    void PublishInvisibleRoot(BaseObject* obj)\n"
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "PublishInvisibleRoot",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  },
+  "LoadInvisibleRoot": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "LoadInvisibleRoot",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zObjArrayAllocator.cpp:70:            MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:416:    BaseObject* LoadInvisibleRoot() const\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:424:        BaseObject* obj = LoadInvisibleRoot();\n"
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "LoadInvisibleRoot",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  },
+  "WithdrawInvisibleRoot": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "WithdrawInvisibleRoot",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zObjArrayAllocator.cpp:104:    MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:422:    BaseObject* WithdrawInvisibleRoot()\n"
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "WithdrawInvisibleRoot",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  },
+  "VisitRawObjects": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "VisitRawObjects",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:298:        VisitRawObjects(visitedInvisibleRootVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:304:    VisitRawObjects(visitedInvisibleRootVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:317:void Mutator::VisitRawObjects(const RootVisitor& func)\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:363:        VisitRawObjects(rawObjectVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.cpp:370:    VisitRawObjects(rawObjectVisitor);\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:407:    // VisitRawObjects is the GC consumer of the slot.\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Mutator/Mutator.h:520:    void VisitRawObjects(const RootVisitor& func);\n"
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "VisitRawObjects",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  },
+  "GcPhaseEnum": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "GcPhaseEnum",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    },
+    "working-tree": {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "GcPhaseEnum",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": ""
+    }
+  }
+}

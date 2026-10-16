@@ -1,0 +1,53 @@
+79703227e1ba12ab1a0f20669e83177cea338cd1
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56
+
+SYMBOL=g_gcTotalTimeUs BASE
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/CompilerCalls.cpp:1
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.cpp:1
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.hpp:1
+RC=0
+HEAD
+RC=1
+
+SYMBOL=g_gcCollectedTotalBytes BASE
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/CompilerCalls.cpp:1
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.cpp:1
+b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.hpp:1
+RC=0
+HEAD
+RC=1
+HEAD:runtime/src/CommonAlias.h:51:extern "C" MRT_EXPORT uint64_t CJ_MCC_GetGCTimeUs() __attribute__((alias("MCC_GetGCTimeUs")));
+HEAD:runtime/src/CommonAlias.h:52:extern "C" MRT_EXPORT size_t CJ_MCC_GetGCFreedSize() __attribute__((alias("MCC_GetGCFreedSize")));
+HEAD:runtime/src/CompilerCalls.cpp:481:extern "C" uint64_t MCC_GetGCTimeUs()
+HEAD:runtime/src/CompilerCalls.cpp:484:    return heap.serviceability_cycle_memory_manager(true)->gc_time_us() +
+HEAD:runtime/src/CompilerCalls.cpp:485:           heap.serviceability_cycle_memory_manager(false)->gc_time_us();
+HEAD:runtime/src/CompilerCalls.cpp:488:extern "C" size_t MCC_GetGCFreedSize()
+HEAD:runtime/src/CompilerCalls.cpp:491:    return heap.serviceability_cycle_memory_manager(true)->gc_freed_size() +
+HEAD:runtime/src/CompilerCalls.cpp:492:           heap.serviceability_cycle_memory_manager(false)->gc_freed_size();
+HEAD:runtime/src/CompilerCalls.h:73:extern "C" uint64_t MCC_GetGCTimeUs();
+HEAD:runtime/src/CompilerCalls.h:74:extern "C" size_t MCC_GetGCFreedSize();
+HEAD:runtime/src/Heap/z/zDriver.cpp:227:    ZServiceabilityCycleTracer _tracer;
+HEAD:runtime/src/Heap/z/zDriver.cpp:244:    ZServiceabilityCycleTracer _tracer;
+HEAD:runtime/src/Heap/z/zDriver.cpp:259:    ZDriverScopeMinor scope(request);
+HEAD:runtime/src/Heap/z/zDriver.cpp:286:    ZDriverScopeMajor scope(request);
+HEAD:runtime/src/Heap/z/zServiceability.cpp:23:void GCMemoryManager::gc_begin()
+HEAD:runtime/src/Heap/z/zServiceability.cpp:30:void GCMemoryManager::gc_end()
+HEAD:runtime/src/Heap/z/zServiceability.cpp:43:uint64_t GCMemoryManager::gc_time_us() const
+HEAD:runtime/src/Heap/z/zServiceability.cpp:49:size_t GCMemoryManager::gc_freed_size() const
+HEAD:runtime/src/Heap/z/zServiceability.cpp:58:    _gc_memory_manager->gc_begin();
+HEAD:runtime/src/Heap/z/zServiceability.cpp:63:    _gc_memory_manager->gc_end();
+HEAD:runtime/src/Heap/z/zServiceability.cpp:71:ZServiceabilityCycleTracer::ZServiceabilityCycleTracer(bool minor)
+HEAD:runtime/src/Heap/z/zServiceability.hpp:32:    void gc_begin();
+HEAD:runtime/src/Heap/z/zServiceability.hpp:33:    void gc_end();
+HEAD:runtime/src/Heap/z/zServiceability.hpp:34:    uint64_t gc_time_us() const;
+HEAD:runtime/src/Heap/z/zServiceability.hpp:35:    size_t gc_freed_size() const;
+HEAD:runtime/src/Heap/z/zServiceability.hpp:68:class ZServiceabilityCycleTracer {
+HEAD:runtime/src/Heap/z/zServiceability.hpp:70:    explicit ZServiceabilityCycleTracer(bool minor);
+HEAD:runtime/src/MacAlias.h:65:extern "C" MRT_EXPORT uint64_t CJ_MCC_GetGCTimeUs();
+HEAD:runtime/src/MacAlias.h:66:__asm__(".global _CJ_MCC_GetGCTimeUs\n\t.set _CJ_MCC_GetGCTimeUs, _MCC_GetGCTimeUs");
+HEAD:runtime/src/MacAlias.h:69:extern "C" MRT_EXPORT size_t CJ_MCC_GetGCFreedSize();
+HEAD:runtime/src/MacAlias.h:70:__asm__(".global _CJ_MCC_GetGCFreedSize\n\t.set _CJ_MCC_GetGCFreedSize, _MCC_GetGCFreedSize");
+HEAD:runtime/src/windows_export_references.json:249:    "CJ_MCC_GetGCFreedSize": [
+HEAD:runtime/src/windows_export_references.json:253:    "CJ_MCC_GetGCTimeUs": [
+HEAD:runtime/src/windows_x86_64_exports.def:50:    CJ_MCC_GetGCFreedSize @164
+HEAD:runtime/src/windows_x86_64_exports.def:51:    CJ_MCC_GetGCTimeUs @165

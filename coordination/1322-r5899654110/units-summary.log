@@ -1,0 +1,10 @@
+OHOS_RC=1 wall=3s configure=1
+/usr/bin/grep: unit-ohos/run.log: 没有那个文件或目录
+ 05:55:33 up 20 days,  6:03,  1 user,  load average: 15.64, 19.07, 34.40
+sha256sum: /root/sym_cangjie_runtime_1322_implement_r5899654110/unit-default/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1322_implement_r5899654110/unit-default/cj_gc_forwarding_publication_unit: 没有那个文件或目录
+default rc=123 wall=7
+sha256sum: /root/sym_cangjie_runtime_1322_implement_r5899654110/unit-testable/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1322_implement_r5899654110/unit-testable/cj_gc_forwarding_publication_unit: 没有那个文件或目录
+testable rc=123 wall=8
+ 05:55:41 up 20 days,  6:03,  1 user,  load average: 41.64, 24.45, 35.99

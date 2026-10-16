@@ -1,0 +1,26 @@
+Set cache size limit to 50.0 GB
+arm=producer-time rc=1 wall=23 jobs=192
+MinorTime rc=1
+MinorFreed rc=0
+MajorTime rc=1
+MajorFreed rc=0
+arm=producer-freed rc=1 wall=23 jobs=192
+MinorTime rc=0
+MinorFreed rc=1
+MajorTime rc=0
+MajorFreed rc=1
+arm=consumer-time rc=1 wall=28 jobs=192
+MinorTime rc=1
+MinorFreed rc=0
+MajorTime rc=1
+MajorFreed rc=0
+arm=consumer-freed rc=1 wall=28 jobs=192
+MinorTime rc=0
+MinorFreed rc=1
+MajorTime rc=0
+MajorFreed rc=1
+arm=phase-major rc=1 wall=26 jobs=192
+MinorTime rc=0
+MinorFreed rc=0
+MajorTime rc=1
+MajorFreed rc=1

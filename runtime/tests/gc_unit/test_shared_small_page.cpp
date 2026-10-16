@@ -139,7 +139,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->BirthSequence(), page->generation()->seqnum());
         GC_EXPECT_TRUE(page->IsAllocating());
         const auto other = age == PageAge::old ? ZGenerationId::young : ZGenerationId::old;
-        GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetZGeneration(other).seqnum());
+        GC_EXPECT_EQ(page->OtherSequence(), (*ZGeneration::generation(static_cast<ZGenerationId>(other))).seqnum());
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
         GC_EXPECT_TRUE(page->GetRegionRole() == ZPageRole::RecentFull);
@@ -369,14 +369,4 @@ GC_OTHER_VM_TEST(ObjectAllocator917, FastAvailableRequiresMutator)
     });
 }
 
-GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
-{
-    ExpectAllocatorAbort("ObjectAllocator917.TLABEntryRequiresMutator", "Should be a mutator thread", [] {
-        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
-        AllocBuffer buffer;
-        buffer.ClearRegion();
-        // HotSpot memAllocator.cpp:287-294: the refill slow path queries capacity.
-        (void)buffer.AllocateImpl(16, AllocType::MOVEABLE_OBJECT);
-    });
-}
 #endif

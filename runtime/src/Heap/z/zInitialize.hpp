@@ -10,14 +10,14 @@ public:
 class ZInitialize {
 public:
     static constexpr size_t ErrorMessageLength = 256;
-    static void initialize();
     static void initialize(ZBarrierSet* barrier_set);
     static void register_error(bool debug, const char* error_msg);
     static void error(const char* msg_format, ...);
     static void finish();
     static bool had_error();
+    static const char* error_message();
 private:
-    static char error_message[ErrorMessageLength];
+    static char _error_message[ErrorMessageLength];
     static bool had_error_flag;
     static bool finished;
 };

@@ -64,8 +64,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     // ZGC zPage.inline.hpp:180-186, as in the P1Mark policy fixture.
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
-    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
+    ZBarrier::Mark<false, false, true, false>(from_object(fx.obj0));
+    ZBarrier::Mark<false, false, true, false>(from_object(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
     // ZGC zGeneration.cpp:891-895: use the product combined follow task.
@@ -91,10 +91,10 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
+    ZBarrier::Mark<false, false, true, false>(from_object(fx.obj0));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     mark.CompleteOldMarkForAdmissionTest();
-    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
+    ZBarrier::Mark<false, false, true, false>(from_object(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });

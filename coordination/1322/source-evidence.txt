@@ -1,0 +1,18 @@
+$ git rev-parse HEAD
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7
+RC=0
+$ git grep -n -E g_gcTotalTimeUs|g_gcCollectedTotalBytes HEAD -- runtime/src
+HEAD:runtime/src/CompilerCalls.cpp:473:extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
+HEAD:runtime/src/CompilerCalls.cpp:475:extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
+HEAD:runtime/src/Heap/z/zStat.cpp:1416:std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
+HEAD:runtime/src/Heap/z/zStat.cpp:1417:std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
+HEAD:runtime/src/Heap/z/zStat.hpp:674:extern std::atomic<uint64_t> g_gcTotalTimeUs;
+HEAD:runtime/src/Heap/z/zStat.hpp:675:extern std::atomic<size_t> g_gcCollectedTotalBytes;
+RC=0
+$ git grep -n -E ZServiceabilityCycleTracer|GCMemoryManager HEAD -- runtime/src
+RC=1
+$ git grep -n -E AtRelocateEnd|CycleStats\(\).AtEnd HEAD -- runtime/src/Heap/z/zGeneration.cpp
+HEAD:runtime/src/Heap/z/zGeneration.cpp:335:    CycleStats().AtEnd(TimeUtil::NanoSeconds(), StatWorkers(),
+HEAD:runtime/src/Heap/z/zGeneration.cpp:558:    statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1064:    statHeap.AtRelocateEnd(
+RC=0

@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zMarkStackEntry.hpp"
@@ -33,23 +32,6 @@ class BaseObject;
 // which makes the tail stealable by the other mark workers.
 //
 namespace MarkPartialArray {
-
-using FieldVisitor = std::function<void(MAddress)>;
-using EntryPublisher = std::function<void(const MarkStackEntry&)>;
-
-// One producer/consumer implementation for both generations. Struct arrays
-// retain their GCTib walk; reference arrays publish typed continuations.
-void FollowPartialReferences(const MarkStackEntry& entry,
-                             const FieldVisitor& visit, const EntryPublisher& publish);
-void FollowElements(MAddress start, size_t length, bool finalizable,
-                    const FieldVisitor& visit, const EntryPublisher& publish);
-
-
-// Hot path: runs on every work-stack pop.
-inline bool IsPartialArrayEntry(const MarkStackEntry& entry)
-{
-    return entry.partial_array();
-}
 
 // zMark.cpp:177-196: the entry stores ZAddress::offset(chunk) >> MIN_SIZE_SHIFT.
 MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable = false);

@@ -63,7 +63,7 @@ struct GcVerifyFixture : GcHeapFixture {
         NativeSlot* root = storage.Allocate();
         root->StoreColoured(StoreGoodPointer(object));
         (void)RegionSpace::MarkObject<Generation::Old>(object);
-        Heap::GetHeap().GetZGeneration(Generation::Old).set_phase(ZGenerationPhase::MarkComplete);
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::MarkComplete);
         if (weak) { ZVerify::AfterWeakProcessing(); }
         else { ZVerify::AfterMark(); }
         NativeAccess<>::oop_store(root, nullptr);
@@ -75,7 +75,7 @@ struct GcVerifyFixture : GcHeapFixture {
         region0()->reset(PageAge::old);
         region1()->reset(PageAge::old);
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
-        Heap::GetHeap().GetZGeneration(Generation::Old)
+        (*ZGeneration::old())
             .set_phase(ZGenerationPhase::MarkComplete);
         // zRelocationSet.cpp:110-118: select pages and install the arena before
         // preparing a source page or verifying its forwarding entries.

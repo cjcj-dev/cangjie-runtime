@@ -76,6 +76,7 @@ struct Thread {
     bool isSearching;                       /* indicates whether the thread is in search */
     struct CJThread *boundCJThread;         /* bound cjthread */
     void *nextProcessor;                    /* next processor to be bound to the thread */
+    bool exitBlocked;                     /* native call has not returned at final stop */
     struct Dulink allThreadDulink;          /* link to thread management queue of the scheduler */
 };
 

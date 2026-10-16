@@ -21,6 +21,7 @@
 # to the accounting that exists to make exactly that visible.
 #
 # <file>                                  <status>   <what it needs / why it is here>
+syscall_exit_progress                    manual     run.sh: Linux x86-64 product SO, GDB Python/pexpect, CPU window; ordered syscall publication, two product cuts and restoration
 safepoint_windows                        manual     native Windows product SIMD sentinel, read-only GDB home-area observations and home/restore cuts; .github/workflows/safepoint-windows.yml; behavior.json records behavioral evidence
 
 test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
@@ -120,3 +121,5 @@ check_signal_fatal_watermark.sh           manual     SIGNAL_TEST_OUTPUT with bui
 signal_fatal_watermark_gdb.py             manual     gdb batch script used by check_signal_fatal_watermark.sh; breakpoints at SignalWatermarkWork and ZStackWatermark::start_processing_impl, delivers SIGABRT via gdb `signal`
 check_signal_platform.sh                 manual     Product signal platform/order acceptance; needs one ELF from run_signal_fatal_watermark.sh, ARM_LIB_DIR and gdb; kkk2 only.
 signal_exception_gdb.py                  manual     Invoked by check_signal_platform.sh; observes first ThrowException pending state and invokes second compiler ABI entry.
+
+return_abi                              manual     qualified private SDK compiles main.cj + native.c; Linux x64 N2C result/pending assertions, see return_abi/README.md

@@ -74,8 +74,10 @@ void *SyscallExit0(struct CJThread *cjthread)
                            CJThreadGetId(static_cast<CJThreadHandle>(cjthread)));
         thread->cjthread = nullptr;
         cjthread->thread = nullptr;
+        struct Schedule *schedule = cjthread->schedule;
         ScheduleGlobalWrite(&cjthread, 1);
-        ThreadStop(cjthread->schedule);
+        ProcessorWake(schedule, nullptr);
+        ThreadStop(schedule);
     } else {
         thread->processor = static_cast<void *>(processor);
         processor->thread = thread;

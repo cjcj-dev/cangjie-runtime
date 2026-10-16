@@ -1,3 +1,4 @@
+#include "Heap/z/zAbort.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -5,6 +6,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zRemembered.hpp"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -98,10 +100,10 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
     for (const ZRememberedSetContaining containing : *array) {
         if (from_addr != containing._addr) {
             from_addr = containing._addr;
-            BaseObject* to = Heap::GetHeap().relocate_or_remap_object(
-                reinterpret_cast<BaseObject*>(from_addr), ZGenerationId::old);
+            BaseObject* to = ZGeneration::old()->relocate_or_remap_object(
+                reinterpret_cast<BaseObject*>(from_addr));
             to_addr = reinterpret_cast<MAddress>(to);
-            object_size = to != nullptr ? RegionSpace::GetAllocSize(*to) : 0;
+            object_size = RegionSpace::GetAllocSize(*to);
         }
         const uintptr_t field_offset = containing._field_addr - from_addr;
         if (field_offset < object_size) {
@@ -115,7 +117,7 @@ bool ZRemembered::should_scan_page(ZPage* page) const
     if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
-    ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ZGenerationId::old).forwarding(
+    ZForwarding* forwarding = (*ZGeneration::old()).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -162,7 +164,7 @@ bool ZRemembered::scan_forwarding(ZForwarding* forwarding, void* context_void) c
 {
     auto* context = static_cast<ZRememberedScanForwardingContext*>(context_void);
     bool result = false;
-    if (forwarding->retain_page(&generation_relocate_queue((forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young)))) {
+    if (forwarding->retain_page(ZGeneration::old()->relocate().queue())) {
         forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
         context->_containing_array.clear();
         fill_containing(&context->_containing_array, forwarding->page());
@@ -193,7 +195,7 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
         if (prev == _bm->size()) {
             return false;
         }
-        const BitMap::idx_t page_index = _bm->find_first_set_bit(prev);
+        const BitMap::idx_t page_index = _bm->find_first_set_bit(__atomic_load_n(&_claimed, __ATOMIC_RELAXED));
         if (page_index == _bm->size()) {
             __atomic_compare_exchange_n(&_claimed, &prev, page_index, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
             return false;
@@ -213,7 +215,6 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
             page = nullptr;
         }
         if (page == nullptr && forwarding == nullptr) {
-            prev = page_index + 1;
             continue;
         }
         entry_addr->_forwarding = forwarding;
@@ -264,12 +265,12 @@ public:
           _remset_table_iterator(remembered, true)
     {
         _mark->PrepareWork();
-        ZPage::EnableSafeDestroy();
+        Heap::GetHeap().page_allocator().enable_safe_destroy();
     }
 
     ~ZRememberedScanMarkFollowTask()
     {
-        ZPage::DisableSafeDestroy();
+        Heap::GetHeap().page_allocator().disable_safe_destroy();
         _mark->FinishWork();
         _remembered->clear_found_old_previous_set();
     }
@@ -305,14 +306,14 @@ public:
                 return;
             }
         }
-        _mark->FollowWorkComplete(false);
+        _mark->FollowWorkComplete();
     }
 
     void work() override
     {
         SuspendibleThreadSetJoiner sts_joiner;
         work_inner();
-        (void)_mark->Flush(ThreadLocal::GetThreadLocalData());
+        Heap::GetHeap().mark_flush(ThreadLocal::GetGCData());
     }
 
     void resize_workers(uint32_t nworkers) override
@@ -325,10 +326,10 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
+        ZWorkers* workers = (*ZGeneration::young()).Workers();
         CHECK_DETAIL(workers != nullptr, "ZRemembered::scan_and_follow requires young workers");
         workers->run(&task);
-        if (mark->PollStop() || !mark->TryTerminateFlush()) {
+        if (ZAbort::should_abort() || !mark->TryTerminateFlush()) {
             return;
         }
     }

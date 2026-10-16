@@ -23,39 +23,17 @@ inline size_t ZAttachedArray<ObjectT, ArrayT>::array_size(size_t length)
 
 namespace MapleRuntime {
 template <typename ObjectT, typename ArrayT>
-inline bool ZAttachedArray<ObjectT, ArrayT>::allocation_size(size_t length, size_t* size)
-{
-        if (length > (std::numeric_limits<size_t>::max() - object_size()) / sizeof(ArrayT)) {
-            return false;
-        }
-        *size = object_size() + array_size(length);
-        return true;
-    }
-}
-
-namespace MapleRuntime {
-template <typename ObjectT, typename ArrayT>
-inline void ZAttachedArray<ObjectT, ArrayT>::initialize(void* addr, size_t length)
-{
-        void* const arrayAddr = reinterpret_cast<char*>(addr) + object_size();
-        ::new (arrayAddr) ArrayT[length]();
-    }
-}
-
-namespace MapleRuntime {
-template <typename ObjectT, typename ArrayT>
 inline void* ZAttachedArray<ObjectT, ArrayT>::alloc(size_t length)
 {
-        size_t size;
-        if (!allocation_size(length, &size)) {
-            return nullptr;
-        }
-        void* const addr = std::malloc(size);
-        if (addr == nullptr) {
-            return nullptr;
-        }
-        initialize(addr, length);
-        return addr;
+        struct Allocator {
+            void* alloc(size_t size) const
+            {
+                void* const addr = std::malloc(size);
+                CHECK_DETAIL(addr != nullptr, "failed to allocate attached array");
+                return addr;
+            }
+        } allocator;
+        return alloc(&allocator, length);
     }
 }
 
@@ -66,10 +44,8 @@ inline void* ZAttachedArray<ObjectT, ArrayT>::alloc(Allocator* allocator, size_t
 {
         const size_t size = object_size() + array_size(length);
         void* const addr = allocator->alloc(size);
-        if (addr == nullptr) {
-            return nullptr;
-        }
-        initialize(addr, length);
+        void* const arrayAddr = reinterpret_cast<char*>(addr) + object_size();
+        ::new (arrayAddr) ArrayT[length];
         return addr;
     }
 }

@@ -8,11 +8,16 @@
 
 #include "Heap/z/zPhysicalMemoryBacking_bsd.hpp"
 
+#include <cassert>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <mach/mach.h>
 #include <mach/vm_map.h>
 
+#include "Base/Globals.h"
 #include "Base/Log.h"
+#include "Base/LogFile.h"
+#include "Base/SysCall.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zErrno.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -54,12 +59,11 @@ static ZErrno mremap_mach(uintptr_t from_addr, uintptr_t to_addr, size_t size) {
 ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   : _base(0),
     _initialized(false) {
-  void* const res = mmap(nullptr, max_capacity, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
-  if (res == MAP_FAILED) {
+  _base = reinterpret_cast<uintptr_t>(ReserveMemory(max_capacity));
+  if (_base == 0) {
     ZInitialize::error("Failed to reserve address space for backing memory");
     return;
   }
-  _base = reinterpret_cast<uintptr_t>(res);
   _initialized = true;
 }
 
@@ -72,10 +76,21 @@ void ZPhysicalMemoryBacking::warn_commit_limits(size_t max_capacity) const {
 }
 
 bool ZPhysicalMemoryBacking::commit_inner(zbacking_offset offset, size_t length) const {
+  assert(untype(offset) % static_cast<size_t>(sysconf(_SC_PAGESIZE)) == 0);
+  assert(length % static_cast<size_t>(sysconf(_SC_PAGESIZE)) == 0);
+
+  DLOG(ALLOC, "Committing memory: %zuM-%zuM (%zuM)",
+       untype(offset) / MB, (untype(offset) + length) / MB, length / MB);
+
   const uintptr_t addr = _base + untype(offset);
   const void* const res = mmap(reinterpret_cast<void*>(addr), length, PROT_READ | PROT_WRITE,
                                MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  return res != MAP_FAILED;
+  if (res == MAP_FAILED) {
+    ZErrno err;
+    LOG(RTLOG_ERROR, "Failed to commit memory (%s)", err.to_string());
+    return false;
+  }
+  return true;
 }
 
 size_t ZPhysicalMemoryBacking::commit(zbacking_offset offset, size_t length, uint32_t) const {
@@ -98,10 +113,18 @@ size_t ZPhysicalMemoryBacking::commit(zbacking_offset offset, size_t length, uin
 }
 
 size_t ZPhysicalMemoryBacking::uncommit(zbacking_offset offset, size_t length) const {
+  assert(untype(offset) % static_cast<size_t>(sysconf(_SC_PAGESIZE)) == 0);
+  assert(length % static_cast<size_t>(sysconf(_SC_PAGESIZE)) == 0);
+
+  DLOG(ALLOC, "Uncommitting memory: %zuM-%zuM (%zuM)",
+       untype(offset) / MB, (untype(offset) + length) / MB, length / MB);
+
   const uintptr_t start = _base + untype(offset);
   const void* const res = mmap(reinterpret_cast<void*>(start), length, PROT_NONE,
                                MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
   if (res == MAP_FAILED) {
+    ZErrno err;
+    LOG(RTLOG_ERROR, "Failed to uncommit memory (%s)", err.to_string());
     return 0;
   }
   return length;

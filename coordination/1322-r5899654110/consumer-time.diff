@@ -1,0 +1,12 @@
+--- a/runtime/src/CompilerCalls.cpp
++++ b/runtime/src/CompilerCalls.cpp
+@@ -481,8 +481,7 @@
+ extern "C" uint64_t MCC_GetGCTimeUs()
+ {
+     auto& heap = Heap::GetHeap();
+-    return heap.serviceability_cycle_memory_manager(true)->gc_time_us() +
+-           heap.serviceability_cycle_memory_manager(false)->gc_time_us();
++    (void)heap; return 0; /* cut: public time consumer */
+ }
+ 
+ extern "C" size_t MCC_GetGCFreedSize()

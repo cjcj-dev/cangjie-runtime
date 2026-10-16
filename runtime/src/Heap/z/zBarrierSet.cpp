@@ -11,6 +11,18 @@
 #include <algorithm>
 
 namespace MapleRuntime {
+void ZBarrierSet::on_thread_create(ThreadGCData& data)
+{
+    if (data.storeBarrierBuffer != nullptr) { return; }
+    data.storeBarrierBuffer = new StoreBarrierBuffer();
+}
+
+void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
+{
+    delete data.storeBarrierBuffer;
+    data.storeBarrierBuffer = nullptr;
+}
+
 void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
 {
     const ZPage* const page = Heap::page(reinterpret_cast<MAddress>(new_obj));
@@ -52,9 +64,8 @@ ValuePayload::ValuePayload(MAddress address, size_t size, std::vector<size_t> of
     this->offsets.erase(std::unique(this->offsets.begin(), this->offsets.end()), this->offsets.end());
 }
 
-void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*, zaddress_unsafe* root)
+void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*)
 {
-    data.invisibleRoot = root;
     const auto masks = ThreadGCData::PublishedMasks();
     // Native bootstrap may precede heap/color initialization. A later binding
     // retries attachment before this owner can produce managed references.

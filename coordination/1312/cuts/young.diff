@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -170,7 +170,7 @@
+ {
+     NativeSlotVisitor copy = visitor;
+     strong.apply(&copy);
+-    weak.apply(&copy);
++    // Controlled cut: omit weak storage roots.
+     statics.apply(&copy);
+ }
+ 

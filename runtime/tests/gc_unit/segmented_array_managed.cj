@@ -1,6 +1,6 @@
-// Language-level entry for the managed half of segmented object-array roots.
-// The test product configuration requests one GC at the first 64 KiB yield;
-// this compiled frame supplies real managed stack metadata to the collector.
+// Managed compiler allocation and checksum coverage. The runner's full/young
+// initialization-window checks use the separately built native external fixture;
+// this program does not claim a managed-stack GC initialization window.
 class ManagedSegmentedPayload {
     let value: Int64
 

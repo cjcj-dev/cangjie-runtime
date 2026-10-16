@@ -236,7 +236,7 @@ try:
     TaskStart('zRelocate.cpp:' + str(task_line), internal=True)
     Allocator(0)
     Allocator(1)
-    Allocation(address('MapleRuntime::Heap::alloc_page(unsigned long, MapleRuntime::ZPageType, bool, MapleRuntime::PageAge, MapleRuntime::ZAllocationFlags)'), internal=True)
+    Allocation(address('MapleRuntime::Heap::alloc_page(unsigned long, MapleRuntime::ZPageType, MapleRuntime::PageAge, MapleRuntime::ZAllocationFlags)'), internal=True)
     Starting(address('MapleRuntime::ZRelocate::StartRelocationTasks(MapleRuntime::ZGenerationId)'), internal=True)
     Publishing(address('MapleRuntime::ZStatRelocation::AtRelocateEnd(unsigned long, unsigned long)'), internal=True)
     gdb.execute('continue')

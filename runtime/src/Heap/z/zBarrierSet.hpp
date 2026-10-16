@@ -5,17 +5,20 @@
 #define MRT_Z_BARRIER_SET_HPP
 
 #include "Common/BaseObject.h"
+#include "Heap/shared/barrierSet.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAccessBackend.hpp"
-#include "Heap/z/zThreadLocalData.hpp"
 
 namespace MapleRuntime {
 class MArray;
-class ZBarrierSet {
+class ZBarrierSet : public BarrierSet {
 public:
-    static void on_slowpath_allocation_exit(BaseObject* new_obj);
-    static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
-    static void on_thread_detach(ThreadGCData& data);
+    ZBarrierSet() : BarrierSet(FakeRtti(GetName<ZBarrierSet>::value)) {}
+    void on_thread_create(ThreadGCData& data) override;
+    void on_thread_destroy(ThreadGCData& data) override;
+    void on_slowpath_allocation_exit(BaseObject* new_obj) override;
+    void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native) override;
+    void on_thread_detach(ThreadGCData& data) override;
 
     template<DecoratorSet decorators, typename BarrierSetT = ZBarrierSet>
     class AccessBarrier {
@@ -50,10 +53,9 @@ public:
         static void oop_arraycopy_in_heap_no_check_cast(zpointer* dst, zpointer* src, size_t length);
         static void oop_arraycopy_in_heap(zpointer* src, zpointer* dst, size_t length);
         static void value_copy_in_heap(const ValuePayload& src, const ValuePayload& dst);
-        static void oop_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
-                                         BaseObject* dstObj, MAddress dst, size_t dstSize);
-        static void value_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
-                                           BaseObject* dstObj, MAddress dst, size_t dstSize);
+        static void oop_arraycopy_in_heap(BaseObject* srcObj, MAddress src,
+                                         BaseObject* dstObj, MAddress dst, size_t length);
+        static void value_arraycopy_in_heap(MArray* layout, MAddress src, MAddress dst, size_t length);
         static void struct_copy_one(MArray* layout, MAddress dst, MAddress src);
         static void struct_arraycopy_in_heap_no_check_cast(MArray* layout, MAddress dst, MAddress src, size_t length);
     };
@@ -68,5 +70,4 @@ public:
 };
 } // namespace MapleRuntime
 
-#include "Heap/z/zBarrierSet.inline.hpp"
 #endif

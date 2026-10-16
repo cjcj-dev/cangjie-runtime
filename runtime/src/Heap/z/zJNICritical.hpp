@@ -8,9 +8,8 @@
 #define MRT_Z_JNI_CRITICAL_HPP
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
+#include "Heap/z/zLock.hpp"
 
 namespace MapleRuntime {
 
@@ -30,9 +29,7 @@ private:
     static void exit_inner();
 
     static std::atomic<int64_t> count;
-    static std::mutex lock;
-    static std::condition_variable attention;
-    static std::once_flag once;
+    static ZConditionLock* lock;
 };
 
 } // namespace MapleRuntime

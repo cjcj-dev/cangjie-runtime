@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zServiceability.cpp
++++ b/runtime/src/Heap/z/zServiceability.cpp
+@@ -30,7 +30,7 @@
+ void GCMemoryManager::gc_end()
+ {
+     std::lock_guard<std::mutex> guard(_lock);
+-    _accumulated_time_ns += TimeUtil::NanoSeconds() - _start;
++    /* cut: completed elapsed time not published */
+     _after_gc_usage = Heap::GetHeap().GetMemoryUsage();
+     const size_t before = _before_gc_usage.young.used + _before_gc_usage.old.used;
+     const size_t after = _after_gc_usage.young.used + _after_gc_usage.old.used;

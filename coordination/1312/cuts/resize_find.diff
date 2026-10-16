@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -233,7 +233,7 @@
+ WeakHandle StringDedup::Table::Find(MArray* object, uint32_t hash) const
+ {
+     if (cleanupState != nullptr) {
+-        WeakHandle value = cleanupState->Find(object, hash);
++        WeakHandle value; // Controlled cut: omit old buckets.
+         if (!value.is_empty()) return value;
+     }
+     return buckets[hash % numberOfBuckets].Find(object, hash);

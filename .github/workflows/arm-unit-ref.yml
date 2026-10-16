@@ -1,0 +1,297 @@
+name: ARM unit ELF and product refs
+on:
+  workflow_dispatch:
+    inputs:
+      teardown_qualification_1426:
+        description: Run only bounded native ARM and x64 teardown qualification
+        required: false
+        default: false
+        type: boolean
+      root_qualification_1411:
+        description: Run only the bounded four-root ARM qualification
+        required: false
+        default: false
+        type: boolean
+      elf_ref:
+        description: Ref containing the test sources
+        required: true
+        type: string
+      product_ref:
+        description: Ref containing the runtime sources
+        required: true
+        type: string
+      filter:
+        description: Colon-separated exact Suite.Test names
+        required: true
+        type: string
+  push:
+    branches: ['sym/arm-unit-*']
+permissions:
+  contents: read
+jobs:
+  unit:
+    if: ${{ !inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache
+      GC_UNIT_GATE_SKIP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve refs
+        id: refs
+        env:
+          ELF_REF: ${{ inputs.elf_ref }}
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          TEST_FILTER: ${{ inputs.filter }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            ELF_REF=$(jq -er '.elf_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+            PRODUCT_REF=$(jq -er '.product_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+            TEST_FILTER=$(jq -er '.filter | strings | select(length > 0)' .github/arm-unit-params.json)
+          fi
+          for value in "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER"; do
+            test -n "$value"
+            test "$(printf '%s' "$value" | wc -l)" = 0
+          done
+          printf 'elf_ref=%s\nproduct_ref=%s\nfilter=%s\n' "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refs.outputs.elf_ref }}
+          path: elf-source
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refs.outputs.product_ref }}
+          path: product-source
+      - name: Install native tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build libssl-dev libffi-dev gdb
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: arm-unit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: arm-unit-${{ runner.os }}-
+      - name: Build and execute real standalone entry
+        env:
+          TEST_FILTER: ${{ steps.refs.outputs.filter }}
+        run: |
+          ulimit -S -c 0
+          ulimit -H -c 0
+          mkdir -p evidence compiler-bin
+          uptime > evidence/uptime-before.log
+          git -C elf-source rev-parse HEAD > evidence/elf-ref.log
+          git -C product-source rev-parse HEAD > evidence/product-ref.log
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+          chmod +x compiler-bin/clang++
+          export CXX="$PWD/compiler-bin/clang++"
+          build_ref() {
+            local arm=$1 start=$SECONDS
+            cmake -S "$arm-source/runtime" -B "$arm-build" -DCMAKE_BUILD_TYPE=Release \
+              -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 \
+              -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+              -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+              -DCMAKE_ASM_COMPILER_LAUNCHER=sccache -DMRT_TESTABLE_INTERNALS=OFF -DMRT_GC_UNIT_TESTS=OFF \
+              > "evidence/$arm-configure.log" 2>&1 && \
+              cmake --build "$arm-build" --target cangjie-runtime -j"$(nproc)" > "evidence/$arm-build.log" 2>&1
+            local result=$?
+            printf 'rc=%s wall=%s jobs=%s\n' "$result" "$((SECONDS-start))" "$(nproc)" > "evidence/$arm-build-result.log"
+            return "$result"
+          }
+          build_ref elf & elf_pid=$!
+          build_ref product & product_pid=$!
+          wait "$elf_pid"
+          wait "$product_pid"
+          elf_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' elf-build/CMakeCache.txt)
+          product_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' product-build/CMakeCache.txt)
+          elf_lib=$(dirname "$(find "$elf_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+          product_lib=$(dirname "$(find "$product_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+          sha256sum "$elf_lib/libcangjie-runtime.so" "$product_lib/libcangjie-runtime.so" "$product_lib/libboundscheck.so" > evidence/products.sha256
+          nm --defined-only "$product_lib/libcangjie-runtime.so" | c++filt > evidence/product-symbols.log
+          set +e
+          GC_UNIT_BUILD_ONLY=1 GCV2_RUNTIME_LIB_DIR="$elf_lib" GCV2_RUNTIME_OUTPUT_ROOT="$elf_root" GC_UNIT_OUT="$PWD/evidence/standalone" \
+            bash elf-source/runtime/tests/gc_unit/run_standalone.sh > evidence/standalone.log 2>&1
+          standalone_rc=$?
+          printf '%s\n' "$standalone_rc" > evidence/standalone.rc
+          if [ "$standalone_rc" -ne 0 ]; then exit "$standalone_rc"; fi
+          if ! grep -qxF "GC_UNIT_BUILD_ONLY_DONE tests_executed=0" evidence/standalone.log; then exit 2; fi
+          sha256sum evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit > evidence/elf.sha256
+          nm --defined-only evidence/standalone/cj_gc_unit | c++filt > evidence/elf-defined.log
+          nm -u evidence/standalone/cj_gc_unit | c++filt > evidence/elf-imports.log
+          GC_UNIT_TEST_FILTER="$TEST_FILTER" GC_UNIT_JOBS=1 \
+            bash runtime/tests/gc_unit/run_parallel_tests.sh \
+              evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit \
+              evidence/standalone "$product_lib" > evidence/target.log 2>&1
+          target_rc=$?
+          printf '%s\n' "$target_rc" > evidence/target.rc
+          cat evidence/target.log
+          uptime > evidence/uptime-after.log
+          exit "$target_rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-unit-${{ github.run_id }}
+          path: |
+            evidence/**/*.log
+            evidence/**/*.rc
+            evidence/**/*.sha256
+            evidence/standalone/test-lists/*
+            evidence/standalone/test-manifest*.tsv
+            evidence/standalone/test-status/*
+            evidence/standalone/test-tallies/*
+            evidence/standalone/parallel_tally.txt
+          retention-days: 7
+
+  root-qualification-1411:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-root-1411
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate fixed candidate and four-item manifest before production
+        env:
+          CANDIDATE: ${{ github.sha }}
+          ELF_REF: ${{ inputs.elf_ref }}
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          test "$ELF_REF" = "$CANDIDATE"
+          test "$PRODUCT_REF" = "$CANDIDATE"
+          python3 runtime/tests/arm_root_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+      - name: Install native tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build libssl-dev libffi-dev
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Capture toolchain cache identity and compiler wrappers
+        id: toolchain
+        run: |
+          mkdir -p evidence compiler-bin
+          /usr/bin/clang --version > evidence/clang-version.log
+          cmake --version > evidence/cmake-version.log
+          sccache --version > evidence/sccache-version.log
+          printf 'identity=%s\n' "$(cat evidence/*-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+          chmod +x compiler-bin/*
+          echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+          echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: root1411-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+          restore-keys: root1411-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+      - name: Build product once and qualify four filters with budget control
+        env:
+          CANDIDATE: ${{ github.sha }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          ulimit -S -c 0
+          ulimit -H -c 0
+          set +e
+          python3 runtime/tests/arm_root_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence > evidence/qualification.log 2>&1
+          result=$?
+          printf '%s\n' "$result" > evidence/qualification.rc
+          cat evidence/qualification.log
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: root-qualification-1411-${{ github.run_id }}
+          path: |
+            evidence/*.log
+            evidence/*.rc
+            evidence/*.json
+            evidence/*.sha256
+            evidence/*.diff
+            evidence/QUALIFICATION_DONE
+            evidence/CMakeCache.txt
+            evidence/publication/
+            evidence/standalone/cj_gc_unit
+            evidence/standalone/cj_gc_unit.green
+            evidence/standalone/cj_gc_forwarding_publication_unit
+            evidence/standalone/*.json
+            evidence/standalone/*.sha256
+          retention-days: 7
+
+  teardown-qualification-1426:
+    permissions:
+      contents: read
+      actions: read
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.teardown_qualification_1426 && !inputs.root_qualification_1411 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 40
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-1426-${{ matrix.host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate fixed candidate and teardown-only entry
+        env:
+          CANDIDATE: ${{ github.sha }}
+          ELF_REF: ${{ inputs.elf_ref }}
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          test "$ELF_REF" = "$CANDIDATE"
+          test "$PRODUCT_REF" = "$CANDIDATE"
+          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+      - name: Install native tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build binutils libssl-dev libffi-dev gdb
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Capture cache identity and compiler wrappers
+        id: toolchain
+        run: |
+          mkdir -p evidence compiler-bin
+          /usr/bin/clang --version > evidence/clang-version.log
+          cmake --version > evidence/cmake-version.log
+          sccache --version > evidence/sccache-version.log
+          gdb --version > evidence/gdb-version.log
+          python3 --version > evidence/python-version.log
+          ldd --version > evidence/glibc-version.log
+          uname -a > evidence/kernel.log
+          printf 'identity=%s\n' "$(cat evidence/clang-version.log evidence/cmake-version.log evidence/sccache-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+          chmod +x compiler-bin/*
+          echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+          echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+          restore-keys: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: teardown-qualification-1426-${{ matrix.host }}-37322917803
+          run-id: 37322917803
+          github-token: ${{ github.token }}
+          path: retained
+      - name: Build once and execute finite teardown batch
+        env:
+          CANDIDATE: ${{ github.sha }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          ulimit -S -c 0
+          ulimit -H -c 0
+          set +e
+          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence --reuse retained > evidence/qualification.log 2>&1
+          result=$?
+          printf '%s\n' "$result" > evidence/qualification.rc
+          cat evidence/qualification.log
+          sccache --show-stats > evidence/sccache-final.log 2>&1
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: teardown-qualification-1426-${{ matrix.host }}-${{ github.run_id }}
+          path: evidence/
+          retention-days: 7

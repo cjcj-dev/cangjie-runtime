@@ -1,0 +1,128 @@
+{
+  "rawObject": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c rawObject 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.cpp:9\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.h:7\n",
+      "line_count": 16
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c rawObject b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "PublishInvisibleRoot": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c PublishInvisibleRoot 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zObjArrayAllocator.cpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.cpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.h:1\n",
+      "line_count": 3
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c PublishInvisibleRoot b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "LoadInvisibleRoot": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c LoadInvisibleRoot 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zObjArrayAllocator.cpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.h:2\n",
+      "line_count": 3
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c LoadInvisibleRoot b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "WithdrawInvisibleRoot": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c WithdrawInvisibleRoot 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zObjArrayAllocator.cpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.h:1\n",
+      "line_count": 2
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c WithdrawInvisibleRoot b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "VisitRawObjects": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c VisitRawObjects 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.cpp:5\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Mutator/Mutator.h:2\n",
+      "line_count": 7
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c VisitRawObjects b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "GcPhaseEnum": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c GcPhaseEnum 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c GcPhaseEnum b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    }
+  },
+  "set_invisible_root": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c set_invisible_root 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c set_invisible_root b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 0,
+      "output": "b645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zObjArrayAllocator.cpp:1\nb645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zThreadLocalData.hpp:1\n",
+      "line_count": 2
+    }
+  },
+  "clear_invisible_root": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c clear_invisible_root 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 1,
+      "output": "",
+      "line_count": 0
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c clear_invisible_root b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 0,
+      "output": "b645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zObjArrayAllocator.cpp:1\nb645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zThreadLocalData.hpp:1\n",
+      "line_count": 2
+    }
+  },
+  "process_invisible": {
+    "583370740011dc5d3f465872549f6dacb0617af7": {
+      "cmd": "git grep -c process_invisible 583370740011dc5d3f465872549f6dacb0617af7 -- runtime/src",
+      "rc": 0,
+      "output": "583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zStackWatermark.cpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zUncoloredRoot.hpp:1\n583370740011dc5d3f465872549f6dacb0617af7:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:1\n",
+      "line_count": 3
+    },
+    "b645992f7cbf11e985529f722cff62e72444f3c0": {
+      "cmd": "git grep -c process_invisible b645992f7cbf11e985529f722cff62e72444f3c0 -- runtime/src",
+      "rc": 0,
+      "output": "b645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zStackWatermark.cpp:1\nb645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zUncoloredRoot.hpp:1\nb645992f7cbf11e985529f722cff62e72444f3c0:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:1\n",
+      "line_count": 3
+    }
+  }
+}

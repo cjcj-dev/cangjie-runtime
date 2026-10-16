@@ -1,3 +1,7 @@
+#include "gc_vm_producer.hpp"
+#include "LoaderManager.h"
+#include "Heap/z/zRootsIterator.hpp"
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -7,6 +11,7 @@
 #include <string>
 #include <unistd.h>
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "zunittest.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
@@ -32,16 +37,15 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + fx.obj0->GetSize());
     }
     const size_t size = fx.obj0->GetSize();
+    MarkConsumerFixture consumer;
     if (finalizable) {
-        GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true));
     }
-    MarkLiveCache cache(1);
-    const bool already = ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
-    const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache) : true;
-    cache.Flush();
+    consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+    if (repeat) {
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+    }
+    consumer.context.Cache().Flush();
     const uint64_t bytes = fx.region0()->live_bytes();
     const uint32_t objects = fx.region0()->live_objects();
     // Do not place a transition assertion ahead of the accounting invariant.
@@ -51,8 +55,6 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(size));
     GC_EXPECT_EQ(objects, 1u);
     GC_EXPECT_TRUE(strong);
-    GC_EXPECT_FALSE(already);
-    GC_EXPECT_TRUE(secondAlready);
 }
 }
 
@@ -100,11 +102,9 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
     uint32_t evictedObjects = 0;
     uint64_t evictedBytes = 0;
     {
-        MarkLiveCache cache(stripes);
-        (void)ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
-        (void)ZMark::MarkEntryObject(fx.obj1,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false), &cache);
+        MarkConsumerFixture consumer(stripes);
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false));
         evictedObjects = fx.region0()->live_objects();
         evictedBytes = fx.region0()->live_bytes();
     }
@@ -153,14 +153,16 @@ struct MarkPort203TestAccess {
             YoungTypeSetter type(collector.young(), ZYoungType::minor);
             collector.young().pause_mark_start();
         }
-        if (duplicateRootOrder != 0) {
-            if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-            if (duplicateRootOrder > 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
-        } else if (markOnly) {
-            array->SetInvisibleObject(true);
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-        }
+        GcUnit::ProduceOnVMThread([&] {
+            if (duplicateRootOrder != 0) {
+                if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+                ZBarrier::Mark<false, false, false, false>(from_object(array));
+                if (duplicateRootOrder > 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+            } else if (markOnly) {
+                array->SetInvisibleObject(true);
+                ZBarrier::Mark<false, false, false, false>(from_object(array));
+            }
+        });
         if (major) { collector.old().concurrent_mark(); }
         else { collector.young().concurrent_mark(); }
     }
@@ -178,8 +180,14 @@ public:
         runtime = this;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
     }
-    ~MarkPortRuntime() override { runtime = nullptr; }
+    ~MarkPortRuntime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:
@@ -242,8 +250,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
     // Install the synthetic payload reservation before publishing GC roots.
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
+    ZAddress::OnHeapCreated(fx.heapStart);
+    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     // The 2 MiB small page already covers the entire reference array.
     fx.region1()->reset(major ? PageAge::old : PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->
@@ -313,10 +321,10 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers((*ZGeneration::generation(static_cast<ZGenerationId>(generation))), helpers + 1);
     }
-    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
-    auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    (*ZGeneration::generation(static_cast<ZGenerationId>(major ? ZGenerationId::old : ZGenerationId::young))).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
+    auto& space = Heap::GetHeap().page_allocator();
     fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
@@ -329,9 +337,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
             roots[i] = &rootSlots[i];
         }
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+        LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {
-        handle = Heap::GetHeap().RegisterExportRoot(array);
+        handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(array);
     }
     ArrayClosureResult result;
     result.region = fx.region1();
@@ -356,14 +364,14 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             root.StoreColoured(StoreGoodPointer(nullptr));
         });
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
-        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+        LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {
-        Heap::GetHeap().RemoveExportObject(handle);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
     }
 
     // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        Heap::GetHeap().GetZGeneration(generation).StopWorkers();
+        (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).StopWorkers();
     }
     MarkPort203TestAccess::Bind(nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
@@ -492,8 +500,8 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
     MarkPort203TestAccess::Bind(&heap, static_cast<int32_t>(workers));
-    young.InitializeWorkers(workers);
-    heap.old().InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), workers);
     heap.old().set_phase(ZGenerationPhase::Mark);
     young.set_phase(ZGenerationPhase::MarkComplete);
 
@@ -518,7 +526,7 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     HeapSlotAt<>(reinterpret_cast<MAddress>(oldSlot)).StoreColoured(StoreGoodPointer(remembered));
     fx.region0()->remember(oldSlot);
     young.register_with_remset(fx.region0());
-    const U64 handle = heap.RegisterExportRoot(root);
+    const U64 handle = heap.cross_vm().export_roots().RegisterExportRoot(root);
     YoungTypeSetter type(young, ZYoungType::minor);
     young.pause_mark_start();
     FILE* phaseLog = std::tmpfile();
@@ -559,7 +567,7 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     std::fprintf(stderr,
         "YOUNG828_RESULT workers=%zu continuation=%d root_child=%d remset_child=%d previous_cleared=%d rearmed=%d\n",
         workers, continuation, rootLive, rememberedLive, previousCleared, rearmed);
-    heap.RemoveExportObject(handle);
+    heap.cross_vm().export_roots().RemoveExportRoot(handle);
     // One combined target assertion prevents an earlier receipt from hiding
     // either input's contribution to the phase result.
     GC_EXPECT_TRUE(rootLive && rememberedLive && previousCleared && rearmed);

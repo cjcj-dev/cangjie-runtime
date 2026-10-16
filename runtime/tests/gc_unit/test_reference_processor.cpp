@@ -21,9 +21,10 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 struct BoundRefProc {
     ZStatWorkers stats;
+    MapleRuntime::GcUnit::WorkerBudgetFixture budget{2};
     ZWorkers pool;
     ReferenceProcessor processor;
-    BoundRefProc() : pool(ZGenerationId::old, 2, &stats), processor(&pool) {}
+    BoundRefProc() : pool(ZGenerationId::old, &stats), processor(&pool) {}
 };
 }
 
@@ -199,7 +200,8 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
 GC_TEST(ReferenceProcessor, ProcessReferencesRunsOnBoundWorkers)
 {
     ZStatWorkers stats;
-    ZWorkers pool(ZGenerationId::old, 2, &stats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture poolBudget(2);
+    ZWorkers pool(ZGenerationId::old, &stats);
     WorkerFixture worker(0);
     GcHeapFixture fx;
     ReferenceProcessor processor(&pool);

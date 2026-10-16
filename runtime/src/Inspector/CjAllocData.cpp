@@ -6,6 +6,7 @@
 
 
 #include "CjAllocData.h"
+#include "Heap/z/zHeap.hpp"
 #include <iostream>
 #include <chrono>
 #include <Common/ScopedObjectAccess.h>

@@ -11,7 +11,7 @@ namespace MapleRuntime {
 void MarkLiveCache::IncLive(ZPage* region, size_t bytes)
 {
     CHECK_DETAIL(region != nullptr, "cannot cache live bytes for a null region");
-    const size_t index = (region->GetRegionStart() >> shift) & (CACHE_SIZE - 1);
+    const size_t index = (region->GetRegionStart() >> shift) & (ZMarkCacheSize - 1);
     Entry& entry = entries[index];
     if (entry.region != region) {
         Evict(entry);

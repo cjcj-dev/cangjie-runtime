@@ -23,7 +23,7 @@ class AllocBuffer;
 class Mutator;
 class ZMark;
 
-enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD, UNCOMMITTER_THREAD };
+enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD, UNCOMMITTER_THREAD, VM_THREAD };
 
 // Backend and CJThread will use external tls var through offset calculation, so external tls
 // must in the first place, followed by the internal tls.
@@ -48,6 +48,12 @@ struct ThreadLocalData {
     // Internal thread local var.
     ThreadType threadType;
     bool isCJProcessor;
+    // HotSpot thread.hpp:209-230: identity bookkeeping exists only in ASSERT builds.
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    bool isSuspendibleThread;
+    bool isIndirectlySuspendibleThread;
+    bool isIndirectlySafepointThread;
+#endif
     void* threadCache;
 #ifndef INTERPRETER_ENABLED
     void* gcDataOffsetPadding;
@@ -118,6 +124,7 @@ public:
     static ThreadLocalData* GetThreadLocalData();
     static void InitializeCleaner();
     static ThreadGCData& GetGCData();
+    static ThreadGCData& GetNativeGCData();
     static void FlushCurrentThreadMarkStacks();
     static MarkThreadLocalStacks& GetMarkStacks(ZMark& domain);
     static bool FlushMarkStacks(ThreadLocalData* tls, ZMark& domain);

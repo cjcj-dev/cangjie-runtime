@@ -42,7 +42,7 @@ def run(binary, log_path):
                             continue
                         records = parse_gclog(line.decode("utf-8"))
                         for cycle in records.generations:
-                            if cycle.gc_tag == "y" and cycle.name == "Young_Generation" and cycle.seq > 0:
+                            if cycle.event == "end" and cycle.gc_tag == "y" and cycle.name == "Young_Generation" and cycle.seq > 0:
                                 (Path(directory) / "completed").write_text(f"seq={cycle.seq}\n")
                                 acknowledged = True
                                 log.write(f"PHASE_ENTRY_CYCLE_ACK seq={cycle.seq}\n".encode())

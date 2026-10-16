@@ -14,7 +14,6 @@ private:
     std::mutex monitor;
     std::condition_variable condition;
     bool stopped = false;
-    bool reevaluate = false;
 
     bool wait_for_tick();
 
@@ -26,7 +25,6 @@ public:
     ZDirector();
 
     static void evaluate_rules();
-    void notify_reevaluate();
 };
 } // namespace MapleRuntime
 

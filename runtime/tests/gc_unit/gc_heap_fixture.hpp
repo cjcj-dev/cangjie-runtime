@@ -104,8 +104,8 @@ inline RememberedSet& HeapTestRemset()
 
 inline bool InitFwdTables()
 {
-    generation_forwarding_table(Generation::Young) = ZForwardingTable();
-    generation_forwarding_table(Generation::Old) = ZForwardingTable();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Young))).forwarding_table() = ZForwardingTable();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).forwarding_table() = ZForwardingTable();
     return true;
 }
 
@@ -124,13 +124,16 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
     auto& gen = *(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young())
                                                  : static_cast<ZGeneration*>(ZGeneration::old()));
     selector.select();
+    if (gen.Workers() == nullptr) {
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(gen, 4);
+        gen.Workers()->set_active_workers(1);
+    }
     gen.relocation_set().install(&selector);
     // Explicit fixture input for isolated barrier/table cases. This helper is
     // not evidence for the generation entry; SelectionPublishesPreparedForwardingOnce
     // exercises that entry through real allocation and RequestGC.
     ZRelocationSetIterator iterator(&gen.relocation_set());
     for (ZForwarding* forwarding; iterator.next(&forwarding);) {
-        forwarding->page()->SetRegionRole(ZPageRole::From);
         gen.forwarding_table().insert(forwarding);
     }
     return true;
@@ -271,12 +274,6 @@ struct GcHeapFixture {
         // ZGC zHeap.inline.hpp:60 re-reads the current descriptor by address.
         ZPage* const current0 = Heap::page(heapStart);
         ZPage* const current1 = Heap::page(heapStart + ZGranuleSize);
-        for (ZPage* region : {current0, current1}) {
-            if (region != nullptr) {
-                delete region->_scratch.retiredLivemap;
-                region->_scratch.retiredLivemap = nullptr;
-            }
-        }
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -300,8 +297,7 @@ struct GcHeapFixture {
     // this is fixture setup, not evidence of a complete GC entry path.
     void InstallPageOwner(ZPage* region)
     {
-        if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
-        if (generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart()) == nullptr) {
+        if ((*ZGeneration::generation(static_cast<ZGenerationId>(region->GetOwnerGeneration()))).forwarding_table().get(region->GetRegionStart()) == nullptr) {
             const Generation generation = region->GetOwnerGeneration();
             ZPage* const current0 = region0();
             ZPage* const current1 = region1();
@@ -309,7 +305,7 @@ struct GcHeapFixture {
             ZPage* second = current1->GetOwnerGeneration() == generation ? current1 : nullptr;
             CHECK(BeginForwardingArena(generation, { first, second }));
         }
-        ZForwarding* forwarding = forwarding_for_page(region);
+        ZForwarding* forwarding = ZGeneration::generation((region)->generation_id())->forwarding((region)->GetRegionStart());
         CHECK(forwarding != nullptr);
 
     }

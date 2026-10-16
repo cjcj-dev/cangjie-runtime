@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -5,6 +6,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zAccess.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zCrossVM.hpp"
@@ -124,7 +126,7 @@ void ZCrossVM::ResolveCycleRef()
                 continue;
             }
             auto& heap = Heap::GetHeap();
-            if (!heap.CheckExportObjState(candidateId, candidate) ||
+            if (!heap.cross_vm().export_roots().CheckActiveState(candidateId, candidate) ||
                 resurrectedExportObjectes.find(candidate) != resurrectedExportObjectes.end() ||
                 resurrectedExportObjectesForwardPhase.find(candidate) !=
                     resurrectedExportObjectesForwardPhase.end()) {
@@ -191,7 +193,7 @@ void ZCrossVM::ResolveCycleRef()
         }
 
         auto& heap = Heap::GetHeap();
-        heap.SetExportObjActiveState(id, false);
+        heap.cross_vm().export_roots().SetActiveState(id, false);
         cycleRefProgress.erase(id);
         resolvedIds.insert(id);
         ++i;
@@ -284,8 +286,16 @@ void ZCrossVM::FindUselessExternObjects(ValueRootMap& discoveredExternObjects)
     CurrentizeValueRootMap(discoveredExternObjects);
 }
 
-void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners, ValueRootMap& discoveredExternObjects)
+void ZCrossVM::ProcessExportRoots(ValueRootMap& discoveredExternObjects)
 {
+    // Cross-VM ownership inventory is separate from the strong GC root walk.
+    // The root barrier already produced a current identity; do not mark twice.
+    ValueRootList exportOwners;
+    Heap::GetHeap().cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
+        BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(
+            reinterpret_cast<volatile zpointer*>(&slot)));
+        if (Heap::IsHeapAddress(object)) { exportOwners.emplace_back(object); }
+    });
     while (!exportOwners.empty()) {
         if (ZAbort::should_abort()) {
             return;
@@ -349,13 +359,9 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root) const
         // when this generation's forwarding table has no entry for it.
         BaseObject* current = ZBarrier::remap_generation(colorPtr)
             ->relocate_or_remap_object(value);
-        if (current == nullptr || !Heap::IsHeapAddress(current) ||
-            ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
-            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0);
-        }
         return current;
     }
-    return ZBarrier::ValidateCurrentValue(value);
+    return value;
 }
 
 void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const
@@ -419,4 +425,23 @@ void ZCrossVM::PreforwardAllResurrectExportFromObjects(Generation generation)
 
 namespace MapleRuntime {
 
+}
+
+namespace MapleRuntime {
+ZCrossVM::ZCrossVM() : _export_roots(new ExportRootTable()) {}
+ZCrossVM::~ZCrossVM() = default;
+ExportRootTable& ZCrossVM::export_roots() { return *_export_roots; }
+void ZCrossVM::CrossAccessBarrier(I64 id)
+{
+    BaseObject* recordObj = export_roots().GetExportRoot(id);
+    if (recordObj == nullptr) {
+        return;
+    }
+    // GetExportObject loads the native slot through its colored load barrier.
+    // Preserve that current identity, including an in-place destination whose
+    // address is also another object's from-key (ZUncoloredRoot::make_load_good,
+    // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
+    ResurrectExportObject(recordObj);
+    export_roots().SetActiveState(id, true);
+}
 }

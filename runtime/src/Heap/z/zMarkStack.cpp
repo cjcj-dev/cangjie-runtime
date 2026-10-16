@@ -45,19 +45,12 @@ MarkStripeStack* MarkStripeStack::Create(bool firstStack)
                   "attached entries must not require per-element destruction");
     const size_t capacity = firstStack ? FIRST_STACK_CAPACITY : REGULAR_STACK_CAPACITY;
     void* const memory = AttachedArray::alloc(capacity);
-    if (memory == nullptr) {
-        return nullptr;
-    }
     auto* const stack = ::new (memory) MarkStripeStack(capacity);
     return stack;
 }
 
 void MarkStripeStack::Destroy(MarkStripeStack* stack)
 {
-    // Local slots can be null, unlike the non-null-only ZGC destroy caller.
-    if (stack == nullptr) {
-        return;
-    }
     stack->~MarkStripeStack();
     AttachedArray::free(stack);
 }
@@ -223,7 +216,9 @@ MarkThreadLocalStacks::MarkThreadLocalStacks(size_t stripeCount) : stacks(stripe
 MarkThreadLocalStacks::~MarkThreadLocalStacks()
 {
     for (MarkStripeStack* stack : stacks) {
-        MarkStripeStack::Destroy(stack);
+        if (stack != nullptr) {
+            MarkStripeStack::Destroy(stack);
+        }
     }
 }
 

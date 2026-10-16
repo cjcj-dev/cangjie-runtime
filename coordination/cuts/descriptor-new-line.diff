@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zPageAllocator.cpp
++++ b/runtime/src/Heap/z/zPageAllocator.cpp
+@@ -626,7 +626,7 @@
+ 
+ void RegionManager::enable_safe_destroy() const
+ {
+-    _safe_destroy.enable_deferred_delete();
++    // fault arm: omit descriptor deferral activation
+ }
+ 
+ void RegionManager::disable_safe_destroy() const

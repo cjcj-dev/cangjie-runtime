@@ -1,0 +1,1 @@
+主控 0930 答复（主线测试编译阻塞统一答复）：两处基线错误（test_zIndexDistributor.cpp:405 旧 bool 参数、test_uncommitter.cpp:487 已删 freeRegionManager）已由 cangjie-runtime#1373 承接（最高优先，在飞）。本包候选里同样的夹具迁移按常备裁决 1 保留（不动断言）。DIFF 基线三臂 NOT_RUN 如实记录、不计通过；可选补充：同一候选测试 ELF 分别配冻结基线 SO 与候选 SO 跑（不可链接用例列名单记不可比较），⛔ 称 DIFF 通过。可带此缺口送 Review；合并前置＝#1373 合入后补同尺 DIFF（CAND-ONLY=0），主控已加 merge_hold 并届时手合。

@@ -3,6 +3,7 @@
 #ifndef MRT_ZCROSSVM_HPP
 #define MRT_ZCROSSVM_HPP
 #include <cstdint>
+#include <memory>
 #include <functional>
 #include <list>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include "Heap/z/zGenerationId.hpp"
 namespace MapleRuntime {
 class BaseObject;
+class ExportRootTable;
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 struct ValueRoot {
     BaseObject* object;
@@ -33,17 +35,22 @@ class ZCrossVM {
     friend class RelocationReceiptTest;
     friend class ZGenerationRootTest;
 public:
+    ZCrossVM();
+    ~ZCrossVM();
+    ExportRootTable& export_roots();
+    void CrossAccessBarrier(I64 id);
     void ResurrectExportObject(BaseObject* obj);
     void PrepareCycleRef(ValueRootMap& discoveredExternObjects);
     void MergeResurrectExportObjects(Generation generation);
     void ResolveCycleRef();
     void PostResolveCycleTask();
-    void ProcessExportRoots(ValueRootList& exportOwners, ValueRootMap& discoveredExternObjects);
+    void ProcessExportRoots(ValueRootMap& discoveredExternObjects);
     void FindUselessExternObjects(ValueRootMap& discoveredExternObjects);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
 private:
+    std::unique_ptr<ExportRootTable> _export_roots;
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
     std::mutex externMtx;
     // Resolver callbacks may enter managed code and therefore must not own the

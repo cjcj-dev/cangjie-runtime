@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
@@ -43,7 +44,7 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& generation = Heap::GetHeap().young();
-    generation.InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
     GenerationSequenceFixture::Advance(generation);
     ZGenerationTest::SetTenuringThreshold(generation, promote ? 1u : 15u);

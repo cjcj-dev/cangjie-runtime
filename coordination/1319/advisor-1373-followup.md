@@ -1,0 +1,3 @@
+LANE=sym_cangjie_runtime_1319_implement_r5899659797 ROLE=implement PROGRESS=WIP
+补充证伪：已接回主线583370740011dc5d3f465872549f6dacb0617af7（#1373/#1374）。该提交仅迁移test_zIndexDistributor参数及两个gdb测试参数，未处理test_uncommitter.cpp:487整段旧夹具。git show 583370740011dc5d3f465872549f6dacb0617af7:runtime/tests/gc_unit/test_uncommitter.cpp 的487仍为regions.freeRegionManager，494/519仍为prime(frm,...),508仍为frm.cacheMutex。主控220112Z称两处均由#1373承接，与主线内容不符。
+本包已按常备裁决1迁移整个旧夹具：StopUncommitters直接regions，prime只传size，cache使用已有pageAllocatorMutex（ZPartition本体没有cacheMutex）。不改断言。请更新基线修复/merge_hold承接；继续本包测试，仍不称DIFF通过。
