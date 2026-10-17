@@ -191,6 +191,30 @@ void RecordStackInfo::FillInStackTrace()
     }
 }
 
+void RecordStackInfo::FillInStackTraceForSnapshot()
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    FillInStackTrace();
+    for (const auto* frame : stacks) {
+        if (frame->GetFrameType() == FrameType::MANAGED
+#ifdef INTERPRETER_ENABLED
+            || frame->GetFrameType() == FrameType::INTERPRETER
+#endif
+        ) {
+            traceFrames.emplace_back(StackInfo::CaptureRawFrame(*frame));
+        } else if (frame->GetFrameType() != FrameType::NATIVE) {
+            // Preserve the snapshot's existing OS/stub frame result, owning its bytes before leaving the reader.
+            RawTraceFrame raw;
+            raw.systemFrame = true;
+            raw.resolved.className = frame->GetPackClassName();
+            raw.resolved.methodName = frame->GetMethodName();
+            raw.resolved.fileName = frame->GetFileNameForTrace();
+            raw.resolved.lineNumber = frame->GetLineNum();
+            traceFrames.emplace_back(std::move(raw));
+        }
+    }
+}
+
 void CJThreadStackInfo::FillInStackTrace()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -301,7 +325,7 @@ int InitCJThreadStackInfoFromCurrFunc(uint32_t maxStrSize,
     GetContextWin64(&rip, &rsp);
     frameInfo = GetCurFrameInfo(winModuleManager, rip, rsp);
     UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-    unwindCxt.frameInfo = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs);
+    unwindCxt.frameInfo = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs, GetCallerFrameSiteKind(FrameType::RUNTIME));
 #else
     void* ip = __builtin_return_address(0);
     void* fa = __builtin_frame_address(0);

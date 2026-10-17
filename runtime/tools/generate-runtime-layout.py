@@ -14,6 +14,7 @@ SOURCES = (
     'CJThread/src/runtime/schedule/include/inner/cjthread.h',
     'Sync/Sync.cpp',
     'Common/BaseObject.h',
+    'Common/StackType.h',
     'ObjectModel/MArray.inline.h',
     'ObjectModel/MClass.cpp',
     'ObjectModel/MFuncdesc.inline.h',

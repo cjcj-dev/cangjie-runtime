@@ -97,10 +97,10 @@ extern "C" void MCC_EndCatch();
 
 extern "C" void MCC_ThrowStackOverflowError(uint32_t size);
 
-extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef excepMsg);
+extern "C" ObjRef MCC_FillInStackTraceImpl(const TypeInfo* captureInfo, const TypeInfo* frameArrayInfo,
+                                            const TypeInfo* byteArrayInfo, ArrayRef excepMsg);
 extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate);
-extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
-                                                   const TypeInfo* charArray);
+extern "C" StackTraceData MCC_DecodeStackTraceImpl(ObjRef capture, int64_t index, const TypeInfo* charArray);
 extern "C" MRT_EXPORT ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo* arraySnapshot,
                                                             const TypeInfo* arrayStackTrace,
                                                             const TypeInfo* charArray);
@@ -122,8 +122,8 @@ extern "C" MRT_EXPORT void CJ_MCC_C2NStub(...);
 extern "C" MRT_EXPORT void CJ_MCC_N2CStub(...);
 extern "C" MRT_EXPORT void CJ_MCC_StackGrowStub(...);
 extern "C" MRT_EXPORT void* CJ_MCC_ExclusiveScope(...);
-extern "C" MRT_EXPORT ArrayRef CJ_MCC_DecodeStackTrace(const ArrayRef pcArray, const TypeInfo* steObjInfo,
-                                                       const TypeInfo* steArrayInfo, const TypeInfo* charArrayInfo);
+extern "C" MRT_EXPORT StackTraceData CJ_MCC_DecodeStackTrace(ObjRef capture, int64_t index,
+                                                            const TypeInfo* charArrayInfo);
 extern "C" MRT_EXPORT ArrayRef CJ_MCC_GetAllThreadSnapshot(const TypeInfo* arraySnapshot,
                                                            const TypeInfo* arrayStackTrace,
                                                            const TypeInfo* charArray);

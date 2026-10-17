@@ -276,8 +276,8 @@ public class MockFramework {
         RecordingFailureReport().fail(recordingInfo, NotAMock, UnmockableCallable)
     }
 
-    func getCachedStackTraceFrame(rawStackTrace: Array<UInt64>): Option<StackTraceElement> {
-        let frameSize = rawStackTrace.size / 3
+    func getCachedStackTraceFrame(rawStackTrace: TraceCapture): Option<StackTraceElement> {
+        let frameSize = rawStackTrace.size
         for (i in 0..frameSize) {
             let rawStackTraceElement = RawStackTraceElement.byIndex(rawStackTrace, i)
             if (stackTraceCache.contains(rawStackTraceElement)) {
@@ -288,7 +288,7 @@ public class MockFramework {
     }
 
     func recordStackTraceFrame(
-        rawStackTrace: Array<UInt64>, frameIndex: Int64, stackTraceElement: StackTraceElement
+        rawStackTrace: TraceCapture, frameIndex: Int64, stackTraceElement: StackTraceElement
     ) {
         stackTraceCache[RawStackTraceElement.byIndex(rawStackTrace, frameIndex)] = stackTraceElement
     }
@@ -367,36 +367,55 @@ class MockScopeViolation <: FailureReport {
 }
 
 private struct RawStackTraceElement <: Hashable & Equatable<RawStackTraceElement> {
-    let methodName: UInt64
-    let fileName: UInt64
-    let lineNumber: UInt64
+    let mangledName: String
+    let directory: String
+    let filename: String
+    let resolvedClass: String
+    let resolvedMethod: String
+    let resolvedFile: String
+    let resolvedLine: Int64
+    let lineNumber: Int64
+    let format: Int64
+    let kind: Int64
 
-    static func byIndex(rawStackTrace: Array<UInt64>, frameIndex: Int64) {
-        return RawStackTraceElement(
-            rawStackTrace[frameIndex * 3], rawStackTrace[frameIndex * 3 + 1], rawStackTrace[frameIndex * 3 + 2])
+    static func byIndex(rawStackTrace: TraceCapture, frameIndex: Int64) {
+        return RawStackTraceElement(rawStackTrace.frame(frameIndex))
     }
 
-    private init(methodName: UInt64, fileName: UInt64, lineNumber: UInt64) {
-        this.methodName = methodName
-        this.fileName = fileName
-        this.lineNumber = lineNumber
+    private init(frame: TraceFrame) {
+        mangledName = frame.mangledNameText
+        directory = frame.directoryText
+        filename = frame.filenameText
+        resolvedClass = frame.resolved.classNameText
+        resolvedMethod = frame.resolved.methodNameText
+        resolvedFile = frame.resolved.fileNameText
+        resolvedLine = frame.resolved.lineNumber
+        lineNumber = frame.lineNumber
+        format = frame.format
+        kind = frame.kind
     }
 
     public func hashCode(): Int64 {
         var hasher = DefaultHasher()
-        hasher.write(methodName)
-        hasher.write(fileName)
+        hasher.write(mangledName)
+        hasher.write(directory)
+        hasher.write(filename)
+        hasher.write(resolvedClass)
+        hasher.write(resolvedMethod)
+        hasher.write(resolvedFile)
+        hasher.write(resolvedLine)
         hasher.write(lineNumber)
+        hasher.write(format)
+        hasher.write(kind)
         return hasher.finish()
     }
 
     public operator func ==(that: RawStackTraceElement): Bool {
-        return this.methodName == that.methodName && this.fileName == that.fileName &&
-            this.lineNumber == that.lineNumber
+        return mangledName == that.mangledName && directory == that.directory && filename == that.filename &&
+            resolvedClass == that.resolvedClass && resolvedMethod == that.resolvedMethod &&
+            resolvedFile == that.resolvedFile && resolvedLine == that.resolvedLine &&
+            lineNumber == that.lineNumber && format == that.format && kind == that.kind
     }
 
-    public operator func !=(that: RawStackTraceElement): Bool {
-        return this.methodName != that.methodName || this.fileName != that.fileName ||
-            this.lineNumber != that.lineNumber
-    }
+    public operator func !=(that: RawStackTraceElement): Bool { return !(this == that) }
 }

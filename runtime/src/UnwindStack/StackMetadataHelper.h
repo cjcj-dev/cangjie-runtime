@@ -112,12 +112,7 @@ public:
 private:
     static uint64_t* ResolveFuncDesc(const FrameInfo& frameInfo)
     {
-#ifdef __APPLE__
-        return reinterpret_cast<uint64_t*>(MFuncDesc::GetFuncDesc(frameInfo.mFrame.GetFA()));
-#else
-        return reinterpret_cast<uint64_t*>(
-            MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frameInfo.GetFuncStartPC())));
-#endif
+        return reinterpret_cast<uint64_t*>(frameInfo.GetQualifiedDescriptor());
     }
 
     // Keep the image mapped for the complete helper lifetime, not only while
