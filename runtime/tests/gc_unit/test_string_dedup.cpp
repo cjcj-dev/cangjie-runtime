@@ -596,26 +596,45 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
 }
 
 namespace {
+std::filesystem::path LocateDedupSource(const std::filesystem::path& recorded,
+                                        const std::filesystem::path& executableDirectory)
+{
+    std::error_code error;
+    if (std::filesystem::is_regular_file(recorded, error)) return recorded;
+    auto findFromExecutable = [&](const std::filesystem::path& suffix) -> std::filesystem::path {
+        for (auto directory = executableDirectory; !directory.empty();) {
+            if (std::filesystem::is_regular_file(directory / suffix, error)) return directory / suffix;
+            const auto parent = directory.parent_path();
+            if (parent == directory) break;
+            directory = parent;
+        }
+        return {};
+    };
+    if (recorded.is_relative()) {
+        if (const auto found = findFromExecutable(recorded); !found.empty()) return found;
+    }
+    std::filesystem::path parts[64];
+    size_t count = 0;
+    for (const auto& part : recorded) {
+        if (part.empty() || part == recorded.root_directory() || part == recorded.root_name()) continue;
+        if (count == 64) break;
+        parts[count++] = part;
+    }
+    for (size_t start = 0; start < count; ++start) {
+        std::filesystem::path suffix;
+        for (size_t index = start; index < count; ++index) suffix /= parts[index];
+        if (const auto found = findFromExecutable(suffix); !found.empty()) return found;
+    }
+    return recorded;
+}
 bool RunMaintenanceSchedule(const char* fixture)
 {
     if (std::getenv("DEDUP_MAINTENANCE_FILE") != nullptr) return false;
     char executable[4096]{};
     const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     GC_EXPECT_TRUE(length > 0);
-    std::filesystem::path source = __FILE__;
-    if (source.is_relative()) {
-        auto directory = std::filesystem::path(executable).parent_path();
-        while (!directory.empty()) {
-            if (std::filesystem::is_regular_file(directory / source)) {
-                source = directory / source;
-                break;
-            }
-            const auto parent = directory.parent_path();
-            if (parent == directory) break;
-            directory = parent;
-        }
-    }
-    source = std::filesystem::absolute(source);
+    const auto source = std::filesystem::absolute(
+        LocateDedupSource(__FILE__, std::filesystem::path(executable).parent_path()));
     const auto scheduler = source.parent_path() / "test_string_dedup_maintenance_gdb.py";
     GC_EXPECT_TRUE(std::filesystem::is_regular_file(scheduler));
     const std::string prefix = std::string(executable) + ".maintenance-" + std::to_string(getpid());
@@ -744,22 +763,8 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
         GC_EXPECT_TRUE(length > 0);
         executable[length] = '\0';
         const std::string snapshot = std::string(executable) + ".queue-observation-" + std::to_string(getpid());
-        std::filesystem::path source = __FILE__;
-        if (source.is_relative()) {
-            // ccache can record a source path relative to the lane root. A
-            // cut runs from its own build directory, so resolve from the ELF.
-            auto directory = std::filesystem::path(executable).parent_path();
-            while (!directory.empty()) {
-                if (std::filesystem::is_regular_file(directory / source)) {
-                    source = directory / source;
-                    break;
-                }
-                const auto parent = directory.parent_path();
-                if (parent == directory) break;
-                directory = parent;
-            }
-        }
-        source = std::filesystem::absolute(source);
+        const auto source = std::filesystem::absolute(
+            LocateDedupSource(__FILE__, std::filesystem::path(executable).parent_path()));
         const auto observer = source.parent_path() / "test_string_dedup_queue_gdb.py";
         GC_EXPECT_TRUE(std::filesystem::is_regular_file(source));
         GC_EXPECT_TRUE(std::filesystem::is_regular_file(observer));
