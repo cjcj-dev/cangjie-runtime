@@ -110,9 +110,6 @@ _CJ_MCC_NewWeakRefObject:
 
     .text
     .align 2
-    .global _CJ_MCC_NewFinalizer
-_CJ_MCC_NewFinalizer:
-    CalleeSavedRegistersStub MCC_NewFinalizer
 
     .text
     .align 2

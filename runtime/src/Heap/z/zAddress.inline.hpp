@@ -751,7 +751,7 @@ inline BaseObject* from_region_addr(Uptr addr)
 }
 
 // from_alloc_addr: 凭什么: address just returned by the allocator
-// (SetClassInfo / NewFinalizer). Memory is committed and
+// (SetClassInfo). Memory is committed and
 // about to be / just was initialised as a BaseObject; never coloured.
 inline BaseObject* from_alloc_addr(Uptr addr)
 {

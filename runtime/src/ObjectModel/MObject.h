@@ -15,8 +15,6 @@ namespace MapleRuntime {
 // refer to BaseObject instead.
 class ATTR_PACKED(4) MObject : public BaseObject {
 public:
-    static MObject* NewFinalizer(const TypeInfo* ti, MSize size);
-
     // no need to retrieve object size via class metadata, i.e. GetInstanceSize().
     static MObject* NewObject(TypeInfo* ti, MSize objectSize, AllocType);
     static MObject* NewPinnedObject(TypeInfo* ti, MSize objectSize);

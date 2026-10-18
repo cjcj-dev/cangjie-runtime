@@ -17,7 +17,7 @@
 #include <set>
 #include <vector>
 using namespace MapleRuntime;
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize, bool);
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize);
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 
 int main(int argc, char** argv)
@@ -42,7 +42,7 @@ int main(int argc, char** argv)
         bool ordinary = false;
         {
             ScopedObjectAccess access;
-            BaseObject* obj = MCC_NewPinnedObject(type, size, false);
+            BaseObject* obj = MCC_NewPinnedObject(type, size);
             AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
             ordinary = obj != nullptr && buffer != nullptr &&
                 buffer->GetRegion() == Heap::page(reinterpret_cast<uintptr_t>(obj));
@@ -60,7 +60,7 @@ int main(int argc, char** argv)
     {
         ScopedObjectAccess access;
         for (size_t i = 0; i < 24 * 1024; ++i) {
-            BaseObject* obj = MCC_NewPinnedObject(type, size, false);
+            BaseObject* obj = MCC_NewPinnedObject(type, size);
             if (obj == nullptr) { return 83; }
             ++allocated;
             auto* page = Heap::page(reinterpret_cast<uintptr_t>(obj));

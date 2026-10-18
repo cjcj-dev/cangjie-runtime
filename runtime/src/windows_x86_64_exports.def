@@ -156,7 +156,6 @@ EXPORTS
     CJ_MCC_NewArrayGeneric @274
     CJ_MCC_NewCJThread @275
     CJ_MCC_NewCJThreadNoReturn @276
-    CJ_MCC_NewFinalizer @277
     CJ_MCC_NewObjArray @278
     CJ_MCC_NewObject @279
     CJ_MCC_NewPinnedObject @280
