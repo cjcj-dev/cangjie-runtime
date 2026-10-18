@@ -27,6 +27,7 @@ blocked_result_seen=False
 fini_thread=0
 rdlock_entered=False
 cut_skipped=False
+barrier_check_witness=None
 late_stack_ok=False
 late_parked=False
 running_samples=[]
@@ -454,6 +455,42 @@ class CutRdlockCall(gdb.Breakpoint):
         gdb.execute("set $eax=0")
         print("EVENT RDLOCK_CUT",flush=True)
         return False
+class BarrierCheckWitness(gdb.Breakpoint):
+    def __init__(self,address,instruction):
+        super().__init__("*"+hex(address),internal=True)
+        self.address=address
+        self.instruction=instruction
+    def stop(self):
+        global barrier_check_witness
+        tid,thread=blocked_thread()
+        if gdb.selected_thread().ptid[1]!=tid or not cut_skipped:
+            return False
+        # Observe the actual CHECK_DETAIL dispatch before the compiler can
+        # tail-call FormatLog and erase wait_if_vm_exited from the abort stack.
+        # This observer, like the rdlock knife, uses the x86_64 SysV ABI.
+        try:
+            message=gdb.parse_and_eval("(char*)$rcx").string()
+            level=int(gdb.parse_and_eval("$esi"))
+            fatal=int(gdb.parse_and_eval("RTLOG_FATAL"))
+            if message!="returned through permanent VM exit barrier" or level!=fatal:
+                return False
+            barrier_check_witness=dict(tid=tid,pc=hex(self.address),instruction=self.instruction,
+                                       message=message,level=level)
+            print("EVENT BARRIER_CHECK_DISPATCH "+json.dumps(barrier_check_witness),flush=True)
+        except (gdb.error,UnicodeError) as error:
+            check(False,"barrier_check_dispatch_observation",error=str(error))
+        # Do not manufacture the terminal state by parking at the CHECK.
+        return False
+def barrier_check_sites():
+    dis=gdb.execute("disassemble 'MapleRuntime::VM_Exit::wait_if_vm_exited()'",to_string=True)
+    sites=[]
+    for line in dis.splitlines():
+        if "FormatLog" not in line or not re.search(r"\b(?:callq?|jmpq?)\b",line):
+            continue
+        address=re.search(r"(0x[0-9a-f]+)",line)
+        if address:
+            sites.append((int(address.group(1),16),line.strip()))
+    return sites
 def rdlock_call_site():
     dis=gdb.execute("disassemble 'MapleRuntime::VM_Exit::wait_if_vm_exited()'",to_string=True)
     lines=dis.splitlines()
@@ -473,6 +510,10 @@ def begin_late(cut):
         check(site is not None,"late_lock_call_site",site=str(site))
         if site:
             CutRdlockCall(*site)
+        sites=barrier_check_sites()
+        check(bool(sites),"barrier_check_dispatch_sites",sites=str(sites))
+        for address,instruction in sites:
+            BarrierCheckWitness(address,instruction)
     else:
         RdlockWitness()
     released=release_blocked_read(pid,tid)
@@ -507,8 +548,11 @@ def observe_barrier_abort():
         frame=frame.older()
     on_late=gdb.selected_thread() is not None and gdb.selected_thread().ptid[1]==tid
     in_barrier=any("wait_if_vm_exited" in name for name in names)
-    ok=signo==6 and signal_on_late and on_late and in_barrier and cut_skipped and not failures
-    check(ok,"permanent_barrier_return_check",signo=signo,on_late=int(on_late),barrier=int(in_barrier),signal_thread=last_signal)
+    dispatched=barrier_check_witness is not None and barrier_check_witness["tid"]==tid
+    from_syscall=any("SyscallExit" in name for name in names)
+    ok=signo==6 and signal_on_late and on_late and dispatched and from_syscall and cut_skipped and not failures
+    check(ok,"permanent_barrier_return_check",signo=signo,on_late=int(on_late),barrier=int(in_barrier),
+          dispatch=barrier_check_witness,from_syscall=int(from_syscall),signal_thread=last_signal)
     print("LATE_ABORT_FRAMES",json.dumps(names),flush=True)
     pc=int(gdb.parse_and_eval("$pc"))
     maps=open("/proc/%d/maps"%gdb.selected_inferior().pid).read()
