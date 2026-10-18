@@ -52,9 +52,12 @@ def main():
                 print("TEARDOWN_OBSERVE %s workers=%d names=%s" %
                       (self.location, len(workers), ",".join(workers)))
                 if self.completion:
-                    pool = "MapleRuntime::ZCollectedHeap::_collected_heap->safepoint_workers()"
-                    counts = tuple(int(gdb.parse_and_eval("%s->%s()" % (pool, method)))
-                                   for method in ("created_workers", "active_workers"))
+                    # Read loaded DWARF fields only. Calling inferior functions
+                    # from Breakpoint.stop can resume threads inside this callback.
+                    heap = gdb.parse_and_eval("MapleRuntime::ZCollectedHeap::_collected_heap")
+                    pool = heap.dereference()["_runtime_workers"]["_workers"]
+                    counts = (int(pool["_created_workers"]["_M_i"]),
+                              int(pool["_active_workers"]))
                     published.append(counts)
                     print("TEARDOWN_POOL created=%d active=%d" % counts)
             except Exception as error:
@@ -67,7 +70,11 @@ def main():
     Observe("MapleRuntime::Heap::StopGCWork()", live)
     Observe("MapleRuntime::GcUnit::CompleteTestRun(int)", completed, completion=True)
     gdb.events.exited.connect(lambda event: exit_codes.append(getattr(event, "exit_code", None)))
-    gdb.execute("run")
+    try:
+        gdb.execute("run")
+    except Exception as error:
+        observation_errors.append(str(error))
+        print("TEARDOWN_GDB_ABORT %s" % error, flush=True)
     positive = len(live) == 1 and len(live[0]) > 0
     ordered = teardown_before_sentinel(completed)
     stopped = published == [(0, 0)]
@@ -77,8 +84,16 @@ def main():
           (len(published), "PASS" if stopped else "FAIL"))
     print("ASSERT_TEARDOWN_EXECUTED exits=%s errors=%s %s" %
           (exit_codes, observation_errors, "PASS" if executed else "FAIL"))
-    gdb.execute("quit %d" % (0 if positive and ordered and stopped and executed else 1))
+    return 0 if positive and ordered and stopped and executed else 1
 
 
 if __name__ == "__main__":
-    main()
+    import gdb
+    try:
+        result = main()
+    except Exception as error:
+        print("TEARDOWN_GDB_ABORT %s" % error, flush=True)
+        result = 1
+    # A Python command-file exception alone can leave batch gdb with rc=0.
+    # Return the observer result explicitly, including setup failures.
+    gdb.execute("quit %d" % result)
