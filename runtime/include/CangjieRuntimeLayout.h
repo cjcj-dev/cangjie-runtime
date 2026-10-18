@@ -15,6 +15,7 @@ constexpr unsigned ObjectStateWordOffset = 0;
 constexpr unsigned ObjectHeaderSize = 8;
 constexpr unsigned ArrayLengthOffset = 8;
 constexpr unsigned ArrayHeaderSize = 16;
+constexpr unsigned ArrayInitSegmentSize = 65536;
 constexpr unsigned TypeInfoSize = 96;
 constexpr unsigned FuncDescReturnPollOffsetMachO = 32;
 constexpr unsigned FuncDescReturnPollOffsetELF = 28;

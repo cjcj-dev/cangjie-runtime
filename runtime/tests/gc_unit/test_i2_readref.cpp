@@ -50,11 +50,19 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t remap = ZPointerRemapped;
+    // zAddress_aarch64.inline.hpp:29-31 converts logical remap state to
+    // physical colour bits; ColouredPointer accepts those physical bits.
+    const uintptr_t remap = ZPointer::remap_bits(ZPointerRemapped);
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
+    const bool loadGood = ZPointer::is_load_good(good);
+    // Record input qualification before entering the barrier. GC_EXPECT throws,
+    // so assert qualification after the original results to keep them observable
+    // when deliberately reverting the input conversion.
+    std::printf("I2_READREF_INPUT load_good=%d\n", loadGood);
     field.StoreColoured(good);
     GC_EXPECT_TRUE(HeapAccess<>::oop_load(&(field)) == fx.obj0);
     GC_EXPECT_EQ(raw(field.GetFieldValue()), raw(good));
+    GC_EXPECT_TRUE(loadGood);
 }
 
 GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)

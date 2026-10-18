@@ -15,6 +15,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "ObjectModel/MFuncdesc.inline.h"
 #include "CangjieRuntime.h"
 
 #include <cstdint>
@@ -156,9 +157,33 @@ uintptr_t EmptyStartPC()
 
 void LinkManaged(ChainNode& node, FrameAddress* caller, const uint32_t* ip)
 {
+#if defined(__x86_64__)
+    // FrameInfo::GetFuncStartPC subtracts the x86 prologue call offset.
     node.before = EmptyStartPC() + 9;
+#elif defined(__arm__)
+    node.before = EmptyStartPC() + 12;
+#else
+    // AArch64 stores the function entry itself in the slot preceding FA.
+    node.before = EmptyStartPC();
+#endif
     node.fa.callerFrameAddress = caller;
     node.fa.returnAddress = ip;
+
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    MachineFrame machine;
+    machine.SetFA(&node.fa);
+    machine.SetIP(ip);
+    FrameInfo frame(machine, FrameType::MANAGED);
+    const uintptr_t actualPC = reinterpret_cast<uintptr_t>(frame.GetFuncStartPC());
+    std::fprintf(stderr, "MANAGED_FRAME_IDENTITY actual=%zx expected=%zx\n", actualPC, EmptyStartPC());
+    GC_EXPECT_EQ(actualPC, EmptyStartPC());
+    frame.ResolveProcInfo();
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(frame.GetStartProc()), EmptyStartPC());
+    const auto descriptor = MFuncDesc::GetFuncDesc(actualPC);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(descriptor), reinterpret_cast<uintptr_t>(&gEmptyDesc.stackMapOffset));
+    GC_EXPECT_TRUE(descriptor->HasReturnPoll());
+    std::fprintf(stderr, "MANAGED_FRAME_QUALIFIED start=%zx return_poll=1\n", actualPC);
+#endif
 }
 
 #if defined(__x86_64__)
@@ -333,12 +358,15 @@ GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
     context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
     StackWatermarkSet::start_processing(owner);
     auto& watermark = owner.GetStackWatermark();
+    std::fprintf(stderr, "GROW_BEFORE_ASSERT done=%d\n", watermark.IsDone());
     GC_EXPECT_FALSE(watermark.IsDone());
     const uintptr_t mark = watermark.watermark();
     const uintptr_t last = watermark.last_processed_raw();
     GC_EXPECT_NE(mark, uintptr_t(0));
     GC_EXPECT_NE(last, uintptr_t(0));
     watermark.OnStackGrow(4096);
+    std::fprintf(stderr, "GROW_AFTER_ASSERT done=%d mark=%zx expected_mark=%zx last=%zx expected_last=%zx\n",
+        watermark.IsDone(), watermark.watermark(), mark + 4096, watermark.last_processed_raw(), last + 4096);
     GC_EXPECT_FALSE(watermark.IsDone());
     GC_EXPECT_EQ(watermark.watermark(), mark + 4096);
     GC_EXPECT_EQ(watermark.last_processed_raw(), last + 4096);
