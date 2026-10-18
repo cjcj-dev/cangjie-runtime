@@ -46,6 +46,8 @@ public:
     u4 GetId(CjHeapDataStringId klassId);
     I8 GetObjType(BaseObject* obj);
 private:
+    class VM_HeapSnapshot;
+    bool SerializeAtSafepoint();
     StreamWriter* writer = nullptr;
     std::unordered_map<CjHeapDataStringId, u4> stringIdxMap;
     u4 stringIdx = 0;
