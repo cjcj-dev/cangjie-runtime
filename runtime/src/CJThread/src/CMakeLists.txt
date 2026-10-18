@@ -87,21 +87,21 @@ if(${PLATFORM_NAME} STREQUAL "linux_aarch64_cangjie" OR ${PLATFORM_NAME} STREQUA
     ${PLATFORM_NAME} STREQUAL "ios_cangjie_x86_64" OR ${PLATFORM_NAME} STREQUAL "ios_simulator_x86_64_cangjie" OR
     ${PLATFORM_NAME} STREQUAL "mac_x86_64_cangjie" OR ${PLATFORM_NAME} STREQUAL "mac_aarch64_cangjie" OR
     ${PLATFORM_NAME} STREQUAL "windows_x86_64" OR ${PLATFORM_NAME} STREQUAL "cross_windows_x86_64")
-install(TARGETS cangjie-thread ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
+install(TARGETS cangjie-thread ARCHIVE DESTINATION lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 set(OBJCOPY_PROGRAM objcopy)
 set(STRIP_PROGRAM strip)
 
 if (NOT (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS"))
 install(CODE "execute_process(COMMAND ${OBJCOPY_PROGRAM} -D --rename-section .text=.text_thread \
-            ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a\")"
         COMPONENT cangjie-thread)
 endif()
 if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "MinSizeRel")
     if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
+    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a\")"
         COMPONENT cangjie-thread)
     else()
-    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} --strip-unneeded ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
+    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} --strip-unneeded \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a\")"
         COMPONENT cangjie-thread)
     endif()
 endif()
@@ -147,4 +147,4 @@ endif()
 add_library(cjthread-trace ${LIBTYPE}
 $<TARGET_OBJECTS:trace>
 )
-install(TARGETS cangjie-aio ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH})
+install(TARGETS cangjie-aio ARCHIVE DESTINATION lib/${TARGET_ARCH})

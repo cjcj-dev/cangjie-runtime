@@ -321,6 +321,10 @@ if (DEFINED _cjthread_result)
         message(FATAL_ERROR "CJThread build failed: ${_cjthread_result}")
     endif()
     message("build cjthread done!!!")
+    # CJThread is configured separately and preinstalled during configure.
+    # The public install entry can select another prefix, so include the child
+    # install graph as well; its archives are inputs to std FFI and net.
+    install(SCRIPT "${CMAKE_BINARY_DIR}/cjthread-build/cmake_install.cmake")
 endif()
 endif() # BUILD_CJTHREAD
 
