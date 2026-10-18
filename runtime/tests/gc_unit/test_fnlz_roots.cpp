@@ -1,4 +1,5 @@
 #include "Heap/z/zRootsIterator.hpp"
+#include "Common/Mutex.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -75,7 +76,10 @@ GC_OTHER_VM_TEST(FnlzRoots, PendingTransferClearsPersistentRoot)
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
     GcHeapFixture fixture;
     auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-    GC_EXPECT_TRUE(processor.SwapPendingList(fixture.obj0) == nullptr);
+    {
+        MonitorLocker lock(HeapMonitor());
+        GC_EXPECT_TRUE(processor.SwapPendingList(fixture.obj0) == nullptr);
+    }
     NativeSlot* pending = nullptr;
     processor.VisitGCRoots([&](NativeSlot& slot) { pending = &slot; });
     GC_EXPECT_TRUE(pending != nullptr);

@@ -72,9 +72,14 @@ void ConcurrentGCThread::create_and_start()
     CHECK_PTHREAD_CALL(pthread_create, (&_thread, nullptr, ConcurrentGCThread::entry, this), "ConcurrentGCThread");
 }
 
+static thread_local ConcurrentGCThread* currentConcurrentGCThread = nullptr;
+
+ConcurrentGCThread* ConcurrentGCThread::current() { return currentConcurrentGCThread; }
+
 void* ConcurrentGCThread::entry(void* arg)
 {
     ConcurrentGCThread* const thread = static_cast<ConcurrentGCThread*>(arg);
+    currentConcurrentGCThread = thread;
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
 #ifdef __APPLE__
     CHECK_PTHREAD_CALL(pthread_setname_np, (thread->_name), "ConcurrentGCThread");
@@ -82,6 +87,7 @@ void* ConcurrentGCThread::entry(void* arg)
     CHECK_PTHREAD_CALL(prctl, (PR_SET_NAME, thread->_name), "ConcurrentGCThread");
 #endif
     thread->run();
+    currentConcurrentGCThread = nullptr;
     return nullptr;
 }
 

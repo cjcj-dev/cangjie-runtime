@@ -11,6 +11,24 @@
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
+// HotSpot interfaceSupport.inline.hpp:203-223: release an in-flight lock
+// before processing a request while returning from the blocked state.
+template<class Preprocess>
+class MutatorBlockInVMPreprocess {
+public:
+    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
+        : mutator(mutator), preprocess(preprocess)
+    {
+        (void)mutator.EnterSaferegion(false);
+    }
+    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
+    MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;
+    MutatorBlockInVMPreprocess& operator=(const MutatorBlockInVMPreprocess&) = delete;
+private:
+    Mutator& mutator;
+    Preprocess& preprocess;
+};
+
 // Scoped guard for saferegion.
 class ScopedEnterSaferegion {
 public:

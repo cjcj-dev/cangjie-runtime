@@ -15,6 +15,7 @@
 #include <cstring>
 #include "Base/TimeUtils.h"
 #include "Common/Runtime.h"
+#include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
@@ -318,21 +319,6 @@ private:
     bool released = false;
 };
 
-// interfaceSupport.inline.hpp:203-223: the transition owns preprocessing;
-// the lock acquisition must not cache the request decision before it.
-template<class Preprocess>
-class MutatorBlockInVMPreprocess {
-public:
-    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
-        : mutator(mutator), preprocess(preprocess)
-    {
-        (void)mutator.EnterSaferegion(false);
-    }
-    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
-private:
-    Mutator& mutator;
-    Preprocess& preprocess;
-};
 } // namespace
 
 void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)

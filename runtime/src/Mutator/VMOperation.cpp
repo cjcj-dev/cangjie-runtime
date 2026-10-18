@@ -98,8 +98,8 @@ void VMThread::execute(VMOperation* operation)
     MRT_ASSERT(!SuspendibleThreadSet::is_suspendible_thread(), "VM operation submitter must not belong to STS");
     MRT_ASSERT(!ThreadLocal::GetThreadLocalData()->isIndirectlySuspendibleThread,
                  "VM operation submitter must not indirectly belong to STS");
-    CHECK_DETAIL(is_running(), "VM thread must be ready before operation submission");
     if (!operation->doit_prologue()) { return; }
+    CHECK_DETAIL(is_running(), "VM thread must be ready before operation submission");
     operation->set_calling_thread(ThreadLocal::GetThreadLocalData());
     vmThread.wait_until_executed(operation);
     operation->doit_epilogue();

@@ -41,6 +41,7 @@ public:
     ConcurrentGCThread& operator=(const ConcurrentGCThread&) = delete;
 
     virtual bool is_ConcurrentGC_thread() const { return true; }
+    static ConcurrentGCThread* current();
 
     // runtime/init.cpp:245-258: publish only after runtime initialization.
     static void NotifyRuntimeInitialized();

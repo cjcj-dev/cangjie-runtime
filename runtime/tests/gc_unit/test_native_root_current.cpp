@@ -1,4 +1,5 @@
 #include "gc_worker_fixture.hpp"
+#include "Common/Mutex.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -594,7 +595,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     fixture.region0()->reset(PageAge::old);
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
-    GC_EXPECT_TRUE(heap.GetFinalizerProcessor().SwapPendingList(fixture.obj0) == nullptr);
+    {
+        MonitorLocker lock(HeapMonitor());
+        GC_EXPECT_TRUE(heap.GetFinalizerProcessor().SwapPendingList(fixture.obj0) == nullptr);
+    }
     RelocationReceiptTest::NativeRootTrace(collector);
     const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p marked=%u\n",
@@ -620,7 +624,10 @@ void CheckRootStorageSegments(unsigned family)
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     const size_t count = family == 0 ? 1 : 24 * sizeof(uintptr_t) * CHAR_BIT;
     for (size_t i = 0; i < count; ++i) {
-        if (family == 0) { GC_EXPECT_TRUE(finalizers.SwapPendingList(fixture.obj0) == nullptr); }
+        if (family == 0) {
+            MonitorLocker lock(HeapMonitor());
+            GC_EXPECT_TRUE(finalizers.SwapPendingList(fixture.obj0) == nullptr);
+        }
         else { (void)heap.cross_vm().export_roots().RegisterExportRoot(fixture.obj0); }
     }
     std::unordered_map<NativeSlot*, uintptr_t> before;

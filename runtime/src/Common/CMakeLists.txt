@@ -6,6 +6,7 @@
 
 set(SRC_LIST
     "BaseObject.cpp"
+    "Mutex.cpp"
     "OopStorage.cpp"
     "WeakHandle.cpp"
     "SuspendibleThreadSet.cpp"

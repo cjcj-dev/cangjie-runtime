@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include <thread>
+#include "Common/Mutex.h"
 #include <unordered_set>
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zResurrection.hpp"
@@ -41,6 +42,7 @@ struct BoundRefProc {
         ZResurrection::block();
         processor.process_references();
         processor.enqueue_references();
+        MonitorLocker lock(HeapMonitor());
         return Heap::GetHeap().GetFinalizerProcessor().SwapPendingList(nullptr);
     }
 };
@@ -109,7 +111,11 @@ GC_OTHER_VM_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
     fixture.processor.process_references();
     const bool clearedBeforeEnqueue = is_null(MReference::referent_addr(fixture.reference)->GetTargetObject());
     fixture.processor.enqueue_references();
-    BaseObject* pending = Heap::GetHeap().GetFinalizerProcessor().SwapPendingList(nullptr);
+    BaseObject* pending;
+    {
+        MonitorLocker lock(HeapMonitor());
+        pending = Heap::GetHeap().GetFinalizerProcessor().SwapPendingList(nullptr);
+    }
     const bool cleared = is_null(MReference::referent_addr(fixture.reference)->GetTargetObject());
     std::fprintf(stderr, "REFERENCE1356_WEAK before_enqueue=%d cleared=%d enqueued=%zu\n", clearedBeforeEnqueue,
                  cleared, fixture.processor.Enqueued(ReferenceType::WEAK));

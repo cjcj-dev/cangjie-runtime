@@ -24,6 +24,7 @@
 #include "WinModuleManager.h"
 #endif
 #include "Common/ScopedObjectAccess.h"
+#include "Common/Mutex.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "os/Processor.h"
@@ -99,6 +100,11 @@ extern "C" MRT_EXPORT void CJ_MRT_DumpAllStackTrace() __attribute__((alias("MRT_
 Runtime* Runtime::runtime = nullptr;
 std::atomic<bool> g_initialized = { false };
 
+bool CangjieRuntime::IsInitialized()
+{
+    return g_initialized.load(std::memory_order_acquire);
+}
+
 void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
 {
     ScopedEntryTrace trace("CJRT_CreateAndInit");
@@ -125,7 +131,12 @@ void CangjieRuntime::FiniAndDelete()
         return;
     }
     auto cjRuntime = reinterpret_cast<CangjieRuntime*>(Runtime::runtime);
-    VMThread::wait_for_vm_thread_exit();
+    {
+        // HotSpot threads.cpp:987-994: service stop/join and caller detach
+        // precede this final Heap_lock window.
+        MonitorLocker lock(HeapMonitor());
+        VMThread::wait_for_vm_thread_exit();
+    }
     Runtime::runtime = nullptr;
     cjRuntime->Fini();
     delete cjRuntime;

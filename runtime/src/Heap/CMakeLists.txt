@@ -9,6 +9,7 @@ set(SRC_LIST
     "shared/memAllocator.cpp"
     "shared/threadLocalMemAllocator.cpp"
     "shared/gcArguments.cpp"
+    "shared/gcVMOperations.cpp"
     "shared/jvmFlagConstraintsGC.cpp"
     "z/zHeap.cpp"
     "z/zInitialize.cpp"

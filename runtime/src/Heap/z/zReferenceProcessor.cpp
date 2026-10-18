@@ -5,6 +5,7 @@
 
 #include "Base/Panic.h"
 #include "Common/SuspendibleThreadSet.h"
+#include "Common/Mutex.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
@@ -313,7 +314,7 @@ void ReferenceProcessor::enqueue_references()
     verify_pending_references();
     auto& owner = Heap::GetHeap().GetFinalizerProcessor();
     {
-        std::lock_guard<std::mutex> lock(owner.PendingLock());
+        MonitorLocker lock(HeapMonitor());
         SuspendibleThreadSetJoiner stsJoiner;
         BaseObject* previous = owner.SwapPendingList(pending_list.get());
         reference_set_discovered(pending_list_tail, previous);
@@ -402,10 +403,13 @@ void FinalizerProcessor::Start()
 
 void FinalizerProcessor::Stop()
 {
-    CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
+    {
+        MonitorLocker lock(HeapMonitor());
+        CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
+        running.store(false, std::memory_order_release);
+        lock.notify_all();
+    }
     Heap::GetHeap().page_allocator().StopUncommitters();
-    running.store(false, std::memory_order_release);
-    Notify();
     WaitStop();
 }
 
@@ -433,18 +437,18 @@ void FinalizerProcessor::WaitStop()
 
 void FinalizerProcessor::Notify()
 {
-    std::lock_guard<std::mutex> lock(pendingLock);
-    pendingCondition.notify_all();
+    MonitorLocker lock(HeapMonitor());
+    lock.notify_all();
 }
 
 void FinalizerProcessor::SetReferenceMethods(void* registration, void* handler, void* finalizer)
 {
-    std::lock_guard<std::mutex> lock(pendingLock);
+    MonitorLocker lock(HeapMonitor());
     registerMethod = registration;
     handlerMethod = handler;
     finalizerMethod = finalizer;
     methodsReady.store(true, std::memory_order_release);
-    pendingCondition.notify_all();
+    lock.notify_all();
 }
 
 void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
@@ -471,12 +475,12 @@ void FinalizerProcessor::RunWorker(bool handler)
 {
     NotifyStarted();
     {
-        std::unique_lock<std::mutex> lock(pendingLock);
-        pendingCondition.wait(lock, [this] {
-            return !IsRunning() || (firstPending && methodsReady.load(std::memory_order_acquire));
-        });
+        MonitorLocker lock(HeapMonitor());
+        while (IsRunning() && !(firstPending && methodsReady.load(std::memory_order_acquire))) {
+            lock.wait();
+        }
+        if (!IsRunning()) { return; }
     }
-    if (!IsRunning()) { return; }
     (void)NewFinalizerCJThread();
     Mutator* mutator = Mutator::GetMutator();
     if (!handler) {
@@ -520,6 +524,7 @@ BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)
 
 BaseObject* FinalizerProcessor::SwapPendingList(BaseObject* head)
 {
+    CHECK_DETAIL(HeapMonitor().owned_by_self(), "pending swap requires Heap_lock ownership");
     BaseObject* previous = NativeAccess<>::oop_load(referencePending);
     NativeAccess<>::oop_store(referencePending, head);
     return previous;
@@ -527,26 +532,24 @@ BaseObject* FinalizerProcessor::SwapPendingList(BaseObject* head)
 
 void FinalizerProcessor::NotifyPending()
 {
+    CHECK_DETAIL(HeapMonitor().owned_by_self(), "pending publication requires Heap_lock ownership");
     firstPending = true;
-    pendingCondition.notify_all();
+    HeapMonitor().notify_all();
+}
+
+bool FinalizerProcessor::HasPendingList() const
+{
+    CHECK_DETAIL(HeapMonitor().owned_by_self(), "pending predicate requires Heap_lock ownership");
+    return !is_null_any(referencePending->GetFieldValue(std::memory_order_acquire));
 }
 
 BaseObject* FinalizerProcessor::WaitPending()
 {
-    {
-        ScopedEnterSaferegion safe(false);
-        std::unique_lock<std::mutex> lock(pendingLock);
-        while (IsRunning() && is_null_any(referencePending->GetFieldValue(std::memory_order_acquire))) {
-            lock.unlock();
-            if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
-                (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
-            }
-            lock.lock();
-            pendingCondition.wait_for(lock, std::chrono::milliseconds(1));
-        }
-    }
     ScopedObjectAccess access;
-    std::lock_guard<std::mutex> lock(pendingLock);
+    MonitorLocker lock(HeapMonitor());
+    while (IsRunning() && !HasPendingList()) { lock.wait(); }
+    // No raw head survives a blocking transition. Resolve the updatable root
+    // only after returning active and reacquiring Heap_lock.
     return SwapPendingList(nullptr);
 }
 

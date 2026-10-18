@@ -154,6 +154,9 @@ void ZCollectedHeap::collect(GCReason reason)
 
 void ZCollectedHeap::stop()
 {
+    // Drain an admitted caller's whole prologue/execute/epilogue window,
+    // then stop services outside Heap_lock so GC pauses can finish.
+    heap()->initiate_shutdown();
     ZAbort::abort();
     Heap::GetHeap().page_allocator().StopStalledAllocations();
     ZCollectedHeap* collected = heap();

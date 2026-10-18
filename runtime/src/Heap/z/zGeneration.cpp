@@ -13,6 +13,7 @@
 #include "Mutator/Mutator.inline.h"
 #include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBreakpoint.hpp"
+#include "Common/Mutex.h"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
@@ -196,6 +197,12 @@ public:
     virtual bool block_jni_critical() const { return false; }
     bool skip_thread_oop_barriers() const override { return true; }
     bool is_gc_operation() const override { return true; }
+    bool doit_prologue() override
+    {
+        HeapMonitor().lock();
+        return true;
+    }
+    void doit_epilogue() override { HeapMonitor().unlock(); }
     void doit() override
     {
         GCIdMark gcIdMark(gcId);
@@ -246,7 +253,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoungAndOld);
-        ZCollectedHeap::heap()->increment_total_collections();
+        ZCollectedHeap::heap()->increment_total_collections(true);
         ZGeneration::young()->mark_start();
         ZGeneration::old()->mark_start();
         return true;

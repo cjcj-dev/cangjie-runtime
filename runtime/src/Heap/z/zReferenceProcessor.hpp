@@ -101,9 +101,9 @@ public:
     void EnqueueReferences() { referenceProcessor.enqueue_references(); }
     void SetReferenceMethods(void* registerMethod, void* handlerMethod, void* finalizerMethod);
     BaseObject* SwapPendingList(BaseObject* head);
+    bool HasPendingList() const;
     BaseObject* WaitPending();
     static void InvokeFinalize(BaseObject* object);
-    std::mutex& PendingLock() { return pendingLock; }
     void NotifyPending();
 private:
     void RunWorker(bool handler);
@@ -117,8 +117,6 @@ private:
     void* registerMethod = nullptr;
     void* handlerMethod = nullptr;
     void* finalizerMethod = nullptr;
-    std::mutex pendingLock;
-    std::condition_variable pendingCondition;
     bool firstPending = false;
     std::mutex startedLock;
     std::condition_variable startedCondition;

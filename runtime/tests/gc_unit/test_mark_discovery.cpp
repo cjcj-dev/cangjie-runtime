@@ -1,4 +1,5 @@
 #include "Heap/z/zRootsIterator.hpp"
+#include "Common/Mutex.h"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -107,7 +108,11 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         // Do not assemble processor/process/enqueue calls in the test.
         heap.old().process_non_strong_references();
     }
-    BaseObject* pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
+    BaseObject* pending;
+    {
+        MonitorLocker lock(HeapMonitor());
+        pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
+    }
     const bool cleared = referent.GetTargetObject() == zaddress::null;
     if (handle != 0) heap.cross_vm().export_roots().RemoveExportRoot(handle);
     const bool finalCarrier = !finalizable || (pending == finalReference && MReference::next(finalReference) == finalReference);
