@@ -56,10 +56,10 @@ if "%~1" == "-s" (
     if errorlevel 1 goto :cjthread_fail
 
     if "%~2" == "windows_x86_64" (
-        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu "%CJTHREAD_PATH%" -G "MinGW Makefiles"
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 -DCMAKE_INSTALL_PREFIX="%~7" -DTARGET_ARCH="%~8" -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     ) else (
-        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 "%CJTHREAD_PATH%" -G "MinGW Makefiles"
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 -DCMAKE_INSTALL_PREFIX="%~7" -DTARGET_ARCH="%~8" "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     )
 

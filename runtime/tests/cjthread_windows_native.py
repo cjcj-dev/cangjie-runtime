@@ -136,6 +136,9 @@ else:
                 values[key.split(":", 1)[0]] = value
     output = values.get("RUNTIME_OUTPUT_ROOT")
     checks["output_directory"] = bool(output) and Path(output) == build / "runtime-staging"
+    prefix = values.get("CMAKE_INSTALL_PREFIX")
+    checks["child_install_prefix"] = bool(prefix) and Path(prefix) == WORK / "install"
+    checks["child_target_tuple"] = values.get("TARGET_ARCH") == "windows_x86_64_cjnative"
     archives = list(TREE.rglob("libcangjie-thread.a"))
     checks["native_archive"] = len(archives) == 1
     if len(archives) == 1:
