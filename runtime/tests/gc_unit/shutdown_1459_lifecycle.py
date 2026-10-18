@@ -24,6 +24,19 @@ published=0
 selected=gdb.execute("show environment GC_UNIT_OTHER_VM_CHILD",to_string=True).split(" = ",1)[1].strip().replace(".", "_")
 blocked_mode="UnreturnedNativeCallRetainsStorage" in selected
 blocked_result_seen=False
+fini_thread=0
+rdlock_entered=False
+cut_skipped=False
+late_stack_ok=False
+late_parked=False
+running_samples=[]
+last_signal=None
+def record_signal(event):
+    global last_signal
+    if isinstance(event,gdb.SignalEvent):
+        thread=event.inferior_thread
+        last_signal=(event.stop_signal,thread.ptid[1] if thread is not None else None)
+gdb.events.stop.connect(record_signal)
 counts={"create":0,"attach":0,"detach":0,"destroy":0}
 def check(condition, label, **values):
     print("LIFECYCLE_TARGET " + json.dumps(dict(label=label,ok=bool(condition),**values),sort_keys=True))
@@ -254,10 +267,14 @@ class Teardown(gdb.Breakpoint):
     def stop(self):
         global teardown_seen
         teardown_seen=True
+        blocked_tid=0
         if blocked_mode:
-            check(False,"unreturned_native_storage_retained")
-            print("EVENT BLOCKED_TEARDOWN_RED",flush=True)
-            return True
+            blocked_tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
+            sample=open("/proc/%d/task/%d/syscall"%(gdb.selected_inferior().pid,blocked_tid)).read()
+            check(sample.startswith("0 "),"unreturned_native_still_blocked",tid=blocked_tid,syscall=sample.strip())
+            check(blocked_tid not in joined,"unreturned_native_not_joined",tid=blocked_tid)
+            owners=[r for r in records.values() if r["tid"]==blocked_tid]
+            check(bool(owners) and all(not r["destroyed"] for r in owners),"unreturned_native_not_destroyed",tid=blocked_tid,owners=len(owners))
         if boundary_mode == "producer":
             global boundary_qualified
             owners=[r for r in records.values() if r["tid"]==bootstrap_tid]
@@ -272,6 +289,8 @@ class Teardown(gdb.Breakpoint):
                 return True
         before_failures=len(failures)
         for handle,tid in carriers.items():
+            if blocked_mode and tid==blocked_tid:
+                continue
             owners=[r for r in records.values() if r["tid"]==tid]
             check(tid in joined,"carrier_join_before_teardown",tid=tid)
             for r in owners:
@@ -288,21 +307,252 @@ CarrierEntry("*StartCJRuntime",bootstrap=True)
 CarrierEntry("*CJ_ThreadEntry")
 JoinEntry("*pthread_join",internal=True)
 Teardown("*'MapleRuntime::CangjieRuntime::FiniAndDelete()'",internal=True)
+def symbol_ready(name):
+    symbol=gdb.lookup_global_symbol(name)
+    return symbol is not None
+def field_bitpos(type_name, field):
+    try:
+        ty=gdb.lookup_type(type_name)
+    except gdb.error:
+        check(False,"loaded_type_missing",type=type_name,field=field)
+        return None
+    for item in ty.fields():
+        if item.name==field and item.bitpos is not None:
+            return item.bitpos
+    check(False,"loaded_field_missing",type=type_name,field=field)
+    return None
+def mem_u64(address):
+    return struct.unpack("<Q",gdb.selected_inferior().read_memory(address,8))[0]
+def mem_u8(address):
+    return struct.unpack("<B",gdb.selected_inferior().read_memory(address,1))[0]
+def flag_at(base, bitpos):
+    return (mem_u8(base + bitpos//8) >> (bitpos % 8)) & 1
+def ptr_at(base, bitpos):
+    if bitpos % 8:
+        check(False,"loaded_field_misaligned",bitpos=bitpos)
+        return 0
+    return mem_u64(base + bitpos//8)
+def observe_terminal(mut):
+    exited_name="MapleRuntime::VM_Exit::exited()"
+    native_name="MapleRuntime::VM_Exit::is_native(MapleRuntime::Mutator const&)"
+    state_name="MapleRuntime::SafepointSynchronize::state()"
+    if not symbol_ready(exited_name):
+        check(False,"exited_symbol_missing")
+        exited_vm=0
+    else:
+        exited_vm=int(gdb.parse_and_eval(exited_name))
+    if not symbol_ready(state_name):
+        check(False,"safepoint_state_symbol_missing")
+        paused=0
+    else:
+        bit=field_bitpos("MapleRuntime::SafepointState","worldStopped")
+        if bit is None:
+            paused=0
+        else:
+            base=int(gdb.parse_and_eval("(unsigned long)&MapleRuntime::SafepointSynchronize::state()"))
+            paused=flag_at(base, bit)
+    check(exited_vm==1 and paused==1,"logical_terminal_published",exited=exited_vm,paused=paused)
+    if mut==0:
+        check(False,"unreturned_native_mutator_retained",mut=0)
+        return
+    term_bit=field_bitpos("MapleRuntime::Mutator","terminatedByVM")
+    det_bit=field_bitpos("MapleRuntime::Mutator","gcDetached")
+    cj_bit=field_bitpos("MapleRuntime::Mutator","cjthread")
+    gc_bit=field_bitpos("MapleRuntime::Mutator","gcData")
+    buf_bit=field_bitpos("MapleRuntime::ThreadGCData","storeBarrierBuffer")
+    if None in (term_bit,det_bit,cj_bit,gc_bit,buf_bit):
+        return
+    if gc_bit % 8:
+        check(False,"loaded_field_misaligned",field="gcData",bitpos=gc_bit)
+        return
+    term=flag_at(mut, term_bit)
+    detached=flag_at(mut, det_bit)
+    carrier=ptr_at(mut, cj_bit)
+    buffer_ptr=ptr_at(mut + gc_bit//8, buf_bit)
+    if not symbol_ready(native_name):
+        check(False,"is_native_symbol_missing")
+        native=0
+    else:
+        native=int(gdb.parse_and_eval("MapleRuntime::VM_Exit::is_native(*(MapleRuntime::Mutator*)%d)"%mut))
+    check(term==1 and detached==0 and carrier!=0 and buffer_ptr!=0 and native==1,"unreturned_native_storage_retained",terminated=term,detached=detached,carrier=hex(carrier),buffer=hex(buffer_ptr),native=native)
+def release_blocked_read(pid, tid):
+    fields=open("/proc/%d/task/%d/syscall"%(pid,tid)).read().split()
+    if len(fields)<2 or fields[0]!="0":
+        return False
+    try:
+        read_fd=int(fields[1],0)
+    except ValueError:
+        return False
+    want=os.readlink("/proc/%d/fd/%d"%(pid,read_fd))
+    for name in os.listdir("/proc/%d/fd"%pid):
+        if name==str(read_fd):
+            continue
+        path="/proc/%d/fd/%s"%(pid,name)
+        try:
+            if os.readlink(path)!=want:
+                continue
+            info=open("/proc/%d/fdinfo/%s"%(pid,name)).read()
+        except OSError:
+            continue
+        writable=False
+        for line in info.splitlines():
+            if line.startswith("flags:"):
+                writable=bool(int(line.split()[1],8)&3)
+        if not writable:
+            continue
+        fd=os.open(path,os.O_WRONLY)
+        try:
+            os.write(fd,b"x")
+        finally:
+            os.close(fd)
+        return True
+    return False
+def observe_held_terminal():
+    # Inferior function calls are not allowed from Breakpoint.stop callbacks.
+    # The controller invokes this only after the Fini breakpoint has stopped.
+    mut=int(gdb.parse_and_eval("*(unsigned long*)&shutdown1459BlockedMutator"))
+    observe_terminal(mut)
+    print("TERMINAL_OBSERVED",len(failures),flush=True)
+def blocked_thread():
+    tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
+    for thread in gdb.selected_inferior().threads():
+        if thread.ptid[1]==tid:
+            return tid,thread
+    return tid,None
+class RdlockWitness(gdb.Breakpoint):
+    def __init__(self):
+        super().__init__("pthread_rwlock_rdlock",internal=True)
+    def stop(self):
+        global rdlock_entered,late_stack_ok
+        tid,thread=blocked_thread()
+        if gdb.selected_thread().ptid[1]!=tid:
+            return False
+        names=[(frame["function"] or "") for frame in stack()]
+        in_lock=any("pthread_rwlock_rdlock" in name for name in names)
+        in_barrier=any("wait_if_vm_exited" in name for name in names)
+        from_syscall=any("SyscallExit" in name for name in names)
+        top=names[0] if names else ""
+        late_stack_ok=in_lock and in_barrier and from_syscall and "wait_if_vm_exited" not in top
+        if not late_stack_ok:
+            return False
+        rdlock_entered=True
+        print("EVENT RDLOCK_ENTERED",flush=True)
+        return False
+class CutRdlockCall(gdb.Breakpoint):
+    def __init__(self,call,after):
+        super().__init__("*"+hex(call),internal=True)
+        self.after=after
+        self.done=False
+    def stop(self):
+        global cut_skipped
+        tid,thread=blocked_thread()
+        if gdb.selected_thread().ptid[1]!=tid or self.done:
+            return False
+        self.done=True
+        cut_skipped=True
+        gdb.execute("set $pc=%d"%self.after)
+        gdb.execute("set $eax=0")
+        print("EVENT RDLOCK_CUT",flush=True)
+        return False
+def rdlock_call_site():
+    dis=gdb.execute("disassemble 'MapleRuntime::VM_Exit::wait_if_vm_exited()'",to_string=True)
+    lines=dis.splitlines()
+    for index,line in enumerate(lines):
+        if "pthread_rwlock_rdlock" not in line or "call" not in line:
+            continue
+        here=re.search(r"(0x[0-9a-f]+)",line)
+        nxt=re.search(r"(0x[0-9a-f]+)",lines[index+1]) if index+1<len(lines) else None
+        if here and nxt:
+            return int(here.group(1),16),int(nxt.group(1),16)
+    return None
+def begin_late(cut):
+    pid=gdb.selected_inferior().pid
+    tid,thread=blocked_thread()
+    if cut:
+        site=rdlock_call_site()
+        check(site is not None,"late_lock_call_site",site=str(site))
+        if site:
+            CutRdlockCall(*site)
+    else:
+        RdlockWitness()
+    released=release_blocked_read(pid,tid)
+    check(released,"late_return_pipe_released",tid=tid)
+    print("LATE_ARMED",int(released),int(bool(cut)),flush=True)
+def note_running():
+    pid=gdb.selected_inferior().pid
+    tid,thread=blocked_thread()
+    try:
+        wchan=open("/proc/%d/task/%d/wchan"%(pid,tid)).read().strip()
+        fields=open("/proc/%d/task/%d/syscall"%(pid,tid)).read().split()
+        number=int(fields[0],0) if fields else -1
+        stopped=thread is not None and thread.is_stopped()
+    except OSError:
+        wchan,number,stopped="gone",-1,False
+    waiting=(not stopped) and ("futex" in wchan) and number not in (0,-1)
+    running_samples.append(waiting)
+    print("LATE_RUNNING",int(waiting),wchan,number,int(stopped),flush=True)
+def observe_barrier_abort():
+    tid,thread=blocked_thread()
+    signal_on_late=last_signal==("SIGABRT",tid)
+    if thread is not None:
+        thread.switch()
+    try:
+        signo=int(gdb.parse_and_eval("$_siginfo.si_signo"))
+    except gdb.error:
+        signo=-1
+    names=[]
+    frame=gdb.newest_frame()
+    while frame is not None and len(names)<24:
+        names.append(frame.name() or "")
+        frame=frame.older()
+    on_late=gdb.selected_thread() is not None and gdb.selected_thread().ptid[1]==tid
+    in_barrier=any("wait_if_vm_exited" in name for name in names)
+    ok=signo==6 and signal_on_late and on_late and in_barrier and cut_skipped and not failures
+    check(ok,"permanent_barrier_return_check",signo=signo,on_late=int(on_late),barrier=int(in_barrier),signal_thread=last_signal)
+    print("LATE_ABORT_FRAMES",json.dumps(names),flush=True)
+    pc=int(gdb.parse_and_eval("$pc"))
+    maps=open("/proc/%d/maps"%gdb.selected_inferior().pid).read()
+    location=None
+    for line in maps.splitlines():
+        fields=line.split(None,5)
+        begin,end=(int(value,16) for value in fields[0].split("-"))
+        if begin<=pc<end:
+            location=dict(module=fields[5] if len(fields)>5 else "anonymous",
+                          offset=hex(pc-begin+int(fields[2],16)))
+            break
+    print("LATE_ABORT_PC",json.dumps(dict(pc=hex(pc),location=location)),flush=True)
+    print("LATE_ABORT_MAPS\n"+maps,flush=True)
+    if ok:
+        print("EVENT LATE_BARRIER_ABORT",flush=True)
+def finish_late(cut):
+    global late_parked
+    stable=len(running_samples)>=2 and all(running_samples[-2:])
+    if cut:
+        check(False,"cut_flag_is_not_a_product_failure",skipped=int(cut_skipped),entered=int(rdlock_entered),stable=int(stable))
+        return
+    late_parked=rdlock_entered and late_stack_ok and stable
+    check(late_parked,"late_return_blocked_in_permanent_lock",entered=int(rdlock_entered),stack=int(late_stack_ok),stable=int(stable),samples=len(running_samples))
+    print("EVENT LATE_RETURN_BLOCKED",flush=True)
 class FiniReturned(gdb.Breakpoint):
     def stop(self):
-        global blocked_result_seen
+        global blocked_result_seen,fini_thread
         if blocked_mode:
             blocked_result_seen=True
             tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
             sample=open("/proc/%d/task/%d/syscall"%(gdb.selected_inferior().pid,tid)).read()
             runtime=int(gdb.parse_and_eval("MapleRuntime::Runtime::runtime"))
             owners=[r for r in records.values() if r["tid"]==tid]
-            check(int(gdb.parse_and_eval("$rax"))!=0 and runtime!=0,"unreturned_native_storage_retained",tid=tid,runtime=hex(runtime))
+            rc=int(gdb.parse_and_eval("$rax"))
+            check(rc==0,"logical_fini_ok",tid=tid,rc=rc)
+            check(runtime==0,"logical_runtime_facade_deleted",tid=tid,runtime=hex(runtime))
             check(sample.startswith("0 ") and tid not in joined,"unreturned_native_not_joined",tid=tid,syscall=sample.strip())
             check(bool(owners) and all(not r["destroyed"] for r in owners),"unreturned_native_not_destroyed",tid=tid,owners=len(owners))
             for carrier_tid in carriers.values():
                 if carrier_tid!=tid:
                     check(carrier_tid in joined,"completed_native_joined_with_blocker",tid=carrier_tid)
+            fini_thread=gdb.selected_thread().num
+            print("EVENT FINI_HELD",flush=True)
+            return True
         return False
 for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",gdb.execute("disassemble FiniCJRuntime",to_string=True)):
     FiniReturned("*"+address,internal=True)
@@ -331,7 +581,7 @@ def exited(event):
         else:
             print("LIFECYCLE_OBSERVED "+json.dumps(dict(data=hex(data),destroyed=r["destroyed"],target=False,create_stack=r["stack"])))
     check(all(counts[x]>0 for x in counts),"all_lifecycle_events",counts=counts)
-    check((blocked_result_seen if blocked_mode else teardown_seen) and bool(carriers),"shutdown_observer_executed",carriers=len(carriers),teardown=teardown_seen,blocked_result=blocked_result_seen)
+    check(((blocked_result_seen and late_parked) if blocked_mode else teardown_seen) and bool(carriers),"shutdown_observer_executed",carriers=len(carriers),teardown=teardown_seen,blocked_result=blocked_result_seen,late_return=late_parked)
     check(bool(tls_completed),"actual_tls_return_executed",n=len(tls_completed))
     check(getattr(event,"exit_code",None)==0,"inferior_exit",rc=getattr(event,"exit_code",None))
     print("LIFECYCLE_SUMMARY "+json.dumps(dict(counts=counts,failures=failures,records=len(records),target_records=sum(r["target"] for r in records.values()),destructor_results=selected_destructor_results)))
