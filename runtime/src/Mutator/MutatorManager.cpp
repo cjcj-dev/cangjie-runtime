@@ -547,8 +547,11 @@ void MutatorManager::WaitUntilAllMutatorStopped()
 
 void MutatorManager::TransitionAllMutatorsToCpuProfile()
 {
-    bool SafepointSynchronize::state().worldStopped = WorldStopped();
-    if (!SafepointSynchronize::state().worldStopped) {
+    // Only the VM thread owns the list lock throughout a safepoint. The
+    // native sampling thread must acquire it even if a pause is in progress.
+    // Keep the same decision for release; the global pause state may change.
+    const bool ownsSafepoint = VMThread::is_VM_thread() && WorldStopped();
+    if (!ownsSafepoint) {
         if (!AcquireMutatorManagementWLockForCpuProfile()) {
             return;
         }
@@ -558,7 +561,7 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             PublishCpuProfileRequest(&mutator);
         }
     });
-    if (!SafepointSynchronize::state().worldStopped) {
+    if (!ownsSafepoint) {
         MutatorManagementWUnlock();
     }
 }
