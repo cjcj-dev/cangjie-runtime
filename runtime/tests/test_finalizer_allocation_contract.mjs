@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 
 const [so] = process.argv.slice(2);
 if (!so || process.argv.length !== 3) {
-  process.stderr.write('usage: test_finalizer_allocation_contract.mjs <installed-runtime-so>\n');
+  process.stderr.write('usage: test_finalizer_allocation_contract.mjs <unstripped-runtime-so>\n');
   process.exit(2);
 }
 const nm = spawnSync('nm', ['--defined-only', '--demangle', so], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
