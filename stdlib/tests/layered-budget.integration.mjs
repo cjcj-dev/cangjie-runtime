@@ -142,7 +142,7 @@ try {
     normal = records.find(r => r.name === 'candidate');
     cut = records.find(r => r.name === 'cut');
     assert.equal(normal?.rc, 0); assert.equal(cut?.rc, 1);
-    assert.equal(records.at(-1).name, 'cut', 'only resume the interrupted first cut observation');
+    assert(['cut', 'restored'].includes(records.at(-1).name), 'only resume the interrupted cut/recovery observation');
     assert.equal(JSON.parse(fs.readFileSync(root + '/restoration.json')).restored, true);
     results.candidate = checkIntervals(events().slice(0, 16), 2, '2GB');
     results.changed = checkIntervals(events().slice(16, 32), 1, '3GB');
@@ -158,10 +158,22 @@ try {
   assert.match(failure.stdout, /COMPILER_HEAP_ASSERTION_REACHED 7GB/);
   assert.match(failure.stderr, /SELECTED_HEAP_MUST_REACH_COMPILER/);
   fs.writeFileSync(root + '/cut-observation.json', JSON.stringify({failurePath, failure, reused: resumeCut}, null, 2));
-  const independent = run('cut-native-control', [build + '/native-control']); assert.equal(independent.rc, 0);
+  const independent = records.find(r => r.name === 'cut-native-control')
+    ?? run('cut-native-control', [build + '/native-control']); assert.equal(independent.rc, 0);
   fs.writeFileSync(moduleFile, original);
+  // A failed compiler can leave the previous successful outputs intact. Once
+  // the recipe is restored Ninja may legally reuse those outputs. Preserve
+  // them, then require actual recovery execution with identical source bytes.
+  const retained = root + '/pre-recovery-products';
+  fs.mkdirSync(retained);
+  const moved = [];
+  for (let i = 0; i < 4; ++i) for (const name of ['p' + i + '.a', 'libp' + i + '.bc']) {
+    fs.renameSync(path.join(build, name), path.join(retained, name)); moved.push(name);
+  }
+  fs.writeFileSync(root + '/recovery-products.json', JSON.stringify({reason: 'require execution after failed recipe; retain original outputs', retained, moved}));
   const n = events().length;
-  const restored = run('restored', command()); assert.equal(restored.rc, 0, restored.stderr);
+  const restored = run(records.some(r => r.name === 'restored') ? 'restored-after-cache' : 'restored', command());
+  assert.equal(restored.rc, 0, restored.stderr);
   results.restored = checkIntervals(events().slice(n), 2, '2GB');
   assert(fs.readFileSync(moduleFile).equals(original));
   const install = run('install', ['python3', '-I', fixture + '/build.py', 'install', '--prefix', root + '/install']);
