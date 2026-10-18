@@ -21,6 +21,10 @@
 # to the accounting that exists to make exactly that visible.
 #
 # <file>                                  <status>   <what it needs / why it is here>
+signal_shutdown.cpp                      manual     build_signal_shutdown.mjs; fixed product SO and matching SDK; blocked native/real managed/managed GC arms, qualification pending
+signal_shutdown_managed.cj               manual     build_signal_shutdown.mjs; matching compiler/std/runtime/LLVM tuple, actual @C callback and managed GC validation
+shutdown_owner_identity.cpp              manual     build_signal_shutdown.mjs; Linux x86_64 same-stack pthread reuse, existing Grok owner observes permanent product return barrier
+build_signal_shutdown.mjs                manual     box+wf admitted slot; explicit runtime library directory, matching SDK install and output directory; builds fixtures without executing them
 syscall_exit_progress                    manual     run.sh: Linux x86-64 product SO, GDB Python/pexpect, CPU window; ordered syscall publication, two product cuts and restoration
 safepoint_windows                        manual     native Windows product SIMD sentinel, read-only GDB home-area observations and home/restore cuts; .github/workflows/safepoint-windows.yml; behavior.json records behavioral evidence
 

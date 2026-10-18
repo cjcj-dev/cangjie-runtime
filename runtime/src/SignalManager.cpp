@@ -215,17 +215,16 @@ void SignalManager::Init()
 
 void SignalManager::Fini()
 {
-    if (VM_Exit::native_threads_at_exit() != 0) {
-        // A retained carrier may still own the installed alternate stack.
-        // Preserve that allocation, not the SignalManager facade.
+    if (!pthread_equal(pthread_self(), signalStackOwner)) {
+        // sigaltstack belongs to the initializing OS thread, including a host
+        // thread outside the managed-thread inventory. Only that thread can
+        // disable it; retain its backing allocation when another host finalizes.
         extraStack = nullptr;
         return;
     }
-    if (pthread_equal(pthread_self(), signalStackOwner)) {
-        stack_t disabled{};
-        disabled.ss_flags = SS_DISABLE;
-        CHECK_SIGNAL_CALL(sigaltstack, (&disabled, nullptr), "disable signal stack during shutdown failed");
-    }
+    stack_t disabled{};
+    disabled.ss_flags = SS_DISABLE;
+    CHECK_SIGNAL_CALL(sigaltstack, (&disabled, nullptr), "disable signal stack during shutdown failed");
     FreeSigStack();
 }
 

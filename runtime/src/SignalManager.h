@@ -37,6 +37,10 @@ public:
     void Init();
     // Fini the signal manager
     void Fini();
+    bool HasForeignStackAllocation() const
+    {
+        return extraStack != nullptr && !pthread_equal(pthread_self(), signalStackOwner);
+    }
 
     static bool HandlePlatformSignal(int sig, siginfo_t* info, void* context);
 

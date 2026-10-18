@@ -24,7 +24,7 @@ public:
     void UnlockWrite() { lock.unlock(); }
     bool TryLockWrite() { return lock.try_lock(); }
 private:
-    std::shared_mutex lock;
+    std::shared_timed_mutex lock;
 };
 // HotSpot mutexLocker.cpp:322 / safepoint.cpp:343,586. Normal pauses and
 // the final permanent pause share one process-lifetime synchronization base.

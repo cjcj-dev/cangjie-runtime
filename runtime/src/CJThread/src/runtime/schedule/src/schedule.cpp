@@ -20,6 +20,7 @@
 #endif
 #include "StackManager.h"
 #include "Common/NativeAllocator.h"
+#include "Mutator/VMExit.h"
 #if defined (MRT_LINUX) || defined (MRT_MACOS)
 #include "schdpoll.h"
 #endif
@@ -1342,7 +1343,7 @@ int ScheduleStopOutside(ScheduleHandle scheduleHandle)
         ScheduleSet(oldSchedule);
         // Physical retention is consumed here by retaining the full closure.
         // FiniCJRuntime still owes the final VM terminal protocol before E_OK.
-        return 0;
+        return MapleRuntime::VM_Exit::is_shutdown_thread() ? 0 : ERRNO_SCHD_EXIT_FAILED;
     }
     // This parameter is added to solve the memory leakage problem when the dlclose exits in
     // the macro expansion scenario.

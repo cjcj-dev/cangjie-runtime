@@ -134,6 +134,10 @@ void CangjieRuntime::FiniAndDelete()
         return;
     }
     auto cjRuntime = reinterpret_cast<CangjieRuntime*>(Runtime::runtime);
+    // Drain ordinary native TLS detach while the VM executor and registration
+    // lock still work. A cleaner which already holds the read side can finish
+    // its scheduler/SMR removal before the permanent final safepoint.
+    ThreadLocal::ThreadLocalFini();
     {
         // HotSpot threads.cpp:987-994: service stop/join and caller detach
         // precede this final Heap_lock window.
@@ -287,8 +291,7 @@ inline void CheckAndFini(T*& module)
 
 void CangjieRuntime::Fini()
 {
-    // To avoid foreign thread access finalized runtime.
-    ThreadLocal::ThreadLocalFini();
+    bool retainSignalStackPages = false;
     // since there might be failure during initialization,
     // here we need to check and call fini.
 #ifdef _WIN64
@@ -303,13 +306,14 @@ void CangjieRuntime::Fini()
     CheckAndFini<MutatorManager>(mutatorManager);
     CheckAndFini<ConcurrencyModel>(concurrencyModel);
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
+    retainSignalStackPages = signalManager != nullptr && signalManager->HasForeignStackAllocation();
     CheckAndFini<SignalManager>(signalManager);
 #endif
     CheckAndFini<LogManager>(logManager);
     // NativeAllocator backs retained scheduler/processor closures. Releasing
     // this arena while actual native threads remain would invalidate their
     // pre-barrier storage even though the Runtime facade has been deleted.
-    if (VM_Exit::native_threads_at_exit() == 0) { PagePool::Instance().Fini(); }
+    if (VM_Exit::native_threads_at_exit() == 0 && !retainSignalStackPages) { PagePool::Instance().Fini(); }
 
     LOG(RTLOG_INFO, "Cangjie runtime shutdown.");
 }

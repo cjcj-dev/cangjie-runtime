@@ -7,17 +7,21 @@
 #include "ThreadSMR.h"
 #include "VMOperation.h"
 #include <atomic>
-#include <thread>
+#include <new>
 
 namespace MapleRuntime {
 namespace {
 enum class BeforeExit { NotRun, Running, Done, Failed };
+// A native thread ID or TLS address can be reused after the host owner exits.
+// Retain the owner's identity object, as HotSpot retains _shutdown_thread.
+struct NativeThreadIdentity {};
+thread_local NativeThreadIdentity* currentShutdownIdentity = nullptr;
 struct ExitState {
     Monitor monitor;
     std::atomic<BeforeExit> before{BeforeExit::NotRun};
     std::atomic<bool> vmExited{false};
     size_t nativeCount = 0;
-    std::thread::id owner;
+    NativeThreadIdentity* owner = nullptr;
 };
 ExitState& state()
 {
@@ -32,7 +36,9 @@ bool VM_Exit::begin_before_exit(bool (*qualify)())
     while (state().before.load() == BeforeExit::Running) { lock.wait(); }
     if (state().before.load() != BeforeExit::NotRun) { return false; }
     if (qualify != nullptr && !qualify()) { return false; }
-    state().owner = std::this_thread::get_id();
+    currentShutdownIdentity = new (std::nothrow) NativeThreadIdentity;
+    CHECK_DETAIL(currentShutdownIdentity != nullptr, "shutdown identity allocation failed");
+    state().owner = currentShutdownIdentity;
     state().before.store(BeforeExit::Running, std::memory_order_release);
     return true;
 }
@@ -50,7 +56,7 @@ bool VM_Exit::closing() { return state().before.load(std::memory_order_acquire) 
 bool VM_Exit::exited() { return state().vmExited.load(std::memory_order_acquire); }
 bool VM_Exit::is_shutdown_thread()
 {
-    return closing() && state().owner == std::this_thread::get_id();
+    return closing() && currentShutdownIdentity != nullptr && state().owner == currentShutdownIdentity;
 }
 
 bool VM_Exit::is_native(const Mutator& mutator)

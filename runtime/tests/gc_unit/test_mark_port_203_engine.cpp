@@ -68,7 +68,7 @@ size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 }
 } // namespace
 
-GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
+GC_OTHER_VM_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
 {
     B09RuntimeFixture runtime;
     for (size_t workers : {size_t{1}, size_t{2}}) {
@@ -298,7 +298,7 @@ GC_OTHER_VM_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
     GC_EXPECT_EQ(second, 81u);
 }
 
-GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
+GC_OTHER_VM_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -464,7 +464,7 @@ GC_OTHER_VM_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 
 // ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected
 // after a terminate flush of thread-local stacks.
-GC_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
+GC_OTHER_VM_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
@@ -521,7 +521,7 @@ GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
-GC_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
+GC_OTHER_VM_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
 {
     B09RuntimeFixture runtime;
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
@@ -569,12 +569,12 @@ void CheckYoungClosureAccounting(uint32_t workers)
 }
 }
 
-GC_TEST(YoungClosure784, SingleWorkerAccountsPublishedRoot)
+GC_OTHER_VM_TEST(YoungClosure784, SingleWorkerAccountsPublishedRoot)
 {
     CheckYoungClosureAccounting(1);
 }
 
-GC_TEST(YoungClosure784, MultipleWorkersAccountPublishedRoot)
+GC_OTHER_VM_TEST(YoungClosure784, MultipleWorkersAccountPublishedRoot)
 {
     CheckYoungClosureAccounting(2);
 }
@@ -582,7 +582,7 @@ GC_TEST(YoungClosure784, MultipleWorkersAccountPublishedRoot)
 // ZGC zRemembered.cpp:127-168: consumed previous entries are cleared by the
 // page scan before the same page can be scanned again. Enter the product worker
 // task; observe the product bitmap, without a replacement consumer or callback.
-GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
+GC_OTHER_VM_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
@@ -852,12 +852,12 @@ void CheckOtherGenerationPublication(bool remembered)
 
 } // namespace
 
-GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
+GC_OTHER_VM_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
 {
     CheckOtherGenerationPublication(true);
 }
 
-GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
+GC_OTHER_VM_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
 {
     CheckOtherGenerationPublication(false);
 }
