@@ -120,7 +120,6 @@ write_status() {
     echo "RUNTIME_SHA256=$RUNTIME_SHA256"
     echo "BOUNDSCHECK_SHA256=$BOUNDSCHECK_SHA256"
     echo "LANGUAGE_SDK=$LANGUAGE_SDK"
-    echo "BUILD_SDK=${GC_UNIT_BUILD_SDK:-unrecorded}"
     echo "TOOLCHAIN_IDENTITY=$GC_UNIT_LANGUAGE_IDENTITY"
     echo "CJC_SHA256=$CJC_SHA256"
     echo "LLC_SHA256=$LLC_SHA256"
@@ -290,15 +289,15 @@ if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" || ! -f "$GCV2_RUNTIME_LIB_DIR/libcangjie-r
   echo "GC_UNIT_GATE_FAIL: no libcangjie-runtime.so (set GCV2_RUNTIME_LIB_DIR)" >&2
   exit 2
 fi
-if [[ -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
-  RUNTIME_CONFIG_ID="$GCV2_RUNTIME_CONFIG"
-  config_manifest="$ROOT/runtime/output/temp/$RUNTIME_CONFIG_ID/runtime-build-config.txt"
-  RUNTIME_CONFIG_SIGNATURE=$(/usr/bin/sed -n 's/^CONFIG_SIGNATURE_SHA256=//p' "$config_manifest")
-fi
+
 if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
   GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
     "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR")
   export GCV2_RUNTIME_OUTPUT_ROOT
+fi
+if [[ "$LANGUAGE_TEST_MODE" == "only" || -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  CONFIGURATION_IDENTITY=$(python3 "$SRC/language_toolchain.py" --configuration) || exit $?
+  read -r RUNTIME_CONFIG_ID RUNTIME_CONFIG_SIGNATURE <<<"$CONFIGURATION_IDENTITY"
 fi
 # Use the same hash-bound product recipe as run_standalone. Environment
 # spellings (ON/1/unset) cannot change the selected product's platform.
@@ -440,8 +439,8 @@ run_language_tests() {
   FINALIZER_STATE=FAIL
   FINALIZER_SOURCE=FRESH
   STATUS_REASON=FINALIZER_TRIGGER_FAILURE
-  if ! (gc_unit_language_environment; bash "$FINALIZER_SCRIPT"); then
-    FINALIZER_RUNNER_RC=${PIPESTATUS[0]}
+  if (gc_unit_language_environment; bash "$FINALIZER_SCRIPT"); then :; else
+    FINALIZER_RUNNER_RC=$?
     echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
     return 1
   fi
@@ -451,8 +450,8 @@ run_language_tests() {
   PHASE_ENTRY_STATE=FAIL
   PHASE_ENTRY_SOURCE=FRESH
   STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
-  if ! (gc_unit_language_environment; bash "$PHASE_ENTRY_SCRIPT"); then
-    PHASE_ENTRY_RUNNER_RC=${PIPESTATUS[0]}
+  if (gc_unit_language_environment; bash "$PHASE_ENTRY_SCRIPT"); then :; else
+    PHASE_ENTRY_RUNNER_RC=$?
     echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
     return 1
   fi
@@ -463,8 +462,8 @@ run_language_tests() {
     SO_REENTRY_STATE=FAIL
     SO_REENTRY_SOURCE=FRESH
     STATUS_REASON=SO_REENTRY_BOUNDED_FAILURE
-    if ! bash "$SO_REENTRY_SCRIPT"; then
-      SO_REENTRY_RUNNER_RC=${PIPESTATUS[0]}
+    if bash "$SO_REENTRY_SCRIPT"; then :; else
+      SO_REENTRY_RUNNER_RC=$?
       echo "GC_UNIT_GATE_FAIL: bounded stack-overflow recovery test failed" >&2
       return 1
     fi
@@ -476,8 +475,8 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if ! (gc_unit_language_environment; bash "$SEGMENTED_MANAGED_SCRIPT" both); then
-      SEGMENTED_RUNNER_RC=${PIPESTATUS[0]}
+    if (gc_unit_language_environment; bash "$SEGMENTED_MANAGED_SCRIPT" both); then :; else
+      SEGMENTED_RUNNER_RC=$?
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
     fi
@@ -485,6 +484,7 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=PASS
   fi
 
+  python3 "$SRC/language_toolchain.py" --verify-runs "$GC_UNIT_OUT" || return $?
   LANGUAGE_TESTS_STATE=LANGUAGE_DONE
   mkdir -p "$GC_UNIT_OUT"
   language_identity >"$LANGUAGE_IDENTITY_FILE"

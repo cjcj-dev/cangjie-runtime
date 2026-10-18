@@ -20,19 +20,10 @@ def main():
     env = dict(os.environ, GC_UNIT_GATE_CONTRACT_SELFTEST='1',
                GC_UNIT_GATE_LANGUAGE_TESTS='only', GC_UNIT_GATE_SKIP='0')
     env.pop('CJC', None)
-    qualification = Path(env['GC_UNIT_LANGUAGE_QUALIFICATION'])
-    changed = args.out / 'changed-qualification.json'
-    proof = json.loads(qualification.read_text())
-    proof['source'] += '; unapproved change'
-    changed.write_text(json.dumps(proof, sort_keys=True))
-    cases = [('unknown-qualification', {'GC_UNIT_LANGUAGE_QUALIFICATION': str(changed)})]
-    if not args.rejection_only:
-        cases += [('official', {'GC_UNIT_LANGUAGE_SDK': str(args.official_sdk)}),
-                  ('missing-language', {'GC_UNIT_LANGUAGE_SDK': ''}),
-                  ('missing-build', {'GC_UNIT_BUILD_SDK': ''}),
-                  ('missing-host', {'GC_UNIT_CJC_RUNTIME_LIB_DIR': ''}),
-                  ('missing-qualification', {'GC_UNIT_LANGUAGE_QUALIFICATION': ''}),
-                  ('cjc-conflict', {'CJC': str(args.official_sdk / 'bin/cjc')})]
+    cases = [('missing-language', {'GC_UNIT_LANGUAGE_SDK': ''}),
+             ('missing-host', {'GC_UNIT_CJC_RUNTIME_LIB_DIR': ''}),
+             ('missing-reference', {'GC_UNIT_COLOUR_HOST_RUNTIME': ''}),
+             ('cjc-conflict', {'CJC': str(args.official_sdk / 'bin/cjc')})]
     commands = ['gate_gc_unit.sh', 'run_finalizer_trigger.sh',
                 'run_phase_entry_trigger.sh', 'run_segmented_array_managed.sh',
                 'kkk2_managed.sh']

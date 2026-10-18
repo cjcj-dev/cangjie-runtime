@@ -40,7 +40,7 @@ LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR 
 # The language fixture retains its real compiler allocation/checksum coverage.
 set +e
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
+  LD_DEBUG=libs MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
   timeout 60s "$BIN" >"$OUT/segmented_array_managed.construct.log" 2>&1
 construct_rc=$?
 set -e
@@ -61,7 +61,7 @@ run_external_window() {
   local rc
   set +e
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_LOG_LEVEL=e cjGCInterval=3600s \
+    LD_DEBUG=libs MRT_LOG_LEVEL=e cjGCInterval=3600s \
     timeout 60s "$elf" --gtest_filter="$filter" >"$log" 2>&1
   rc=$?
   set -e

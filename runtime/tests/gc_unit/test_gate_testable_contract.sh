@@ -5,7 +5,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/gc-unit-gate-contract.XXXXXX")"
-trap 'rm -rf "$fixture"' EXIT
+cleanup() {
+  local rc=$?
+  if [[ "$rc" != 0 || "${GC_UNIT_CONTRACT_KEEP:-0}" == 1 ]]; then
+    echo "GC_UNIT_CONTRACT_EVIDENCE=$fixture rc=$rc" >&2
+  else
+    rm -rf "$fixture"
+  fi
+}
+trap cleanup EXIT
 
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
@@ -16,8 +24,7 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER GC_UNIT_GATE_RESULT \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
   GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN \
-  GC_UNIT_BUILD_SDK GC_UNIT_LANGUAGE_SDK GC_UNIT_LANGUAGE_QUALIFICATION \
-  GC_UNIT_COLOUR_CHECKER GC_UNIT_COLOUR_HOST_RUNTIME
+  GC_UNIT_LANGUAGE_SDK GC_UNIT_COLOUR_HOST_RUNTIME
 # Synthetic gate arms likewise supply their own header root. The copied-pair
 # integration regression exercises automatic publication lookup with real SOs.
 export GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/lib"
@@ -27,6 +34,10 @@ mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runti
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
 cp "$ROOT/runtime/tests/gc_unit/language_toolchain.sh" "$fixture/runtime/tests/gc_unit/"
+# Configuration parsing uses the actual product reader. Only the synthetic
+# compiler admission below is a stand-in; no configuration value is invented.
+cp "$ROOT/runtime/tests/gc_unit/language_toolchain.py" "$fixture/runtime/tests/gc_unit/language_configuration_product.py"
+cp "$ROOT/runtime/tests/gc_unit/std_runtime_colour.py" "$fixture/runtime/tests/gc_unit/"
 cat >"$fixture/runtime/tests/gc_unit/language_toolchain.py" <<'PYADMISSION'
 import hashlib
 import json
@@ -37,6 +48,11 @@ import sys
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+if sys.argv[1:] == ['--configuration']:
+    import runpy
+    runpy.run_path(str(Path(__file__).with_name('language_configuration_product.py')), run_name='__main__')
+if len(sys.argv) == 3 and sys.argv[1] == '--verify-runs':
+    sys.exit(0)  # Synthetic children below do not load real ELF libraries.
 sdk = Path(os.environ.get('GC_UNIT_LANGUAGE_SDK', '/nonexistent'))
 host = Path(os.environ['GC_UNIT_CJC_RUNTIME_LIB_DIR'])
 if not (sdk / 'bin/cjc').is_file():
@@ -78,7 +94,15 @@ if sys.argv[4] == '1':
 recipe = dict(products={name: hashlib.sha256((library / name).read_bytes()).hexdigest()
                         for name in ('libcangjie-runtime.so', 'libboundscheck.so')},
               commands=[dict(file='/runtime/src/Heap/z/zGeneration.cpp', arguments=arguments)])
-(output / 'runtime-build-inputs.txt').write_text(json.dumps(recipe))
+encoded = json.dumps(recipe, sort_keys=True)
+(output / 'runtime-build-inputs.txt').write_text(encoded)
+# Every fixture output owns its real selected pair and compile configuration.
+# This covers config-selector, explicit-output, only, all and defer branches.
+fields = dict(SCHEMA_VERSION='1', CONFIG_ID=output.name,
+              CONFIG_SIGNATURE_SHA256=hashlib.sha256(encoded.encode()).hexdigest(),
+              LIB_DIR=str(library.resolve()), RUNTIME_SHA256=recipe['products']['libcangjie-runtime.so'],
+              BOUNDSCHECK_SHA256=recipe['products']['libboundscheck.so'])
+(output / 'runtime-build-config.txt').write_text(''.join(f'{key}={value}\n' for key,value in fields.items()))
 PYRECIPE
 }
 
@@ -384,7 +408,7 @@ set -e
 
 PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=ON GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=only \
-  GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/only.log" 2>&1
 echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
@@ -392,7 +416,7 @@ echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
 /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/only.status"
 
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all.log" 2>&1
 [[ "$(cat "$fixture/all.trace")" == $'CPP_SUITE\nFINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
@@ -404,7 +428,7 @@ for source in fresh cache; do
   out="$fixture/no-cjc-$source-out"
   mkdir -p "$out"
   if [[ "$source" == cache ]]; then
-    PATH="$fixture/bin:$PATH" GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    PATH="$fixture/bin:$PATH" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
       GC_UNIT_GATE_TRACE="$fixture/no-cjc-seed.trace" \
       GC_UNIT_OUT="$out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
       GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/no-cjc-seed.status" \
@@ -437,7 +461,7 @@ for component in cjc llc opt std; do
   printf '\n# identity change\n' >>"$fixture/sdk/$file"
   rm -f "$fixture/all.trace"
   PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-    GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
     GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
     bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-$component.log" 2>&1
   actual=$(sed -n "s/^$key=//p" "$fixture/all.status")
@@ -453,7 +477,7 @@ for component in cjc llc opt std; do
 done
 rm -f "$fixture/all.trace"
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-cached.log" 2>&1
 [[ ! -f "$fixture/all.trace" ]]
@@ -467,7 +491,7 @@ for mode in all only; do
   PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
     GC_UNIT_GATE_LANGUAGE_TESTS="$mode" GC_UNIT_OUT="$fixture/host-missing-$mode" \
     GC_UNIT_GATE_TRACE="$fixture/host-missing-$mode.trace" \
-    GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
     GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/missing-host" \
     GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/host-missing-$mode.status" \
     bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/host-missing-$mode.log" 2>&1

@@ -13,14 +13,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf_vs_official")
 from gclog_schema import parse_gclog
 
 
-def run(binary, log_path):
+def run(binary, log_path, library_path=None):
+    # The Python launcher owns its own libraries. Pass the target loader input
+    # separately so that launcher sanitization cannot erase the fixture path.
+    child_env = os.environ.copy()
+    if library_path is not None:
+        child_env["LD_LIBRARY_PATH"] = library_path
     deadline = time.monotonic() + 60
     acknowledged = False
     pending = b""
     with tempfile.TemporaryDirectory(prefix="cycle-ack-", dir=Path(log_path).parent) as directory, \
             open(log_path, "wb") as log, subprocess.Popen(
         [binary, str(Path(directory) / "completed")], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=child_env
     ) as process, selectors.DefaultSelector() as selector:
         selector.register(process.stdout, selectors.EVENT_READ)
         try:
@@ -64,4 +69,4 @@ def run(binary, log_path):
 
 
 if __name__ == "__main__":
-    raise SystemExit(run(sys.argv[1], sys.argv[2]))
+    raise SystemExit(run(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None))

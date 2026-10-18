@@ -17,7 +17,7 @@ gc_unit_language_environment() {
 
 gc_unit_language_compile() {
   local compiler_rc=0
-  "$CJC_BIN" "$@" || compiler_rc=$?
+  LD_DEBUG=libs "$CJC_BIN" -V --import-path "$GC_UNIT_LANGUAGE_SDK/modules/${GC_UNIT_RUNTIME_TUPLE:-linux_x86_64_cjnative}" -L"$GCV2_RUNTIME_LIB_DIR" "$@" || compiler_rc=$?
   printf '%s\n' "$compiler_rc" >>"${GC_UNIT_OUT:?}/compile.rc"
   return "$compiler_rc"
 }

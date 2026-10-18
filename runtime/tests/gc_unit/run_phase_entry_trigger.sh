@@ -14,6 +14,7 @@ source "$UNIT_SRC/language_toolchain.sh"
 gc_unit_language_admit
 gc_unit_language_environment
 CXX_BIN="${CXX:-c++}"
+RUNTIME_OUTPUT_ROOT="${GCV2_RUNTIME_OUTPUT_ROOT:-$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$RUNTIME_LIB_DIR")}"
 
 for library in libcangjie-runtime.so libboundscheck.so; do
   if [[ ! -f "$RUNTIME_LIB_DIR/$library" ]]; then
@@ -46,9 +47,9 @@ echo "$analyzer_unit_rc" >"$OUT/schema_ledger.unit.rc"
 
 if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
   "$CXX_BIN" -std=gnu++17 -O0 -fPIC -shared -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
-    -I"$ROOT/runtime/src/Heap/z/os/linux" \
+    -I"$ROOT/runtime/src/Heap/z/os/linux" -I"$ROOT/runtime/src/Heap" -I"$ROOT/runtime/src/Loader/BinaryFile" \
     -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
-    -I"$RUNTIME_LIB_DIR/../../include" \
+    -I"$RUNTIME_LIB_DIR/../../include" -I"$RUNTIME_OUTPUT_ROOT/include" \
     -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
     "$UNIT_SRC/phase_entry_request.cpp" \
     -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck \
@@ -81,12 +82,13 @@ done
 
 set +e
 LD_LIBRARY_PATH="$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
+  LD_DEBUG=libs MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   PYTHONPATH="$ROOT/runtime/tests/perf_vs_official${PYTHONPATH:+:$PYTHONPATH}" \
-  python3 "$UNIT_SRC/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG"
+  python3 "$UNIT_SRC/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG" \
+    "$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 minor_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
+  LD_DEBUG=libs MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   timeout 60s "$MAJOR_BIN" >"$MAJOR_RUN_LOG" 2>&1
 major_rc=$?
 set -e

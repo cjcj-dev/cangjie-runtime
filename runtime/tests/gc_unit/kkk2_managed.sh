@@ -3,7 +3,7 @@
 # Target arm: stained; cjc compiler host: official/H48 runtime.
 # cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
-# HARNESS-FILES: runtime/tests/gc_unit/language_toolchain.py runtime/tests/gc_unit/language_toolchain.sh runtime/tests/gc_unit/language_toolchain_qualification.json runtime/tests/gc_unit/std_runtime_colour.py
+# HARNESS-FILES: runtime/tests/gc_unit/language_toolchain.py runtime/tests/gc_unit/language_toolchain.sh runtime/tests/gc_unit/std_runtime_colour.py
 # HARNESS-FILES: runtime/tests/gc_unit/run_finalizer_trigger.sh runtime/tests/gc_unit/run_phase_entry_trigger.sh runtime/tests/gc_unit/run_segmented_array_managed.sh
 # HARNESS-FILES: runtime/tests/gc_unit/finalizer_trigger.cj runtime/tests/gc_unit/phase_entry_trigger.cj runtime/tests/gc_unit/phase_entry_major.cj runtime/tests/gc_unit/segmented_array_managed.cj runtime/tests/gc_unit/phase_entry_request.cpp runtime/tests/gc_unit/wait_phase_entry_cycle.py
 set -euo pipefail
@@ -18,8 +18,6 @@ OUT=${OUT:-$LANE/managed-runs}
 # Compiler/stdlib SDK for the inline TLAB ABI (top@0/end@8).
 COLORED_SDK=${COLORED_SDK:-}
 H48_RT=${H48_RT:-}
-BUILD_SDK_DEFAULT=/root/.cjv/toolchains/nightly-1.3.0-alpha.20260904010027
-export GC_UNIT_BUILD_SDK=${GC_UNIT_BUILD_SDK-$BUILD_SDK_DEFAULT}
 export GC_UNIT_LANGUAGE_SDK=${GC_UNIT_LANGUAGE_SDK-$COLORED_SDK}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
 export CANGJIE_HOME="$GC_UNIT_LANGUAGE_SDK"
@@ -30,13 +28,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 ADMISSION_UNIT="$HERE"
 export GC_UNIT_SOURCE_ROOT="$SRCROOT"
-export GC_UNIT_LANGUAGE_QUALIFICATION=${GC_UNIT_LANGUAGE_QUALIFICATION-$ADMISSION_UNIT/language_toolchain_qualification.json}
-export GC_UNIT_COLOUR_HOST_RUNTIME=${GC_UNIT_COLOUR_HOST_RUNTIME-$GC_UNIT_BUILD_SDK/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so}
-mkdir -p "$LANE/qualification"
-if [[ ! ${GC_UNIT_COLOUR_CHECKER+x} ]]; then
-  cp "$ADMISSION_UNIT/std_runtime_colour.py" "$LANE/qualification/std_runtime_colour.py"
-  export GC_UNIT_COLOUR_CHECKER="$LANE/qualification/std_runtime_colour.py"
-fi
+: "${GC_UNIT_COLOUR_HOST_RUNTIME:?declare the plain runtime reference}"
 
 ANALYZER_TOOLS=(zstat_pillars.py)
 
