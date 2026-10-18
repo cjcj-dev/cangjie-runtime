@@ -30,7 +30,7 @@ def main():
             raise RuntimeError('Wrong product library')
         mi.delete(ready)
         stop = mi.breakpoint('MRT_StopGCWork')
-        tls = mi.breakpoint('CangjieRuntime.cpp:274')
+        tls = mi.breakpoint('MapleRuntime::ThreadLocal::ThreadLocalFini')
         mi.resume(main_thread)
         event = mi.stop()
         observed_stop = event_field(event, 'bkptno') == stop
