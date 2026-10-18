@@ -21,6 +21,7 @@ struct ExitState {
     std::atomic<BeforeExit> before{BeforeExit::NotRun};
     std::atomic<bool> vmExited{false};
     size_t nativeCount = 0;
+    size_t threadCount = 0;
     NativeThreadIdentity* owner = nullptr;
 };
 ExitState& state()
@@ -72,6 +73,7 @@ size_t VM_Exit::set_vm_exited()
                  "terminal publication requires the permanent final safepoint");
     size_t nativeCount = 0;
     ThreadsListHandle threads;
+    state().threadCount = threads.length();
     for (size_t i = 0; i < threads.length(); ++i) {
         Mutator* mutator = threads.thread_at(i);
         if (is_native(*mutator)) {
@@ -88,6 +90,12 @@ size_t VM_Exit::native_threads_at_exit()
 {
     CHECK_DETAIL(exited(), "native inventory is only final after terminal publication");
     return state().nativeCount;
+}
+
+size_t VM_Exit::threads_at_exit()
+{
+    CHECK_DETAIL(exited(), "thread inventory is only final after terminal publication");
+    return state().threadCount;
 }
 
 void VM_Exit::wait_if_vm_exited()

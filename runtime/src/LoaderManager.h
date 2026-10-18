@@ -47,7 +47,8 @@ public:
     void UnregisterStaticRoots(Uptr addr, U32 size);
     void VisitStaticRoots(const NativeSlotVisitor& visitor);
     void Init();
-    void Fini();
+    // False means live terminal images remain in the existing catalog.
+    bool Fini();
     void AddPreLoadedImageMetaAddr(Uptr address);
     void RemovePreLoadedImageMetaAddr(Uptr address);
     void LoadPreLoadedImages();

@@ -15,6 +15,7 @@
 #include "LoaderManager.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "TypeInfoManager.h"
+#include "Mutator/VMExit.h"
 
 namespace MapleRuntime {
 bool LoaderManager::isReleased;
@@ -142,10 +143,26 @@ void LoaderManager::Init()
     initStatus.store(true, std::memory_order_relaxed);
 }
 
-void LoaderManager::Fini()
+bool LoaderManager::Fini()
 {
+    // threads.cpp:995-1027: final safepoint keeps daemon stack/code metadata
+    // alive; exit_globals tears down output/performance resources, not the
+    // CodeCache. Our ELF catalog and generic-type arenas are its backing-store
+    // counterpart. A blocked-in-VM reader cannot finish after the final pause,
+    // and a native caller may still hold a return PC into any linked image.
+    // Do not acquire unload admission or drain metadata readers in that case.
+    if (VM_Exit::exited() && VM_Exit::threads_at_exit() != 0) {
+        initStatus.store(false, std::memory_order_relaxed);
+        return false;
+    }
     loader->Fini();
     initStatus.store(false, std::memory_order_relaxed);
+    bool empty = true;
+    loader->VisitBaseFile([&](BaseFile*) {
+        empty = false;
+        return true;
+    });
+    return empty;
 }
 
 void* LoaderManager::LoadCJLibrary(const char* libName) const

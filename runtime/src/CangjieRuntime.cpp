@@ -145,8 +145,9 @@ void CangjieRuntime::FiniAndDelete()
         VMThread::wait_for_vm_thread_exit();
     }
     VM_Exit::set_vm_exited();
+    const bool releaseTypeMetadata = cjRuntime->loaderManager->Fini();
     Runtime::runtime = nullptr;
-    cjRuntime->Fini();
+    cjRuntime->Fini(releaseTypeMetadata);
     delete cjRuntime;
     VM_Exit::complete_before_exit(true);
 }
@@ -289,7 +290,7 @@ inline void CheckAndFini(T*& module)
     module = nullptr;
 }
 
-void CangjieRuntime::Fini()
+void CangjieRuntime::Fini(bool releaseTypeMetadata)
 {
     bool retainSignalStackPages = false;
     // since there might be failure during initialization,
@@ -301,8 +302,9 @@ void CangjieRuntime::Fini()
     CheckAndFini<HeapManager>(heapManager);
     CheckAndFini<ExceptionManager>(exceptionManager);
     CheckAndFini<StackManager>(stackManager);
-    loaderManager->Fini();
-    typeInfoManager->Fini();
+    // Generic metadata uses shared mmap arenas. Their ownership cannot be
+    // separated from a live image by deleting just the Runtime facade.
+    if (releaseTypeMetadata) { typeInfoManager->Fini(); }
     CheckAndFini<MutatorManager>(mutatorManager);
     CheckAndFini<ConcurrencyModel>(concurrencyModel);
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
@@ -311,9 +313,9 @@ void CangjieRuntime::Fini()
 #endif
     CheckAndFini<LogManager>(logManager);
     // NativeAllocator backs retained scheduler/processor closures. Releasing
-    // this arena while actual native threads remain would invalidate their
+    // this arena while native or blocked-in-VM threads remain invalidates their
     // pre-barrier storage even though the Runtime facade has been deleted.
-    if (VM_Exit::native_threads_at_exit() == 0 && !retainSignalStackPages) { PagePool::Instance().Fini(); }
+    if (VM_Exit::threads_at_exit() == 0 && !retainSignalStackPages) { PagePool::Instance().Fini(); }
 
     LOG(RTLOG_INFO, "Cangjie runtime shutdown.");
 }

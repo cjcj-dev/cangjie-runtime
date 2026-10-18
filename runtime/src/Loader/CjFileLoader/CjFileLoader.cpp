@@ -22,6 +22,8 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadSMR.h"
+#include "Mutator/VMExit.h"
+#include "Mutator/SafepointSynchronize.h"
 #include <unordered_map>
 #include "ObjectManager.inline.h"
 #include "TypeInfoManager.h"
@@ -585,26 +587,28 @@ void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 
 void CJFileLoader::ClearLoadedFiles()
 {
-    // CangjieRuntime clears Runtime::runtime before module finalization, so a
-    // shutdown cleanup cannot submit a new VM pause or query
-    // MutatorManager::Instance(). Both runtime exits retire their entry mutator
-    // and stop the scheduler before FiniAndDelete, so no active image frame can
-    // be created or remain here. Close task admission for the complete cleanup
-    // and prove the remaining pending side explicitly for every image.
-    CHECK_DETAIL(Runtime::CurrentRef() == nullptr,
+    const bool terminal = VM_Exit::exited();
+    CHECK_DETAIL(Runtime::CurrentRef() == nullptr ||
+                     (terminal && SafepointSynchronize::is_at_safepoint()),
                  "ELF shutdown cleanup requires a stopped runtime");
+    // zStackWatermark.cpp:43: on-stack code remains live.
+    // At the permanent final pause, pending tasks cannot finish and active
+    // native callers cannot cross their return barrier. Preserve those images
+    // in the existing catalog instead of waiting for an impossible completion.
+    // The Runtime facade remains available while saved frames are inspected.
     ElfUnloadQuiescence::TaskAdmissionScope shutdownAdmission;
-    for (;;) {
-        BaseFile* file = nullptr;
-        {
-            std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-            if (loadedFiles.empty()) {
-                return;
-            }
-            file = loadedFiles.front();
-        }
+    std::vector<BaseFile*> files;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        files.assign(loadedFiles.begin(), loadedFiles.end());
+    }
+    for (BaseFile* file : files) {
         Uptr imageAddress = file->GetFileMetaAddr();
-        shutdownAdmission.WaitUntilNoPendingForImage(imageAddress);
+        if (terminal) {
+            if (shutdownAdmission.HasPendingForImage(imageAddress) || HasActiveImageFrames(file)) { continue; }
+        } else {
+            shutdownAdmission.WaitUntilNoPendingForImage(imageAddress);
+        }
         ElfUnloadQuiescence::PurgeAuthorizationScope authorization(
             imageAddress, shutdownAdmission);
         RemoveLoadedFiles(file);
@@ -847,7 +851,7 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
         bool active = false;
     };
 
-    // zStackWatermark.cpp:43 / zNMethod.cpp:388: on-stack code stays alive,
+    // zStackWatermark.cpp:43: on-stack code stays alive,
     // including unmounted tasks. Cangjie saves these stacks on logical Mutators
     // rather than heap stackChunks, so retain their complete SMR membership.
     ScopedEnterSaferegion enterSaferegion(false);
@@ -856,6 +860,7 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
     for (;;) {
         closure.ScanSafeThreads();
         if (closure.IsComplete()) { break; }
+        CHECK_DETAIL(!VM_Exit::exited(), "final safepoint must make every remaining frame inspectable");
         Handshake::execute(&closure);
         if (closure.IsComplete()) { break; }
     }

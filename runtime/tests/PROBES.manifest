@@ -21,6 +21,7 @@
 # to the accounting that exists to make exactly that visible.
 #
 # <file>                                  <status>   <what it needs / why it is here>
+finalizer_registration                   manual     matching installed compiler/std/runtime/LLVM tuple; real constructor success/before-root/after-root failures and existing Grok young-mark qualification
 signal_shutdown.cpp                      manual     build_signal_shutdown.mjs; fixed product SO and matching SDK; blocked native/real managed/managed GC arms, qualification pending
 signal_shutdown_managed.cj               manual     build_signal_shutdown.mjs; matching compiler/std/runtime/LLVM tuple, actual @C callback and managed GC validation
 shutdown_owner_identity.cpp              manual     build_signal_shutdown.mjs; Linux x86_64 same-stack pthread reuse, existing Grok owner observes permanent product return barrier

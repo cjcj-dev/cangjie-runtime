@@ -4,10 +4,12 @@
 #include "Cangjie.h"
 #include "Common/Runtime.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/SafepointSynchronize.h"
 #include "Mutator/VMExit.h"
 #include "Mutator/VMOperation.h"
 #include <cstdio>
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -81,3 +83,31 @@ GC_RUNTIME_OTHER_VM_TEST(VMExit1473, HostSuccessRequiresFinalStateAndRepeatFails
     GC_EXPECT_EQ(FiniCJRuntime(), E_FAILED);
     std::fprintf(stderr, "VM1473_HOST_TARGET executed=1 terminal=1 final_pause=1 facade_deleted=1 repeat_rejected=1\n");
 }
+
+#if defined(__linux__) && !defined(__OHOS__)
+GC_RUNTIME_OTHER_VM_TEST(VMService1350, PublicHostHeapDumpAttachesAndDetachesOnEveryCall)
+{
+    auto params = ShutdownParameters();
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const auto mainHandle = MutatorManager::Instance().GetMainThreadHandle();
+    bool detached[2] = {false, false};
+    bool written[2] = {false, false};
+    std::thread host([&] {
+        for (int i = 0; i != 2; ++i) {
+            FILE* output = std::tmpfile();
+            if (output == nullptr) { return; }
+            CJ_MRT_ForceFullGC();
+            CJ_MRT_DumpHeapSnapshot(fileno(output));
+            detached[i] = Mutator::GetMutator() == nullptr;
+            written[i] = std::fseek(output, 0, SEEK_END) == 0 && std::ftell(output) > 0;
+            std::fclose(output);
+        }
+    });
+    host.join();
+    GC_EXPECT_TRUE(detached[0] && detached[1]);
+    GC_EXPECT_TRUE(written[0] && written[1]);
+    GC_EXPECT_TRUE(MutatorManager::Instance().GetMainThreadHandle() == mainHandle);
+    std::fprintf(stderr, "VM1350_PUBLIC_HOST_TARGET executed=1 calls=2 detached=2 output=2 main_preserved=1\n");
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif

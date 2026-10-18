@@ -857,7 +857,7 @@ void ScheduleNonDefaultThreadExit(struct Schedule *schedule, bool wait)
 /* Releases thread resources in the thread pool. Note: This interface needs to be invoked
  * only in schedule_try_exit, not in schedule_stop.
  */
-static bool ScheduleThreadSkipFFI(struct Thread *thread);
+static bool ScheduleThreadNeedsRetention(struct Thread *thread);
 
 static bool ScheduleThreadsStop(struct Schedule *schedule, bool joinThreads)
 {
@@ -873,7 +873,7 @@ static bool ScheduleThreadsStop(struct Schedule *schedule, bool joinThreads)
         struct CJThread *cjthread = static_cast<struct CJThread*>(thread->cjthread);
         // SyscallEnter explicitly unbinds the processor. The carrier inventory
         // remains its owner while a native call has not returned.
-        if (cjthread != nullptr && cjthread->state == CJTHREAD_SYSCALL && ScheduleThreadSkipFFI(thread)) {
+        if (cjthread != nullptr && cjthread->state == CJTHREAD_SYSCALL && ScheduleThreadNeedsRetention(thread)) {
             thread->exitBlocked = true;
         }
         if (thread->exitBlocked) {
@@ -1069,7 +1069,7 @@ void ScheduleNonDefaultFree(ScheduleHandle scheduleHandle)
 /* Check whether the current processor is in the FFI state. The processor is in ScheduleStop
  * and will not be scheduled again.
  */
-static bool ScheduleThreadSkipFFI(struct Thread *thread)
+static bool ScheduleThreadNeedsRetention(struct Thread *thread)
 {
     if (thread == nullptr) {
         return false;
@@ -1082,9 +1082,9 @@ static bool ScheduleThreadSkipFFI(struct Thread *thread)
     return hookFunc(cjthread->mutator);
 }
 
-bool ScheduleProcessorSkipFFI(struct Processor *processor)
+static bool ScheduleProcessorNeedsRetention(struct Processor *processor)
 {
-    return ScheduleThreadSkipFFI(processor->thread);
+    return ScheduleThreadNeedsRetention(processor->thread);
 }
 
 bool ScheduleAllNonDefaultExit(void)
@@ -1115,7 +1115,14 @@ bool ScheduleAllNonDefaultExit(void)
         if (schedule == curschdeule) {
             continue;
         }
-        if (ScheduleProcessorSkipFFI(&(schedule->schdProcessor.processorGroup[0]))) {
+        if (schedule->scheduleType == SCHEDULE_FOREIGN_THREAD) {
+            // The embedder owns this OS thread. Its registered logical thread
+            // joins the final safepoint, but VM shutdown must not pthread_join
+            // an arbitrary host which can outlive a completed public API call.
+            completed = false;
+            continue;
+        }
+        if (ScheduleProcessorNeedsRetention(&(schedule->schdProcessor.processorGroup[0]))) {
             // Native-return termination barrier retains this scheduler's closure.
             completed = false;
             continue;
@@ -1186,12 +1193,12 @@ bool ScheduleProcessorExit(struct Schedule *schedule)
                 SchmonPreemptRunning(processor);
             }
 
-            // Detects that the current processor is running FFI and exits directly. If the
-            // FFI ends and is ready to leave the security zone, the stw mechanism is triggered
-            // and the thread is blocked.
-            struct Thread *nativeThread = processor->thread;
-            if (ScheduleProcessorSkipFFI(processor)) {
-                nativeThread->exitBlocked = true;
+            // A native call or a blocked VM caller owns a saferegion return
+            // barrier. Retain its physical closure; final logical termination
+            // and the distinct native inventory are published by VM_Exit.
+            struct Thread *retainedThread = processor->thread;
+            if (ScheduleThreadNeedsRetention(retainedThread)) {
+                retainedThread->exitBlocked = true;
                 completed = false;
                 break;
             }

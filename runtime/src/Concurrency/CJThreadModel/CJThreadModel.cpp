@@ -133,17 +133,11 @@ extern "C" void MRT_DestroyMutator(void* mutator)
 
 extern "C" bool MRT_CheckMutatorStatus(void* mutator)
 {
-    Mutator *curMutator = reinterpret_cast<Mutator*>(mutator);
-    auto status = curMutator->GetUnwindContext().GetUnwindContextStatus();
-    if (status == UnwindContextStatus::RISKY && curMutator->InSaferegion()) {
-        status = curMutator->GetUnwindContext().GetUnwindContextStatus();
-        if (status != UnwindContextStatus::RISKY || !curMutator->InSaferegion()) {
-            return false;
-        }
-
-        return true;
-    }
-    return false;
+    // Physical retention includes a native call AND a thread blocked in VM.
+    // Both own a saferegion return transition; neither may be joined while
+    // waiting for a shutdown operation. This does not classify either as
+    // _thread_in_native: VM_Exit::is_native separately requires SAFE + RISKY.
+    return reinterpret_cast<Mutator*>(mutator)->InSaferegion();
 }
 
 static void RegisterCJThreadHooks()

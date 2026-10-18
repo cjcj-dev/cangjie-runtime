@@ -395,6 +395,8 @@ MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/test_vmthread.cpp"
+  "$SRC/test_vm_exit.cpp"
+  "$SRC/test_leaf_barrier_contract.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"

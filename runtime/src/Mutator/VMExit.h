@@ -15,6 +15,7 @@ public:
     static bool is_shutdown_thread();
     static size_t set_vm_exited();
     static size_t native_threads_at_exit();
+    static size_t threads_at_exit();
     static void wait_if_vm_exited();
     static void wait_for_native_entry();
     static bool is_native(const Mutator& mutator);

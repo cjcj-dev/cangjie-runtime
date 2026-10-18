@@ -76,7 +76,7 @@ protected:
 
 private:
     void Init();
-    void Fini();
+    void Fini(bool releaseTypeMetadata);
 
     RuntimeParam param;
     const char** commandLineArgs = nullptr;

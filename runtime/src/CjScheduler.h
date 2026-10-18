@@ -29,6 +29,8 @@ void MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* entries, size_t c
 void MRT_SetCommandLineArgs(int argc, const char* argv[]);
 const char** MRT_GetCommandLineArgs();
 void MRT_CjRuntimeStart(void* execute);
+bool MRT_NewForeignCJThread();
+bool MRT_EndForeignCJThread();
 int MRT_NewWaitQueue(void* waitQueuePtr);
 bool MRT_SuspendWithTimeout(void* wq, const WqCallbackFunc callBack, void* callBackObj, int64_t timeOut);
 void MRT_ResumeOne(void* wq, const WqCallbackFunc callBack, void* callBackObj);

@@ -51,6 +51,66 @@
 #include "Heap/shared/gcArguments.hpp"
 #include "HeapManager.h"
 #include "HeapManager.inline.h"
+#include "CangjieRuntime.h"
+#include "CjScheduler.h"
+#include "Heap/shared/gcVMOperations.hpp"
+#include "Inspector/CjHeapData.h"
+
+namespace {
+// Public native services reuse the real N2C attachment/detachment path. A host
+// has no managed stack until it calls a generated entry, so do not manufacture
+// a stack anchor or a RISKY/native state for the C++ service body.
+class ScopedHostVMEntry {
+public:
+    ScopedHostVMEntry()
+    {
+        using namespace MapleRuntime;
+        VM_Exit::wait_if_vm_exited();
+        if (!CangjieRuntime::IsInitialized()) { return; }
+        attached = MRT_NewForeignCJThread();
+        mutator = Mutator::GetMutator();
+        CHECK_DETAIL(mutator != nullptr, "native service attachment must publish a logical thread");
+        if (attached) { mutator->SetManagedContext(false); }
+        leftSafe = mutator->LeaveSaferegion();
+        ready = true;
+    }
+    ~ScopedHostVMEntry()
+    {
+        using namespace MapleRuntime;
+        if (!ready) { return; }
+        if (attached) {
+            MRT_EndForeignCJThread();
+            // The cached foreign carrier owns its scheduler until native TLS
+            // destruction. Preserve that binding for CleanThreadLocalData.
+        } else if (leftSafe) {
+            (void)mutator->EnterSaferegion(false);
+        }
+    }
+    explicit operator bool() const { return ready; }
+    ScopedHostVMEntry(const ScopedHostVMEntry&) = delete;
+    ScopedHostVMEntry& operator=(const ScopedHostVMEntry&) = delete;
+private:
+    MapleRuntime::Mutator* mutator = nullptr;
+    bool attached = false;
+    bool leftSafe = false;
+    bool ready = false;
+};
+
+#if defined(__OHOS__) && (__OHOS__ == 1)
+class VM_ForkHeapSnapshot final : public MapleRuntime::VM_GC_Operation {
+public:
+    explicit VM_ForkHeapSnapshot(int fd)
+        : VM_GC_Operation(0, false, 0, MapleRuntime::GC_REASON_HEAP_DUMP), fd(fd) {}
+    const char* name() const override { return "fork heap snapshot"; }
+    void doit() override { child = MapleRuntime::CjHeapData::ForkAndDumpHeap(fd, false); }
+    pid_t child_pid() const { return child; }
+private:
+    bool skip_operation() const override { return false; }
+    int fd;
+    pid_t child = -1;
+};
+#endif
+} // namespace
 
 CANGJIE_RT_API_DECLS_BEGIN
 const double ERRORESTIMATE = 1e-12;
@@ -818,6 +878,8 @@ char* CJ_MRT_DemangleHandle(const char* functionName)
 using SendMsgCB = std::function<void(const std::string& message)>;
 void ProfilerAgent(const std::string& message, SendMsgCB sendMsg)
 {
+    ScopedHostVMEntry entry;
+    if (!entry) { return; }
     MapleRuntime::ProfilerAgentImpl(message, sendMsg);
 }
 #endif
@@ -931,11 +993,15 @@ void* CJThreadGetspecific(CJThreadKey key) { return CJThreadGetspecificInner(key
 
 void CJ_MRT_DumpHeapSnapshot(int fd)
 {
+    ScopedHostVMEntry entry;
+    if (!entry) { return; }
 #if defined(__OHOS__) && (__OHOS__ == 1)
     // Fork child process to perform heap dump asynchronously
     // Parent process does not wait, returns immediately
     LOG(RTLOG_INFO, "start child process for heap dump from hidumper");
-    pid_t childPid = MapleRuntime::CjHeapData::ForkAndDumpHeap(fd, false);
+    VM_ForkHeapSnapshot operation(fd);
+    MapleRuntime::VMThread::execute(&operation);
+    pid_t childPid = operation.child_pid();
     if (childPid < 0) {
         LOG(RTLOG_ERROR, "Failed to start child process for heap dump");
     }
@@ -946,6 +1012,11 @@ void CJ_MRT_DumpHeapSnapshot(int fd)
 #endif
 }
 
-void CJ_MRT_ForceFullGC() { MapleRuntime::HeapManager::RequestGC(MapleRuntime::GC_REASON_USER); }
+void CJ_MRT_ForceFullGC()
+{
+    ScopedHostVMEntry entry;
+    if (!entry) { return; }
+    MapleRuntime::HeapManager::RequestGC(MapleRuntime::GC_REASON_USER);
+}
 
 CANGJIE_RT_API_DECLS_END

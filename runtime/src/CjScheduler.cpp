@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "CjScheduler.h"
+#include "Mutator/ThreadSMR.h"
 #include "Mutator/VMExit.h"
 #include "Mutator/SafepointSynchronize.h"
 
@@ -473,7 +474,6 @@ bool MRT_NewForeignCJThread()
         CJThreadHandle cjthread =
             CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData),
             CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
-        MutatorManager::Instance().SetMainThreadHandle(cjthread);
         CJThreadPreemptOffCntAdd();
         RebindCJThread(cjthread);
         ThreadLocal::SetForeignCJThread(cjthread);
@@ -485,6 +485,14 @@ bool MRT_NewForeignCJThread()
     void* cjthread = ThreadLocal::GetForeignCJThread();
     ThreadLocal::SetCJThread(cjthread);
     Mutator* mutator = reinterpret_cast<Mutator*>(CJThreadGetMutator());
+    if (mutator == nullptr) {
+        // The cached foreign carrier survives an N2C exit; its detached logical
+        // Mutator does not. Reattachment constructs a new identity, just like
+        // CJThreadMake, under the same registration lock as the first attach.
+        mutator = Mutator::NewMutator();
+        CJThreadSetMutator(mutator);
+        ThreadsSMRSupport::add_thread(mutator);
+    }
     // The same registration lock already covers construction and this binding.
     // Its guard ends before the N2C stub leaves the saferegion.
     auto& mutatorManager = MutatorManager::Instance();
