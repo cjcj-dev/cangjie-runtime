@@ -4,6 +4,8 @@ import std.collection.ArrayList
 
 foreign func ShutdownInstallCallback(callback: CFunc<(Int32, CPointer<Unit>, CPointer<Unit>) -> Bool>): Unit
 foreign func ShutdownInstallGcCallback(callback: CFunc<(Int32, CPointer<Unit>, CPointer<Unit>) -> Bool>): Unit
+foreign func ShutdownInstallDumpCaller(callback: CFunc<(CPointer<Unit>) -> CPointer<Unit>>): Unit
+foreign func ShutdownRaiseDumpSignal(): Int32
 foreign func ShutdownNativeBlock(): Unit
 foreign func ShutdownManagedProgress(stage: Int32): Unit
 foreign func ShutdownManagedAwaitGc(): Int64
@@ -49,9 +51,17 @@ func shutdownManagedGcCallback(_: Int32, _: CPointer<Unit>, _: CPointer<Unit>): 
     return true
 }
 
+@C
+func shutdownManagedDumpCaller(argument: CPointer<Unit>): CPointer<Unit> {
+    let sent = unsafe { ShutdownRaiseDumpSignal() }
+    if (sent == 0) { unsafe { ShutdownManagedProgress(41) } }
+    return argument
+}
+
 func installCallback(): Int64 {
     unsafe { ShutdownInstallCallback(shutdownManagedCallback) }
     unsafe { ShutdownInstallGcCallback(shutdownManagedGcCallback) }
+    unsafe { ShutdownInstallDumpCaller(shutdownManagedDumpCaller) }
     return 1
 }
 
