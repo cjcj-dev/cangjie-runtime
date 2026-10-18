@@ -75,7 +75,7 @@ public:
         // establish colors and sequence before the real concurrent root task.
         auto& old = Heap::GetHeap().old();
         {
-            ExecuteTestAtSafepoint("native-root old mark-start", [&] {
+            GcUnit::ExecuteTestAtSafepoint("native-root old mark-start", [&] {
             old.mark_start();
             });
         }

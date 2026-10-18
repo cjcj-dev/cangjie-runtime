@@ -203,8 +203,8 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
         // A reader may request a real pause while the remover waits. Native
         // removal must already have left STS or this forms a wait cycle.
         {
-            ExecuteTestAtSafepoint("native owner grace period", [&] {
-            pauseDuringGrace = MutatorManager::Instance().WorldStopped();
+            GcUnit::ExecuteTestAtSafepoint("native owner grace period", [&] {
+                pauseDuringGrace = MutatorManager::Instance().WorldStopped();
             });
         }
         // Enter after the first remover has begun its grace period. This

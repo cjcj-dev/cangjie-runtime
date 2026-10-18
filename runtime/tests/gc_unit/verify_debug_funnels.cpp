@@ -94,7 +94,7 @@ int main(int argc, char** argv)
         VerifyFunnelTask task(run);
         Heap::GetHeap().old().Workers()->run(&task);
     } else if (worldstopped) {
-        ExecuteTestAtSafepoint("VerifyFunnelInput", [&] {
+        GcUnit::ExecuteTestAtSafepoint("VerifyFunnelInput", [&] {
         run();
         });
     } else if (saferegion) {

@@ -7,6 +7,7 @@
 #include "Heap/z/zRootsIterator.hpp"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MClass.h"
+#include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include <array>
 #include <cstring>
@@ -41,8 +42,9 @@ void* ExerciseLeafHelpers(void* opaque)
     HandleMark roots(*mutator);
     Handle objectRoot(mutator, MCC_NewObject(type, 512 + TYPEINFO_PTR_SIZE));
     Handle destinationRoot(mutator, MCC_NewObject(type, 512 + TYPEINFO_PTR_SIZE));
-    ObjRef object = objectRoot();
-    ObjRef destination = destinationRoot();
+    // Handles expose the generic managed-object type used by the barrier ABI.
+    ObjectPtr object = objectRoot();
+    ObjectPtr destination = destinationRoot();
     std::array<unsigned char, 512> input{}, output{};
     for (size_t i = 0; i < input.size(); ++i) { input[i] = static_cast<unsigned char>(i ^ 0x5a); }
     MCC_WriteStructField(object, reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE, input.size(),
