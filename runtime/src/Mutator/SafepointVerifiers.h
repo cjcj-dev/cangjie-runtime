@@ -6,7 +6,10 @@ namespace MapleRuntime {
 // are allowed; a managed allocation or a safepoint-capable transition is not.
 class NoSafepointVerifier {
 public:
-    NoSafepointVerifier() : mutator(Mutator::GetMutator())
+    // Binding and scheduler switches publish the current mutator in this TLS.
+    // A native caller may have no mutator, even before scheduler TLS hooks are
+    // installed. Observing a leaf scope must not enter that scheduler fallback.
+    NoSafepointVerifier() : mutator(ThreadLocal::GetMutator())
     {
         if (mutator != nullptr) { mutator->IncNoSafepointCount(); }
     }

@@ -14,6 +14,7 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_verify_fixture.hpp"
+#include "gc_vmthread_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
@@ -125,7 +126,7 @@ private:
 
 GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
 {
-    VerifyRuntime runtime;
+    VMThreadContainerRuntime runtime(8);
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;

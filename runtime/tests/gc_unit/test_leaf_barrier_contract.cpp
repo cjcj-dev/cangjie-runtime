@@ -37,7 +37,13 @@ void* ExerciseLeafHelpers(void* opaque)
     auto* type = reinterpret_cast<TypeInfo*>(metadata);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(512);
-    type->SetGCTib(GCTib{});
+    // Use the metadata producer: 512 bytes require a long, all-zero bitmap.
+    // A null GCTib is not the representation of a resolved reference-free layout.
+    TypeInfoManager::GetTypeInfoManager().CalculateGCTib(type);
+    const GCTib layout = type->GetGCTib();
+    GC_EXPECT_TRUE(!layout.IsGCTibWord());
+    GC_EXPECT_TRUE(layout.gctib != nullptr);
+    GC_EXPECT_EQ(layout.gctib->nBitmapWords, 512u / sizeof(uintptr_t) / 8u);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(metadata), sizeof(metadata));
     HandleMark roots(*mutator);
     Handle objectRoot(mutator, MCC_NewObject(type, 512 + TYPEINFO_PTR_SIZE));
@@ -48,7 +54,7 @@ void* ExerciseLeafHelpers(void* opaque)
     std::array<unsigned char, 512> input{}, output{};
     for (size_t i = 0; i < input.size(); ++i) { input[i] = static_cast<unsigned char>(i ^ 0x5a); }
     MCC_WriteStructField(object, reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE, input.size(),
-                         reinterpret_cast<MAddress>(input.data()), input.size(), GCTib{});
+                         reinterpret_cast<MAddress>(input.data()), input.size(), layout);
     std::fprintf(stderr, "LEAF_BARRIER_TARGET helper=ReadGenericPayload entered=1 registered=1\n");
     CJ_MCC_ReadGenericPayload(output.data(), object, output.size());
     result.matches = output == input;
