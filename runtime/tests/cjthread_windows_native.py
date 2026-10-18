@@ -81,6 +81,9 @@ elif ARM == "cut-path":
 elif ARM == "cut-output":
     replace(parent, 'set(OTHER_DEFINITIONS " -DRUNTIME_OUTPUT_ROOT=${CMAKE_OUTPUT_DIRECTORY}")',
             'set(OTHER_DEFINITIONS " -DRUNTIME_OUTPUT_ROOT=${CMAKE_OUTPUT_DIRECTORY}/cut-output")')
+elif ARM == "cut-install-inputs":
+    replace(bat, ' -DCMAKE_INSTALL_PREFIX="%~7" -DTARGET_ARCH="%~8" -DCMAKE_C_COMPILER_TARGET=',
+            ' -DCMAKE_C_COMPILER_TARGET=')
 elif ARM in ["incomplete", "cut-dependency-overlay"]:
     dependency.mkdir(parents=True)
     if ARM == "cut-dependency-overlay":
@@ -149,9 +152,11 @@ else:
     checks["dependency_consumed"] = (dependency / "include/securec.h").is_file() and "securec.h' file not found" not in text
     if (dependency / "include/securec.h").is_file():
         record["securec_sha256"] = digest(dependency / "include/securec.h")
-    expected_failures = {"baseline": ["child_directory", "output_directory"],
+    expected_failures = {"baseline": ["child_directory", "output_directory",
+                                      "child_install_prefix", "child_target_tuple"],
                          "cut-path": ["child_directory"],
-                         "cut-output": ["output_directory"]}.get(ARM, [])
+                         "cut-output": ["output_directory"],
+                         "cut-install-inputs": ["child_install_prefix", "child_target_tuple"]}.get(ARM, [])
 
 failures = sorted(key for key, passed in checks.items() if not passed)
 for key, passed in checks.items():
