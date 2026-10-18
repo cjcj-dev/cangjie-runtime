@@ -97,7 +97,7 @@ void BaseObject::OnFinalizerCreated()
     Heap::page(reinterpret_cast<MAddress>(this))->generation()
         ->MarkObjectIfActive<false, false, false, false>(from_object(this));
     // HotSpot sharedRuntime.cpp:1072-1075 / instanceKlass.cpp:1919-1932:
-    // constructor completion registers the object before returning to the caller.
+    // Normal return from the root Object.init registers before derived init continues.
     heap.GetFinalizerProcessor().RegisterFinalizer(this);
 }
 

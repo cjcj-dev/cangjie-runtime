@@ -751,20 +751,6 @@
       "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:613",
       "cjcj-codegen/IRBuilder.cj:76"
     ],
-    "CJ_MCC_NewFinalizer": [
-      "llvm-lib/Analysis/MemoryDependenceAnalysis.cpp:481",
-      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4173",
-      "llvm-lib/IR/SafepointIRVerifier.cpp:1162",
-      "llvm-lib/Target/AArch64/AArch64InstrInfo.cpp:110",
-      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:160",
-      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:168",
-      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:58",
-      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:406",
-      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:410",
-      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:177",
-      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:401",
-      "llvm-include/llvm/ADT/StringRef.h:908"
-    ],
     "CJ_MCC_NewObjArray": [
       "llvm-lib/CodeGen/CJBarrierLowering.cpp:478",
       "llvm-lib/CodeGen/CJBarrierLowering.cpp:560",

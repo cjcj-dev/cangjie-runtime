@@ -119,8 +119,7 @@ def main():
         allocators = re.findall(r'^define [^\n]*@([^\s(]*MObject[^\s(]*)\(', allocation_ir, re.M)
         allocation_calls = {s: function(allocation_ir, s) for s in allocators
                             if re.search(r'call[^\n]*@' + RECORD + r'\(', function(allocation_ir, s))}
-        check('allocation_record_entries', any('NewObject' in s for s in allocation_calls)
-              and any('NewFinalizer' in s for s in allocation_calls), allocation_calls)
+        check('allocation_record_entries', any('NewObject' in s for s in allocation_calls), allocation_calls)
         symbols = run(['nm', '--defined-only', so]).decode()
         check('linked_real_service', all(re.search(r'\b' + re.escape(s) + r'$', symbols, re.M)
               for s in (SERIALIZE, RECORD, GET_HEAP, GET_SIZE, 'ProfilerAgent')))

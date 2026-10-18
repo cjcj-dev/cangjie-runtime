@@ -218,7 +218,6 @@ unwindPCForC2RStubStart:
     CalleeSavedRegistersStub MCC_NewObject CJ_MCC_NewObject
     CalleeSavedRegistersStub MCC_NewWeakRefObject CJ_MCC_NewWeakRefObject
     CalleeSavedRegistersStub MCC_NewObjArray CJ_MCC_NewObjArray
-    CalleeSavedRegistersStub MCC_NewFinalizer CJ_MCC_NewFinalizer
     CalleeSavedRegistersStub MCC_NewArray CJ_MCC_NewArray
     CalleeSavedRegistersStub MCC_NewArray8 CJ_MCC_NewArray8
     CalleeSavedRegistersStub MCC_NewArray16 CJ_MCC_NewArray16
