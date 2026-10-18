@@ -9,6 +9,46 @@ set(CANGJIE_LIB_DIR "modules")
 set(CANGJIE_EXECUTABLE_OUTPUT_DIR ${CMAKE_BINARY_DIR}/bin)
 set(CJNATIVE_BACKEND "cjnative")
 
+# build.py owns one GNU jobserver for the complete Ninja invocation. Keep the
+# memory-heavy package limit separate from CPU capacity; Ninja 1.10 needs this
+# command adapter and must not acquire a second implicit slot on our behalf.
+option(CANGJIE_SHARED_JOBSERVER "Share CPU tokens between Ninja commands and cjc" OFF)
+set(CANGJIE_CPU_JOBS 8 CACHE STRING "CPU capacity requested by the build entry")
+set(CANGJIE_PACKAGE_JOBS 2 CACHE STRING "Concurrent memory-heavy cjc packages")
+set(CANGJIE_COMPILER_HEAP_GIB "" CACHE STRING "Managed heap per compiler process in GiB")
+set(CANGJIE_COMPILER_ENV)
+if(NOT "${CANGJIE_COMPILER_HEAP_GIB}" STREQUAL "")
+    if(NOT "${CANGJIE_COMPILER_HEAP_GIB}" MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "CANGJIE_COMPILER_HEAP_GIB must be a positive integer")
+    endif()
+    set(CANGJIE_COMPILER_ENV "cjHeapSize=${CANGJIE_COMPILER_HEAP_GIB}GB")
+endif()
+set(CANGJIE_BUDGET_LAUNCHER)
+set(CANGJIE_PACKAGE_POOL)
+if(CANGJIE_SHARED_JOBSERVER)
+    if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "The shared Ninja jobserver currently requires a Linux host")
+    endif()
+    foreach(budget CANGJIE_CPU_JOBS CANGJIE_PACKAGE_JOBS)
+        if(NOT "${${budget}}" MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "${budget} must be a positive integer")
+        endif()
+    endforeach()
+    find_program(CANGJIE_NODE_EXECUTABLE node)
+    if(NOT CANGJIE_NODE_EXECUTABLE)
+        message(FATAL_ERROR "node is required for the shared Ninja jobserver")
+    endif()
+    get_filename_component(CANGJIE_JOBSERVER_SCRIPT
+        "${CMAKE_CURRENT_LIST_DIR}/../../scripts/ninja-jobserver.mjs" ABSOLUTE)
+    set(CANGJIE_BUDGET_LAUNCHER "${CANGJIE_NODE_EXECUTABLE}" "${CANGJIE_JOBSERVER_SCRIPT}" command --)
+    # Native C/C++/ASM compile and link commands share the same pool as cjc.
+    set(_cj_budget_rule "\"${CANGJIE_NODE_EXECUTABLE}\" \"${CANGJIE_JOBSERVER_SCRIPT}\" command --")
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${_cj_budget_rule}")
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${_cj_budget_rule}")
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS "cangjie_packages=${CANGJIE_PACKAGE_JOBS}")
+    set(CANGJIE_PACKAGE_POOL JOB_POOL cangjie_packages)
+endif()
+
 # Resolve a list of CMake target names / plain file paths to the actual output
 # files those targets produce, so that add_custom_command(OUTPUT) DEPENDS can
 # track them via file timestamps.
@@ -253,7 +293,8 @@ function(add_cangjie_library target_name)
         set(temp_files_dir "${CMAKE_BINARY_DIR}/${output_dir}/${CANGJIELIB_PACKAGE_NAME}-temp-files")
     endif()
     
-    set(COMPILE_CMD ${COMPILE_CMD} "-j1")
+    set(COMPILE_CMD ${CANGJIE_BUDGET_LAUNCHER} ${COMPILE_CMD} "-j${CANGJIE_CPU_JOBS}")
+    set(COMPILE_BC_CMD ${CANGJIE_BUDGET_LAUNCHER} ${COMPILE_BC_CMD} "-j${CANGJIE_CPU_JOBS}")
     set(COMPILE_CMD ${COMPILE_CMD} "--save-temps=${temp_files_dir}")
     set(MKDIR_TEMP_FILES_CMD COMMAND ${CMAKE_COMMAND} -E make_directory ${temp_files_dir})
 
@@ -282,9 +323,10 @@ function(add_cangjie_library target_name)
         OUTPUT ${output_full_name}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_dir}
         ${MKDIR_TEMP_FILES_CMD}
-        COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}"  "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
+        COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}"  "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib" ${CANGJIE_COMPILER_ENV}
                 ${COMPILE_CMD}
         DEPENDS ${resolved_depends} ${source_files} ${CANGJIELIB_SOURCE_DIR}
+        ${CANGJIE_PACKAGE_POOL}
         COMMENT "Generating ${target_name}")
 
     add_custom_target(
@@ -305,12 +347,13 @@ function(add_cangjie_library target_name)
         add_custom_command(
             OUTPUT ${output_lto_bc_full_name}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/${output_bc_dir}
-            COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}" "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
+            COMMAND ${CMAKE_COMMAND} -E env "CANGJIE_PATH=${CMAKE_BINARY_DIR}/modules/${output_cj_lib_dir}" "LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib" ${CANGJIE_COMPILER_ENV}
                      ${COMPILE_BC_CMD}
             # ${target_name}_bc depends on ${target_name} so they will not run simultaneously. <target> and <target>_bc
             # compile the same package, which means they may write the same bc cache file. Running simultaneously
             # may cause IO error on windows in some cases.
             DEPENDS ${target_name}
+            ${CANGJIE_PACKAGE_POOL}
             COMMENT "Generating ${target_name}_bc")
 
         add_custom_target(
@@ -340,7 +383,7 @@ function(add_cangjie_library target_name)
             COMMAND ${CMAKE_COMMAND} -E make_directory ${target_name} && cd ${target_name}
             COMMAND ${CMAKE_COMMAND} -E remove_directory tmp
             COMMAND ${CMAKE_COMMAND} -E make_directory tmp && cd tmp
-            COMMAND ${TARGET_AR} x ${output_full_name}
+            COMMAND ${CANGJIE_BUDGET_LAUNCHER} ${TARGET_AR} x ${output_full_name}
             COMMAND ${MOVE_CMD} *.o ${output_full_name_prefix}.o
             COMMAND cd ..
             COMMAND ${CMAKE_COMMAND} -E remove_directory tmp

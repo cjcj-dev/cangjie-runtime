@@ -54,21 +54,7 @@ if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "armv7-a")
 endif()
 string(TOLOWER "${target_folder_name}_${runtime_build_mode}_${cmake_system_processor}" dir1)
 string(TOLOWER "${target_folder_name}_${cmake_system_processor}_${CJNATIVE_BACKEND}" dir2)
-set(CANGJIE_RUNTIME_OUTPUT_PATH "")
-
-foreach(lib_path ${CANGJIE_TARGET_LIB})
-    file(GLOB MATCHING_RUNTIME_FILES "${lib_path}/common/${dir1}/lib/${dir2}/*cangjie-aio*")
-    if(MATCHING_RUNTIME_FILES)
-        set(CANGJIE_RUNTIME_OUTPUT_PATH ${lib_path})
-        break()
-    endif()
-endforeach()
-
-if(NOT CANGJIE_RUNTIME_OUTPUT_PATH STREQUAL "")
-    set(RUNTIME_COMMON_LIB_DIR ${CANGJIE_RUNTIME_OUTPUT_PATH}/common/${dir1}/lib/${dir2} CACHE STRING "runtime common path lib")
-else()
-    set(RUNTIME_COMMON_LIB_DIR $ENV{CANGJIE_HOME}/lib/${dir2} CACHE STRING "runtime common path lib")
-endif()
+include(SelectRuntime)
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 

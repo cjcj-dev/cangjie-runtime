@@ -16,6 +16,8 @@ import multiprocessing
 import os
 import platform
 import shutil
+import signal
+import selectors
 import time
 import re
 import stat
@@ -63,6 +65,126 @@ def resolve_path(path):
         return path
     return os.path.abspath(path)
 
+def cmake_cache_value(cache_path, name):
+    if not os.path.exists(cache_path):
+        return None
+    key = name + ":"
+    with open(cache_path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith(key) and "=" in line:
+                return line.split("=", 1)[1].strip()
+    return ""
+
+def requested_target_lib(target_lib):
+    return ";".join(target_lib) if target_lib else ""
+
+def native_build_target(value):
+    # Shared by Ninja and the Windows Make fallback. A target must not become
+    # an option (e.g. -n/-t) or a Make variable assignment on either backend.
+    if not isinstance(value, str) or not value.strip() or value.startswith("-") or "=" in value:
+        raise argparse.ArgumentTypeError(
+            "build target must be nonempty and must not be an option or variable assignment")
+    return value
+
+def stdlib_configure_required(cache_path, requested):
+    if not os.path.exists(cache_path):
+        return True
+    return cmake_cache_value(cache_path, "CANGJIE_TARGET_LIB") != requested
+
+def compiler_memory_budget(args):
+    values = (args.memory_budget_gib, args.compiler_heap_gib, args.native_reserve_gib)
+    if all(value is None for value in values):
+        return ""
+    if sys.platform != "linux":
+        raise ValueError("compiler memory budgeting requires the Linux shared package pool")
+    if any(value is None or value <= 0 for value in values):
+        raise ValueError("memory-budget-gib, compiler-heap-gib and native-reserve-gib must all be positive")
+    packages = min(args.jobs, args.package_jobs)
+    if packages * args.compiler_heap_gib + args.native_reserve_gib > args.memory_budget_gib:
+        raise ValueError("compiler heaps plus native reserve exceed memory-budget-gib")
+    # The runtime's GB suffix is binary GiB. This is the managed heap limit;
+    # the caller's memory scope also bounds native allocations and subprocesses.
+    return str(args.compiler_heap_gib)
+
+def run_logged_command(argv, cwd, budget=False, env=None):
+    # The whole build/install worker is already inside the stable supervisor.
+    # Keep the private jobserver descriptors; no cooperative idle/PGID owner.
+    child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=PIPE, close_fds=False)
+    if sys.platform != 'linux':
+        log_output(child)
+        return child
+    # A descendant can keep stdout open after the direct command dies. Observe
+    # that command independently of EOF so our stable ancestor can take over.
+    import selectors
+    import fcntl
+    fd = child.stdout.fileno()
+    os.set_blocking(fd, False)
+    pending = bytearray()
+    def consume(data):
+        pending.extend(data)
+        while b'\n' in pending:
+            line, _, rest = pending.partition(b'\n')
+            pending[:] = rest
+            LOG.info(line.decode('ascii', 'ignore').rstrip())
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_READ)
+        eof = False
+        while child.poll() is None:
+            if not eof and selector.select(0.05):
+                try: data = os.read(fd, 65536)
+                except BlockingIOError: continue
+                if data: consume(data)
+                else:
+                    eof = True
+                    selector.unregister(fd)
+            elif eof:
+                child.wait()
+        # Preserve everything already buffered from a normally finished direct
+        # child. A still-live orphan writer cannot extend this drain forever.
+        remaining = fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+        while remaining:
+            try: data = os.read(fd, min(65536, remaining))
+            except BlockingIOError: break
+            if not data: break
+            consume(data)
+            remaining -= len(data)
+    child.stdout.close()
+    if pending: LOG.info(pending.decode('ascii', 'ignore').rstrip())
+    if child.returncode != 0:
+        LOG.error('build error: %d!', child.returncode)
+        sys.exit(child.returncode if child.returncode > 0 else 128 - child.returncode)
+    return child
+
+def supervised_build_entry():
+    helper = os.path.join(HOME_DIR, 'scripts', 'command-supervisor.mjs')
+    owner_read, owner_write = os.pipe()
+    os.set_inheritable(owner_read, True)
+    # Only this Python frontend owns the writer. Node bridge and G inherit
+    # the read endpoint; its EOF catches loss of Python even if Node lives.
+    os.set_inheritable(owner_write, False)
+    work_root = os.environ.get('CJCJ_SUPERVISOR_WORK', BUILD_DIR)
+    os.makedirs(work_root, exist_ok=True)
+    env = dict(os.environ, CJCJ_SUPERVISOR_OWNER_FD=str(owner_read),
+               CJCJ_SUPERVISOR_WORK=os.path.abspath(work_root))
+    active = None
+    cancelled = None
+    def interrupt(sig, _):
+        nonlocal cancelled
+        cancelled = cancelled or sig
+        if active is not None:
+            try: active.send_signal(cancelled)
+            except ProcessLookupError: pass
+    handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        active = subprocess.Popen(['node', helper, '--', sys.executable, '-I', __file__,
+                                   '--supervised-build'] + sys.argv[1:], env=env, close_fds=False)
+        if cancelled: interrupt(cancelled, None)
+        rc = active.wait()
+        return 128 + cancelled if cancelled else (rc if rc >= 0 else 128 - rc)
+    finally:
+        os.close(owner_write);os.close(owner_read)
+        for sig, handler in handlers.items(): signal.signal(sig, handler)
+
 def log_output(output, checker=None, args=[]):
     """log command output"""
     while True:
@@ -72,7 +194,7 @@ def log_output(output, checker=None, args=[]):
             returncode = output.returncode
             if returncode != 0:
                 LOG.error("build error: %d!\n", returncode)
-                sys.exit(1)
+                sys.exit(returncode if returncode > 0 else 128 - returncode)
             break
         try:
             LOG.info(line.decode("ascii", "ignore").rstrip())
@@ -178,7 +300,22 @@ def build(args):
 
     if IS_MACOS:
         os.environ["ZERO_AR_DATE"] = "1"
-        
+
+    if sys.platform == "linux":
+        if args.jobs < 0 or args.package_jobs < 1:
+            raise ValueError("jobs must be nonnegative and package-jobs must be positive")
+        if args.jobs == 0:
+            args.jobs = len(os.sched_getaffinity(0))
+    elif args.jobs <= 0 or args.jobs > 8:
+        args.jobs = 8
+
+    compiler_heap = compiler_memory_budget(args)
+    LOG.info("STDLIB_BUILD_BUDGET %s", json.dumps({
+        "cpuJobs": args.jobs, "packageJobs": min(args.jobs, args.package_jobs),
+        "memoryBudgetGiB": args.memory_budget_gib, "compilerHeapGiB": args.compiler_heap_gib,
+        "nativeReserveGiB": args.native_reserve_gib,
+    }, sort_keys=True))
+
     if IS_WINDOWS:
         # For Windows, try Ninja first, otherwise use Make instead.
         ninja_valid = True
@@ -205,6 +342,17 @@ def build(args):
             build_cmd.extend(["-j", str(args.jobs)])
 
     cmake_command = ["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args)
+    # Native Ninja targets allow bounded dependency builds without replacing
+    # the stdlib top-level graph. The default still builds its complete graph.
+    if args.build_targets:
+        build_cmd.extend(args.build_targets)
+    if sys.platform == "linux":
+        cmake_command += ["-DCANGJIE_SHARED_JOBSERVER=ON",
+                          "-DCANGJIE_CPU_JOBS=" + str(args.jobs),
+                          "-DCANGJIE_PACKAGE_JOBS=" + str(min(args.jobs, args.package_jobs)),
+                          "-DCANGJIE_COMPILER_HEAP_GIB=" + compiler_heap]
+        build_cmd = ["node", os.path.join(HOME_DIR, "scripts", "ninja-jobserver.mjs"),
+                     "run", "--jobs", str(args.jobs), "--"] + build_cmd
 
     if not os.path.exists(BUILD_DIR):
         os.makedirs(BUILD_DIR)
@@ -216,13 +364,23 @@ def build(args):
     else:
         cmake_build_dir = os.path.join(BUILD_DIR, "build-libs-{}".format(args.target)) if args.target else CMAKE_BUILD_DIR
 
+    cache_path = os.path.join(cmake_build_dir, "CMakeCache.txt")
     if not os.path.exists(cmake_build_dir):
         os.makedirs(cmake_build_dir)
-        output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE)
-        log_output(output)
+    budget_changed = sys.platform == "linux" and any(
+        cmake_cache_value(cache_path, key) != value for key, value in {
+            "CANGJIE_SHARED_JOBSERVER": "ON", "CANGJIE_CPU_JOBS": str(args.jobs),
+            "CANGJIE_PACKAGE_JOBS": str(min(args.jobs, args.package_jobs)),
+            "CANGJIE_COMPILER_HEAP_GIB": compiler_heap}.items())
+    if budget_changed or stdlib_configure_required(cache_path, requested_target_lib(args.target_lib)):
+        # Configuration runs before the Ninja pool exists and owns only the
+        # caller's implicit slot. Its native dependency builds (e.g. PCRE2)
+        # must stay serial even when the inherited build default is much wider.
+        configure_env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL='1')
+        run_logged_command(cmake_command, cmake_build_dir, env=configure_env)
 
-    output = subprocess.Popen(build_cmd, cwd=cmake_build_dir, stdout=PIPE)
-    log_output(output)
+    # Keep only descriptors the invoking make/jobserver deliberately made inheritable.
+    output = run_logged_command(build_cmd, cmake_build_dir, budget=sys.platform == 'linux')
 
     if output.returncode != 0:
         LOG.fatal("build failed")
@@ -274,8 +432,7 @@ def install(args):
         elif args.host:
             cmake_cmd += ["--prefix", os.path.join(HOME_DIR, "output-{}".format(args.host))]
         LOG.info(target[1])
-        output = subprocess.Popen(cmake_cmd, cwd=target[1], stdout=PIPE)
-        log_output(output)
+        output = run_logged_command(cmake_cmd, target[1])
         if output.returncode != 0:
             LOG.fatal("install {} build failed".format(target[0]))
             sys.exit(1)
@@ -390,6 +547,20 @@ def main():
         "--jobs","-j" , dest="jobs", type=int, default=0, help="run N jobs in parallel (0 means default)"
     )
     parser_build.add_argument(
+        "--package-jobs", type=int, default=2,
+        help="maximum simultaneous memory-heavy cjc packages (CPU tokens are shared separately)"
+    )
+    parser_build.add_argument("--memory-budget-gib", type=int,
+        help="total memory scope in GiB; requires compiler-heap-gib and native-reserve-gib")
+    parser_build.add_argument("--compiler-heap-gib", type=int,
+        help="managed heap limit for each static/BC compiler process in GiB")
+    parser_build.add_argument("--native-reserve-gib", type=int,
+        help="memory reserved for native tools and non-heap allocations in GiB")
+    parser_build.add_argument(
+        "--build-target", dest="build_targets", type=native_build_target, action="append", default=[],
+        help="build a named native target and its dependencies (repeatable; default all)"
+    )
+    parser_build.add_argument(
         "--hwasan", action="store_true", help="build with hardware asan"
     )
     parser_build.add_argument(
@@ -451,6 +622,15 @@ def main():
     parser_clean.set_defaults(func=clean)
 
     args, unknown = parser.parse_known_args()
+    if args.func == build:
+        # Some argparse versions remove a literal '--' value before invoking
+        # type conversion. Validate the final values before any platform branch.
+        try:
+            args.build_targets = [native_build_target(value) for value in args.build_targets]
+        except argparse.ArgumentTypeError as error:
+            parser_build.error("argument --build-target: " + str(error))
+    if sys.platform == 'linux' and args.func in (build, install) and not SUPERVISED_BUILD:
+        sys.exit(supervised_build_entry())
     args.func(args)
 
 def check_compiler(args):
@@ -491,6 +671,11 @@ def check_compiler(args):
     os.environ["CXX"] = cxx_compiler
 
 if __name__ == "__main__":
+    SUPERVISED_BUILD = len(sys.argv) > 1 and sys.argv[1] == '--supervised-build'
+    if SUPERVISED_BUILD:
+        if os.environ.get('CJCJ_SUPERVISOR_PARENT') != str(os.getppid()):
+            raise RuntimeError('BUILD_WORKER_PARENT')
+        del sys.argv[1]
     LOG = init_log("root")
     os.environ["LANG"] = "C.UTF-8"
 

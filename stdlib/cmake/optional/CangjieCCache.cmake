@@ -8,8 +8,16 @@
 if(CANGJIE_ENABLE_CCACHE)
     find_program(FOUND ccache)
     if(FOUND)
-        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-        set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
+        # Admission must precede ccache (including cache hits and links).
+        # AddCangjieSource owns the budget prefix; do not overwrite it here.
+        foreach(rule RULE_LAUNCH_COMPILE RULE_LAUNCH_LINK)
+            get_property(launcher GLOBAL PROPERTY ${rule})
+            if(launcher)
+                set_property(GLOBAL PROPERTY ${rule} "${launcher} \"${FOUND}\"")
+            else()
+                set_property(GLOBAL PROPERTY ${rule} "\"${FOUND}\"")
+            endif()
+        endforeach()
         message(STATUS "CCache found. Build with CCache.")
     endif()
 endif()

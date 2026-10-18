@@ -1,0 +1,9 @@
+{
+  "repository": "cjcj",
+  "commit": "2347401f0481e3abe2ffd5b1e9d6f334cc98ad1f",
+  "path": "ci/bootstrap/sdk-command-lifetime.mjs",
+  "blob": "d883b309790ab41556c4eb8179f13d7fdb20010e",
+  "sha256": "4d771baa6e1c42b35dcafbecce46e4223a610c1aa3bb99ce1de24f70992f0127",
+  "consumer": "stdlib/scripts/command-supervisor.mjs",
+  "purpose": "ordinary source provenance; no runtime cross-repository lookup"
+}

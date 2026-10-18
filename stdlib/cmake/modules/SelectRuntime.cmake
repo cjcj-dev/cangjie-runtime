@@ -1,0 +1,25 @@
+# Select the complete target runtime independently of compiler execution libraries.
+set(CANGJIE_RUNTIME_OUTPUT_PATH "")
+
+foreach(lib_path ${CANGJIE_TARGET_LIB})
+    set(_cj_runtime_lib_dir "${lib_path}/common/${dir1}/lib/${dir2}")
+    file(GLOB _cj_runtime_shared "${lib_path}/common/${dir1}/runtime/lib/${dir2}/libcangjie-runtime.*")
+    file(GLOB _cj_runtime_aio "${_cj_runtime_lib_dir}/*cangjie-aio*")
+    if(EXISTS "${_cj_runtime_lib_dir}/libcangjie-runtime.a" OR _cj_runtime_shared OR _cj_runtime_aio)
+        set(CANGJIE_RUNTIME_OUTPUT_PATH ${lib_path})
+        break()
+    endif()
+endforeach()
+
+if(NOT CANGJIE_RUNTIME_OUTPUT_PATH STREQUAL "")
+    set(_cj_runtime_common_lib_dir "${CANGJIE_RUNTIME_OUTPUT_PATH}/common/${dir1}/lib/${dir2}")
+else()
+    set(_cj_runtime_common_lib_dir "$ENV{CANGJIE_HOME}/lib/${dir2}")
+endif()
+if(DEFINED CACHE{RUNTIME_COMMON_LIB_DIR} AND NOT "${RUNTIME_COMMON_LIB_DIR}" STREQUAL "${_cj_runtime_common_lib_dir}")
+    message(STATUS "Reconfiguring RUNTIME_COMMON_LIB_DIR")
+    set(RUNTIME_COMMON_LIB_DIR "${_cj_runtime_common_lib_dir}" CACHE STRING "runtime common path lib" FORCE)
+else()
+    set(RUNTIME_COMMON_LIB_DIR "${_cj_runtime_common_lib_dir}" CACHE STRING "runtime common path lib")
+endif()
+
