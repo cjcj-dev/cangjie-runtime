@@ -45,6 +45,8 @@
 #include "CpuProfiler/CpuProfiler.h"
 #include "Heap/z/zDriverPort.hpp"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/VMExit.h"
+#include "UnwindStack/StackInfo.h"
 #include "Common/ColourEncoding.h"
 #include "Heap/shared/gcArguments.hpp"
 #include "HeapManager.h"
@@ -54,7 +56,6 @@ CANGJIE_RT_API_DECLS_BEGIN
 const double ERRORESTIMATE = 1e-12;
 
 static std::atomic_bool g_runtimeInited = ATOMIC_VAR_INIT(false);
-static std::atomic_bool g_runtimeFinished = ATOMIC_VAR_INIT(false);
 static std::condition_variable g_conditionVariable;
 static std::mutex g_mtx;
 static size_t g_sysmemSize = 1U * MapleRuntime::GB;
@@ -132,7 +133,7 @@ static bool CheckInitConfig(const struct RuntimeParam& param)
 
 RTErrorCode SetRuntimeInitFlag()
 {
-    if (g_runtimeFinished.load()) {
+    if (MapleRuntime::VM_Exit::closing()) {
         LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support init again.");
         return E_FAILED;
     }
@@ -146,16 +147,8 @@ RTErrorCode SetRuntimeInitFlag()
 
 RTErrorCode SetRuntimeFiniFlag()
 {
-    if (!g_runtimeInited.load()) {
-        LOG(RTLOG_ERROR, "Cangjie runtime has not been initialized when executing finish.");
-        return E_FAILED;
-    }
-    if (g_runtimeFinished.load()) {
-        LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support finish again.");
-        return E_FAILED;
-    }
-    g_runtimeFinished.store(true);
-    return E_OK;
+    if (!g_runtimeInited.load()) { return E_FAILED; }
+    return MapleRuntime::VM_Exit::begin_before_exit() ? E_OK : E_FAILED;
 }
 
 void NotifyRuntimeSchedulerReady(ScheduleHandle scheduler)
@@ -182,7 +175,7 @@ static void* StartCJRuntime(void* arg)
 
 RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
 {
-    if (g_runtimeFinished.load()) {
+    if (MapleRuntime::VM_Exit::closing()) {
         LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support init again.");
         return E_FAILED;
     }
@@ -335,7 +328,7 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
 #ifdef INTERPRETER_ENABLED
 RTErrorCode InitCJInterpreter(const struct InterpreterParam* param)
 {
-    if (g_runtimeFinished.load()) {
+    if (MapleRuntime::VM_Exit::closing()) {
         LOG(RTLOG_ERROR, "Interpreter initialization started too late, runtime is already fully initialized.");
         return E_STATE;
     }
@@ -399,36 +392,50 @@ RTErrorCode SetCJCommandLineArgs(int argc, const char* argv[])
     return E_OK;
 }
 
-// The function will stop scheduler and finish runtime.
+// Called under the short before-exit monitor, before publishing closing or
+// detaching the caller. Use the real frame stream, not a safe/RISKY flag, to
+// determine whether a host caller still has a managed caller frame.
+static bool CanFinishRuntime()
+{
+    using namespace MapleRuntime;
+    if (Runtime::CurrentRef() == nullptr) { return false; }
+    const auto scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
+    if (!ScheduleCanStopOutside(scheduler)) { return false; }
+    if (Mutator* mutator = Mutator::GetMutator()) {
+        StackFrameStream frames(&mutator->GetUnwindContext());
+        for (frames.Start(); !frames.IsDone(); frames.Next()) {
+            if (frames.Current().GetFrameType() == FrameType::MANAGED) { return false; }
+#ifdef INTERPRETER_ENABLED
+            if (frames.Current().GetFrameType() == FrameType::INTERPRETER) { return false; }
+#endif
+        }
+    }
+    return true;
+}
+
+// Physical native retention is not completion. E_OK requires the shared main/
+// host protocol to publish final global/per-thread termination and free only
+// the Runtime resources which native return edges can no longer reach.
 RTErrorCode FiniCJRuntime()
 {
-    if (!g_runtimeInited.load()) {
-        LOG(RTLOG_ERROR, "Cangjie runtime has not been initialized when executing finish.");
+    using namespace MapleRuntime;
+    if (!g_runtimeInited.load() || !VM_Exit::begin_before_exit(CanFinishRuntime)) {
         return E_FAILED;
     }
-    if (!g_runtimeFinished.exchange(true)) {
-        // Ensure that sampling thread is stopped before finishing runtime.
-        MapleRuntime::CpuProfiler::GetInstance().TryStopSampling();
-
-        MapleRuntime::Mutator* mutator = MapleRuntime::Mutator::GetMutator();
-        if (mutator != nullptr) {
-            MapleRuntime::MutatorManager::Instance().TransitMutatorToExit();
-        }
-        ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-#ifndef _WIN64
-        MapleRuntime::SignalStack::StopDispatcher();
-#endif
-        const int stopResult =
-        ScheduleStopOutside(scheduler);
-        if (stopResult != 0) {
-            // A native call has not returned: its termination barrier still owns
-            // runtime storage (HotSpot runtime/threads.cpp:996-1000).
-            return E_FAILED;
-        }
-        MapleRuntime::CangjieRuntime::FiniAndDelete();
-        return E_OK;
+    CpuProfiler::GetInstance().TryStopSampling();
+    const auto scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
+    if (Mutator::GetMutator() != nullptr) {
+        MutatorManager::Instance().TransitMutatorToExit();
     }
-    LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support finish again.");
+#ifndef _WIN64
+    SignalStack::StopDispatcher();
+#endif
+    const int stopResult = ScheduleStopOutside(scheduler);
+    if (stopResult != 0) {
+        VM_Exit::complete_before_exit(false);
+        return E_FAILED;
+    }
+    CangjieRuntime::FiniAndDelete();
     return E_OK;
 }
 
@@ -503,7 +510,7 @@ bool CheckRuntimeValid(const CJTaskFunc func)
         LOG(RTLOG_ERROR, "Cangjie runtime has not been initialized.\n");
         return false;
     }
-    if (g_runtimeFinished.load()) {
+    if (MapleRuntime::VM_Exit::closing()) {
         LOG(RTLOG_ERROR, "Cangjie runtime has been finished.\n");
         return false;
     }
@@ -512,7 +519,7 @@ bool CheckRuntimeValid(const CJTaskFunc func)
 
 extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished()
 {
-    return g_runtimeFinished.load();
+    return MapleRuntime::VM_Exit::closing();
 }
 
 ScheduleHandle GetScheduler()

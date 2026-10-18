@@ -858,7 +858,7 @@ void ScheduleNonDefaultThreadExit(struct Schedule *schedule, bool wait)
  */
 static bool ScheduleThreadSkipFFI(struct Thread *thread);
 
-bool ScheduleThreadsFree(struct Schedule *schedule)
+static bool ScheduleThreadsStop(struct Schedule *schedule, bool joinThreads)
 {
     struct ScheduleThread *schdThread = &schedule->schdThread;
     struct Dulink *node;
@@ -879,7 +879,7 @@ bool ScheduleThreadsFree(struct Schedule *schedule)
             completed = false;
             continue;
         }
-        if (thread == schedule->thread0) {
+        if (thread == schedule->thread0 || !joinThreads) {
             continue;
         }
         SemaphorePost(&thread->sem);
@@ -1234,8 +1234,9 @@ bool ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         ScheduleNonDefaultThreadExit(schedule, true);
     }
 
+    // The unbound syscall inventory is required for both main and host exits.
+    completed = ScheduleThreadsStop(schedule, threadExit) && completed;
     if (threadExit) {
-        completed = ScheduleThreadsFree(schedule) && completed;
         if (schedule->scheduleType == SCHEDULE_DEFAULT &&
             !pthread_equal(pthread_self(), schedule->thread0->osThread) &&
             !schedule->thread0->exitBlocked) {
@@ -1293,7 +1294,11 @@ void ScheduleStop(ScheduleHandle scheduleHandle)
             usleep(SCHEDULE_CJTHREAD_EXIT_WAIT_TIME);
         }
     }
-    ScheduleExitMode(schedule, false);
+    if (!ScheduleExitMode(schedule, false)) {
+        // The actual native closure remains reachable until the final VM
+        // transition barrier. Do not clear the global scheduler manager.
+        return;
+    }
     if (schedule->scheduleType == SCHEDULE_DEFAULT) {
         ScheduleAllCJThreadListRemove(cjthread);
         g_scheduleManager.defaultSchedule = nullptr;
@@ -1307,6 +1312,16 @@ void ScheduleStop(ScheduleHandle scheduleHandle)
 
 /* Stops the scheduling framework. Note: This interface suspends the thread without exiting,
  * so that the thread exits with the process. This interface can be used outside the scheduling framework. */
+bool ScheduleCanStopOutside(ScheduleHandle scheduleHandle)
+{
+    auto* schedule = reinterpret_cast<Schedule*>(scheduleHandle);
+    if (schedule == nullptr) { return false; }
+    if (schedule->thread0 != nullptr && pthread_equal(pthread_self(), schedule->thread0->osThread)) {
+        return false;
+    }
+    return CJThreadGet() == nullptr || CJThreadGet()->schedule != schedule;
+}
+
 int ScheduleStopOutside(ScheduleHandle scheduleHandle)
 {
     struct Schedule *oldSchedule;
@@ -1317,10 +1332,7 @@ int ScheduleStopOutside(ScheduleHandle scheduleHandle)
         return ERRNO_SCHD_INVALID;
     }
 
-    if (schedule->thread0 != nullptr && pthread_equal(pthread_self(), schedule->thread0->osThread)) {
-        return ERRNO_SCHD_EXIT_FAILED;
-    }
-    if (CJThreadGet() != nullptr && CJThreadGet()->schedule == schedule) {
+    if (!ScheduleCanStopOutside(scheduleHandle)) {
         return ERRNO_SCHD_EXIT_FAILED;
     }
     ScheduleType scheduleType = schedule->scheduleType;
@@ -1328,7 +1340,9 @@ int ScheduleStopOutside(ScheduleHandle scheduleHandle)
     ScheduleSet(schedule);
     if (!ScheduleExitMode(schedule, true)) {
         ScheduleSet(oldSchedule);
-        return ERRNO_SCHD_EXIT_FAILED;
+        // Physical retention is consumed here by retaining the full closure.
+        // FiniCJRuntime still owes the final VM terminal protocol before E_OK.
+        return 0;
     }
     // This parameter is added to solve the memory leakage problem when the dlclose exits in
     // the macro expansion scenario.
@@ -1373,7 +1387,7 @@ int ScheduleTryExit(void)
     }
     pthread_mutex_unlock(&g_scheduleManager.allCJThreadListLock);
 
-    ScheduleExitMode(schedule, true);
+    if (!ScheduleExitMode(schedule, true)) { return ERRNO_SCHD_EXIT_FAILED; }
 
     // Switch back to the context in which the main thread invokes schedule start.
     g_tryExit = true;

@@ -10,6 +10,8 @@
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     test_vmthread.cpp
+    test_vm_exit.cpp
+    test_leaf_barrier_contract.cpp
     gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_colour_address.cpp

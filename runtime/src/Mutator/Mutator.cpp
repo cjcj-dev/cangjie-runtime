@@ -23,6 +23,7 @@
 #include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
+#include "VMExit.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ExceptionManager.h"
@@ -246,21 +247,18 @@ void Mutator::SetManagedContext(bool isManagedContext)
 void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
+        if (IsTerminatedByVM()) { VM_Exit::wait_if_vm_exited(); }
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
         if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
         } else if (HasPreemptRequest()) {
             SuspendForPreempt();
-        } else if (HasSuspensionRequest(SUSPENSION_FOR_EXIT)) {
-            while (true) {
-                sleep(INT_MAX);
-            }
         }
         MarkFlushBeginLeaveSaferegion();
         SetInSaferegion(SAFE_REGION_FALSE);
         MarkFlushEndLeaveSaferegion();
-        if (MutatorManager::Instance().SyncTriggered()) {
+        if (SafepointSynchronize::is_synchronizing()) {
             // entering this branch means a second request has been broadcasted, we need to reset this flag to avoid
             // missing the request. And this must be after the behaviour that set saferegion state to false, because
             // we need to make sure that the mutator can always perceive the gc request when the mutator is not in
@@ -269,7 +267,7 @@ void Mutator::HandleSuspensionRequest()
         }
         // Leave saferegion if current mutator has no suspend request, otherwise try again
         if (LIKELY(!HasSuspensionRequest(SUSPENSION_FOR_SYNC) &&
-                   !HasSuspensionRequest(SUSPENSION_FOR_EXIT) && !HasPreemptRequest() && !HasObserver())) {
+                   !HasPreemptRequest() && !HasObserver())) {
             return;
         }
     }
@@ -278,22 +276,8 @@ void Mutator::HandleSuspensionRequest()
 void Mutator::SuspendForSync()
 {
     ClearSuspensionFlag(SUSPENSION_FOR_SYNC);
-    // wait until StartTheWorld
-    int curCount = static_cast<int>(MutatorManager::Instance().GetSyncFutexWordValue());
-    // Avoid losing wake-ups
-    if (curCount > 0) {
-#if defined(_WIN64) || defined(__APPLE__)
-        MutatorManager::Instance().MutatorWait();
-#else
-        int* countAddr = MutatorManager::Instance().GetSyncFutexWord();
-        // FUTEX_WAIT may fail when gc thread wakes up all threads before the current thread reaches this position.
-        // But it is not important because there won't be data race between the current thread and the gc thread,
-        // and it also won't be frozen since gc thread also modifies the value at countAddr before its waking option.
-        (void)Futex(countAddr, FUTEX_WAIT, curCount);
-#endif
-    }
+    SafepointSynchronize::block();
 }
-
 
 // zVerify.cpp:329-340: a previous epoch's done bit is not a current address.
 // Only roots whose watermark processing has started for this epoch are readable,

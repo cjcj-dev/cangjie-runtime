@@ -1,4 +1,5 @@
 #include "Handshake.h"
+#include "SafepointSynchronize.h"
 
 #include <mutex>
 #include <thread>
@@ -325,10 +326,7 @@ bool HasPendingCpuProfileRequest()
 
 bool GlobalPoll()
 {
-    if (Runtime::CurrentRef() == nullptr) {
-        return HasPendingCpuProfileRequest();
-    }
-    return HasPendingCpuProfileRequest() || MutatorManager::Instance().SyncTriggered();
+    return SafepointSynchronize::is_synchronizing() || HasPendingCpuProfileRequest();
 }
 
 bool HasPendingSafepoint(ThreadLocalData* tls)
@@ -345,10 +343,7 @@ bool HasPendingSafepoint(ThreadLocalData* tls)
         tls->mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
         return true;
     }
-    if (Runtime::CurrentRef() == nullptr) {
-        return false;
-    }
-    return MutatorManager::Instance().TlsHasMarkFlushPending(tls);
+    return false;
 }
 
 void UpdatePollValues(ThreadLocalData* tls)

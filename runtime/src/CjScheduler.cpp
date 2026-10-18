@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "CjScheduler.h"
+#include "Mutator/VMExit.h"
+#include "Mutator/SafepointSynchronize.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +38,9 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "CpuProfiler/CpuProfiler.h"
+#ifndef _WIN64
+#include "Signal/SignalStack.h"
+#endif
 namespace MapleRuntime {
 #ifdef __cplusplus
 extern "C" {
@@ -354,6 +359,9 @@ void* StartMainTask(void* arg, unsigned int len)
     if (rtCode != E_OK) {
         LOG(RTLOG_FATAL, "Finish cj runtime failed for %d\n", rtCode);
     }
+#ifndef _WIN64
+    SignalStack::StopDispatcher();
+#endif
     MutatorManager::Instance().TransitMutatorToExit();
     ScheduleStop(scheduler);
     CangjieRuntime::FiniAndDelete();
@@ -434,9 +442,25 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
 
 bool MRT_NewForeignCJThread()
 {
+    VM_Exit::wait_if_vm_exited();
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
+    VM_Exit::wait_for_native_entry();
+    // First attach and final VM stop compete in the normal registration domain.
+    // The read lock covers the first Runtime access and all scheduler setup.
+    auto& registration = SafepointSynchronize::state().mutatorManagementRWLock;
+    registration.LockRead();
+    if (VM_Exit::closing()) {
+        registration.UnlockRead();
+        VM_Exit::wait_for_native_entry();
+        CHECK_DETAIL(false, "native registration cannot resume after shutdown");
+    }
+    struct RegistrationGuard {
+        ThreadListLock& lock;
+        ~RegistrationGuard() { lock.UnlockRead(); }
+    } registrationGuard{registration};
+    VM_Exit::wait_if_vm_exited();
     TRACE_START("CJRT_INVOKE_CJTASK");
     ScheduleHandle scheduler = nullptr;
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
@@ -461,11 +485,9 @@ bool MRT_NewForeignCJThread()
     void* cjthread = ThreadLocal::GetForeignCJThread();
     ThreadLocal::SetCJThread(cjthread);
     Mutator* mutator = reinterpret_cast<Mutator*>(CJThreadGetMutator());
-    // Register under management R-lock (CreateMutator / CreateRuntimeMutator). Do not hold the
-    // lock across LeaveSaferegion: managed-entry may block on STW/phase.
-    // Anchors: MutatorManager.cpp:115-128,181-198; UnwindCApi.cpp:136-141; gcr_stw ESCAPE 1.
+    // The same registration lock already covers construction and this binding.
+    // Its guard ends before the N2C stub leaves the saferegion.
     auto& mutatorManager = MutatorManager::Instance();
-    mutatorManager.MutatorManagementRLock();
     mutatorManager.BindMutator(*mutator);
     if (scheduler == nullptr) {
         scheduler = GetCJThreadScheduler();
@@ -473,7 +495,6 @@ bool MRT_NewForeignCJThread()
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
-    mutatorManager.MutatorManagementRUnlock();
     // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
     if (UNLIKELY(mutatorManager.SyncTriggered())) {
         mutator->SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
@@ -491,6 +512,7 @@ bool MRT_NewForeignCJThread()
 
 bool MRT_EndForeignCJThread()
 {
+    VM_Exit::wait_if_vm_exited();
     if (ThreadLocal::IsCJProcessor()) {
         return false;
     }

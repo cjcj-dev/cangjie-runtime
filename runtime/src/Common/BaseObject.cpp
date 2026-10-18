@@ -94,10 +94,9 @@ size_t BaseObject::GetSize() const
 BaseObject* BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
-    Heap::page(reinterpret_cast<MAddress>(this))->generation()
-        ->MarkObjectIfActive<false, false, false, false>(from_object(this));
     // HotSpot sharedRuntime.cpp:1072-1075 / instanceKlass.cpp:1919-1932:
     // Normal return from the root Object.init registers before derived init continues.
+    // Registration publishes a FinalReference, not a strong marking root.
     return heap.GetFinalizerProcessor().RegisterFinalizer(this);
 }
 

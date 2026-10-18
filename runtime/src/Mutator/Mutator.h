@@ -20,6 +20,7 @@
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Handshake.h"
+#include "Mutator/VMExit.h"
 #include "schedule.h"
 #ifdef _WIN64
 #include "UnwindWin.h"
@@ -47,7 +48,6 @@ public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
     enum SuspensionType : uint32_t {
         SUSPENSION_FOR_SYNC = 2,
-        SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
     };
 
@@ -183,6 +183,10 @@ public:
     __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
         CheckSafepointAllowed();
+        if (VM_Exit::exited()) {
+            preprocess();
+            VM_Exit::wait_if_vm_exited();
+        }
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
             MutatorLock();
@@ -213,6 +217,8 @@ public:
 
     // Called if current mutator should do corresponding task by suspensionFlag value
     void HandleSuspensionRequest();
+    void SetTerminatedByVM() { terminatedByVM.store(true, std::memory_order_release); }
+    bool IsTerminatedByVM() const { return terminatedByVM.load(std::memory_order_acquire); }
     // Called if current mutator should handle stw request
     void SuspendForSync();
     void SuspendForPreempt()
@@ -522,6 +528,7 @@ private:
     // we don't need to scan it.
     std::atomic<bool> inManagedContext = { true };
     std::atomic<bool> gcDetached = { false };
+    std::atomic<bool> terminatedByVM = { false };
     unsigned noSafepointCount = 0;
     void* stackBoundAddr = { nullptr };
     std::mutex mutatorLock;

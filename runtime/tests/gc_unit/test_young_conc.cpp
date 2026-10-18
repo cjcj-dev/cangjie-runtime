@@ -185,7 +185,7 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
 }
 
 // 3. young→young overwrite is not remset (ZGC remember only if slot old; zBarrier:729-733).
-GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
+GC_OTHER_VM_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
@@ -220,7 +220,7 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 #endif
 
 // old→young still remset (control: TRACE window must not drop the only remset edge).
-GC_TEST(YoungConc, OldToYoungStillRecorded)
+GC_OTHER_VM_TEST(YoungConc, OldToYoungStillRecorded)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
@@ -272,7 +272,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 // mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
 // paints the new young target. STW/Idle TestBarrier must not (phase gate).
 // Synthetic mark phases are installed directly on their owning generation.
-GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
+GC_OTHER_VM_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
@@ -299,7 +299,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     GC_EXPECT_FALSE(fx.region1()->is_object_strongly_live(from_object(incoming)));
 }
 
-GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
+GC_OTHER_VM_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
@@ -323,7 +323,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
 }
 
-GC_TEST(YoungConc, StackScanIsRequired)
+GC_OTHER_VM_TEST(YoungConc, StackScanIsRequired)
 {
     GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
 }
@@ -332,7 +332,7 @@ GC_TEST(YoungConc, StackScanIsRequired)
 // record produced after the flip remains on the active face for the next cycle.
 // Product must not return to retired-only termination. Flipping the constant is
 // also the deliberate-break red proof for the regression guard below.
-GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
+GC_OTHER_VM_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 {
     GcHeapFixture fx;
     fx.region0()->reset(PageAge::eden);
@@ -348,7 +348,7 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 // sampling reports global-empty and would commit termination, while the target
 // remains white. This test is supposed to prove the miss, not pretend the
 // legacy arm is correct.
-GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
+GC_OTHER_VM_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 {
     GcHeapFixture fx;
     fx.region0()->reset(PageAge::old);
@@ -429,7 +429,7 @@ void CallMarkObjectIfActive(ZGeneration& cycle, zaddress address, bool resurrect
 }
 }
 
-GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
+GC_OTHER_VM_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
 {
     for (bool young : {false, true}) {
         for (bool gcThread : {false, true}) {
@@ -504,7 +504,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
 }
 
 
-GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
+GC_OTHER_VM_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
 {
     GcHeapFixture fx;
     MarkPublicationFixture publication;

@@ -26,7 +26,7 @@ zpointer* SlotOf(NativeSlot& slot)
 }
 }
 
-GC_RUNTIME_TEST(WeakRootsProduct, EmptyRendezvousCompletes)
+GC_RUNTIME_OTHER_VM_TEST(WeakRootsProduct, EmptyRendezvousCompletes)
 {
     VMThreadContainerRuntime container(8);
     ZRendezvousGCThreads op;
@@ -35,7 +35,7 @@ GC_RUNTIME_TEST(WeakRootsProduct, EmptyRendezvousCompletes)
     std::fprintf(stderr, "WEAK_ROOTS_EMPTY_RENDEZVOUS_ASSERT_EXECUTED\n");
 }
 
-GC_RUNTIME_TEST(WeakRootsProduct, JoinerLeaveWakesSynchronize)
+GC_RUNTIME_OTHER_VM_TEST(WeakRootsProduct, JoinerLeaveWakesSynchronize)
 {
     VMThreadContainerRuntime container(8);
     std::atomic<bool> joined{false};

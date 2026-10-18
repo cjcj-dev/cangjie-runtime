@@ -1,0 +1,11 @@
+diff --git a/runtime/src/CompilerCalls.cpp b/runtime/src/CompilerCalls.cpp
+--- a/runtime/src/CompilerCalls.cpp
++++ b/runtime/src/CompilerCalls.cpp
+@@ -2068,6 +2068,7 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size)
+         return;
+     }
+     CheckGenericPayloadSize(obj, size);
++    (void)MCC_NewObject(obj->GetTypeInfo(), obj->GetSize());
+     MAddress srcPayload = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+     TypeInfo* typeInfo = obj->GetTypeInfo();
+     if (!typeInfo->HasRefField()) {

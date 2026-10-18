@@ -136,11 +136,8 @@ extern "C" bool MRT_CheckMutatorStatus(void* mutator)
     Mutator *curMutator = reinterpret_cast<Mutator*>(mutator);
     auto status = curMutator->GetUnwindContext().GetUnwindContextStatus();
     if (status == UnwindContextStatus::RISKY && curMutator->InSaferegion()) {
-        curMutator->SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_EXIT);
-
         status = curMutator->GetUnwindContext().GetUnwindContextStatus();
         if (status != UnwindContextStatus::RISKY || !curMutator->InSaferegion()) {
-            curMutator->ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_EXIT);
             return false;
         }
 

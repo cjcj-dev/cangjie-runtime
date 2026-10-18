@@ -198,7 +198,7 @@ public:
     }
 
 private:
-    static RwLock tlEnableLock;
+    static RwLock& tlEnableLock;
 };
 } // namespace MapleRuntime
 

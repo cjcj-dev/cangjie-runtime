@@ -7,6 +7,7 @@
 
 #include "RuntimeConfig.h"
 #include "MutatorManager.h"
+#include "VMExit.h"
 #include "ThreadSMR.h"
 #include "VMOperation.h"
 
@@ -83,6 +84,7 @@ bool IsGcThread()
 // uses the same block -> watermark -> handshake loop -> poll publication.
 static void ProcessSafepoint(ThreadLocalData* tlData)
 {
+    VM_Exit::wait_if_vm_exited();
     std::atomic_thread_fence(std::memory_order_acquire);
     Mutator* mutator = tlData->mutator;
     if (mutator != nullptr) { mutator->CheckSafepointAllowed(); }
@@ -285,14 +287,7 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     DestroyMutator(mutator);
 }
 
-void MutatorManager::Init()
-{
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-    safepointPageManager = new (std::nothrow) SafepointPageManager();
-    CHECK_DETAIL(safepointPageManager != nullptr, "new safepointPageManager failed");
-    safepointPageManager->Init();
-#endif
-}
+void MutatorManager::Init() { SafepointSynchronize::initialize(); }
 
 MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().GetMutatorManager(); }
 
@@ -428,15 +423,15 @@ void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
 {
     if (tls == ThreadLocal::GetThreadLocalData()) { ThreadLocal::InitializeCleaner(); }
     if (tls == nullptr || tls->threadType == ThreadType::GC_THREAD) { return; }
-    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-    markFlushThreads.insert(tls);
+    std::lock_guard<std::mutex> lock(SafepointSynchronize::state().markFlushThreadMutex);
+    SafepointSynchronize::state().markFlushThreads.insert(tls);
 }
 
 void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
 {
     if (tls == nullptr) { return; }
-    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-    markFlushThreads.erase(tls);
+    std::lock_guard<std::mutex> lock(SafepointSynchronize::state().markFlushThreadMutex);
+    SafepointSynchronize::state().markFlushThreads.erase(tls);
 }
 
 bool MutatorManager::TlsHasMarkFlushPending(ThreadLocalData* tls)
@@ -456,33 +451,33 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 void MutatorManager::StopTheWorld()
 {
     CHECK_DETAIL(VMThread::is_VM_thread(), "Only VM thread may execute a safepoint");
-    syncMutex.lock();
+    SafepointSynchronize::state().syncMutex.lock();
     // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
     // list, since concurrent root workers can still be visiting that list.
     if (ZCollectedHeap::heap() != nullptr) {
         ZCollectedHeap::heap()->safepoint_synchronize_begin();
     }
-    syncTriggered.store(true);
+    SafepointSynchronize::state().syncTriggered.store(true);
 
     AcquireMutatorManagementWLock();
 
     size_t mutatorCount = GetMutatorCount();
     if (UNLIKELY(mutatorCount == 0)) {
-        worldStopped.store(true, std::memory_order_release);
+        SafepointSynchronize::state().worldStopped.store(true, std::memory_order_release);
         return;
     }
     SetSuspensionMutatorCount(static_cast<uint32_t>(mutatorCount));
     DemandSuspensionForSync();
     WaitUntilAllMutatorStopped();
 
-    worldStopped.store(true, std::memory_order_release);
+    SafepointSynchronize::state().worldStopped.store(true, std::memory_order_release);
 }
 
 void MutatorManager::StartTheWorld() noexcept
 {
     CHECK_DETAIL(VMThread::is_VM_thread(), "Only VM thread may end a safepoint");
-    syncTriggered.store(false);
-    worldStopped.store(false, std::memory_order_release);
+    SafepointSynchronize::state().syncTriggered.store(false);
+    SafepointSynchronize::state().worldStopped.store(false, std::memory_order_release);
 
     CancelSuspensionAfterSync();
     SetSuspensionMutatorCount(0);
@@ -499,8 +494,8 @@ void MutatorManager::StartTheWorld() noexcept
     if (ZCollectedHeap::heap() != nullptr) {
         ZCollectedHeap::heap()->safepoint_synchronize_end();
     }
-    // Release syncMutex to allow other thread call STW.
-    syncMutex.unlock();
+    // Release SafepointSynchronize::state().syncMutex to allow other thread call STW.
+    SafepointSynchronize::state().syncMutex.unlock();
 }
 
 void MutatorManager::WaitUntilAllMutatorStopped()
@@ -552,8 +547,8 @@ void MutatorManager::WaitUntilAllMutatorStopped()
 
 void MutatorManager::TransitionAllMutatorsToCpuProfile()
 {
-    bool worldStopped = WorldStopped();
-    if (!worldStopped) {
+    bool SafepointSynchronize::state().worldStopped = WorldStopped();
+    if (!SafepointSynchronize::state().worldStopped) {
         if (!AcquireMutatorManagementWLockForCpuProfile()) {
             return;
         }
@@ -563,7 +558,7 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             PublishCpuProfileRequest(&mutator);
         }
     });
-    if (!worldStopped) {
+    if (!SafepointSynchronize::state().worldStopped) {
         MutatorManagementWUnlock();
     }
 }

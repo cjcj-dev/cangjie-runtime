@@ -6,6 +6,7 @@
 
 
 #include <cerrno>
+#include "Mutator/VMExit.h"
 #include "cjthread.h"
 #include "thread.h"
 #include "processor.h"
@@ -93,6 +94,7 @@ void *SyscallExit0(struct CJThread *cjthread)
 
 void SyscallExit(void)
 {
+    MapleRuntime::VM_Exit::wait_if_vm_exited();
     struct CJThread *cjthread;
     struct Processor *oldProcessor;
     struct Thread *thread;

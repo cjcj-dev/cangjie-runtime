@@ -1,5 +1,6 @@
 #include "Base/Panic.h"
 #include "Mutator/VMOperation.h"
+#include "Mutator/VMExit.h"
 #include "Base/GcLog.h"
 #include "Base/Log.h"
 #include "Common/ScopedObjectAccess.h"
@@ -88,6 +89,7 @@ void VMThread::wait_until_executed(VMOperation* operation)
 
 void VMThread::execute(VMOperation* operation)
 {
+    VM_Exit::wait_if_vm_exited();
     auto& vmThread = instance();
     if (is_VM_thread()) {
         operation->set_calling_thread(ThreadLocal::GetThreadLocalData());

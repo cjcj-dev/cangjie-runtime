@@ -6,6 +6,7 @@
 
 
 #include "HeapManager.h"
+#include "Mutator/Mutator.h"
 #include "Heap/shared/threadLocalMemAllocator.hpp"
 
 #include "Heap/z/zHeap.hpp"
@@ -19,6 +20,7 @@ HeapManager::HeapManager() {}
 
 MAddress HeapManager::Allocate(size_t allocSize, AllocType allocType)
 {
+    if (Mutator* mutator = Mutator::GetMutator()) { mutator->CheckSafepointAllowed(); }
     return ThreadLocalMemAllocator(RoundUp<size_t>(allocSize, 8), allocType).allocate();
 }
 

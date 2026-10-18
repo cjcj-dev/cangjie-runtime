@@ -32,6 +32,7 @@
 #include "LoaderManager.h"
 #include "LogManager.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/VMExit.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/Allocator/RegionSpace.h"
 #ifdef CANGJIE_GWPASAN_SUPPORT
@@ -139,9 +140,11 @@ void CangjieRuntime::FiniAndDelete()
         MonitorLocker lock(HeapMonitor());
         VMThread::wait_for_vm_thread_exit();
     }
+    VM_Exit::set_vm_exited();
     Runtime::runtime = nullptr;
     cjRuntime->Fini();
     delete cjRuntime;
+    VM_Exit::complete_before_exit(true);
 }
 
 CangjieRuntime::CangjieRuntime(const RuntimeParam& runtimeParam) : param(runtimeParam) {}
@@ -303,7 +306,10 @@ void CangjieRuntime::Fini()
     CheckAndFini<SignalManager>(signalManager);
 #endif
     CheckAndFini<LogManager>(logManager);
-    PagePool::Instance().Fini();
+    // NativeAllocator backs retained scheduler/processor closures. Releasing
+    // this arena while actual native threads remain would invalidate their
+    // pre-barrier storage even though the Runtime facade has been deleted.
+    if (VM_Exit::native_threads_at_exit() == 0) { PagePool::Instance().Fini(); }
 
     LOG(RTLOG_INFO, "Cangjie runtime shutdown.");
 }

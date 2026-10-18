@@ -9,6 +9,7 @@
 #define MRT_SIGNAL_MANAGER_H
 
 #include <vector>
+#include <pthread.h>
 
 #include "Base/Macros.h"
 #include "Common/PagePool.h"
@@ -79,6 +80,7 @@ private:
     void* extraStack{ nullptr };
     uint32_t extraStackSize{ 0 };
     stack_t signalStack;
+    pthread_t signalStackOwner{};
 };
 } // namespace MapleRuntime
 #endif // MRT_SIGNAL_MANAGER_H

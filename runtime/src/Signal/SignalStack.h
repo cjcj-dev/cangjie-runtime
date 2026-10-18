@@ -54,11 +54,7 @@ private:
     bool isMark;
 
     std::vector<SignalAction> handlerStack;
-#ifdef __APPLE__
-    static SignalStack stacks[NSIG];
-#else
-    static SignalStack stacks[_NSIG];
-#endif
+    static SignalStack* stacks;
 };
 } // namespace MapleRuntime
 #endif // MRT_SIGNAL_STACK_H

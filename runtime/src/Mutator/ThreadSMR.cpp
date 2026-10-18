@@ -20,8 +20,8 @@ struct SMRState {
 };
 SMRState& State()
 {
-    static SMRState state;
-    return state;
+    static SMRState* const state = new SMRState;
+    return *state;
 }
 // Trivial TLS identifies the explicitly scoped executor. No TLS destructor
 // registration (and therefore no platform loader lock) is needed here.

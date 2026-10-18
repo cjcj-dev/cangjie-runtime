@@ -983,6 +983,7 @@ void ScheduleStop(ScheduleHandle scheduleHandle);
  * @retval 0 or error code
  */
 int ScheduleStopOutside(ScheduleHandle scheduleHandle);
+bool ScheduleCanStopOutside(ScheduleHandle scheduleHandle);
 
 /**
  * @brief Free a non-default scheduler.

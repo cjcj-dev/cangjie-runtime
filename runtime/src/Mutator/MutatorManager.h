@@ -25,6 +25,7 @@
 #include "Common/PageAllocator.h"
 #include "Mutator.h"
 #include "VMOperation.h"
+#include "SafepointSynchronize.h"
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include "SafepointPageManager.h"
 #endif
@@ -61,15 +62,7 @@ class MutatorManager {
     friend class VMThread;
 public:
     MutatorManager() {}
-    ~MutatorManager()
-    {
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-        if (safepointPageManager != nullptr) {
-            delete safepointPageManager;
-            safepointPageManager = nullptr;
-        }
-#endif
-    }
+    ~MutatorManager() = default;
 
     MutatorManager(const MutatorManager&) = delete;
     MutatorManager(MutatorManager&&) = delete;
@@ -98,24 +91,24 @@ public:
 
     bool TryAcquireMutatorManagementWLock()
     {
-        return mutatorManagementRWLock.TryLockWrite();
+        return SafepointSynchronize::state().mutatorManagementRWLock.TryLockWrite();
     }
 
     bool TryAcquireMutatorManagementRLock()
     {
         // Writer-preference: defer to a pending writer so a non-blocking reader does
         // not help starve the GC's mutator-list write lock.
-        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+        if (SafepointSynchronize::state().mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
             return false;
         }
-        if (!mutatorManagementRWLock.TryLockRead()) {
+        if (!SafepointSynchronize::state().mutatorManagementRWLock.TryLockRead()) {
             return false;
         }
         // Close the race between the pending-writer check above and TryLockRead().
         // A reader that overlapped a writer announcement must not join the reader
         // set and extend the writer's wait indefinitely.
-        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
-            mutatorManagementRWLock.UnlockRead();
+        if (SafepointSynchronize::state().mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            SafepointSynchronize::state().mutatorManagementRWLock.UnlockRead();
             return false;
         }
         return true;
@@ -125,9 +118,9 @@ public:
     // write-lock acquisition (AcquireMutatorManagementWLock*) which does not go through
     // MutatorManagementWLock(). A counter (not a flag) supports several writers spinning
     // concurrently; readers wait while any writer is pending.
-    void AnnounceMgmtWriterPending() { mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
+    void AnnounceMgmtWriterPending() { SafepointSynchronize::state().mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
 
-    void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
+    void WithdrawMgmtWriterPending() { SafepointSynchronize::state().mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
     void AcquireMutatorManagementWLockForExit(Mutator& mutator);
@@ -197,13 +190,13 @@ public:
     Mutator* CreateRuntimeMutator(ThreadType threadType) __attribute__((noinline));
     void DestroyRuntimeMutator(ThreadType threadType);
 
-    bool WorldStopped() const { return worldStopped.load(std::memory_order_acquire); }
+    bool WorldStopped() const { return SafepointSynchronize::state().worldStopped.load(std::memory_order_acquire); }
 
-    bool SyncTriggered() const { return syncTriggered.load(); }
+    bool SyncTriggered() const { return SafepointSynchronize::state().syncTriggered.load(); }
 
-    void SyncMutexLock() { syncMutex.lock(); }
+    void SyncMutexLock() { SafepointSynchronize::state().syncMutex.lock(); }
 
-    void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
+    void SyncMutexUnlock() noexcept { SafepointSynchronize::state().syncMutex.unlock(); }
 
     static bool ConcurrentStackScanEnabled();
 
@@ -212,7 +205,7 @@ public:
 
     __attribute__((always_inline)) inline int* GetSyncFutexWord()
     {
-        return reinterpret_cast<int*>(&suspensionMutatorCount);
+        return reinterpret_cast<int*>(&SafepointSynchronize::state().suspensionMutatorCount);
     }
 
     __attribute__((always_inline)) inline int GetSyncFutexWordValue() const
@@ -222,32 +215,32 @@ public:
 
     __attribute__((always_inline)) inline uint32_t GetSuspensionMutatorCount() const
     {
-        return suspensionMutatorCount.load(std::memory_order_acquire);
+        return SafepointSynchronize::state().suspensionMutatorCount.load(std::memory_order_acquire);
     }
 
     __attribute__((always_inline)) inline void SetSuspensionMutatorCount(uint32_t total)
     {
-        suspensionMutatorCount.store(total, std::memory_order_release);
+        SafepointSynchronize::state().suspensionMutatorCount.store(total, std::memory_order_release);
     }
 
 #if defined(_WIN64) || defined (__APPLE__)
     __attribute__((always_inline)) inline void MutatorWait()
     {
-        std::unique_lock<std::mutex> mutatorsToStopLck(mutatorSuspensionMtx);
-        mutatorSuspensionCV.wait(mutatorsToStopLck, [this]() {
+        std::unique_lock<std::mutex> mutatorsToStopLck(SafepointSynchronize::state().mutatorSuspensionMtx);
+        SafepointSynchronize::state().mutatorSuspensionCV.wait(mutatorsToStopLck, [this]() {
             return GetSuspensionMutatorCount() == 0;
         });
     }
 
     __attribute__((always_inline)) inline void WakeAllMutators()
     {
-        std::unique_lock<std::mutex> mutatorsToStopLck(mutatorSuspensionMtx);
-        mutatorSuspensionCV.notify_all();
+        std::unique_lock<std::mutex> mutatorsToStopLck(SafepointSynchronize::state().mutatorSuspensionMtx);
+        SafepointSynchronize::state().mutatorSuspensionCV.notify_all();
     }
 #endif
 
 #if not defined (_WIN64)
-    const SafepointPageManager* GetSafepointPageManager() const { return safepointPageManager; }
+    const SafepointPageManager* GetSafepointPageManager() const { return SafepointSynchronize::state().safepointPageManager; }
 #endif
 
     void MutatorManagementRLock()
@@ -258,31 +251,31 @@ public:
         // reader waits here in the same state it would wait for an already-held write
         // lock, so this adds no new stop-the-world deadlock.
         for (;;) {
-            while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            while (SafepointSynchronize::state().mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
                 (void)sched_yield();
             }
-            mutatorManagementRWLock.LockRead();
+            SafepointSynchronize::state().mutatorManagementRWLock.LockRead();
             // A writer may announce itself after the check above but before LockRead
             // increments the reader count. Back out in that case. Once a writer is
             // pending, only the finite set of readers which completed both checks
             // before the announcement can remain, so the writer must make progress.
-            if (mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
+            if (SafepointSynchronize::state().mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
                 return;
             }
-            mutatorManagementRWLock.UnlockRead();
+            SafepointSynchronize::state().mutatorManagementRWLock.UnlockRead();
         }
     }
 
-    void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
+    void MutatorManagementRUnlock() { SafepointSynchronize::state().mutatorManagementRWLock.UnlockRead(); }
 
     void MutatorManagementWLock()
     {
         AnnounceMgmtWriterPending();
-        mutatorManagementRWLock.LockWrite();
+        SafepointSynchronize::state().mutatorManagementRWLock.LockWrite();
         WithdrawMgmtWriterPending();
     }
 
-    void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
+    void MutatorManagementWUnlock() { SafepointSynchronize::state().mutatorManagementRWLock.UnlockWrite(); }
 
 
     bool HasNativeMutator();
@@ -294,8 +287,8 @@ public:
     template<typename Fn>
     void ForEachMarkFlushTls(Fn&& fn)
     {
-        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-        for (auto* tls : markFlushThreads) {
+        std::lock_guard<std::mutex> lock(SafepointSynchronize::state().markFlushThreadMutex);
+        for (auto* tls : SafepointSynchronize::state().markFlushThreads) {
             if (tls != nullptr) {
                 fn(tls);
             }
@@ -304,41 +297,6 @@ public:
 
     private:
 
-    // guard mutator set for stop-the-world/light-sync
-    RwLock mutatorManagementRWLock;
-
-    // Number of writers currently waiting for mutatorManagementRWLock. Read by the
-    // read-lock paths to implement writer-preference (see MutatorManagementRLock /
-    // TryAcquireMutatorManagementRLock), preventing GC write-lock starvation.
-    std::atomic<uint32_t> mgmtWritersWaiting{ 0 };
-
-    // count of mutators need to be suspended for stw/lsync.
-    // this field is also used as futex wait/wakeup word for stw/lsync.
-    std::atomic<uint32_t> suspensionMutatorCount;
-
-    /*
-    The following variables with sync are shared by stw and light sync.
-    The STW starts the world after all mutators finish GC phase transition.
-    The light sync starts the world immediately after all mutators stop and
-    does not need to wait for all mutators to finish GC phase transition.
-    */
-    std::recursive_mutex syncMutex;
-    std::atomic<bool> syncTriggered = { false };
-    std::atomic<bool> worldStopped = { false };
-    std::list<Mutator*> undoneLightSyncMutators;
-
-    // Runtime mutators are not necessarily owned by a scheduler CJThread, so
-    // keep them in the same participant inventory explicitly.
-    std::mutex markFlushThreadMutex;
-    std::unordered_set<ThreadLocalData*> markFlushThreads;
-
-#if defined(_WIN64) || defined (__APPLE__)
-    std::condition_variable mutatorSuspensionCV;
-    std::mutex mutatorSuspensionMtx;
-#endif
-#if not defined (_WIN64)
-    SafepointPageManager* safepointPageManager = nullptr;
-#endif
     Mutator* nativeMutator = nullptr;
     CJThreadHandle mainThreadHandle = nullptr;
 };

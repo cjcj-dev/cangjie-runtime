@@ -23,6 +23,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/VMExit.h"
 #include "Mutator/MutatorManager.h"
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
@@ -214,11 +215,23 @@ void SignalManager::Init()
 
 void SignalManager::Fini()
 {
+    if (VM_Exit::native_threads_at_exit() != 0) {
+        // A retained carrier may still own the installed alternate stack.
+        // Preserve that allocation, not the SignalManager facade.
+        extraStack = nullptr;
+        return;
+    }
+    if (pthread_equal(pthread_self(), signalStackOwner)) {
+        stack_t disabled{};
+        disabled.ss_flags = SS_DISABLE;
+        CHECK_SIGNAL_CALL(sigaltstack, (&disabled, nullptr), "disable signal stack during shutdown failed");
+    }
     FreeSigStack();
 }
 
 void SignalManager::PrepareSigStack()
 {
+    signalStackOwner = pthread_self();
     constexpr int stackSizeMultiples = 4;
     signalStack.ss_sp = malloc(SIGSTKSZ * stackSizeMultiples);
     if (signalStack.ss_sp == nullptr) {
@@ -263,11 +276,7 @@ static void CheckSuspendState()
     if (mutator == nullptr) {
         return;
     }
-    if (mutator->HasSuspensionRequest(Mutator::SuspensionType::SUSPENSION_FOR_EXIT)) {
-        while (true) {
-            sleep(INT_MAX);
-        }
-    }
+    if (mutator->IsTerminatedByVM()) { VM_Exit::wait_if_vm_exited(); }
 }
 
 void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)

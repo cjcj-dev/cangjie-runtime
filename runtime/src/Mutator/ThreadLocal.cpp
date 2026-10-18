@@ -20,7 +20,7 @@
 #include <mutex>
 
 namespace MapleRuntime {
-RwLock ThreadLocal::tlEnableLock;
+RwLock& ThreadLocal::tlEnableLock = *new RwLock;
 MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeof(uint64_t)] = {
 #if UINTPTR_MAX == UINT64_MAX
     0, 0, 0, 0, 0, 0, ThreadLocalData::DisarmedPollWord
@@ -126,8 +126,8 @@ struct CleanThreadLocalData::List {
 
 CleanThreadLocalData::List& CleanThreadLocalData::TheList()
 {
-    static List list;
-    return list;
+    static List* const list = new List;
+    return *list;
 }
 
 CleanThreadLocalData::Iterator::Iterator()

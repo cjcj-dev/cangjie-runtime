@@ -27,6 +27,7 @@
 #include "Base/SysCall.h"
 #include "securec.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/VMExit.h"
 #include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -37,7 +38,7 @@
 extern "C" void __gcov_dump(void);
 #endif
 namespace MapleRuntime {
-SignalStack SignalStack::stacks[_NSIG];
+SignalStack* SignalStack::stacks = new SignalStack[_NSIG];
 
 static decltype(&sigaction) g_linkedSignalAction;
 static decltype(&sigprocmask) g_linkedSignalProcmask;
@@ -50,7 +51,7 @@ static semaphore_t g_signalSemaphore;
 static sem_t g_signalSemaphore;
 #endif
 static CJThreadHandle g_signalDispatcher = nullptr;
-static std::mutex g_handlerMutex;
+static std::mutex& g_handlerMutex = *new std::mutex;
 
 static void NotifySignal(int signal)
 {
@@ -213,6 +214,7 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
 
 void SignalStack::HandlerImpl(int signal)
 {
+    VM_Exit::wait_if_vm_exited();
     // The managed dispatcher owns execution. User signal delivery carries a
     // signal number, not an interrupted stack (os.cpp:signal_thread_entry).
     std::vector<SignalAction> handlers;
@@ -251,10 +253,9 @@ void SignalStack::StopDispatcher()
 {
     if (g_signalDispatcher == nullptr) { return; }
     NotifySignal(_NSIG);
-    void* result = nullptr;
-    GetTaskRet(g_signalDispatcher, &result);
-    ReleaseHandle(g_signalDispatcher);
-    g_signalDispatcher = nullptr;
+    // os.cpp:500 / java.cpp:492: publish the exit notification without joining
+    // a user callback. The final VM safepoint owns late managed/native returns.
+    // The future and its actual callback closure remain valid until process exit.
 }
 
 template <typename T>

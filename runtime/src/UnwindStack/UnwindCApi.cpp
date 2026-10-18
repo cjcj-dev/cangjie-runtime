@@ -6,6 +6,7 @@
 
 
 #include "UnwindCApi.h"
+#include "Mutator/VMExit.h"
 
 #include "schedule.h"
 #include "Exception/ExceptionCApi.h"
@@ -80,6 +81,7 @@ extern "C" bool MRT_C2N_Enter(const uint32_t* pc, void* fa, ThreadLocalData* tlD
 
 extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long stackTop)
 {
+    VM_Exit::wait_if_vm_exited();
 #ifdef __OHOS__
     if (stackTop != 0) {
         PopUIThreadStackTop();
@@ -101,6 +103,8 @@ extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long sta
     if (safeState) {
         // Step 1: LeaveSaferegion - includes suspension request check
         MRT_LeaveNative();
+    } else {
+        ProcessSafepointIfRequested(tlData);
     }
 
     // Step 2: DeleteC2NContext - restore unwind context status to RELIABLE

@@ -8,6 +8,8 @@ set(SRC_LIST
     "Mutator.cpp"
     "MutatorManager.cpp"
     "VMOperation.cpp"
+    "VMExit.cpp"
+    "SafepointSynchronize.cpp"
     "Handshake.cpp"
     "ThreadLocal.cpp"
     "ThreadSMR.cpp"

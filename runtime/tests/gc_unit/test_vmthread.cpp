@@ -86,7 +86,7 @@ public:
 };
 } // namespace
 
-GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
+GC_RUNTIME_OTHER_VM_TEST(VMThread1308, PauseRunsOnTheVMThread)
 {
     VMThreadContainerRuntime container(8);
     GcHeapFixture fx;
@@ -102,7 +102,7 @@ GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
     GC_EXPECT_EQ(after, before + 1);
 }
 
-GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
+GC_RUNTIME_OTHER_VM_TEST(VMThread1308, SubmitterWaitsForCompletion)
 {
     VMThreadContainerRuntime container(8);
     VMBlockingOperation operation;
@@ -207,7 +207,7 @@ std::vector<size_t> PublishedOffsets(ZMark& domain)
 }
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, GlobalHandshakeUsesVMThread)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, GlobalHandshakeUsesVMThread)
 {
     VMThreadContainerRuntime container(8);
     RegisteredSafeMutator target;
@@ -220,7 +220,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, GlobalHandshakeUsesVMThread)
     GC_EXPECT_FALSE(closure.stopped);
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, SingleTargetUsesRequester)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, SingleTargetUsesRequester)
 {
     VMThreadContainerRuntime container(8);
     RegisteredSafeMutator target;
@@ -233,7 +233,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, SingleTargetUsesRequester)
     GC_EXPECT_FALSE(closure.stopped);
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, FlushPublishesVMAndMutatorWork)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, FlushPublishesVMAndMutatorWork)
 {
     VMThreadContainerRuntime container(8);
     WorkerFixture worker;
@@ -262,7 +262,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, FlushPublishesVMAndMutatorWork)
     GC_EXPECT_TRUE(vmPublished);
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, EmptyVMFlushHasNoWork)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, EmptyVMFlushHasNoWork)
 {
     VMThreadContainerRuntime container(8);
     ZMark domain(16, MarkingStacks::MarkingGeneration::YOUNG);
@@ -273,7 +273,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, EmptyVMFlushHasNoWork)
     GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
 {
     VMThreadContainerRuntime container(8);
     auto& young = Heap::GetHeap().young();
@@ -287,7 +287,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, MarkFollowLeavesSTSForProactiveFlush)
     GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
 {
     VMThreadContainerRuntime container(8);
     auto& young = Heap::GetHeap().young();
@@ -302,7 +302,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, DriverTerminateFlushOutsideSTS)
     GC_EXPECT_FALSE(MutatorManager::Instance().WorldStopped());
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, NonStrongRendezvousBeforeUnblock)
 {
     VMThreadContainerRuntime container(8);
     auto& old = Heap::GetHeap().old();
@@ -396,7 +396,7 @@ public:
 };
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, IndirectStatesFollowCoordinatorAndClear)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, IndirectStatesFollowCoordinatorAndClear)
 {
     VMThreadContainerRuntime container(8);
     WorkerThreads workers("1349 indirect", 2);
@@ -415,7 +415,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, IndirectStatesFollowCoordinatorAndClear)
     GC_EXPECT_EQ(restarted.matched.load(), 2u);
 }
 
-GC_RUNTIME_TEST(ConcurrentVM1349, IndirectSafepointStateFromVMCoordinator)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, IndirectSafepointStateFromVMCoordinator)
 {
     VMThreadContainerRuntime container(8);
     WorkerThreads workers("1349 safepoint", 2);
@@ -549,7 +549,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
 
 #endif
 
-GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
 {
     VMThreadContainerRuntime container(8);
     bool executed = false;
@@ -576,7 +576,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, VMNestedSubmissionKeepsInternalRoute)
 }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-GC_RUNTIME_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
 {
     VMThreadContainerRuntime container(8);
     WorkerBudgetFixture budget(2);
@@ -619,7 +619,7 @@ GC_RUNTIME_TEST(ConcurrentVM1349, RestartableDispatchReestablishesIndirectState)
 #endif
 
 #if !defined(MRT_DEBUG) || (MRT_DEBUG != 1)
-GC_RUNTIME_TEST(ConcurrentVM1349, ReleaseCancelledSubmissionHasNoIdentityFatal)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentVM1349, ReleaseCancelledSubmissionHasNoIdentityFatal)
 {
     VMThreadContainerRuntime container(8);
     class Cancelled : public VMOperation {
