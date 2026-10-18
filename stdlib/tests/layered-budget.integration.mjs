@@ -9,16 +9,21 @@ import {fileURLToPath} from 'node:url';
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = process.argv[2];
-assert(root && path.isAbsolute(root) && !fs.existsSync(root), 'fresh absolute evidence directory');
+const resumeCut = process.argv[3] === '--resume-cut';
+assert(root && path.isAbsolute(root) && fs.existsSync(root) === resumeCut, 'fresh directory or explicit cut recovery');
 fs.mkdirSync(root, {recursive: true});
 const fixture = path.join(root, 'stdlib'), bin = path.join(root, 'bin');
+if (!resumeCut) {
 fs.mkdirSync(fixture); fs.mkdirSync(bin);
 fs.copyFileSync(path.join(source, 'build.py'), path.join(fixture, 'build.py'));
 for (const name of ['cmake', 'scripts']) fs.cpSync(path.join(source, name), path.join(fixture, name), {recursive: true});
+}
 const moduleFile = path.join(fixture, 'cmake/modules/AddCangjieSource.cmake');
-const original = fs.readFileSync(moduleFile);
+const original = fs.readFileSync(path.join(source, 'cmake/modules/AddCangjieSource.cmake'));
+assert(fs.readFileSync(moduleFile).equals(original), 'product restored before recovery');
+assert(fs.readFileSync(fixture + '/build.py').equals(fs.readFileSync(source + '/build.py')));
 const eventsFile = path.join(root, 'compiler-events.jsonl');
-const records = [];
+const records = resumeCut ? JSON.parse(fs.readFileSync(root + '/commands.json')) : [];
 const env = {...process.env, PATH: bin + ':' + process.env.PATH, CANGJIE_HOME: root + '/host',
   cjHeapSize: '7GB', BUDGET_EVENTS: eventsFile, EXPECTED_HEAP: '2GB',
   CANGJIE_JOBSERVER_LOG: root + '/jobserver.jsonl', CJCJ_SUPERVISOR_WORK: root + '/supervision'};
@@ -39,6 +44,7 @@ function run(name, argv, extra = {}) {
     stderr: fs.readFileSync(root + '/' + name + '.stderr', 'utf8')};
 }
 const target = name => path.join(root, name);
+if (!resumeCut) {
 for (const name of ['target-a', 'target-b']) {
   const dir = path.join(target(name), 'common/linux_relwithdebinfo_x86_64/lib/linux_x86_64_cjnative');
   fs.mkdirSync(dir, {recursive: true});
@@ -85,6 +91,7 @@ endforeach()
 add_executable(native-control native.c)
 install(TARGETS native-control DESTINATION bin)
 `);
+}
 const build = path.join(fixture, 'build/build');
 const command = ({packages = 2, heap = 2, total = 8, reserve = 4, lib = 'target-a'} = {}) =>
   ['python3', '-I', fixture + '/build.py', 'build', '-t', 'relwithdebinfo', '--jobs', '8',
@@ -102,7 +109,9 @@ function checkIntervals(rows, packages, heap) {
 }
 const results = {};
 try {
-  const normal = run('candidate', command()); assert.equal(normal.rc, 0, normal.stderr);
+  let normal, cut;
+  if (!resumeCut) {
+  normal = run('candidate', command()); assert.equal(normal.rc, 0, normal.stderr);
   results.candidate = checkIntervals(events(), 2, '2GB');
   assert(fs.readFileSync(build + '/selected-runtime.txt', 'utf8').startsWith(target('target-a')));
   const graph = fs.readFileSync(build + '/build.ninja', 'utf8');
@@ -128,9 +137,27 @@ try {
   assert.equal(text.split(needle).length, 2);
   fs.writeFileSync(root + '/cut.diff', '-    ' + needle + '\n+    set(CANGJIE_COMPILER_ENV)\n');
   fs.writeFileSync(moduleFile, text.replace(needle, 'set(CANGJIE_COMPILER_ENV)'));
-  const cut = run('cut', command()); assert.notEqual(cut.rc, 0);
-  assert.match(cut.stdout + cut.stderr, /COMPILER_HEAP_ASSERTION_REACHED 7GB/);
-  assert.match(cut.stdout + cut.stderr, /SELECTED_HEAP_MUST_REACH_COMPILER/);
+  cut = run('cut', command()); assert.notEqual(cut.rc, 0);
+  } else {
+    normal = records.find(r => r.name === 'candidate');
+    cut = records.find(r => r.name === 'cut');
+    assert.equal(normal?.rc, 0); assert.equal(cut?.rc, 1);
+    assert.equal(records.at(-1).name, 'cut', 'only resume the interrupted first cut observation');
+    assert.equal(JSON.parse(fs.readFileSync(root + '/restoration.json')).restored, true);
+    results.candidate = checkIntervals(events().slice(0, 16), 2, '2GB');
+    results.changed = checkIntervals(events().slice(16, 32), 1, '3GB');
+  }
+  // Ninja may be stopped before flushing its buffered output. The stable
+  // production supervisor preserves the first child's exact diagnostic.
+  const budgetLog = fs.readFileSync(root + '/jobserver.jsonl', 'utf8').trim().split('\n').map(JSON.parse);
+  const failedPool = budgetLog.filter(e => e.event === 'pool-end' && e.rc !== 0).at(-1);
+  assert(failedPool, 'cut reached the real Ninja pool');
+  const failurePath = path.join(failedPool.directory, 'failure');
+  const failure = JSON.parse(fs.readFileSync(failurePath));
+  assert.equal(failure.rc, cut.rc);
+  assert.match(failure.stdout, /COMPILER_HEAP_ASSERTION_REACHED 7GB/);
+  assert.match(failure.stderr, /SELECTED_HEAP_MUST_REACH_COMPILER/);
+  fs.writeFileSync(root + '/cut-observation.json', JSON.stringify({failurePath, failure, reused: resumeCut}, null, 2));
   const independent = run('cut-native-control', [build + '/native-control']); assert.equal(independent.rc, 0);
   fs.writeFileSync(moduleFile, original);
   const n = events().length;
