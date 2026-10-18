@@ -123,6 +123,7 @@ Heap::~Heap()
 // ZGC zHeap.inline.hpp:82-90: the facade directly enters the object allocator.
 MAddress Heap::Allocate(size_t size, AllocType allocType)
 {
+    if (Mutator* mutator = Mutator::GetMutator()) { mutator->CheckSafepointAllowed(); }
     (void)allocType;
     const MAddress addr = _object_allocator.alloc(RoundUp<size_t>(size, 8));
     if (UNLIKELY(addr == 0)) {

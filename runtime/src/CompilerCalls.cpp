@@ -11,6 +11,7 @@
 #include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zBarrierSet.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/SafepointVerifiers.h"
 
 #include "Base/CString.h"
 #include "Heap/z/zStat.hpp"
@@ -314,6 +315,7 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib)
 {
+    NoSafepointVerifier noSafepoint;
     ObjectPtr plainObj = obj;
     MAddress plainDst = dst;
     MAddress plainSrc = src;
@@ -342,6 +344,7 @@ extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
 {
+    NoSafepointVerifier noSafepoint;
     MAddress plainDst = dst;
     MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
@@ -2067,6 +2070,7 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
 
 extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size)
 {
+    NoSafepointVerifier noSafepoint;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (Heap::IsHeapAddress(dstNative)) {
         LOG(RTLOG_FATAL, "dstNative is in heap");
@@ -2089,6 +2093,7 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t
 
 extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size)
 {
+    NoSafepointVerifier noSafepoint;
     if (size == 0) {
         return;
     }

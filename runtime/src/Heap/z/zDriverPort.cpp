@@ -174,7 +174,8 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_ALLOCATION_RATE, "allocation_rate" },
     { GC_REASON_HIGH_USAGE, "high_usage" },
     { GC_REASON_PROACTIVE, "proactive" },
-    { GC_REASON_DCMD_GC_RUN, "diagnostic_command" }
+    { GC_REASON_DCMD_GC_RUN, "diagnostic_command" },
+    { GC_REASON_HEAP_DUMP, "heap_dump" }
 };
 
 } // namespace MapleRuntime

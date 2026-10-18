@@ -13,6 +13,7 @@
 namespace MapleRuntime {
 inline void Mutator::DoEnterSaferegion()
 {
+    CheckSafepointAllowed();
     SetInSaferegion(SAFE_REGION_TRUE);
     MarkFlushOnEnterSaferegion();
 }

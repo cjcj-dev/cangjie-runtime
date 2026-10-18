@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -54,8 +55,9 @@ int main(int argc, char** argv)
         // Register before the actual mark-start flip so the real remset-table
         // iterator finds the source in the previous found-old set.
         heap.remembered().register_found_old(fixture.region0());
-        ScopedStopTheWorld stopped("VerifyRemsetPhaseInput");
+        ExecuteTestAtSafepoint("VerifyRemsetPhaseInput", [&] {
         heap.young().mark_start();
+        });
     }
     // Start young marking before activating the old relocation queue. A
     // phase-only input has no concurrent old worker to acknowledge a later

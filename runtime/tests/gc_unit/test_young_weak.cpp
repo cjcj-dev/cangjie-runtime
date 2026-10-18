@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -632,13 +633,15 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
                     MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
         GC_EXPECT_TRUE(current.Stripes().IsEmpty());
         GC_EXPECT_FALSE(stacks.IsEmpty());
+        bool rejectedCallReturned = false;
         {
-            ScopedStopTheWorld stw("mark stacks verification test", false);
+            ExecuteTestAtSafepoint("mark stacks verification test", [&] {
             other.verify_all_stacks_empty();
             const char* generation = domain == &old ? "old" : "young";
             if (rejectGeneration != nullptr && std::strcmp(rejectGeneration, generation) == 0) {
                 signal(SIGABRT, SIG_DFL);
                 current.verify_all_stacks_empty();
+                rejectedCallReturned = true;
                 return; // Normal completion fails the parent's abort assertion.
             }
             // Verification of the other generation has not flushed this stack.
@@ -652,7 +655,9 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkStripeStack::Destroy(published);
             MarkingSMRTest::reclaim(smr);
             current.verify_all_stacks_empty();
+            });
         }
+        if (rejectedCallReturned) { return; }
     }
 }
 
@@ -1124,10 +1129,11 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
     const U64 handle = collector.cross_vm().export_roots().RegisterExportRoot(fx.obj0);
     size_t visits = 0;
     {
-        ScopedStopTheWorld stw("B10 phantom root iteration", false);
+        ExecuteTestAtSafepoint("B10 phantom root iteration", [&] {
         collector.old().mark_start();
         GC_EXPECT_FALSE(fx.region0()->is_object_live(from_object(fx.obj0)));
         HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
+        });
     }
     ThreadLocal::FlushCurrentThreadMarkStacks();
     collector.old().Mark().MarkFollow();

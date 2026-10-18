@@ -97,6 +97,16 @@ public:
     }
 
     static Mutator* GetMutator() noexcept;
+    void IncNoSafepointCount() { ++noSafepointCount; }
+    void DecNoSafepointCount()
+    {
+        CHECK_DETAIL(noSafepointCount != 0, "unbalanced no-safepoint scope");
+        --noSafepointCount;
+    }
+    void CheckSafepointAllowed() const
+    {
+        CHECK_DETAIL(noSafepointCount == 0, "safepoint or managed allocation inside leaf barrier helper");
+    }
     HandshakeState& GetHandshakeState() { return handshakeState; }
     void StackGuardExpand() const;
     void StackGuardRecover() const;
@@ -172,6 +182,7 @@ public:
     template<class Preprocess>
     __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
+        CheckSafepointAllowed();
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
             MutatorLock();
@@ -511,6 +522,7 @@ private:
     // we don't need to scan it.
     std::atomic<bool> inManagedContext = { true };
     std::atomic<bool> gcDetached = { false };
+    unsigned noSafepointCount = 0;
     void* stackBoundAddr = { nullptr };
     std::mutex mutatorLock;
 

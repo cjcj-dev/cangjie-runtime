@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -477,7 +478,7 @@ void* RunVisibleArrayGraph(void*)
     const MAddress first = reinterpret_cast<MAddress>(array->ConvertToCArray());
     {
         ScopedEnterSaferegion saferegion(false);
-        ScopedStopTheWorld stw("segmented-array range graph", false);
+        ExecuteTestAtSafepoint("segmented-array range graph", [&] {
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; },
             [&](BaseObject* base, const void* slot, uintptr_t) {
                 if (base != array) { return; }
@@ -489,6 +490,7 @@ void* RunVisibleArrayGraph(void*)
                     ++visits[(field - first) / sizeof(RefField<>)];
                 }
             });
+        });
     }
     LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     for (size_t count : visits) { invalid += count != 1; }
@@ -727,8 +729,9 @@ void* RunNativeTaskRootCase(void*)
     size_t objects = 0;
     {
         ScopedEnterSaferegion saferegion(false);
-        ScopedStopTheWorld stw("native task heap iteration", false);
+        ExecuteTestAtSafepoint("native task heap iteration", [&] {
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
+        });
     }
     Heap::GetHeap().RequestGC(GC_REASON_USER);
     LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);

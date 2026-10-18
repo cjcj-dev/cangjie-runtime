@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -159,8 +160,9 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
     {
-        ScopedStopTheWorld stopped("object allocator retirement");
+        ExecuteTestAtSafepoint("object allocator retirement", [&] {
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+        });
     }
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     const uintptr_t retired = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
@@ -175,8 +177,9 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
     {
-        ScopedStopTheWorld stopped("object allocator retirement");
+        ExecuteTestAtSafepoint("object allocator retirement", [&] {
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+        });
     }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old);

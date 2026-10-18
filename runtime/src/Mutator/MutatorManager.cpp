@@ -8,6 +8,7 @@
 #include "RuntimeConfig.h"
 #include "MutatorManager.h"
 #include "ThreadSMR.h"
+#include "VMOperation.h"
 
 #include <atomic>
 #include <thread>
@@ -84,6 +85,7 @@ static void ProcessSafepoint(ThreadLocalData* tlData)
 {
     std::atomic_thread_fence(std::memory_order_acquire);
     Mutator* mutator = tlData->mutator;
+    if (mutator != nullptr) { mutator->CheckSafepointAllowed(); }
     bool recheck;
     do {
         if (mutator != nullptr) {
@@ -453,6 +455,7 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 
 void MutatorManager::StopTheWorld()
 {
+    CHECK_DETAIL(VMThread::is_VM_thread(), "Only VM thread may execute a safepoint");
     syncMutex.lock();
     // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
     // list, since concurrent root workers can still be visiting that list.
@@ -477,6 +480,7 @@ void MutatorManager::StopTheWorld()
 
 void MutatorManager::StartTheWorld() noexcept
 {
+    CHECK_DETAIL(VMThread::is_VM_thread(), "Only VM thread may end a safepoint");
     syncTriggered.store(false);
     worldStopped.store(false, std::memory_order_release);
 
@@ -497,69 +501,6 @@ void MutatorManager::StartTheWorld() noexcept
     }
     // Release syncMutex to allow other thread call STW.
     syncMutex.unlock();
-}
-
-void MutatorManager::StartLightSync()
-{
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool saferegionEntered = false;
-    if (!IsGcThread()) {
-        Mutator* mutator = Mutator::GetMutator();
-        if (mutator != nullptr) {
-            saferegionEntered = mutator->EnterSaferegion(true);
-        }
-    }
-#endif
-    syncMutex.lock();
-    syncTriggered.store(true);
-
-    AcquireMutatorManagementWLock();
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    saferegionStateChanged = saferegionEntered;
-#endif
-
-    size_t mutatorCount = GetMutatorCount();
-    if (UNLIKELY(mutatorCount == 0)) {
-        worldStopped.store(true, std::memory_order_release);
-    } else {
-        SetSuspensionMutatorCount(static_cast<uint32_t>(mutatorCount));
-        DemandSuspensionForSync();
-        WaitUntilAllMutatorStopped();
-        worldStopped.store(true, std::memory_order_release);
-    }
-}
-
-void MutatorManager::StopLightSync() noexcept
-{
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool shouldLeaveSaferegion = saferegionStateChanged;
-#endif
-
-    syncTriggered.store(false);
-    worldStopped.store(false, std::memory_order_release);
-
-    CancelSuspensionAfterSync();
-    SetSuspensionMutatorCount(0);
-
-    // wakeup all mutators which blocking on countOfMutatorsToStop futex.
-#if defined(_WIN64) || defined(__APPLE__)
-    WakeAllMutators();
-#else
-    (void)MapleRuntime::Futex(GetSyncFutexWord(), FUTEX_WAKE, INT_MAX);
-#endif
-    MutatorManagementWUnlock();
-    // Release syncMutex to allow other thread call lsync.
-    syncMutex.unlock();
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    // Restore saferegion state if the state is changed when mutator calls StartLightSync().
-    if (!IsGcThread()) {
-        Mutator* mutator = Mutator::GetMutator();
-        if (mutator != nullptr && shouldLeaveSaferegion) {
-            (void)mutator->LeaveSaferegion();
-        }
-    }
-#endif
 }
 
 void MutatorManager::WaitUntilAllMutatorStopped()

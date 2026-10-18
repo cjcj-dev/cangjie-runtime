@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_worker_fixture.hpp"
 #include "Common/Mutex.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
@@ -74,8 +75,9 @@ public:
         // establish colors and sequence before the real concurrent root task.
         auto& old = Heap::GetHeap().old();
         {
-            ScopedStopTheWorld stopped("native-root old mark-start");
+            ExecuteTestAtSafepoint("native-root old mark-start", [&] {
             old.mark_start();
+            });
         }
         old.concurrent_mark();
     }
@@ -475,8 +477,9 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     // zGeneration.cpp:1212-1237, zMark.cpp:797-834: mark-start establishes
     // the color/sequence before workers consume roots, then follow marks objects.
     {
-        ScopedStopTheWorld stw("p10-root-mark-start", false);
+        ExecuteTestAtSafepoint("p10-root-mark-start", [&] {
         heap.old().mark_start();
+        });
     }
     heap.old().concurrent_mark();
 
@@ -551,8 +554,9 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     RelocationReceiptTest::BindNativeRootFixture(collector);
     fx.region0()->reset(PageAge::eden);
     {
-        ScopedStopTheWorld stopped("native-root young mark-start");
+        ExecuteTestAtSafepoint("native-root young mark-start", [&] {
         Heap::GetHeap().young().mark_start();
+        });
     }
     Heap::GetHeap().young().Mark().verify_all_stacks_empty();
     // Load-good, but the previous young/old mark epochs: the root must take

@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -117,8 +118,9 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 
     // retire_pages: every slot of the age is cleared.
     {
-        ScopedStopTheWorld stopped("object allocator retirement");
+        ExecuteTestAtSafepoint("object allocator retirement", [&] {
         Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+        });
     }
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);

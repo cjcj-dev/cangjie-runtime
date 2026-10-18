@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -347,8 +348,9 @@ void* AllocateFromDirtyCache(void*)
     {
         // ZGC zObjectAllocator.cpp:196-202: retire shared pages only in a pause.
         ScopedEnterSaferegion saferegion(false);
-        ScopedStopTheWorld stopped("allocation zeroing fixture retirement");
+        ExecuteTestAtSafepoint("allocation zeroing fixture retirement", [&] {
         heap.object_allocator().retire_pages(kPageAgeRangeEden);
+        });
     }
     const bool small = kind == ZeroCase::TLAB;
     const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer || kind == ZeroCase::SegmentedArray;

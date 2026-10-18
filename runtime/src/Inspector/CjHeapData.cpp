@@ -10,6 +10,7 @@
 #include "Heap/z/zHeapIterator.hpp"
 #include "CjHeapData.h"
 #include "Mutator/VMOperation.h"
+#include "Heap/shared/gcVMOperations.hpp"
 #include <cerrno>
 #include <cstdint>
 #include <Common/BaseObject.h>
@@ -94,10 +95,12 @@ void CjHeapData::InitSerializedIdWrapper()
 }
 
 // HotSpot heapDumper.cpp:2461,2882-2883: the caller retains the writer.
-class VM_HeapDumper final : public VMOperation {
+class VM_HeapDumper final : public VM_GC_Operation {
 public:
-    VM_HeapDumper(CjHeapData& data, const char* reason) : heapData(data), dumpReason(reason) {}
+    VM_HeapDumper(CjHeapData& data, const char* reason)
+        : VM_GC_Operation(0, false, 0, GC_REASON_HEAP_DUMP), heapData(data), dumpReason(reason) {}
     const char* name() const override { return dumpReason; }
+    bool completed() const { return didDump; }
     void doit() override
     {
         size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
@@ -106,10 +109,14 @@ public:
         heapData.dumpObjects.reserve(allocatedSize / estimateSize);
         heapData.ProcessHeap();
         heapData.WriteHeap();
+        didDump = true;
     }
 private:
+    // heapDumper.cpp:2567: an intervening collection never replaces a dump.
+    bool skip_operation() const override { return false; }
     CjHeapData& heapData;
     const char* dumpReason;
+    bool didDump = false;
 };
 
 void CjHeapData::DumpHeap(bool needStopTheWorld)
@@ -167,6 +174,12 @@ void CjHeapData::DumpHeap(bool needStopTheWorld)
     // step3 - close file
     int ret = fclose(fp);
     fp = nullptr;
+    if (!operation.completed()) {
+        // A rejected VM operation did not produce a dump. In particular,
+        // closing its caller-owned cache must not publish a successful file.
+        if (!dumpAfterOOM) { (void)remove("item_data.dat.cache"); }
+        return;
+    }
     if (ret) {
         LOG(RTLOG_ERROR, "Fail to close file when dump heap data finished, %s", strerror(errno));
     }
@@ -214,7 +227,7 @@ bool CjHeapData::DumpHeap(int fd, bool needStopTheWorld)
         LOG(RTLOG_ERROR, "Fail to close file when dump heap data finished, %s", strerror(errno));
         return false;
     }
-    return true;
+    return operation.completed();
 }
 
 void CjHeapData::ProcessHeapObject(BaseObject* obj)

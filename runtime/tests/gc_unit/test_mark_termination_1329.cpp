@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include <sstream>
@@ -34,8 +35,9 @@ void StartOld(Heap& heap)
 {
     InitializeGenerationWorkers(heap.old(), 1);
     InitializeGenerationWorkers(heap.young(), 1);
-    ScopedStopTheWorld pause("1329 old mark start", false);
+    ExecuteTestAtSafepoint("1329 old mark start", [&] {
     heap.old().mark_start();
+    });
 }
 }
 
@@ -51,14 +53,16 @@ GC_OTHER_VM_TEST(MarkTermination1329, OldContinueReachesStatistics)
     ZBarrier::MarkSlowPath(from_object(fx.obj0));
     bool first;
     {
-        ScopedStopTheWorld pause("1329 first mark end", false);
+        ExecuteTestAtSafepoint("1329 first mark end", [&] {
         first = heap.old().mark_end();
+        });
     }
     heap.old().concurrent_mark_continue();
     bool second;
     {
-        ScopedStopTheWorld pause("1329 continued mark end", false);
+        ExecuteTestAtSafepoint("1329 continued mark end", [&] {
         second = heap.old().mark_end();
+        });
     }
     const size_t count = heap.old().StatMark()->_ncontinue;
     std::fprintf(stderr, "MARK1329_CONTINUE_TARGET executed=1 first=%d second=%d ncontinue=%zu\n",
@@ -101,8 +105,9 @@ GC_OTHER_VM_TEST(MarkTermination1329, OldTaskPublishesYoungPrivateStack)
     fx.region0()->reset(PageAge::eden);
     StartOld(heap);
     {
-        ScopedStopTheWorld pause("1329 young mark start", false);
+        ExecuteTestAtSafepoint("1329 young mark start", [&] {
         heap.young().mark_start();
+        });
     }
     class SeedYoung final : public ZTask {
         BaseObject* object;

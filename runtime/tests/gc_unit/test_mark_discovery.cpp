@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "Common/Mutex.h"
 #include "gc_worker_fixture.hpp"
@@ -83,8 +84,9 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
             // ZPage::is_object_strongly_live treats allocating pages as live.
             // Start the old epoch before the minor phase so this old target
             // is an unmarked survivor, not an implicitly-live allocation.
-            ScopedStopTheWorld pause("old epoch for young-reference test", false);
+            ExecuteTestAtSafepoint("old epoch for young-reference test", [&] {
             heap.old().mark_start();
+            });
         }
         heap.young().set_phase(ZGenerationPhase::MarkComplete);
         YoungTypeSetter type(heap.young(), ZYoungType::minor);
@@ -92,8 +94,9 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         heap.young().concurrent_mark();
     } else {
         {
-            ScopedStopTheWorld pause("reference discovery mark-start", false);
+            ExecuteTestAtSafepoint("reference discovery mark-start", [&] {
             heap.old().mark_start();
+            });
         }
         heap.old().concurrent_mark();
     }

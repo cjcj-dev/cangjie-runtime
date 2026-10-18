@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -1106,7 +1107,7 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierFreeExcludesMarkEnd)
     bool registeredDuringPause = false;
     std::thread pause([&] {
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-        ScopedStopTheWorld stw("unstarted carrier young mark-end", false);
+        ExecuteTestAtSafepoint("unstarted carrier young mark-end", [&] {
         stopped = MutatorManager::Instance().WorldStopped();
         const bool ended = young.mark_end();
         markEndCalled = true;
@@ -1118,6 +1119,7 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierFreeExcludesMarkEnd)
         registeredDuringPause = list.includes(state.identity.load());
         std::fprintf(stderr, "UNSTARTED_MARK_END_PAUSE stopped=%d mark_end=%d started=%d done=%d registered=%d\n",
                      stopped, ended, started, doneDuringPause, registeredDuringPause);
+        });
     });
     pause.join();
     void* result = nullptr;

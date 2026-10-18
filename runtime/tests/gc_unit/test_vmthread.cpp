@@ -37,6 +37,28 @@ extern "C" int CJ_ScheduleManagerInit();
 extern "C" void CJ_MRT_DumpHeapSnapshot(int fd);
 
 namespace {
+// These service entry points require the published VM initialization state.
+// Keep the container-only fixture for coordinator tests that do not submit a
+// VM_GC_Operation; do not manufacture the service admission bit in a fixture.
+class InitializedServiceRuntime {
+public:
+    InitializedServiceRuntime()
+    {
+        RuntimeParam params{};
+        params.heapParam.heapSize = 128 * 1024;
+        params.coParam.processorNum = 1;
+        params.gcParam.staticGCThreads = true;
+        params.gcParam.concGCThreads = 2;
+        params.gcParam.concGCThreadsSet = true;
+        params.gcParam.youngGCThreads = 2;
+        params.gcParam.youngGCThreadsSet = true;
+        params.gcParam.oldGCThreads = 2;
+        params.gcParam.oldGCThreadsSet = true;
+        GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    }
+    ~InitializedServiceRuntime() { CHECK(FiniCJRuntime() == E_OK); }
+};
+
 // Deterministic interleaving device, shaped after HotSpot
 // threadHelper.inline.hpp:53-95: the submitting thread parks until the operation
 // has published that it is executing, so the interleaving is not random.
@@ -488,7 +510,7 @@ private:
 
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, IDETransportRunsOnVMThread)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     ObserveSnapshotTransport();
     CjHeapDataForIDE data;
     const bool result = data.Serialize();
@@ -498,7 +520,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, IDETransportRunsOnVMThread)
 
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationAllowsNestedService)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     ObserveSnapshotTransport();
     VMNestedSnapshot operation(true);
     VMThread::execute(&operation);
@@ -512,7 +534,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterOperationRejectsNestedService)
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
-        VMThreadContainerRuntime container(8);
+        InitializedServiceRuntime runtime;
         ObserveSnapshotTransport();
         VMNestedSnapshot operation(false);
         VMThread::execute(&operation);
@@ -654,7 +676,7 @@ private:
 }
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryDescriptorCallerRetainsFile)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     FILE* file = tmpfile();
     GC_EXPECT_TRUE(file != nullptr);
     CjHeapData data;
@@ -664,7 +686,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryDescriptorCallerRetainsFile)
 }
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterAllowsBinaryDump)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     FILE* file = tmpfile();
     GC_EXPECT_TRUE(file != nullptr);
     VMNestedBinaryDump operation(fileno(file), true);
@@ -677,7 +699,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, OuterRejectsBinaryDump)
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
-        VMThreadContainerRuntime container(8);
+        InitializedServiceRuntime runtime;
         FILE* file = tmpfile();
         if (file == nullptr) { _exit(2); }
         VMNestedBinaryDump operation(fileno(file), false);
@@ -739,7 +761,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, ManagedRequesterWaitsSafely)
 
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, BinaryPathCallerOwnsFile)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     const char* root = std::getenv("GC_UNIT_OUT");
     GC_EXPECT_TRUE(root != nullptr);
     const std::string directory = std::string(root) + "/dump-path-" + std::to_string(getpid());
@@ -844,7 +866,7 @@ GC_RUNTIME_OTHER_VM_TEST(VMService1350, ThreadSnapshotCallerConsumesRecords)
 extern "C" void MRT_DumpAllStackTrace();
 GC_RUNTIME_OTHER_VM_TEST(VMService1350, DebugStackTraceEntry)
 {
-    VMThreadContainerRuntime container(8);
+    InitializedServiceRuntime runtime;
     MRT_DumpAllStackTrace();
     std::fprintf(stderr, "VM1350_STACKTRACE_TARGET executed=1 returned=1\n");
 }

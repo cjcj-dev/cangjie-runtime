@@ -586,7 +586,7 @@ void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 void CJFileLoader::ClearLoadedFiles()
 {
     // CangjieRuntime clears Runtime::runtime before module finalization, so a
-    // shutdown cleanup cannot create ScopedStopTheWorld or query
+    // shutdown cleanup cannot submit a new VM pause or query
     // MutatorManager::Instance(). Both runtime exits retire their entry mutator
     // and stop the scheduler before FiniAndDelete, so no active image frame can
     // be created or remain here. Close task admission for the complete cleanup

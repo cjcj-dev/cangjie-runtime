@@ -1,26 +1,12 @@
 diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
 --- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
 +++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
-@@ -480,16 +480,15 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
-     if (!authorizedByCaller) {
-+        // Fault injection: purge before the final mutator rendezvous.
-+        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
-+        PurgeLoadedFile(baseFile);
-+#ifdef MRT_TESTABLE_INTERNALS
-+        ElfUnloadQuiescence::NoteDirectPurgeForTesting();
-+#endif
-         ScopedEnterSaferegion enterSaferegion(false);
-         ScopedStopTheWorld handshake("ELF unload quiescence", false);
- #ifdef MRT_TESTABLE_INTERNALS
-         ElfUnloadQuiescence::NoteDirectHandshakeForTesting();
- #endif
--        CHECK_DETAIL(!HasActiveImageFrames(baseFile),
--                     "ELF image became active after direct unload preflight");
--        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
--        PurgeLoadedFile(baseFile);
--#ifdef MRT_TESTABLE_INTERNALS
--        ElfUnloadQuiescence::NoteDirectPurgeForTesting();
--#endif
+@@ -499,7 +499,7 @@
+         };
+         UnloadRendezvousClosure rendezvous;
+-        Handshake::execute(&rendezvous);
+         ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
+         PurgeLoadedFile(baseFile);
++        Handshake::execute(&rendezvous); // Cut: purge before the product VM handshake.
          unload.OpenAdmission();
          return;
-     }

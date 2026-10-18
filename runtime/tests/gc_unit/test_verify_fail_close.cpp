@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #define MRT_USE_CJTHREAD_RENAME 1
 // Observe the existing product pool getter without adding a runtime hook.
 #include <atomic>
@@ -740,8 +741,9 @@ void CheckCarrierWalk(bool heapWalk)
         const ThreadType savedType = ThreadLocal::GetThreadType();
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
         {
-            ScopedStopTheWorld stw("carrier graph", false);
+            ExecuteTestAtSafepoint("carrier graph", [&] {
             HeapIterator(false).Iterate([&](BaseObject* visited) { found |= visited == object; });
+            });
         }
         ThreadLocal::SetThreadType(savedType);
     } else {

@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_forwarding_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -375,8 +376,9 @@ struct Remembered1314Relocation {
     {
         auto& old = Heap::GetHeap().old();
         {
-            ScopedStopTheWorld pause("Remembered1314 old relocate start", false);
+            ExecuteTestAtSafepoint("Remembered1314 old relocate start", [&] {
             old.relocate_start();
+            });
         }
         old.relocate().relocate(&old.relocation_set());
     }

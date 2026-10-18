@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_vm_producer.hpp"
 #include "LoaderManager.h"
 #include "Heap/z/zRootsIterator.hpp"
@@ -148,8 +149,9 @@ struct MarkPort203TestAccess {
         if (major) {
             // The heap fixture has an active synthetic epoch. The real old
             // mark-start owns Begin (ZGC zGeneration.cpp:1212-1240).
-            ScopedStopTheWorld pause("P16 old mark-start fixture", false);
+            ExecuteTestAtSafepoint("P16 old mark-start fixture", [&] {
             collector.old().mark_start();
+            });
         } else {
             YoungTypeSetter type(collector.young(), ZYoungType::minor);
             collector.young().pause_mark_start();

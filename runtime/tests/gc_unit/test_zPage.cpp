@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -847,8 +848,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     std::atomic<bool> stwFinished{false};
     std::thread collector([&] {
-        ScopedStopTheWorld stw("jni-critical-blocked-enter", false);
+        ExecuteTestAtSafepoint("jni-critical-blocked-enter", [&] {
         stwFinished.store(true, std::memory_order_release);
+        });
     });
     const auto stwDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!stwFinished.load(std::memory_order_acquire) &&

@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
@@ -1295,8 +1296,9 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // Enter the actual old mark-start producer; a bare ZMark::Start only
     // initializes stacks and does not publish the generation's Mark phase.
     {
-        ScopedStopTheWorld stopped("old mark-start fixture");
+        ExecuteTestAtSafepoint("old mark-start fixture", [&] {
         Heap::GetHeap().old().mark_start();
+        });
     }
     {
         DriverLocker driver;
@@ -1378,8 +1380,9 @@ void CheckMajorCurrentRemset(unsigned workers)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(companion, other));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {source, companion}));
     {
-        ScopedStopTheWorld stopped("current remset old mark-start");
+        ExecuteTestAtSafepoint("current remset old mark-start", [&] {
         old.mark_start();
+        });
     }
     for (BaseObject* object : {from, other}) {
         *reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(object) + sizeof(BaseObject)) =

@@ -58,6 +58,7 @@ using MutatorVisitor = std::function<void(Mutator&)>;
 class MutatorManager {
     friend class MutatorManagerTest;
     friend class ZMark;
+    friend class VMThread;
 public:
     MutatorManager() {}
     ~MutatorManager()
@@ -157,10 +158,10 @@ public:
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
+private:
     void StopTheWorld();
     void StartTheWorld() noexcept;
-    void StartLightSync();
-    void StopLightSync() noexcept;
+public:
     void WaitUntilAllMutatorStopped();
     void DumpMutators(uint32_t timeoutTimes);
     void DemandSuspensionForSync();
@@ -340,72 +341,7 @@ public:
 #endif
     Mutator* nativeMutator = nullptr;
     CJThreadHandle mainThreadHandle = nullptr;
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool saferegionStateChanged = false;
-#endif
 };
 
-// Scoped stop the world.
-class ScopedStopTheWorld {
-public:
-    __attribute__((always_inline)) explicit ScopedStopTheWorld(const char* gcReason, bool = false,
-        int = 0) : reason(gcReason)
-    {
-        startTime = TimeUtil::NanoSeconds();
-        MutatorManager::Instance().StopTheWorld();
-        stoppedTime = TimeUtil::NanoSeconds();
-    }
-
-    __attribute__((always_inline)) ~ScopedStopTheWorld()
-    {
-        const uint64_t endTime = TimeUtil::NanoSeconds();
-        LOG(RTLOG_REPORT, "%s stw time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
-        // The line above goes to REPORT, which Release gates behind MRT_REPORT=<path> -- so the one
-        // number a pause budget is made of was only visible in a mode that writes ~10MB per run and
-        // perturbs the thing being measured. Emit it on the same always-on MRT_GC_LOG channel as
-        // rec=cycle/rec=phase instead.
-        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
-        MutatorManager::Instance().StartTheWorld();
-    }
-
-    uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
-
-
-private:
-    const char* reason = nullptr;
-    uint64_t startTime = 0;
-    uint64_t stoppedTime = 0;
-};
-
-// Scoped light sync.
-class ScopedLightSync {
-public:
-    __attribute__((always_inline)) explicit ScopedLightSync(const char* gcReason, bool = false,
-        int = 0) : reason(gcReason)
-    {
-        startTime = TimeUtil::NanoSeconds();
-        MutatorManager::Instance().StartLightSync();
-        stoppedTime = TimeUtil::NanoSeconds();
-    }
-
-    __attribute__((always_inline)) ~ScopedLightSync()
-    {
-        const uint64_t endTime = TimeUtil::NanoSeconds();
-        LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
-        // A light sync parks every mutator just like StopTheWorld(). Keep its rendezvous and
-        // held intervals in the same structured pause ledger so pause sums cannot omit it.
-        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
-        MutatorManager::Instance().StopLightSync();
-    }
-
-    uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
-
-private:
-    const char* reason = nullptr;
-    uint64_t startTime = 0;
-    uint64_t stoppedTime = 0;
-};
-
-// Scoped lock STW, this prevent other thread STW during the current scope.
 } // namespace MapleRuntime
 #endif

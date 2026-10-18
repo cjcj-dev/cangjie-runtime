@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_worker_fixture.hpp"
 #define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_heap_fixture.hpp"
@@ -139,8 +140,9 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
         GC_EXPECT_EQ(stored, storedExpected);
     }
     {
-        ScopedStopTheWorld stopped("old mark-start fixture");
+        ExecuteTestAtSafepoint("old mark-start fixture", [&] {
         heap.old().mark_start();
+        });
     }
     observed = 0;
     heap.old().concurrent_mark();

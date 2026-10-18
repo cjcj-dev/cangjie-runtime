@@ -23,7 +23,6 @@
 #include "Heap/z/zValue.inline.hpp"
 
 namespace MapleRuntime {
-class ScopedStopTheWorld;
 
 // ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
 class ZRelocateQueue {

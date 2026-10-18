@@ -17,16 +17,19 @@
 #include "CjHeapData.h"
 #include "HeapSnapshotJsonSerializer.h"
 #include "Mutator/VMOperation.h"
+#include "Heap/shared/gcVMOperations.hpp"
 
 namespace MapleRuntime {
 
-class CjHeapDataForIDE::VM_HeapSnapshot final : public VMOperation {
+class CjHeapDataForIDE::VM_HeapSnapshot final : public VM_GC_Operation {
 public:
-    explicit VM_HeapSnapshot(CjHeapDataForIDE& data) : heapData(data) {}
+    explicit VM_HeapSnapshot(CjHeapDataForIDE& data)
+        : VM_GC_Operation(0, false, 0, GC_REASON_HEAP_DUMP), heapData(data) {}
     const char* name() const override { return "serialize heap data"; }
     void doit() override { result = heapData.SerializeAtSafepoint(); }
     bool result = false;
 private:
+    bool skip_operation() const override { return false; }
     CjHeapDataForIDE& heapData;
 };
 

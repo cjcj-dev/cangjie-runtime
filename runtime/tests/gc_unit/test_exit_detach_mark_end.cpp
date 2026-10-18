@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -9,7 +10,7 @@
 //   -> ZMark::Flush(ThreadGCData&) -> StoreBarrierBuffer::Flush ->
 //   ZBarrier::mark_and_remember -> ZMark::MarkObject ->
 //   MarkThreadLocalStacks::Push (Create() ... breakpoint ... Push(entry)).
-// Pause side (product): ScopedStopTheWorld + ZGenerationYoung::mark_end ->
+// Pause side (product): VMThread pause + ZGenerationYoung::mark_end ->
 //   ZMark::End -> ZMark::TryEnd -> HandshakeFlush (world-stopped
 //   branch) -> MarkStripe::PublishStack (CHECK never publish an empty mark
 //   stripe stack).
@@ -138,13 +139,14 @@ void RunArm(Arm arm)
         // (concurrentGCThread.cpp:78); SetThreadType attaches native GC TLS
         // data through ThreadLocal::InitializeCleaner (ThreadLocal.h:111).
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-        ScopedStopTheWorld stw("EXIT_DETACH young mark-end", false);
+        ExecuteTestAtSafepoint("EXIT_DETACH young mark-end", [&] {
         worldStopped.store(true, std::memory_order_release);
         std::fprintf(stderr, "EXIT_DETACH_FLUSH_BEGIN world_stopped=%d\n",
                      MutatorManager::Instance().WorldStopped());
         const bool ended = Heap::GetHeap().young().mark_end();
         std::fprintf(stderr, "EXIT_DETACH_FLUSH_END mark_end=%d\n", ended);
         pauseDone.store(true, std::memory_order_release);
+        });
     });
     const bool stoppedWhileParked = WaitFor([&] { return worldStopped.load(std::memory_order_acquire); }, 3000);
     if (arm == Arm::RaceInWindow) {
@@ -377,10 +379,11 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
         before = buffer->Pending();
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
         {
-            ScopedStopTheWorld stw("EXIT_DETACH attached owner scope", false);
+            ExecuteTestAtSafepoint("EXIT_DETACH attached owner scope", [&] {
             (void)Heap::GetHeap().young().mark_end();
             after = buffer->Pending();
             markedDuringPause = heap.region0()->is_object_marked(from_object(heap.obj0), false);
+            });
         }
     }
     // The pause advanced the young phase past marking; restore it so the

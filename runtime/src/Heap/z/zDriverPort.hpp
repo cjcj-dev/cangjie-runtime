@@ -24,6 +24,7 @@ enum GCReason : uint32_t {
     GC_REASON_HIGH_USAGE,
     GC_REASON_PROACTIVE,
     GC_REASON_DCMD_GC_RUN,
+    GC_REASON_HEAP_DUMP,
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };

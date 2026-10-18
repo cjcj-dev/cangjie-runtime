@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_unittest.hpp"
@@ -202,8 +203,9 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
         // A reader may request a real pause while the remover waits. Native
         // removal must already have left STS or this forms a wait cycle.
         {
-            ScopedStopTheWorld pause("native owner grace period");
+            ExecuteTestAtSafepoint("native owner grace period", [&] {
             pauseDuringGrace = MutatorManager::Instance().WorldStopped();
+            });
         }
         // Enter after the first remover has begun its grace period. This
         // second generation must not delay the first generation's completion.

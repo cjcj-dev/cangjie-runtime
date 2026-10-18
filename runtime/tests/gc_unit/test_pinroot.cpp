@@ -1,3 +1,4 @@
+#include "gc_vm_operation.hpp"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -208,8 +209,9 @@ static void CheckInPlaceRemset()
     MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
     {
-        ScopedStopTheWorld pause("old relocate start", false);
+        ExecuteTestAtSafepoint("old relocate start", [&] {
         heap.old().relocate_start();
+        });
     }
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
@@ -337,8 +339,9 @@ static void CheckMutatorRelocation(bool stopped)
         GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8), 0x909u);
     };
     if (stopped) {
-        ScopedStopTheWorld pause("mutator relocation routing", false);
+        ExecuteTestAtSafepoint("mutator relocation routing", [&] {
         relocate();
+        });
     } else {
         relocate();
     }
@@ -643,8 +646,10 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         return;
     }
     if (requestEntry == 3) {
-        ScopedStopTheWorld operation("K3-non-Z-operation");
-        const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        uintptr_t forwarding = 0;
+        ExecuteTestAtSafepoint("K3-non-Z-operation", [&] {
+            forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        });
         std::fprintf(stderr, "K3_NON_ZOP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
                      before, younger[2], forwarding);
         GC_EXPECT_TRUE(younger[2] != before && younger[2] == forwarding);
@@ -1475,8 +1480,9 @@ GC_COMPONENT_OTHER_VM_TEST(Remset1313, OldRelocateStartParity)
     GenerationSequenceFixture::Advance(young);
     old.set_phase(ZGenerationPhase::MarkComplete);
     {
-        ScopedStopTheWorld pause("old relocate parity", false);
+        ExecuteTestAtSafepoint("old relocate parity", [&] {
         old.relocate_start();
+        });
     }
     const bool phase = old.GcPhase() == ZGenerationPhase::Relocate;
     const bool queue = old.relocate().queue()->is_active();
