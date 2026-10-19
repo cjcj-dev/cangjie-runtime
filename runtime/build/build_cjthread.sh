@@ -63,8 +63,8 @@ elif [ "$1" = "-p" ];then
     else
       cmake -DTARGET="$2" -DCMAKE_BUILD_TYPE="$3" -DLIBTYPE="$4" -DBUILDING_STAGE="$5" $6 -DCMAKE_INSTALL_PREFIX="$7" -DTARGET_ARCH="$8" ${CJTHREAD_PATH}
     fi
-    make -j"$(getconf _NPROCESSORS_ONLN)"
-    make install
+    make -j"${CANGJIE_BUILD_JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-${KKK2_JOBS:-$(getconf _NPROCESSORS_ONLN)}}}"
+    make install -j"${CANGJIE_BUILD_JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-${KKK2_JOBS:-$(getconf _NPROCESSORS_ONLN)}}}"
 fi
 
 exit 0

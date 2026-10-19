@@ -8,6 +8,9 @@
 @echo off
 
 setlocal
+if not defined CANGJIE_BUILD_JOBS set "CANGJIE_BUILD_JOBS=%CMAKE_BUILD_PARALLEL_LEVEL%"
+if not defined CANGJIE_BUILD_JOBS set "CANGJIE_BUILD_JOBS=%KKK2_JOBS%"
+if not defined CANGJIE_BUILD_JOBS set "CANGJIE_BUILD_JOBS=%NUMBER_OF_PROCESSORS%"
 set "platform=windows_x86_64"
 set "CURRENT_PATH=%CD%"
 for %%I in ("%~dp0..") do set "PROJECT_PATH=%%~fI"
@@ -63,7 +66,7 @@ if "%~1" == "-s" (
         if errorlevel 1 goto :cjthread_fail
     )
 
-    mingw32-make -j%NUMBER_OF_PROCESSORS%
+    mingw32-make -j%CANGJIE_BUILD_JOBS%
     if errorlevel 1 goto :cjthread_fail
 )
 
