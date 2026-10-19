@@ -155,7 +155,7 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
    assert.equal(events.length,0,'invalid budget rejected before child work');
   } else {
    assert.equal(r.status,0,'CLI completed');
-   const builds=events.filter(e=>['make','ninja','mingw32-make'].includes(e.name)&&!e.args.includes('--version')&&!e.args.includes('-t')&&!e.args.includes('install'));
+   const builds=events.filter(e=>['make','ninja','mingw32-make'].includes(e.name)&&!e.args.includes('--version')&&!e.args.includes('-t'));
    assert.ok(builds.length>=1,'TARGET_REACHED: build child observed');
    for(const e of builds){
     const j=e.args.find(a=>/^-j\d+$/.test(a))?.slice(2)??e.args[e.args.indexOf('-j')+1];
