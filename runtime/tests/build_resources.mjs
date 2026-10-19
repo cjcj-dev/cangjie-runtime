@@ -28,6 +28,9 @@ files = settings.get('files', {})
 original_open = builtins.open
 def observed_open(path, *args, **kwargs):
     name = os.fspath(path)
+    if name in ('/proc/self/cgroup', '/proc/self/mountinfo') or name.startswith('/resource-cgroup/'):
+        with original_open(os.environ['RESOURCE_READ_TRACE'], 'a') as trace:
+            trace.write(json.dumps(name) + '\n')
     if name in files:
         return io.StringIO(files[name])
     if name in ('/proc/self/cgroup', '/proc/self/mountinfo') or name.startswith('/resource-cgroup/'):
@@ -80,9 +83,34 @@ const v1 = {
  '/resource-cgroup/cpu.cfs_quota_us':'-1',
  '/resource-cgroup/cpu.cfs_period_us':'100000',
 };
+// Inherited mounts omit the namespace-root child name. Deliberately provide
+// a hidden /sub quota: the product must neither guess it nor read the wrong root.
+const namespaceFiles=(kind,root='/..',member='/')=>({
+ '/proc/self/cgroup':kind==='v1'?'5:cpu:'+member+'\n':'0::'+member+'\n',
+ '/proc/self/mountinfo':'155 145 0:32 '+root+' /resource-cgroup rw - '+(kind==='v1'?'cgroup cpu rw,cpu':'cgroup2 cgroup rw')+'\n',
+ ...(kind==='v1'?{
+  '/resource-cgroup/cpu.cfs_quota_us':'-1','/resource-cgroup/cpu.cfs_period_us':'100000',
+  '/resource-cgroup/sub/cpu.cfs_quota_us':'100000','/resource-cgroup/sub/cpu.cfs_period_us':'100000',
+ }:{'/resource-cgroup/cpu.max':'max 100000','/resource-cgroup/sub/cpu.max':'100000 100000'}),
+});
 const cases=[];
 for (const kind of ['runtime','stdlib']) {
  const add=(name,expect,options={})=>cases.push({name:kind+'-'+name,kind,expect,...options});
+ for(const [name,files] of [
+  ['ns-v1-inherited',namespaceFiles('v1')],
+  ['ns-v2-inherited',namespaceFiles('v2','/../..')],
+  ['ns-member-outside',namespaceFiles('v1','/','/../sibling')],
+  ['ns-unmapped-subtree',namespaceFiles('v2','/other','/leaf')],
+ ])add(name,1,{observation:{cpus:8,affinity:8,files},namespaceWarning:true,noQuotaReads:true});
+ add('ns-explicit',8,{jobs:'8',observation:{cpus:2,affinity:2,files:namespaceFiles('v1')},namespaceWarning:false,noProcReads:true});
+ add('ns-parent',8,{env:{CANGJIE_BUILD_JOBS:'8'},observation:{cpus:2,affinity:2,files:namespaceFiles('v2')},namespaceWarning:false,noProcReads:true});
+ add('ns-remounted',1,{observation:{cpus:8,affinity:8,files:{
+  ...namespaceFiles('v1','/'),'/resource-cgroup/cpu.cfs_quota_us':'100000',
+ }},namespaceWarning:false});
+ add('ns-escaped-subtree',2,{observation:{cpus:8,affinity:8,files:{
+  ...v1,'/proc/self/cgroup':'5:cpu,cpuacct:/budget space/leaf\n',
+  '/proc/self/mountinfo':'29 23 0:26 /budget\\040space /resource-cgroup rw - cgroup cgroup rw,cpu,cpuacct\n',
+ }},namespaceWarning:false});
  add('explicit',1,{jobs:'1',env:{CANGJIE_BUILD_JOBS:'bad',CMAKE_BUILD_PARALLEL_LEVEL:'9',KKK2_JOBS:'8'}});
  add('parent-cangjie',3,{env:{CANGJIE_BUILD_JOBS:'3',CMAKE_BUILD_PARALLEL_LEVEL:'2',KKK2_JOBS:'1'}});
  add('parent-cmake',2,{env:{CMAKE_BUILD_PARALLEL_LEVEL:'2',KKK2_JOBS:'1'}});
@@ -114,7 +142,7 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
   if(existsSync(from)){mkdirSync(dirname(to),{recursive:true});copyFileSync(from,to);}
  }
  for(const name of ['cmake','make','ninja','mingw32-make','clang','clang++','gcc','g++','x86_64-w64-mingw32-gcc.exe','x86_64-w64-mingw32-g++.exe'])writeFileSync(join(bin,name),tool,{mode:0o755});
- const env={...process.env,PATH:bin+':'+process.env.PATH,RESOURCE_ROOT:root,RESOURCE_KIND:c.kind,RESOURCE_TRACE:trace,RESOURCE_NINJA:c.ninja??'present',PYTHONDONTWRITEBYTECODE:'1'};
+ const env={...process.env,PATH:bin+':'+process.env.PATH,RESOURCE_ROOT:root,RESOURCE_KIND:c.kind,RESOURCE_TRACE:trace,RESOURCE_READ_TRACE:join(dir,'reads.jsonl'),RESOURCE_NINJA:c.ninja??'present',PYTHONDONTWRITEBYTECODE:'1'};
  for(const k of ['CANGJIE_BUILD_JOBS','CMAKE_BUILD_PARALLEL_LEVEL','KKK2_JOBS','MAKEFLAGS','MFLAGS'])delete env[k];
  Object.assign(env,c.env??{});
  env.RESOURCE_OBSERVATIONS=JSON.stringify({system:c.system??'Linux',...c.observation});
@@ -146,6 +174,7 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
  const r=run();
  if(c.resume && r.status===0)run();
  const events=existsSync(trace)?readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[];
+ const reads=existsSync(env.RESOURCE_READ_TRACE)?readFileSync(env.RESOURCE_READ_TRACE,'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[];
  let error=null;
  try {
   assert.equal(r.error,undefined,'executor completed');
@@ -170,6 +199,9 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
     assert.ok(builds.some(e=>e.cwd.includes('cjthread_build')),'real CJThread script reached');
     assert.ok(builds.some(e=>e.args.includes('preinstall')),'preinstall reached');
    }
+   if(c.namespaceWarning!==undefined)assert.equal(r.stderr.includes('cannot uniquely map CPU cgroup namespace'),c.namespaceWarning,'namespace diagnostic');
+   if(c.noQuotaReads)assert.ok(!reads.some(x=>x.startsWith('/resource-cgroup/')),'unmapped namespace must not read a guessed cgroup');
+   if(c.noProcReads)assert.equal(reads.length,0,'explicit budget bypasses default CPU detection');
    if(c.resume){assert.equal(runs[1].rc,0);assert.equal(configured.length,1,'resume skips configure');assert.equal(builds.length,2,'resume still forwards jobs');}
    if(c.nativeMake){
     const flags=readFileSync(env.RESOURCE_NATIVE_FLAGS,'utf8').trim().split('\n');
@@ -179,7 +211,7 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
   }
  } catch(e){error=e.message;}
  const childResults=existsSync(trace+'.rc')?readFileSync(trace+'.rc','utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[];
- const record={name:c.name,expect:c.expect,assertionReached:!c.reject&&events.some(e=>['make','ninja','mingw32-make'].includes(e.name)&&!e.args.includes('--version')),verdict:error?'FAIL':'PASS',error,runs,events,childResults};
+ const record={name:c.name,expect:c.expect,assertionReached:!c.reject&&events.some(e=>['make','ninja','mingw32-make'].includes(e.name)&&!e.args.includes('--version')),verdict:error?'FAIL':'PASS',error,runs,events,reads,childResults};
  writeFileSync(join(dir,'result.json'),JSON.stringify(record,null,2)+'\n');
  results.push({...record,runs:record.runs.map(r=>({rc:r.rc,signal:r.signal,error:r.error})),events:undefined});
  console.log(JSON.stringify(results.at(-1)));

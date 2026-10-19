@@ -58,10 +58,20 @@ def effective_cpu_count():
                     if kind == "cgroup" and ("cpu" not in controllers.split(",") or
                                               "cpu" not in mount[separator + 3].split(",")):
                         continue
-                    relative = os.path.relpath(group_path, mount_root)
-                    if relative == ".." or relative.startswith("../"):
+                    # Namespace '..' components denote hidden ancestors, not
+                    # filesystem traversal. These interfaces omit the child names
+                    # needed to map an inherited mount back to our current group.
+                    root_parts = [part for part in mount_root.split("/") if part]
+                    group_parts = [part for part in group_path.split("/") if part]
+                    if (".." in root_parts or ".." in group_parts or
+                            group_parts[:len(root_parts)] != root_parts):
+                        print("Warning: cannot uniquely map CPU cgroup namespace "
+                              f"membership {group_path!r} to mount root {mount_root!r}; "
+                              "defaulting to 1 job. Set --jobs or an explicit build budget "
+                              "to override.", file=sys.stderr)
+                        limits.append(1)
                         continue
-                    directory = os.path.normpath(os.path.join(mount_path, relative))
+                    directory = os.path.join(mount_path, *group_parts[len(root_parts):])
                     while True:
                         try:
                             if kind == "cgroup2":
