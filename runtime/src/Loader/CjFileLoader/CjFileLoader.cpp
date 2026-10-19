@@ -29,6 +29,21 @@
 #include "TypeInfoManager.h"
 #include "UnwindStack/GcStackInfo.h"
 namespace MapleRuntime {
+namespace {
+// A loading thread can recursively create generic types before its FE table
+// is ready. Keep their name-directory entries private until catalog commit.
+// TypeInfoManager still owns canonical identity and per-type publication.
+struct RegistrationRecords {
+    CJFileLoader* loader;
+    BaseFile* file;
+    std::vector<TypeInfo*> types;
+    RegistrationRecords* previous;
+    static thread_local RegistrationRecords* current;
+    RegistrationRecords(CJFileLoader* owner, BaseFile* image) : loader(owner), file(image), previous(current) { current = this; }
+    ~RegistrationRecords() { current = previous; }
+};
+thread_local RegistrationRecords* RegistrationRecords::current = nullptr;
+}
 
 void CJFileLoader::Fini()
 {
@@ -38,18 +53,72 @@ void CJFileLoader::Fini()
 void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
 {
     ScopedEntryTrace trace("CJRT_RegisterLoadFile");
+    ElfUnloadQuiescence::ReadScope reader;
     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
     if (file == nullptr) {
         return;
     }
+    // loadedImgsMtx serializes image registration. Parse the file under the
+    // catalog lock, but do not publish its package/extension discovery tables
+    // until FE registration and all generated callbacks have completed.
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        file->RegisterFile();
+    }
+    RegistrationRecords records(this, file);
+    RegisterTypeInfoCreatedByFE(file);
+    // Direct-target extensions can allocate MTable state and register types.
+    // Prepare them without catalogMutex, just like FE enum/generic callbacks.
+    std::vector<ExtensionData*> extensions;
+    Uptr ref = file->GetOuterTypeExtensionsBase();
+    const Uptr end = ref + file->GetOuterTypeExtensionsSize();
+    while (ref < end) {
+        I32 offset = *reinterpret_cast<I32*>(ref);
+#ifdef __APPLE__
+        auto* ed = reinterpret_cast<ExtensionData*>(ref - offset);
+#else
+        auto* ed = reinterpret_cast<ExtensionData*>(ref + offset);
+#endif
+        ref += sizeof(I32);
+        extensions.push_back(ed);
+        if (ed->TargetIsTypeInfo()) {
+            auto& manager = TypeInfoManager::GetTypeInfoManager();
+            TypeInfo* itf = ed->GetInterfaceTypeInfo();
+            TypeInfo* ti = reinterpret_cast<TypeInfo*>(ed->GetTargetType());
+            manager.AddTypeInfo(itf);
+            manager.AddTypeInfo(ti);
+            ti->TryInitMTable();
+            ti->AddMTable(itf, ed);
+        }
+    }
+    // Publish the complete catalog in one transaction. None of these operations
+    // acquires tiMutex or calls generated code. The reader above keeps both the
+    // BaseFile and image metadata alive across preparation and publication.
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    file->RegisterFile();
 #ifndef __arm__
     AddPackageInfos(file);
 #endif
     RegisterTypeExt(file);
-    RegisterTypeInfoCreatedByFE(file);
-    RegisterOuterTypeExtensions(file);
+    for (auto* ed : extensions) {
+        if (!ed->TargetIsTypeInfo()) {
+            extensionDatas[file].emplace(reinterpret_cast<TypeTemplate*>(ed->GetTargetType()), ed);
+        }
+    }
+    staticGIs.clear();
+    Uptr gi = file->GetStaticGIBase();
+    const Uptr giEnd = gi + file->GetStaticGISize();
+    while (gi < giEnd) {
+        I32 offset = *reinterpret_cast<I32*>(gi);
+#ifdef __APPLE__
+        staticGIs.push_back(reinterpret_cast<TypeInfo*>(gi - offset));
+#else
+        staticGIs.push_back(reinterpret_cast<TypeInfo*>(gi + offset));
+#endif
+        gi += sizeof(I32);
+    }
+    for (auto* ti : records.types) {
+        typeInfoCache.insert({ ti->GetName(), ti });
+    }
     file->SetRegistered(true);
 }
 
@@ -175,23 +244,33 @@ void CJFileLoader::GetSubPackages(PackageInfo* packageInfo, std::vector<PackageI
 void CJFileLoader::VisitExtensionData(
     TypeInfo* ti, const std::function<bool(ExtensionData* ed)>& f, TypeTemplate* tt) const
 {
+    // Keep the image metadata alive until the last callback returns. Unload
+    // unlinks the catalog first, then drains these readers before reclaiming it.
     ElfUnloadQuiescence::ReadScope reader;
-    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    // Both MTable initialization and the callback can acquire tiMutex. Never
+    // do either under catalogMutex: AddTypeInfo holds tiMutex while recording
+    // the newly registered type in this loader's catalog.
     ti->TryInitMTable();
-    CHECK(loadedFiles.size() >= extensionDatas.size());
-    for (auto baseFile : loadedFiles) {
-        auto it1 = extensionDatas.find(baseFile);
-        if (it1 == extensionDatas.end()) {
-            continue;
+    std::vector<ExtensionData*> snapshot;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        CHECK(loadedFiles.size() >= extensionDatas.size());
+        for (auto baseFile : loadedFiles) {
+            auto extensions = extensionDatas.find(baseFile);
+            if (extensions == extensionDatas.end()) {
+                continue;
+            }
+            auto range = extensions->second.equal_range(tt);
+            for (auto it = range.first; it != range.second; ++it) {
+                snapshot.push_back(it->second);
+            }
         }
-        auto& extensions = it1->second;
-        auto range = extensions.equal_range(tt);
-        if (range.first == range.second) {
-            continue;
-        }
-        for (auto it2 = range.first; it2 != range.second; ++it2) {
-            f(it2->second);
-        }
+    }
+    // Preserve file/equal_range order and the existing visit-all contract.
+    // A callback can recursively create types or visit this catalog without
+    // retaining iterators into a container it may itself change.
+    for (auto extension : snapshot) {
+        f(extension);
     }
 }
 
@@ -225,6 +304,7 @@ void CJFileLoader::ParseEnumCtor(TypeInfo* ti)
 
 void CJFileLoader::RegisterTypeExt(BaseFile* baseFile)
 {
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     Uptr typeExtBase = baseFile->GetTypeExtBase();
     Uptr typeExtEnd = typeExtBase + baseFile->GetTypeExtTotalSize();
     while (typeExtBase < typeExtEnd) {
@@ -261,7 +341,6 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
 
     Uptr staticGIBase = baseFile->GetStaticGIBase();
     Uptr staticGIEnd = staticGIBase + baseFile->GetStaticGISize();
-    staticGIs.clear();
     while (staticGIBase < staticGIEnd) {
         I32 offset = *reinterpret_cast<I32*>(staticGIBase);
 #if defined(__APPLE__)
@@ -270,7 +349,6 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
         TypeInfo* ti = reinterpret_cast<TypeInfo*>(staticGIBase + offset);
 #endif
         staticGIBase += sizeof(I32);
-        staticGIs.push_back(ti);
         if (ti->IsEnum() || ti->IsTempEnum()) {
             continue;
         } else if (ti->IsGenericTypeInfo() && ti->ReflectInfoIsNull() && !ti->GetSourceGeneric()->ReflectInfoIsNull()) {
@@ -304,6 +382,7 @@ void CJFileLoader::RegisterOuterTypeExtensions(BaseFile* baseFile)
             continue;
         }
         TypeTemplate* tt = reinterpret_cast<TypeTemplate*>(extensionData->GetTargetType());
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
         extensionDatas[baseFile].emplace(tt, extensionData);
     }
 }
@@ -580,6 +659,11 @@ TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemp
 
 void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 {
+    auto* records = RegistrationRecords::current;
+    if (records != nullptr && records->loader == this) {
+        records->types.push_back(ti);
+        return;
+    }
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     typeInfoCache.insert({ ti->GetName(), ti });
@@ -996,7 +1080,21 @@ TypeExt* CJFileLoader::GetTypeExt(void* type)
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeExts.find(type);
-    return it == typeExts.end() ? nullptr : it->second;
+    if (it != typeExts.end()) { return it->second; }
+    // AddTypeInfo -> NeedRefresh must see this image's TypeExt before its
+    // catalog is public. Only the registering thread can see this staging
+    // view; immutable metadata remains pinned by RegisterLoadFile's reader.
+    for (auto* records = RegistrationRecords::current; records != nullptr; records = records->previous) {
+        if (records->loader != this) { continue; }
+        Uptr cursor = records->file->GetTypeExtBase();
+        const Uptr end = cursor + records->file->GetTypeExtTotalSize();
+        while (cursor < end) {
+            auto* ext = reinterpret_cast<TypeExt*>(cursor);
+            if (reinterpret_cast<void*>(ext->ti) == type) { return ext; }
+            cursor += MRT_ALIGN(ext->size, 16u);
+        }
+    }
+    return nullptr;
 }
 
 } // namespace MapleRuntime

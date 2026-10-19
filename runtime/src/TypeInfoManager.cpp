@@ -918,6 +918,7 @@ void TypeInfoManager::FillReflectInfo(TypeTemplate *tt, TypeInfo *ti)
 
 void TypeInfoManager::InitAnyAndObjectType()
 {
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
     if (anyTi == nullptr) {
         auto it = nonGenericTypeInfos.find(CString("std.core:Any").Str());
         if (it != nonGenericTypeInfos.end()) {

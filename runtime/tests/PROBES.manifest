@@ -132,3 +132,4 @@ reference_startup_control.cj               manual     same SDK as startup produc
 reference_startup_dependency              manual     static dependency package for reference_startup_product.cj; initializes collection and finalizable global before main; #1356
 
 return_abi                              manual     qualified private SDK compiles main.cj + native.c; Linux x64 N2C result/pending assertions, see return_abi/README.md
+typeinfo_catalog                         manual     native product runtime/boundscheck and generated headers; CMake/CTest target cj_typeinfo_catalog_unit, also registered by MRT_GC_UNIT_TESTS; deterministic registration/callback lock cycle and unload reader lifetime

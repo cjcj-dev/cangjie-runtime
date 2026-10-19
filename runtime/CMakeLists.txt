@@ -1129,6 +1129,7 @@ if (MRT_GC_UNIT_TESTS)
     target_compile_definitions(Mutator PRIVATE MRT_GC_UNIT_TESTS=1)
     target_compile_definitions(Heap PRIVATE MRT_GC_UNIT_TESTS=1)
     add_subdirectory(tests/gc_unit)
+    add_subdirectory(tests/typeinfo_catalog)
 endif()
 
 # All directory, source and target inputs now exist, including unit hooks.
