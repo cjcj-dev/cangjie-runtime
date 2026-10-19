@@ -18,6 +18,95 @@ import argparse
 # Get the directory where the script is located as the execution directory
 script_path = os.path.dirname(os.path.abspath(__file__))
 
+
+def nonnegative_jobs(value):
+    try:
+        jobs = int(value)
+        if jobs < 0:
+            raise ValueError
+        return jobs
+    except ValueError:
+        raise argparse.ArgumentTypeError("jobs must be a nonnegative integer (0 means default)")
+
+
+def effective_cpu_count():
+    """CPU availability, including affinity and visible ancestor cgroup quotas."""
+    count_fn = getattr(os, "process_cpu_count", os.cpu_count)
+    limits = [count_fn() or 1]
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            limits.append(len(os.sched_getaffinity(0)) or 1)
+        except OSError:
+            pass
+    if sys.platform == "linux":
+        try:
+            with open("/proc/self/cgroup") as stream:
+                groups = [line.strip().split(":", 2) for line in stream]
+            with open("/proc/self/mountinfo") as stream:
+                mounts = [line.split() for line in stream]
+            for mount in mounts:
+                separator = mount.index("-")
+                kind = mount[separator + 1]
+                if kind not in ("cgroup", "cgroup2"):
+                    continue
+                # mountinfo encodes spaces, tabs, newlines and backslashes in octal.
+                decode = lambda text: re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), text)
+                mount_root, mount_path = map(decode, mount[3:5])
+                for _, controllers, group_path in groups:
+                    if kind == "cgroup2" and controllers:
+                        continue
+                    if kind == "cgroup" and ("cpu" not in controllers.split(",") or
+                                              "cpu" not in mount[separator + 3].split(",")):
+                        continue
+                    relative = os.path.relpath(group_path, mount_root)
+                    if relative == ".." or relative.startswith("../"):
+                        continue
+                    directory = os.path.normpath(os.path.join(mount_path, relative))
+                    while True:
+                        try:
+                            if kind == "cgroup2":
+                                with open(os.path.join(directory, "cpu.max")) as stream:
+                                    quota, period = stream.read().split()
+                            else:
+                                with open(os.path.join(directory, "cpu.cfs_quota_us")) as stream:
+                                    quota = stream.read().strip()
+                                with open(os.path.join(directory, "cpu.cfs_period_us")) as stream:
+                                    period = stream.read().strip()
+                            if quota != "max" and int(quota) > 0 and int(period) > 0:
+                                limits.append(max(1, int(quota) // int(period)))
+                        except (OSError, ValueError):
+                            pass
+                        if directory == mount_path:
+                            break
+                        directory = os.path.dirname(directory)
+        except (OSError, ValueError):
+            pass
+    return max(1, min(limits))
+
+
+def resolve_build_jobs(jobs):
+    """Explicit CLI wins; otherwise consume the first declared parent budget."""
+    if jobs > 0:
+        return jobs
+    for name in ("CANGJIE_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL", "KKK2_JOBS"):
+        value = os.environ.get(name)
+        if value:
+            try:
+                budget = int(value)
+                if budget > 0:
+                    return budget
+            except ValueError:
+                pass
+            raise ValueError(f"{name} must be a positive integer")
+    return effective_cpu_count()
+
+
+def build_environment(jobs):
+    env = os.environ.copy()
+    for name in ("CANGJIE_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL", "KKK2_JOBS"):
+        env[name] = str(jobs)
+    return env
+
 def do_clean(args):
     # Remove specified directories
     dirs_to_remove = ["output", "CMakebuild", "build/cjthread_build"]
@@ -335,19 +424,20 @@ def do_build(args):
         sys.exit(1)
 
 def build_target(cmake_command, args=None):
-    build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", str(min(64, os.cpu_count() or 1)))
+    build_jobs = resolve_build_jobs(args.jobs if args else 0)
+    env = build_environment(build_jobs)
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:
-        subprocess.run(cmake_command, check=True)
+        subprocess.run(cmake_command, check=True, env=env)
 
         build_dir = os.path.join(script_path, "CMakebuild")
         os.makedirs(build_dir, exist_ok=True)
         os.chdir(build_dir)
 
-        subprocess.run(["make", "cangjie-runtime", f"-j{build_jobs}", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "cangjie-runtime", f"-j{build_jobs}", "VERBOSE=1"], check=True, env=env)
 
-        subprocess.run(["make", "preinstall", f"-j{build_jobs}", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "preinstall", f"-j{build_jobs}", "VERBOSE=1"], check=True, env=env)
 
         print("Build and preinstall completed successfully.")
     except subprocess.CalledProcessError as e:
@@ -384,6 +474,10 @@ if __name__ == "__main__":
 
     b = sub.add_parser("build", help="compile the project")
     b.set_defaults(func=do_build)
+    b.add_argument(
+        "--jobs", "-j", type=nonnegative_jobs, default=0,
+        help="run N jobs in parallel (0 uses parent budget or effective CPUs)"
+    )
     b.add_argument(
         "--target",
         choices=[

@@ -12,7 +12,6 @@
 import argparse
 import logging
 import json
-import multiprocessing
 import os
 import platform
 import shutil
@@ -36,8 +35,6 @@ LOG_FILE = os.path.join(LOG_DIR, "cangjie.log")
 IS_WINDOWS = platform.system() == "Windows"
 IS_MACOS = platform.system() == "Darwin"
 IS_ARM = platform.uname().processor in ["aarch64", "arm", "arm64"]
-# Wait for the version of aarch64 libcore to be ready.
-MAKE_JOBS = multiprocessing.cpu_count() + 2
 
 TARGET_DICTIONARY = {
     "native": None,
@@ -57,6 +54,95 @@ TARGET_DICTIONARY = {
     "android31-x86_64": "x86_64-linux-android31",
     "android26-x86_64": "x86_64-linux-android26"
 }
+
+
+def nonnegative_jobs(value):
+    try:
+        jobs = int(value)
+        if jobs < 0:
+            raise ValueError
+        return jobs
+    except ValueError:
+        raise argparse.ArgumentTypeError("jobs must be a nonnegative integer (0 means default)")
+
+
+def effective_cpu_count():
+    """CPU availability, including affinity and visible ancestor cgroup quotas."""
+    count_fn = getattr(os, "process_cpu_count", os.cpu_count)
+    limits = [count_fn() or 1]
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            limits.append(len(os.sched_getaffinity(0)) or 1)
+        except OSError:
+            pass
+    if sys.platform == "linux":
+        try:
+            with open("/proc/self/cgroup") as stream:
+                groups = [line.strip().split(":", 2) for line in stream]
+            with open("/proc/self/mountinfo") as stream:
+                mounts = [line.split() for line in stream]
+            for mount in mounts:
+                separator = mount.index("-")
+                kind = mount[separator + 1]
+                if kind not in ("cgroup", "cgroup2"):
+                    continue
+                # mountinfo encodes spaces, tabs, newlines and backslashes in octal.
+                decode = lambda text: re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), text)
+                mount_root, mount_path = map(decode, mount[3:5])
+                for _, controllers, group_path in groups:
+                    if kind == "cgroup2" and controllers:
+                        continue
+                    if kind == "cgroup" and ("cpu" not in controllers.split(",") or
+                                              "cpu" not in mount[separator + 3].split(",")):
+                        continue
+                    relative = os.path.relpath(group_path, mount_root)
+                    if relative == ".." or relative.startswith("../"):
+                        continue
+                    directory = os.path.normpath(os.path.join(mount_path, relative))
+                    while True:
+                        try:
+                            if kind == "cgroup2":
+                                with open(os.path.join(directory, "cpu.max")) as stream:
+                                    quota, period = stream.read().split()
+                            else:
+                                with open(os.path.join(directory, "cpu.cfs_quota_us")) as stream:
+                                    quota = stream.read().strip()
+                                with open(os.path.join(directory, "cpu.cfs_period_us")) as stream:
+                                    period = stream.read().strip()
+                            if quota != "max" and int(quota) > 0 and int(period) > 0:
+                                limits.append(max(1, int(quota) // int(period)))
+                        except (OSError, ValueError):
+                            pass
+                        if directory == mount_path:
+                            break
+                        directory = os.path.dirname(directory)
+        except (OSError, ValueError):
+            pass
+    return max(1, min(limits))
+
+
+def resolve_build_jobs(jobs):
+    """Explicit CLI wins; otherwise consume the first declared parent budget."""
+    if jobs > 0:
+        return jobs
+    for name in ("CANGJIE_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL", "KKK2_JOBS"):
+        value = os.environ.get(name)
+        if value:
+            try:
+                budget = int(value)
+                if budget > 0:
+                    return budget
+            except ValueError:
+                pass
+            raise ValueError(f"{name} must be a positive integer")
+    return effective_cpu_count()
+
+
+def build_environment(jobs):
+    env = os.environ.copy()
+    for name in ("CANGJIE_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL", "KKK2_JOBS"):
+        env[name] = str(jobs)
+    return env
 
 def resolve_path(path):
     if os.path.isabs(path):
@@ -153,6 +239,8 @@ def generate_cmake_defs(args):
 
 def build(args):
 
+    jobs = resolve_build_jobs(args.jobs)
+
     if args.target:
         args.target = TARGET_DICTIONARY[args.target]
 
@@ -179,6 +267,7 @@ def build(args):
     if IS_MACOS:
         os.environ["ZERO_AR_DATE"] = "1"
         
+    env = build_environment(jobs)
     if IS_WINDOWS:
         # For Windows, try Ninja first, otherwise use Make instead.
         ninja_valid = True
@@ -192,17 +281,15 @@ def build(args):
         if ninja_valid:
             generator = "Ninja"
             build_cmd = ["ninja"]
-            if args.jobs > 0:
-                build_cmd.extend(["-j", str(args.jobs)])
+            build_cmd.extend(["-j", str(jobs)])
         else:
             generator = "MinGW Makefiles"
-            build_cmd = ["mingw32-make", "-j" + str(MAKE_JOBS)]
+            build_cmd = ["mingw32-make", "-j" + str(jobs)]
     else:
         # For Linux, just use Ninja.
         generator = "Ninja"
         build_cmd = ["ninja"]
-        if args.jobs > 0:
-            build_cmd.extend(["-j", str(args.jobs)])
+        build_cmd.extend(["-j", str(jobs)])
 
     cmake_command = ["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args)
 
@@ -218,10 +305,10 @@ def build(args):
 
     if not os.path.exists(cmake_build_dir):
         os.makedirs(cmake_build_dir)
-        output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE)
+        output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE, env=env)
         log_output(output)
 
-    output = subprocess.Popen(build_cmd, cwd=cmake_build_dir, stdout=PIPE)
+    output = subprocess.Popen(build_cmd, cwd=cmake_build_dir, stdout=PIPE, env=env)
     log_output(output)
 
     if output.returncode != 0:
@@ -387,7 +474,8 @@ def main():
         help="select target build type",
     )
     parser_build.add_argument(
-        "--jobs","-j" , dest="jobs", type=int, default=0, help="run N jobs in parallel (0 means default)"
+        "--jobs","-j" , dest="jobs", type=nonnegative_jobs, default=0,
+        help="run N jobs in parallel (0 uses parent budget or effective CPUs)"
     )
     parser_build.add_argument(
         "--hwasan", action="store_true", help="build with hardware asan"
