@@ -106,9 +106,34 @@ void GrowBody()
     g_result.after = CJ_CJThreadStackSizeGetByCJThrd(g_thread);
 }
 
+class Fa0Runtime final : public Runtime {
+public:
+    explicit Fa0Runtime(size_t heapUnits)
+    {
+        CreateStandaloneHeap(heapUnits);
+        runtime = this;
+        mutatorManager = &manager;
+        concurrencyModel = &concurrency;
+        manager.Init();
+        concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
+    }
+    ~Fa0Runtime() override
+    {
+        Heap::GetHeap().StopGCWork();
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    MutatorManager manager;
+    Concurrency concurrency;
+};
+
 void RunArm(GrowArm arm)
 {
-    B09RuntimeFixture runtime(8);
+    Fa0Runtime runtime(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     CJThreadAttr attr{};
