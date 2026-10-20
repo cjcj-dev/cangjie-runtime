@@ -11,6 +11,7 @@
 #include "schedule.h"
 #include "Exception/ExceptionCApi.h"
 #include "Mutator/Mutator.inline.h"
+#include "Heap/z/zStackWatermark.hpp"
 #ifdef _WIN64
 #include "UnwindWin.h"
 #endif
@@ -51,7 +52,8 @@ extern "C" void MRT_RestoreTopManagedContextFromN2CStub(FrameAddress* fa)
 
 extern "C" void MRT_SaveTopManagedContextToN2CStub(FrameAddress* fa)
 {
-    UnwindContext& uwContext = Mutator::GetMutator()->GetUnwindContext();
+    Mutator* mutator = Mutator::GetMutator();
+    UnwindContext& uwContext = mutator->GetUnwindContext();
     N2CSlotData* slotData = N2CFrame::GetSlotData(fa);
     const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
     const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
@@ -61,6 +63,11 @@ extern "C" void MRT_SaveTopManagedContextToN2CStub(FrameAddress* fa)
     // By default, all caller functions that pass through N2CStub are risky types
     // and need to use the data on the slot to unwind.
     slotData->status = uwContext.GetUnwindContextStatus();
+    // DoLeave calls on_safepoint only when the poll bit is set (Mutator.h:202,
+    // MutatorManager.cpp:112). CancelSuspensionAfterSync does not clear that bit,
+    // but a later ProcessSafepoint disarms it. Start this epoch on the top that
+    // is still published, then clear. An already-started epoch returns immediately.
+    StackWatermarkSet::on_safepoint(*mutator);
     uwContext.GoIntoManagedCode();
 }
 

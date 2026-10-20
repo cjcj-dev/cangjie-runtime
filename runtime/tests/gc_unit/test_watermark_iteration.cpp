@@ -574,6 +574,78 @@ GC_COMPONENT_TEST(WatermarkIteration, UnpublishedManagedFinishVisitsNativeHead)
 }
 
 extern "C" void MRT_DeleteC2NContext(ThreadLocalData* tlData);
+extern "C" void MRT_SaveTopManagedContextToN2CStub(FrameAddress* fa);
+
+// Cut: delete StackWatermarkSet::on_safepoint in MRT_SaveTopManagedContextToN2CStub.
+// SaveStartsEpochBeforeClear then sees processing_started stay false. The empty
+// test is the control and must stay green: an empty top still does not pack.
+GC_COMPONENT_TEST(WatermarkIteration, SaveStartsEpochBeforeClear)
+{
+    FrameAddress past {};
+    past.callerFrameAddress = nullptr;
+    past.returnAddress = NativeIp();
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = &past;
+    anchor.returnAddress = NativeIp();
+    FrameAddress young {};
+    young.callerFrameAddress = &anchor;
+    young.returnAddress = NativeIp();
+
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(&young);
+    context.frameInfo.mFrame.SetIP(NativeIp());
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    ThreadLocal::GetThreadLocalData()->SetPollWord(ThreadLocalData::DisarmedPollWord);
+
+    alignas(N2CSlotData) unsigned char stubMem[sizeof(N2CSlotData) + sizeof(FrameAddress)] = {};
+    FrameAddress* stubFa = reinterpret_cast<FrameAddress*>(stubMem + sizeof(N2CSlotData));
+    uintptr_t published = 0;
+    ArmStaleEpoch(published);
+    const bool unstarted = !owner.GetStackWatermark().processing_started();
+    MRT_SaveTopManagedContextToN2CStub(stubFa);
+    const bool started = owner.GetStackWatermark().processing_started();
+    const bool cleared = context.frameInfo.mFrame.GetFA() == nullptr &&
+        context.frameInfo.mFrame.GetIP() == nullptr;
+    N2CSlotData* slot = N2CFrame::GetSlotData(stubFa);
+    const bool stashed = slot->fa == &young && slot->pc == NativeIp() &&
+        slot->status == UnwindContextStatus::RELIABLE;
+    ::g_cjStoreGoodMask = published;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(started);
+    GC_EXPECT_TRUE(unstarted);
+    GC_EXPECT_TRUE(cleared);
+    GC_EXPECT_TRUE(stashed);
+}
+
+GC_COMPONENT_TEST(WatermarkIteration, SaveOfEmptyLeavesEpochUnstarted)
+{
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    owner.GetUnwindContext().GoIntoManagedCode();
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+    owner.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    ThreadLocal::GetThreadLocalData()->SetPollWord(ThreadLocalData::DisarmedPollWord);
+
+    alignas(N2CSlotData) unsigned char stubMem[sizeof(N2CSlotData) + sizeof(FrameAddress)] = {};
+    FrameAddress* stubFa = reinterpret_cast<FrameAddress*>(stubMem + sizeof(N2CSlotData));
+    uintptr_t published = 0;
+    const uint32_t packedBefore = owner.GetStackWatermark().PackedState();
+    ArmStaleEpoch(published);
+    MRT_SaveTopManagedContextToN2CStub(stubFa);
+    const bool stayed = !owner.GetStackWatermark().processing_started() &&
+        owner.GetStackWatermark().PackedState() == packedBefore &&
+        owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr;
+    ::g_cjStoreGoodMask = published;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(stayed);
+}
 
 // The stub's own frame must not stay published, and a caller that is still
 // live must. No caller link still clears both ends.
