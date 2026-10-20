@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/StackType.h"
 
@@ -95,6 +96,7 @@ void UnwindContext::GoIntoManagedCode()
 
 void UnwindContext::GoIntoNativeCode(const uint32_t* pc, void* fa)
 {
+    CHECK_DETAIL(pc != nullptr && fa != nullptr, "native transition has no walkable top");
     frameInfo.mFrame.SetIP(pc);
     frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(fa));
     status = UnwindContextStatus::RISKY;

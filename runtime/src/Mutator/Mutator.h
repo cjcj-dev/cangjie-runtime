@@ -208,6 +208,12 @@ public:
         DoLeaveSaferegion(preprocess);
     }
 
+    // Both ends null is GoIntoManagedCode. Exactly one null is not a frame.
+    __attribute__((always_inline)) inline void RejectInconsistentUnwindTop();
+    // interfaceSupport.inline.hpp:120-123 publishes a walkable anchor before
+    // a thread becomes blocked or native. An unpublished managed top is not
+    // proof that the stack has no roots, so the safe transition fills it.
+    __attribute__((always_inline)) inline void PublishUnpublishedManagedTop();
     // If current mutator is not in saferegion, enter and return true
     // If current mutator has been in saferegion, return false
     __attribute__((always_inline)) inline bool EnterSaferegion(bool updateUnwindContext) noexcept;
@@ -417,17 +423,25 @@ public:
     void PreparedToPark(void* pc, void* fa)
     {
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+            if (uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) {
+                CHECK_DETAIL(uwContext.frameInfo.mFrame.GetFA() != nullptr &&
+                    uwContext.frameInfo.mFrame.GetIP() != nullptr, "native transition has no walkable top");
+            } else {
+                RejectInconsistentUnwindTop();
+            }
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
             handshakeState.enter_safe();
             return;
         }
+        CHECK_DETAIL((pc == nullptr) == (fa == nullptr),
+            "unwind top is missing only the frame address or only the instruction");
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY)) {
+        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY) && pc != nullptr) {
             uwContext.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(pc));
             uwContext.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(fa));
         }
 #elif defined(_WIN64)
-        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY)) {
+        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY) && pc != nullptr) {
             Uptr rip = reinterpret_cast<Uptr>(pc);
             Uptr rsp = reinterpret_cast<Uptr>(fa);
             Runtime& runtime = Runtime::Current();

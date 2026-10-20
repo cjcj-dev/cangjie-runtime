@@ -9,8 +9,29 @@
 #define MRT_MUTATOR_INLINE_H
 
 #include "MutatorManager.h"
+#include "Base/Log.h"
 
 namespace MapleRuntime {
+inline void Mutator::RejectInconsistentUnwindTop()
+{
+    const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
+    const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
+}
+
+inline void Mutator::PublishUnpublishedManagedTop()
+{
+    RejectInconsistentUnwindTop();
+    if (uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) {
+        CHECK_DETAIL(uwContext.frameInfo.mFrame.GetFA() != nullptr, "native transition has no walkable top");
+        return;
+    }
+    if (!IsManagedContext() || uwContext.frameInfo.mFrame.GetFA() != nullptr) {
+        return;
+    }
+    UpdateUnwindContext();
+}
+
 inline void Mutator::DoEnterSaferegion()
 {
     CheckSafepointAllowed();
@@ -21,10 +42,12 @@ inline void Mutator::DoEnterSaferegion()
 inline bool Mutator::EnterSaferegion(bool updateUnwindContext) noexcept
 {
     if (LIKELY(!InSaferegion())) {
-        // When the status is risky, no update is required. Because
-        // valid information is already stored in the context.
+        // RISKY already stored the native frame. A cleared managed top has not.
         if (updateUnwindContext && uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
+            RejectInconsistentUnwindTop();
             UpdateUnwindContext();
+        } else {
+            PublishUnpublishedManagedTop();
         }
         DoEnterSaferegion();
         return true;

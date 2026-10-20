@@ -187,6 +187,8 @@ void MutatorManager::TransitMutatorToExit()
     PackageInitTable::OwnerExit();
     // Complete this identity's phase processing before detaching its roots.
     // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
+    // GoIntoManagedCode leaves both ends null while the anchor and callers remain.
+    mutator->PublishUnpublishedManagedTop();
     StackWatermarkSet::on_safepoint(*mutator);
     // threads.cpp:1089-1104 (Threads::remove): the final GC publication and
     // the list removal share the Threads_lock critical section held by the

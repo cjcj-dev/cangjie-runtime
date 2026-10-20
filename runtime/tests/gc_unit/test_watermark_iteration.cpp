@@ -330,14 +330,19 @@ GC_COMPONENT_TEST(WatermarkIteration, BrokenChainDoesNotCompleteEpoch)
     cleared.SetManagedContext(true);
     cleared.GetUnwindContext().GoIntoManagedCode();
     cleared.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    const uint32_t packedBefore = cleared.GetStackWatermark().PackedState();
     ArmStaleEpoch(published);
     StackWatermarkSet::on_safepoint(cleared);
-    const bool noFrameDone = cleared.GetStackWatermark().IsDone();
+    const bool unpublishedStarted = cleared.GetStackWatermark().processing_started();
+    const bool unpublishedDone = cleared.GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    const bool unpublishedUntouched = cleared.GetStackWatermark().PackedState() == packedBefore;
     ::g_cjStoreGoodMask = published;
     cleared.SetManagedContext(false);
     legal.SetManagedContext(false);
     owner.SetManagedContext(false);
-    GC_EXPECT_TRUE(noFrameDone);
+    GC_EXPECT_TRUE(!unpublishedStarted);
+    GC_EXPECT_TRUE(!unpublishedDone);
+    GC_EXPECT_TRUE(unpublishedUntouched);
 }
 
 // MutatorBlockInVMPreprocess publishes the live caller for every managed
@@ -443,4 +448,121 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockDropsCaptureAfterReturn)
     GC_EXPECT_TRUE(second != nullptr);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
+}
+
+// Exactly one of FA/IP is not a published frame and must not complete the epoch.
+// Both null stays unpublished: the epoch is not started and this call does not abort.
+GC_COMPONENT_TEST(WatermarkIteration, SingleEmptyTopIsRejected)
+{
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(nullptr);
+    context.frameInfo.mFrame.SetIP(NativeIp());
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        uintptr_t childPublished = 0;
+        ArmStaleEpoch(childPublished);
+        StackWatermarkSet::on_safepoint(owner);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[512];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("unwind top is missing only the frame address or only the instruction") != std::string::npos &&
+        transcript.find("stack watermark stopped before the anchor") == std::string::npos;
+    GC_EXPECT_TRUE(rejected);
+
+    Mutator cleared;
+    BoundMutator clearedBound(cleared);
+    cleared.SetManagedContext(true);
+    cleared.GetUnwindContext().GoIntoManagedCode();
+    cleared.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    uintptr_t published = 0;
+    const uint32_t packedBefore = cleared.GetStackWatermark().PackedState();
+    ArmStaleEpoch(published);
+    StackWatermarkSet::on_safepoint(cleared);
+    const bool stayed = !cleared.GetStackWatermark().processing_started() &&
+        !cleared.GetStackWatermark().IsDone(StackWatermark::epoch_id()) &&
+        cleared.GetStackWatermark().PackedState() == packedBefore;
+    ::g_cjStoreGoodMask = published;
+    cleared.SetManagedContext(false);
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(stayed);
+}
+
+// EnterSaferegion(false) must publish a managed unpublished top. It must not
+// replace a RISKY native frame, a native context, or an already walkable top.
+GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
+{
+    auto staysNull = [](Mutator& mutator) {
+        return mutator.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr &&
+            mutator.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr;
+    };
+    Mutator cleared;
+    BoundMutator bound(cleared);
+    cleared.SetManagedContext(true);
+    cleared.SetInSaferegion(SAFE_REGION_FALSE);
+    cleared.GetUnwindContext().GoIntoManagedCode();
+    const bool entered = cleared.EnterSaferegion(false);
+    const bool published = cleared.InSaferegion() &&
+        cleared.GetUnwindContext().frameInfo.mFrame.GetFA() != nullptr &&
+        cleared.GetUnwindContext().frameInfo.mFrame.GetIP() != nullptr;
+    GC_EXPECT_TRUE(entered);
+    GC_EXPECT_TRUE(published);
+
+    FrameAddress sentinel {};
+    sentinel.callerFrameAddress = &sentinel;
+    sentinel.returnAddress = NativeIp();
+    Mutator risky;
+    BoundMutator riskyBound(risky);
+    risky.SetManagedContext(true);
+    risky.SetInSaferegion(SAFE_REGION_FALSE);
+    risky.GetUnwindContext().GoIntoNativeCode(NativeIp(), &sentinel);
+    const bool riskyEntered = risky.EnterSaferegion(false);
+    GC_EXPECT_TRUE(riskyEntered);
+    GC_EXPECT_TRUE(risky.GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RISKY);
+    GC_EXPECT_TRUE(risky.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
+    GC_EXPECT_TRUE(risky.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
+
+    Mutator native;
+    BoundMutator nativeBound(native);
+    native.SetManagedContext(false);
+    native.SetInSaferegion(SAFE_REGION_FALSE);
+    native.GetUnwindContext().GoIntoManagedCode();
+    const bool nativeEntered = native.EnterSaferegion(false);
+    GC_EXPECT_TRUE(nativeEntered);
+    GC_EXPECT_TRUE(staysNull(native));
+
+    Mutator kept;
+    BoundMutator keptBound(kept);
+    kept.SetManagedContext(true);
+    kept.SetInSaferegion(SAFE_REGION_FALSE);
+    kept.GetUnwindContext().frameInfo.mFrame.SetFA(&sentinel);
+    kept.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
+    kept.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    const bool keptEntered = kept.EnterSaferegion(false);
+    GC_EXPECT_TRUE(keptEntered);
+    GC_EXPECT_TRUE(kept.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
+    GC_EXPECT_TRUE(kept.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
 }

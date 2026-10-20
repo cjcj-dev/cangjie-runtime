@@ -195,15 +195,20 @@ uintptr_t StackWatermark::last_processed_raw() const
     return iterator == nullptr ? 0 : iterator->caller();
 }
 
-// javaFrameAnchor.hpp:77 has_last_Java_frame is last_Java_sp != nullptr.
-// anchorFA is the oldest-frame stop, not that youngest frame.
-static bool HasExposableFrame(Mutator& owner)
+// javaFrameAnchor.hpp:59-77: one end without the other is not a frame.
+// Both ends null is GoIntoManagedCode, not has_last_Java_frame()==false.
+static void RequireConsistentTop(const MachineFrame& top)
 {
-    if (!owner.IsManagedContext()) {
-        return false;
-    }
+    const bool hasFA = top.GetFA() != nullptr;
+    const bool hasIP = top.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
+}
+
+static bool WalkableManagedTop(Mutator& owner)
+{
     const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
-    return top.GetFA() != nullptr && top.GetIP() != nullptr;
+    RequireConsistentTop(top);
+    return owner.IsManagedContext() && top.GetFA() != nullptr;
 }
 
 void StackWatermark::update_watermark()
@@ -226,14 +231,23 @@ void StackWatermark::update_watermark()
 void StackWatermark::start_processing_impl(void* context)
 {
     iterator.reset();
-    // stackWatermark.cpp:203-221: no last Java frame leaves the iterator null.
-    if (HasExposableFrame(owner)) {
-        iterator.reset(new StackWatermarkFramesIterator(*this));
-        // runtime/stackWatermark.cpp:205-228: callee, caller, unwind margin.
-        iterator->process_one(context);
-        iterator->process_one(context);
-        iterator->process_one(context);
+    const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
+    RequireConsistentTop(top);
+    // stackWatermark.cpp:203-221 walks only a published last Java frame.
+    // A managed thread with both ends null has not published that frame.
+    // Do not record the epoch: finish_processing would then skip the stack.
+    if (!owner.IsManagedContext()) {
+        update_watermark();
+        return;
     }
+    if (top.GetFA() == nullptr) {
+        return;
+    }
+    iterator.reset(new StackWatermarkFramesIterator(*this));
+    // runtime/stackWatermark.cpp:205-228: callee, caller, unwind margin.
+    iterator->process_one(context);
+    iterator->process_one(context);
+    iterator->process_one(context);
     update_watermark();
 }
 
@@ -256,7 +270,7 @@ void StackWatermark::finish_processing(void* context)
 {
     lock.lock();
     if (!processing_started()) { start_processing_impl(context); }
-    if (!IsDone()) {
+    if (processing_started() && !IsDone()) {
         iterator->process_all(context);
         update_watermark();
     }
@@ -309,7 +323,7 @@ void StackWatermark::before_unwind()
     // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
     // runtime leave has no Java frame: do not classify it.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) {
+    if (IsDone() || !WalkableManagedTop(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -325,7 +339,7 @@ void StackWatermark::after_unwind()
 {
     // stackWatermark.inline.hpp:109-124.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) {
+    if (IsDone() || !WalkableManagedTop(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -339,7 +353,7 @@ void StackWatermark::after_unwind()
 void StackWatermark::on_iteration(const FrameInfo& frame)
 {
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) { return; }
+    if (IsDone() || !WalkableManagedTop(owner)) { return; }
     ensure_safe(frame);
 }
 
@@ -410,6 +424,15 @@ void ZStackWatermark::process_head(void* context)
 
 void ZStackWatermark::start_processing_impl(void* context)
 {
+    const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
+    const bool hasFA = top.GetFA() != nullptr;
+    const bool hasIP = top.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
+    // Unpublished managed top: callers and the anchor may still hold roots.
+    // Leave the epoch untouched so a later published entry can walk them.
+    if (owner.IsManagedContext() && !hasFA) {
+        return;
+    }
     save_old_watermark();
     process_head(context);
     owner.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());

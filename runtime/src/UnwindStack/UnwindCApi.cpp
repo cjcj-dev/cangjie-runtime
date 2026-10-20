@@ -23,6 +23,9 @@ extern "C" void MRT_RestoreTopManagedContextFromN2CStub(FrameAddress* fa)
 {
     UnwindContext& uwContext = Mutator::GetMutator()->GetUnwindContext();
     N2CSlotData* slotData = N2CFrame::GetSlotData(fa);
+    const bool hasFA = slotData->fa != nullptr;
+    const bool hasIP = slotData->pc != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
     uwContext.frameInfo.mFrame.SetIP(slotData->pc);
     uwContext.frameInfo.mFrame.SetFA(slotData->fa);
     uwContext.SetUnwindContextStatus(slotData->status);
@@ -32,6 +35,9 @@ extern "C" void MRT_SaveTopManagedContextToN2CStub(FrameAddress* fa)
 {
     UnwindContext& uwContext = Mutator::GetMutator()->GetUnwindContext();
     N2CSlotData* slotData = N2CFrame::GetSlotData(fa);
+    const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
+    const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
     slotData->pc = uwContext.frameInfo.mFrame.GetIP();
     slotData->fa = uwContext.frameInfo.mFrame.GetFA();
     // By default, all caller functions that pass through N2CStub are risky types
@@ -61,6 +67,8 @@ extern "C" void MRT_DeleteC2NContext(ThreadLocalData* tlData)
 
 extern "C" void MRT_UpdateUwContext(const uint32_t* pc, void* fa, UnwindContextStatus status, ThreadLocalData* tlData)
 {
+    CHECK_DETAIL(pc != nullptr && fa != nullptr,
+        "published unwind top requires both a frame address and an instruction");
     UnwindContext& uwContext = tlData->mutator->GetUnwindContext();
     uwContext.frameInfo.mFrame.SetIP(pc);
     uwContext.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(fa));

@@ -31,6 +31,7 @@ public:
         // stop and stack move writes it on the live context (Mutator.cpp).
         if (mutator.IsManagedContext() &&
             context.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
+            mutator.RejectInconsistentUnwindTop();
             savedIP = context.frameInfo.mFrame.GetIP();
             savedFA = context.frameInfo.mFrame.GetFA();
             mutator.UpdateUnwindContext();
