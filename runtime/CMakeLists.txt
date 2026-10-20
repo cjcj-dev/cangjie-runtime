@@ -483,6 +483,7 @@ if (MACOS_FLAG MATCHES 1)
     install(TARGETS boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 endif()
 if (ANDROID_FLAG MATCHES 0 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0 AND MACOS_FLAG MATCHES 0 AND IOS_FLAG MATCHES 0 AND IOS_SIMULATOR_FLAG MATCHES 0)
+    install(TARGETS boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
     set(LINK_SCRIPTS "-Wl,-T${CMAKE_CURRENT_SOURCE_DIR}/build/lds/aarch64_linux/cjnative_runtime.lds")
     add_library(cjNativeStartAndEnd OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/aarch64_linux/CjNativeRuntimeStartAndEnd.S)
@@ -719,6 +720,16 @@ if (MACOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_
         DESTINATION lib/${TARGET_ARCH})
 endif()
 
+function(cj_install_tool component relative)
+    list(JOIN ARGN " " _cj_tool_words)
+    install(CODE "
+execute_process(COMMAND ${_cj_tool_words} \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${relative}\" RESULT_VARIABLE _cj_tool_rc)
+if(NOT _cj_tool_rc EQUAL 0)
+message(FATAL_ERROR \"install post-process failed rc=\${_cj_tool_rc}: ${_cj_tool_words} \${CMAKE_INSTALL_PREFIX}/${relative}\")
+endif()
+" COMPONENT ${component})
+endfunction()
+
 if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
     message("strip: ${CMAKE_INSTALL_PREFIX}")
     set(STRIP_PROGRAM strip)
@@ -742,49 +753,39 @@ if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
         endif()
     endif()
     if (WINDOWS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -p ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dll)"
-            COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dll" "${STRIP_PROGRAM}" -p)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/bin/cjfilt.exe)"
-            COMPONENT cjfilt)
+        cj_install_tool(cjfilt "bin/cjfilt.exe" "${STRIP_PROGRAM}")
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -p ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-trace.dll)"
-            COMPONENT cangjie-trace)
+        cj_install_tool(cangjie-trace "runtime/lib/${TARGET_ARCH}/libcangjie-trace.dll" "${STRIP_PROGRAM}" -p)
         endif()
     elseif (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib)"
-                COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib" "${STRIP_PROGRAM}" -x)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/bin/cjfilt)"
-                COMPONENT cjfilt)
+        cj_install_tool(cjfilt "bin/cjfilt" "${STRIP_PROGRAM}" -x)
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-trace.dylib)"
-            COMPONENT cangjie-trace)
+        cj_install_tool(cangjie-trace "runtime/lib/${TARGET_ARCH}/libcangjie-trace.dylib" "${STRIP_PROGRAM}" -x)
         endif()
         if (MACOS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libboundscheck.dylib)"
-            COMPONENT boundscheck)
+        cj_install_tool(boundscheck "runtime/lib/${TARGET_ARCH}/libboundscheck.dylib" "${STRIP_PROGRAM}" -x)
         endif()
     else()
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.so)"
-                COMPONENT cangjie-runtime)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -g ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}/cjstart.o)"
-                COMPONENT cjstart)
+        cj_install_tool(cangjie-runtime "runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.so" "${STRIP_PROGRAM}")
+        cj_install_tool(cjstart "lib/${TARGET_ARCH}/cjstart.o" "${STRIP_PROGRAM}" -g)
         if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-demangle.so)"
-                COMPONENT cangjie-demangle)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -g ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}/cjpgo.o)"
-                COMPONENT cjpgo)
+        cj_install_tool(cangjie-demangle "runtime/lib/${TARGET_ARCH}/libcangjie-demangle.so" "${STRIP_PROGRAM}")
+        cj_install_tool(cjpgo "lib/${TARGET_ARCH}/cjpgo.o" "${STRIP_PROGRAM}" -g)
         endif()
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/bin/cjfilt)"
-                COMPONENT cjfilt)
+        cj_install_tool(cjfilt "bin/cjfilt" "${STRIP_PROGRAM}")
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-trace.so)"
-            COMPONENT cangjie-trace)
+        cj_install_tool(cangjie-trace "runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-trace.so" "${STRIP_PROGRAM}")
+        endif()
+        if (ANDROID_FLAG MATCHES 0 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0 AND MACOS_FLAG MATCHES 0 AND IOS_FLAG MATCHES 0 AND IOS_SIMULATOR_FLAG MATCHES 0)
+        cj_install_tool(boundscheck "runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libboundscheck.so" "${STRIP_PROGRAM}")
         endif()
     endif()
 endif () # CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$"
@@ -916,23 +917,15 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
     set(OBJCOPY_PROGRAM objcopy)
     set(STRIP_PROGRAM strip)
     if (WINDOWS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND bash ${CMAKE_SOURCE_DIR}/build/windows_rename_section.sh \
-                ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" bash "${CMAKE_SOURCE_DIR}/build/windows_rename_section.sh")
     elseif (NOT (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2))
-        install(CODE "execute_process(COMMAND ${OBJCOPY_PROGRAM} -D --rename-section .text=.text_runtime \
-                    ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-                COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" "${OBJCOPY_PROGRAM}" -D --rename-section .text=.text_runtime)
     endif()
     if((CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "MinSizeRel") AND NOT (WINDOWS_FLAG MATCHES 1))
         if (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \
-                    \${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" "${STRIP_PROGRAM}" -x)
         else()
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -D --strip-unneeded \
-                    ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        cj_install_tool(cangjie-runtime "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" "${STRIP_PROGRAM}" -D --strip-unneeded)
         endif()
     endif()
 endif()
