@@ -511,6 +511,99 @@ GC_COMPONENT_TEST(WatermarkIteration, SingleEmptyTopIsRejected)
     GC_EXPECT_TRUE(stayed);
 }
 
+// Cut: delete process_head in ZStackWatermark::start_processing_impl (the call
+// that now runs before the managed double-empty return). The base return does
+// not visit head roots, so it cannot keep nativeHits == 1. Restoring the old
+// return ahead of process_head leaves nativeHits at 0.
+namespace {
+ObjectRef* expectedNativeRoot = nullptr;
+int nativeRootHits = 0;
+
+void CountNativeHeadRoot(zaddress_unsafe* slot, uintptr_t)
+{
+    if (expectedNativeRoot != nullptr && slot == reinterpret_cast<zaddress_unsafe*>(expectedNativeRoot)) {
+        ++nativeRootHits;
+    }
+}
+}
+
+GC_COMPONENT_TEST(WatermarkIteration, UnpublishedManagedFinishVisitsNativeHead)
+{
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    owner.GetUnwindContext().GoIntoManagedCode();
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+    owner.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    alignas(8) static char storage[8] = {};
+    expectedNativeRoot = owner.AddNativeFrameRoot(reinterpret_cast<BaseObject*>(storage));
+    nativeRootHits = 0;
+    uintptr_t published = 0;
+    const uint32_t packedBefore = owner.GetStackWatermark().PackedState();
+    ArmStaleEpoch(published);
+    StackWatermarkSet::finish_processing(owner, reinterpret_cast<void*>(CountNativeHeadRoot));
+    const bool visited = nativeRootHits == 1;
+    const bool stayed = !owner.GetStackWatermark().processing_started() &&
+        !owner.GetStackWatermark().IsDone(StackWatermark::epoch_id()) &&
+        owner.GetStackWatermark().PackedState() == packedBefore &&
+        owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr &&
+        owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr;
+    ::g_cjStoreGoodMask = published;
+    expectedNativeRoot = nullptr;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(visited);
+    GC_EXPECT_TRUE(stayed);
+
+    Mutator native;
+    BoundMutator nativeBound(native);
+    native.SetManagedContext(false);
+    native.GetUnwindContext().GoIntoManagedCode();
+    expectedNativeRoot = native.AddNativeFrameRoot(reinterpret_cast<BaseObject*>(storage));
+    nativeRootHits = 0;
+    ArmStaleEpoch(published);
+    StackWatermarkSet::finish_processing(native, reinterpret_cast<void*>(CountNativeHeadRoot));
+    const bool nativeVisited = nativeRootHits == 1;
+    const bool nativeDone = native.GetStackWatermark().processing_started() &&
+        native.GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    ::g_cjStoreGoodMask = published;
+    expectedNativeRoot = nullptr;
+    GC_EXPECT_TRUE(nativeVisited);
+    GC_EXPECT_TRUE(nativeDone);
+}
+
+extern "C" void MRT_DeleteC2NContext(ThreadLocalData* tlData);
+
+// The stub's own frame must not stay published, and a caller that is still
+// live must. No caller link still clears both ends.
+GC_COMPONENT_TEST(WatermarkIteration, DeleteC2NKeepsLiveCaller)
+{
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    FrameAddress caller {};
+    caller.callerFrameAddress = nullptr;
+    caller.returnAddress = NativeIp();
+    FrameAddress stub {};
+    stub.callerFrameAddress = &caller;
+    stub.returnAddress = NativeIp();
+    owner.GetUnwindContext().frameInfo.mFrame.SetFA(&stub);
+    owner.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
+    owner.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    MRT_DeleteC2NContext(ThreadLocal::GetThreadLocalData());
+    GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == &caller);
+    GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
+    GC_EXPECT_TRUE(owner.GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RELIABLE);
+
+    owner.GetUnwindContext().frameInfo.mFrame.SetFA(&caller);
+    owner.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
+    MRT_DeleteC2NContext(ThreadLocal::GetThreadLocalData());
+    GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr);
+    GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
+    owner.SetManagedContext(false);
+}
+
 // EnterSaferegion(false) must publish a managed unpublished top. It must not
 // replace a RISKY native frame, a native context, or an already walkable top.
 GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)

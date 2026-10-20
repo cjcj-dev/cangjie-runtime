@@ -41,13 +41,18 @@ public:
     }
     ~MutatorBlockInVMPreprocess()
     {
-        if (entered) {
-            mutator.DoLeaveSaferegion(preprocess);
-        }
         if (published) {
+            StackWatermark& watermark = mutator.GetStackWatermark();
+            // Finish a walk that already started before this scope replaces the frame.
+            if (watermark.processing_started() && !watermark.IsDone()) {
+                StackWatermarkSet::finish_processing(mutator);
+            }
             UnwindContext& context = mutator.GetUnwindContext();
             context.frameInfo.mFrame.SetIP(savedIP);
             context.frameInfo.mFrame.SetFA(savedFA);
+        }
+        if (entered) {
+            mutator.DoLeaveSaferegion(preprocess);
         }
     }
     MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;

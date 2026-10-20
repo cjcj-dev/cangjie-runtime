@@ -428,11 +428,8 @@ void ZStackWatermark::start_processing_impl(void* context)
     const bool hasFA = top.GetFA() != nullptr;
     const bool hasIP = top.GetIP() != nullptr;
     CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
-    // Unpublished managed top: callers and the anchor may still hold roots.
-    // Leave the epoch untouched so a later published entry can walk them.
-    if (owner.IsManagedContext() && !hasFA) {
-        return;
-    }
+    // zStackWatermark.cpp:177-203: head, masks, TLAB and the store buffer run
+    // before the frame decision. A managed double-empty top still has them.
     save_old_watermark();
     process_head(context);
     owner.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
@@ -441,6 +438,12 @@ void ZStackWatermark::start_processing_impl(void* context)
         ZThreadLocalAllocBuffer::retire(owner, allocStats);
     }
     if (owner.GetGCData().storeBarrierBuffer != nullptr) { owner.GetGCData().storeBarrierBuffer->on_new_phase(); }
+    // GoIntoManagedCode is not !has_last_Java_frame(). Do not call the base
+    // implementation: its non-managed path records the epoch, and its managed
+    // double-empty return must not be a second completion decision.
+    if (owner.IsManagedContext() && !hasFA) {
+        return;
+    }
     StackWatermark::start_processing_impl(context);
 }
 

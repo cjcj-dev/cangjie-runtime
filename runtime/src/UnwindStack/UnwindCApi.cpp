@@ -19,6 +19,24 @@ extern uintptr_t unwindPCForC2NStub;
 #endif
 
 namespace MapleRuntime {
+// The stub frame is about to return. Its caller stays on the stack. Clearing
+// both ends here is GoIntoManagedCode, which is not ZGC's !has_last_Java_frame().
+static void PublishLiveCallerOrClear(UnwindContext& uwContext)
+{
+    MachineFrame& top = uwContext.frameInfo.mFrame;
+    const bool hasFA = top.GetFA() != nullptr;
+    const bool hasIP = top.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
+    FrameAddress* fa = top.GetFA();
+    if (fa != nullptr && fa->callerFrameAddress != nullptr && fa->returnAddress != nullptr) {
+        top.SetFA(fa->callerFrameAddress);
+        top.SetIP(fa->returnAddress);
+        uwContext.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+        return;
+    }
+    uwContext.GoIntoManagedCode();
+}
+
 extern "C" void MRT_RestoreTopManagedContextFromN2CStub(FrameAddress* fa)
 {
     UnwindContext& uwContext = Mutator::GetMutator()->GetUnwindContext();
@@ -61,8 +79,7 @@ extern "C" void MRT_DeleteC2NContext(ThreadLocalData* tlData)
     if (UNLIKELY(mutator == nullptr)) {
         return;
     }
-    UnwindContext& uwContext = mutator->GetUnwindContext();
-    uwContext.GoIntoManagedCode();
+    PublishLiveCallerOrClear(mutator->GetUnwindContext());
 }
 
 extern "C" void MRT_UpdateUwContext(const uint32_t* pc, void* fa, UnwindContextStatus status, ThreadLocalData* tlData)
@@ -115,9 +132,8 @@ extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long sta
         ProcessSafepointIfRequested(tlData);
     }
 
-    // Step 2: DeleteC2NContext - restore unwind context status to RELIABLE
-    UnwindContext& uwContext = mutator->GetUnwindContext();
-    uwContext.GoIntoManagedCode();
+    // Step 2: the native frame is gone. Keep its still-live caller.
+    PublishLiveCallerOrClear(mutator->GetUnwindContext());
 
     // Step 3: ThrowPendingException only on exception path to avoid an extra PLT call in common case.
     ExceptionWrapper& exceptionWrapper = mutator->GetExceptionWrapper();
