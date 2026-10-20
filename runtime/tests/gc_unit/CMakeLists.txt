@@ -43,6 +43,7 @@ set(GC_UNIT_SOURCES
     test_gctibzero.cpp
     test_field_iterator.cpp
     test_pinroot.cpp
+    test_fix_extended_stack_fa0.cpp
     test_followedge.cpp
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp

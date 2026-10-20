@@ -585,41 +585,49 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #endif // INTERPRETER_ENABLED
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
-            UnwindContext caller;
+            if (stackGrowContext.frameInfo.mFrame.GetFA() == nullptr) {
+                stackOffset = CJThreadStackGrow(CJTHREAD_MAX_STACK_SIZE);
+                if (stackOffset == 0 || stackOffset == -1) {
+                    ExceptionManager::StackOverflow(adjustedSize, ip);
+                    return 0;
+                }
+            } else {
+                UnwindContext caller;
 #ifdef _WIN64
-            UnwindContextStatus ucs = stackGrowContext.GetUnwindContextStatus();
-            stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, ucs);
+                UnwindContextStatus ucs = stackGrowContext.GetUnwindContextStatus();
+                stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, ucs);
 #else
-            stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
+                stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
-            caller.frameInfo.ResolveProcInfo();
-            ElfUnloadQuiescence::ReadScope metadataReader;
+                caller.frameInfo.ResolveProcInfo();
+                ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-            FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(caller.frameInfo.mFrame.GetFA());
+                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(caller.frameInfo.mFrame.GetFA());
 #else
-            FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(caller.frameInfo.GetFuncStartPC()));
+                FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(caller.frameInfo.GetFuncStartPC()));
 #endif
-            CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
-                         reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
-            CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
-                         reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
-            const uint32_t frameSize = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
+                CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
+                             reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
+                CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                             reinterpret_cast<const void*>(caller.frameInfo.GetFuncStartPC()), reinterpret_cast<const void*>(caller.frameInfo.mFrame.GetIP()));
+                const uint32_t frameSize = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
 #if defined(__x86_64__)
-            // 8 is the slot length of returnaddr.
-            uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize + 8;
+                // 8 is the slot length of returnaddr.
+                uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize + 8;
 #elif defined(__aarch64__)
-            uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
+                uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
 #elif defined(__arm__)
-            uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
+                uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
 #endif
-            size_t newSize = stackSize + stackSize;
-            while (stackBaseAddr - callerSp > newSize - CJThreadStackReversedGet()) {
-                newSize += newSize;
-            }
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
-                ExceptionManager::StackOverflow(adjustedSize, ip);
-                return 0;
+                size_t newSize = stackSize + stackSize;
+                while (stackBaseAddr - callerSp > newSize - CJThreadStackReversedGet()) {
+                    newSize += newSize;
+                }
+                stackOffset = CJThreadStackGrow(newSize);
+                if (stackOffset == -1 || stackOffset == 0) {
+                    ExceptionManager::StackOverflow(adjustedSize, ip);
+                    return 0;
+                }
             }
         }
 
