@@ -179,7 +179,8 @@ void RunArm(GrowArm arm)
     GC_EXPECT_TRUE(g_result.after > g_result.before);
     GC_EXPECT_EQ(g_result.anchor, expectedAnchor);
     if (g_mutator != nullptr) {
-        (void)g_mutator->EnterSaferegion(false);
+        MutatorManager::Instance().TransitMutatorToExit();
+        g_mutator = nullptr;
     }
 }
 
