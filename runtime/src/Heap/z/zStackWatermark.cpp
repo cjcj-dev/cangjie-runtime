@@ -233,14 +233,11 @@ void StackWatermark::start_processing_impl(void* context)
     iterator.reset();
     const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
     RequireConsistentTop(top);
-    // stackWatermark.cpp:203-221 walks only a published last Java frame.
-    // A managed thread with both ends null has not published that frame.
-    // Do not record the epoch: finish_processing would then skip the stack.
-    if (!owner.IsManagedContext()) {
+    // stackWatermark.cpp:203-221 walks a published last Java frame.
+    // stackWatermark.cpp:219-222 still completes the epoch when there is none.
+    // GoIntoManagedCode is not that case; ZStackWatermark returns first.
+    if (!owner.IsManagedContext() || top.GetFA() == nullptr) {
         update_watermark();
-        return;
-    }
-    if (top.GetFA() == nullptr) {
         return;
     }
     iterator.reset(new StackWatermarkFramesIterator(*this));
@@ -446,17 +443,18 @@ void ZStackWatermark::start_processing_impl(void* context)
     save_old_watermark();
     process_head(context);
     owner.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    // GoIntoManagedCode clears both ends and sets RELIABLE. That is not
+    // !has_last_Java_frame() (stackWatermark.cpp:203). Retiring or publishing
+    // the epoch here would let finish_processing skip a later frame.
+    if (owner.IsManagedContext() && !hasFA &&
+        owner.GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RELIABLE) {
+        return;
+    }
     if ((ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark()) ||
         (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark())) {
         ZThreadLocalAllocBuffer::retire(owner, allocStats);
     }
     if (owner.GetGCData().storeBarrierBuffer != nullptr) { owner.GetGCData().storeBarrierBuffer->on_new_phase(); }
-    // GoIntoManagedCode is not !has_last_Java_frame(). Do not call the base
-    // implementation: its non-managed path records the epoch, and its managed
-    // double-empty return must not be a second completion decision.
-    if (owner.IsManagedContext() && !hasFA) {
-        return;
-    }
     StackWatermark::start_processing_impl(context);
 }
 
