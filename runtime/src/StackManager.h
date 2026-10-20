@@ -61,12 +61,12 @@ public:
 
     static void PrintStackTraceForCpuProfile(UnwindContext* unContext, unsigned long long int cjThreadId);
 
-    static void RecordLiteFrameInfos(std::vector<uint64_t>& liteFrameInfos, size_t steps = STACK_UNWIND_STEP_MAX);
+    static void RecordRawFrames(std::vector<RawTraceFrame>& frames, size_t steps = STACK_UNWIND_STEP_MAX);
 
-    static void GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
+    static void DecodeRawFrames(const std::vector<RawTraceFrame>& frames,
                                               std::vector<StackTraceElement>& stackTrace);
 
-    static void GetStackTraceByLiteFrameInfo(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
+    static void DecodeRawFrame(const RawTraceFrame& frame,
                                              StackTraceElement& ste);
 
     // visit GC roots of current managed thread for tracing GC.

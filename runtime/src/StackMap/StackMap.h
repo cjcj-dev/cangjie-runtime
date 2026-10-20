@@ -276,11 +276,7 @@ public:
     MapType Build(bool countDerivedRows = false) const
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
-#ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
-#else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
-#endif
         auto closure = head.TakePrologueRegisters();
         auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
@@ -292,11 +288,7 @@ public:
     StackMapInvalidReason GetInvalidReason() const
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
-#ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
-#else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
-#endif
         return head.GetInvalidReason(startPC, framePC);
     }
 
@@ -313,11 +305,7 @@ template<>
 inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDerivedRows) const
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-#ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
-#else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
-#endif
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
     auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
     return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
 }
@@ -328,11 +316,7 @@ inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     (void)countDerivedRows;
-#ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
-#else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
-#endif
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
     auto entry = head.GetStackMapEntry(startPC, framePC);
     if (!entry.IsValid()) {
         return MethodMap(stackBase);

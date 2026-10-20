@@ -102,6 +102,11 @@ void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
 
 void ExceptionHandling::BuildEHFrameInfo()
 {
+    // sharedRuntime.cpp:573-590 / codeCache.cpp:748-749: keep the backing
+    // image alive from frame lookup through the final handler-table read.
+    // FillInStackTrace's local reader ends before ProcessEHFrame consumes
+    // the EH pointer cached in each FrameInfo.
+    ElfUnloadQuiescence::ReadScope metadataReader;
     EHStackInfo ehStackInfo;
     ehStackInfo.SetProcessingOwner(Mutator::GetMutator());
     ehStackInfo.FillInStackTrace();

@@ -1,3 +1,4 @@
+#include "metadata_code_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
@@ -57,6 +58,7 @@
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+#include "metadata_code_fixture.hpp"
 
 #include "Heap/z/zAccess.hpp"
 
@@ -934,21 +936,20 @@ void IncomingAbortWitness(int)
 #if defined(__x86_64__) && defined(__linux__)
 namespace {
 struct DerivedBaseMapImage {
-    int32_t descriptorOffset;
-    uint32_t pc[4];
+    const uint32_t* pc;
     int32_t stackMapOffset;
     uint32_t descriptorRest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
-DerivedBaseMapImage derivedBaseMapImage;
+extern "C" { DerivedBaseMapImage derivedBaseMapImage; }
+GC_METADATA_CODE(derivedBaseMapCode, derivedBaseMapImage, DerivedBaseMapImage, stackMapOffset, 1)
 
 void InitializeDerivedBaseMap(bool tagged)
 {
     auto& image = derivedBaseMapImage;
     std::memset(&image, 0, sizeof(image));
-    image.descriptorOffset = reinterpret_cast<char*>(&image.stackMapOffset) -
-        reinterpret_cast<char*>(&image.descriptorOffset);
+    image.pc = derivedBaseMapCodePC();
     image.stackMapOffset = reinterpret_cast<char*>(image.bits) - reinterpret_cast<char*>(&image.stackMapOffset);
     ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
     size_t bit = 0;

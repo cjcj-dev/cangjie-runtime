@@ -181,11 +181,11 @@ uint64_t GetRuntimeFrameSize(MachineFrame &mFrame)
 // caller assures this frame is a normal frame.
 // we name the direct caller frame in machine stack with "machine caller".
 #ifdef _WIN64
-bool MachineFrame::UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status) const
+bool MachineFrame::UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextStatus& status, U16 siteKind) const
 {
     Runtime& runtime = Runtime::Current();
     WinModuleManager& winModuleManager = runtime.GetWinModuleManager();
-    caller = GetCallerFrameInfo(winModuleManager, *this, status);
+    caller = GetCallerFrameInfo(winModuleManager, *this, status, siteKind);
 
     return true;
 }

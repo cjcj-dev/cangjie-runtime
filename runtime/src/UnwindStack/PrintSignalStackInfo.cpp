@@ -33,6 +33,7 @@ void PrintSignalStackInfo::FillInStackTrace()
             break;
         }
         signalStack[stackIndex++] = uwContext.frameInfo;
+        if (uwContext.frameInfo.GetFrameType() == FrameType::UNKNOWN) { return; }
 
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();

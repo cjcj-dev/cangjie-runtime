@@ -55,7 +55,7 @@ Lfunc_end:
     .section  __CJMETAHEADER,__cjmetaheader
     .p2align  4
     .long 0x12345678
-    .long 0x80000000
+    .long 0x80000001
     .quad 0
     .quad __CJMetaDataSize
     .quad __CJSDKVersion

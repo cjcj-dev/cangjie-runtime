@@ -18,6 +18,7 @@
 #include "Cangjie.h"
 #include "Common/StackType.h"
 #include "Interpreter/RTInterface.h"
+#include "Interpreter/InterpreterSpecific.h"
 #include "UnwindStack/StackInfo.h"
 
 using namespace MapleRuntime;
@@ -54,9 +55,12 @@ extern "C" int interpreter_bridge_init(INT_InterpreterInterface* interpreterInte
 #ifndef SM4_INTERP_MOCK
 int main()
 {
-    std::vector<uint64_t> lite = { 0x11, 0x22, 0 };
+    RawTraceFrame raw;
+    raw.interpreted = true;
+    FillInterpretedFrameDesc(0x11, 0x22, raw.resolved);
+    std::vector<RawTraceFrame> frames{raw};
     std::vector<StackTraceElement> trace;
-    StackInfo::GetStackTraceByLiteFrameInfos(lite, trace);
+    StackInfo::DecodeRawFrames(frames, trace);
     std::fprintf(stderr, "INTERP_SENTINEL_REACHED frames=%zu\n", trace.size());
     return 0;
 }
