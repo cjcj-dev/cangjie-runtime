@@ -354,7 +354,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
     Mutator cleared;
     BoundMutator bound(cleared);
     cleared.SetManagedContext(true);
-    cleared.SetInSaferegion(SAFE_REGION_FALSE);
+    cleared.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     cleared.GetUnwindContext().GoIntoManagedCode();
     {
         MutatorBlockInVMPreprocess<decltype(release)> blocked(cleared, release);
@@ -393,7 +393,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
     Mutator nested;
     BoundMutator nestedBound(nested);
     nested.SetManagedContext(true);
-    nested.SetInSaferegion(SAFE_REGION_TRUE);
+    nested.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
     nested.GetUnwindContext().frameInfo.mFrame.SetFA(&sentinel);
     nested.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
     nested.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
@@ -409,7 +409,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
     Mutator risky;
     BoundMutator riskyBound(risky);
     risky.SetManagedContext(true);
-    risky.SetInSaferegion(SAFE_REGION_FALSE);
+    risky.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     risky.GetUnwindContext().GoIntoNativeCode(NativeIp(), &sentinel);
     {
         MutatorBlockInVMPreprocess<decltype(release)> blocked(risky, release);
@@ -422,7 +422,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
     Mutator native;
     BoundMutator nativeBound(native);
     native.SetManagedContext(false);
-    native.SetInSaferegion(SAFE_REGION_FALSE);
+    native.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     native.GetUnwindContext().GoIntoManagedCode();
     {
         MutatorBlockInVMPreprocess<decltype(release)> blocked(native, release);
@@ -438,7 +438,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockDropsCaptureAfterReturn)
     Mutator owner;
     BoundMutator bound(owner);
     owner.SetManagedContext(true);
-    owner.SetInSaferegion(SAFE_REGION_FALSE);
+    owner.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     owner.GetUnwindContext().GoIntoManagedCode();
     FrameAddress* first = PublishFromA(owner);
     GC_EXPECT_TRUE(first != nullptr);
@@ -726,7 +726,7 @@ GC_COMPONENT_TEST(WatermarkIteration, SafeWaitStartsUnstartedEpoch)
     Mutator owner;
     BoundMutator bound(owner);
     owner.SetManagedContext(true);
-    owner.SetInSaferegion(SAFE_REGION_FALSE);
+    owner.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     owner.GetUnwindContext().GoIntoManagedCode();
     uintptr_t published = 0;
     ArmStaleEpoch(published);
@@ -759,7 +759,7 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockRestoresSavedTopWithoutNewEpoch)
     Mutator owner;
     BoundMutator bound(owner);
     owner.SetManagedContext(true);
-    owner.SetInSaferegion(SAFE_REGION_FALSE);
+    owner.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     FrameAddress sentinel {};
     sentinel.callerFrameAddress = &sentinel;
     sentinel.returnAddress = NativeIp();
@@ -793,7 +793,7 @@ GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
     Mutator cleared;
     BoundMutator bound(cleared);
     cleared.SetManagedContext(true);
-    cleared.SetInSaferegion(SAFE_REGION_FALSE);
+    cleared.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     cleared.GetUnwindContext().GoIntoManagedCode();
     const bool entered = cleared.EnterSaferegion(false);
     const bool published = cleared.InSaferegion() &&
@@ -808,7 +808,7 @@ GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
     Mutator risky;
     BoundMutator riskyBound(risky);
     risky.SetManagedContext(true);
-    risky.SetInSaferegion(SAFE_REGION_FALSE);
+    risky.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     risky.GetUnwindContext().GoIntoNativeCode(NativeIp(), &sentinel);
     const bool riskyEntered = risky.EnterSaferegion(false);
     GC_EXPECT_TRUE(riskyEntered);
@@ -819,7 +819,7 @@ GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
     Mutator native;
     BoundMutator nativeBound(native);
     native.SetManagedContext(false);
-    native.SetInSaferegion(SAFE_REGION_FALSE);
+    native.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     native.GetUnwindContext().GoIntoManagedCode();
     const bool nativeEntered = native.EnterSaferegion(false);
     GC_EXPECT_TRUE(nativeEntered);
@@ -828,7 +828,7 @@ GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
     Mutator kept;
     BoundMutator keptBound(kept);
     kept.SetManagedContext(true);
-    kept.SetInSaferegion(SAFE_REGION_FALSE);
+    kept.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     kept.GetUnwindContext().frameInfo.mFrame.SetFA(&sentinel);
     kept.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
     kept.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
