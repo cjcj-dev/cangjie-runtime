@@ -28,6 +28,7 @@ public:
 
     size_t Cursor() const { return index; }
     bool Done() const { return stream.IsDone(); }
+    bool ChainBroken() const { return stream.ChainBroken(); }
     const FrameInfo* CurrentFrame() const
     {
         return Done() ? nullptr : &stream.Current();

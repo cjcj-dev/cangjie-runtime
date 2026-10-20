@@ -21,6 +21,7 @@ public:
     explicit StackWatermarkFramesIterator(StackWatermark& owner)
         : owner(owner), cursor(owner.owner.GetUnwindContext()) {}
     bool has_next() const { return !cursor.Done(); }
+    bool chain_broken() const { return cursor.ChainBroken(); }
     uintptr_t caller() const { return callerSP; }
     uintptr_t callee() const { return calleeSP; }
     void process_one(void* context)
@@ -198,6 +199,10 @@ void StackWatermark::update_watermark()
 {
     if (iterator != nullptr && iterator->has_next()) {
         waterMark.store(iterator->callee(), std::memory_order_release);
+        state.store(PackState(epoch_id(), false), std::memory_order_release);
+    } else if (iterator != nullptr && iterator->chain_broken()) {
+        // stackWatermark.cpp:199-222 completes only after the last Java frame.
+        // A chain that never reached anchorFA stays incomplete.
         state.store(PackState(epoch_id(), false), std::memory_order_release);
     } else {
         waterMark.store(0, std::memory_order_release);

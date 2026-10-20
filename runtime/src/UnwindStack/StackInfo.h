@@ -45,6 +45,8 @@ public:
     void Next();
     void Rebase(intptr_t offset);
     bool IsDone() const { return done; }
+    // Physical stop before anchorFA. Recorded frames and a legal anchor end leave this false.
+    bool ChainBroken() const { return broken; }
     const FrameInfo& Current() const { return current.frameInfo; }
     // One walk, one map. Next() publishes the callee's save locations for its sender.
     // HotSpot stackFrameStream.cpp:28-32 / frame_x86.inline.hpp:455-460.
@@ -68,6 +70,7 @@ private:
     bool isReliableN2CStub;
     UnwindContext current;
     bool done = true;
+    bool broken = false;
     // Set once the oldest anchored frame is current. The next Next() must not sender().
     bool stopBeforeUnwind = false;
     RegSlotsMap regSlotsMap;

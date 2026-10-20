@@ -217,8 +217,10 @@ void StackFrameStream::Start()
     // ip==nullptr is an empty context (GoIntoManagedCode), not a frame.
     // A real instruction at anchorFA is the oldest frame: process it, do not sender().
     // HotSpot stackFrameStream.inline.hpp:33 / stackWatermark.inline.hpp:103-104.
+    // An anchor that was never visited is not that end (stackWatermark.cpp:199-222).
     const bool noInstruction = current.frameInfo.mFrame.GetIP() == nullptr;
     done = noInstruction;
+    broken = noInstruction && anchorFA != nullptr;
     stopBeforeUnwind = !noInstruction && AtOldestFrame(current.frameInfo.mFrame);
     if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }
@@ -319,6 +321,7 @@ void StackFrameStream::Next()
     }
     if (stopBeforeUnwind) {
         done = true;
+        broken = false;
         return;
     }
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -328,6 +331,7 @@ void StackFrameStream::Next()
     // Recorded frames and UpdateRegisterMap already ran above.
     if (current.frameInfo.mFrame.GetFA() == nullptr) {
         done = true;
+        broken = anchorFA != nullptr && !AtOldestFrame(current.frameInfo.mFrame);
         return;
     }
     lastFrameType = current.frameInfo.GetFrameType();
@@ -338,10 +342,11 @@ void StackFrameStream::Next()
     const bool advanced = current.UnwindToCallerContext(caller, uwCtxStatus);
 #endif
     // A null caller fa is not a frame. Do not install it (that is the
-    // {fa=0, ip=iterator} shape). This is not a claim that every null fa
-    // has already had its managed roots scanned.
+    // {fa=0, ip=iterator} shape). Stopping here has not reached anchorFA,
+    // so the watermark must not treat the epoch as complete.
     if (!advanced || caller.frameInfo.mFrame.GetFA() == nullptr || caller.frameInfo.mFrame.GetIP() == nullptr) {
         done = true;
+        broken = anchorFA != nullptr && !AtOldestFrame(current.frameInfo.mFrame);
         return;
     }
     caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());

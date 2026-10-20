@@ -17,25 +17,35 @@ template<class Preprocess>
 class MutatorBlockInVMPreprocess {
 public:
     MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
-        : mutator(mutator), preprocess(preprocess)
+        : mutator(mutator), preprocess(preprocess), saved(mutator.GetUnwindContext())
     {
-        // A cleared managed context (GoIntoManagedCode) has no frame to walk.
-        // Publish the live C++ frame so the rbp chain reaches anchorFA.
-        // RISKY already holds the C2N managed frame; do not overwrite it.
-        // EnterSaferegion(false) elsewhere keeps its context on purpose.
+        // javaFrameAnchor.hpp:59-66 / frame_x86.cpp:710-716: a non-empty anchor is
+        // not proof the frame is still the caller of this block. Refresh every
+        // managed entry. RISKY is the C2N anchor; do not replace it.
+        // interfaceSupport.inline.hpp:213-223: leave and process while that caller
+        // is alive, then drop this capture so it cannot outlive the return.
         UnwindContext& context = mutator.GetUnwindContext();
-        const MachineFrame& frame = context.frameInfo.mFrame;
-        const bool cleared = frame.GetFA() == nullptr || frame.GetIP() == nullptr;
-        const bool publish = mutator.IsManagedContext() &&
-            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY && cleared;
-        (void)mutator.EnterSaferegion(publish);
+        published = mutator.IsManagedContext() &&
+            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY;
+        if (published) {
+            mutator.UpdateUnwindContext();
+        }
+        (void)mutator.EnterSaferegion(false);
     }
-    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
+    ~MutatorBlockInVMPreprocess()
+    {
+        mutator.DoLeaveSaferegion(preprocess);
+        if (published) {
+            mutator.GetUnwindContext() = saved;
+        }
+    }
     MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;
     MutatorBlockInVMPreprocess& operator=(const MutatorBlockInVMPreprocess&) = delete;
 private:
     Mutator& mutator;
     Preprocess& preprocess;
+    UnwindContext saved;
+    bool published = false;
 };
 
 // Scoped guard for saferegion.
