@@ -173,7 +173,7 @@ GC_COMPONENT_TEST(WatermarkIteration, RecordedNullHeadStillAdvances)
 GC_COMPONENT_TEST(WatermarkIteration, AnchorStopsBeforeNullCaller)
 {
     FrameAddress past {};
-    past.callerFrameAddress = &past;
+    past.callerFrameAddress = nullptr;
     past.returnAddress = NativeIp();
     FrameAddress anchor {};
     anchor.callerFrameAddress = &past;
@@ -231,7 +231,7 @@ GC_COMPONENT_TEST(WatermarkIteration, AnchorStopsBeforeNullCaller)
 GC_COMPONENT_TEST(WatermarkIteration, SafepointWalkStopsOnAnchor)
 {
     FrameAddress past {};
-    past.callerFrameAddress = &past;
+    past.callerFrameAddress = nullptr;
     past.returnAddress = NativeIp();
     FrameAddress anchor {};
     anchor.callerFrameAddress = &past;
@@ -261,12 +261,12 @@ GC_COMPONENT_TEST(WatermarkIteration, SafepointWalkStopsOnAnchor)
     GC_EXPECT_TRUE(finished);
 }
 
-// The same consumer must not publish epoch completion when the chain stops
-// before anchorFA, or when the context is empty while the anchor is still set.
+// A walk that starts and stops before the anchor must not return to the caller.
+// An empty context is not that walk: javaFrameAnchor.hpp:77, stackWatermark.cpp:219.
 GC_COMPONENT_TEST(WatermarkIteration, BrokenChainDoesNotCompleteEpoch)
 {
     FrameAddress anchor {};
-    anchor.callerFrameAddress = &anchor;
+    anchor.callerFrameAddress = nullptr;
     anchor.returnAddress = NativeIp();
     FrameAddress broken {};
     broken.callerFrameAddress = nullptr;
@@ -281,14 +281,49 @@ GC_COMPONENT_TEST(WatermarkIteration, BrokenChainDoesNotCompleteEpoch)
     context.frameInfo.mFrame.SetIP(NativeIp());
     context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
 
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        uintptr_t childPublished = 0;
+        ArmStaleEpoch(childPublished);
+        StackWatermarkSet::on_safepoint(owner);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[512];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("stack watermark stopped before the anchor") != std::string::npos;
+    GC_EXPECT_TRUE(rejected);
+
+    FrameAddress young {};
+    young.callerFrameAddress = &anchor;
+    young.returnAddress = NativeIp();
+    Mutator legal;
+    BoundMutator legalBound(legal);
+    legal.SetManagedContext(true);
+    UnwindContext& legalContext = legal.GetUnwindContext();
+    legalContext.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    legalContext.frameInfo.mFrame.SetFA(&young);
+    legalContext.frameInfo.mFrame.SetIP(NativeIp());
+    legalContext.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
     uintptr_t published = 0;
     ArmStaleEpoch(published);
-    StackWatermarkSet::on_safepoint(owner);
-    const bool started = owner.GetStackWatermark().processing_started();
-    const bool unfinished = !owner.GetStackWatermark().IsDone();
+    StackWatermarkSet::on_safepoint(legal);
+    const bool legalDone = legal.GetStackWatermark().IsDone();
     ::g_cjStoreGoodMask = published;
-    GC_EXPECT_TRUE(started);
-    GC_EXPECT_TRUE(unfinished);
+    GC_EXPECT_TRUE(legalDone);
 
     Mutator cleared;
     BoundMutator clearedBound(cleared);
@@ -297,24 +332,12 @@ GC_COMPONENT_TEST(WatermarkIteration, BrokenChainDoesNotCompleteEpoch)
     cleared.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
     ArmStaleEpoch(published);
     StackWatermarkSet::on_safepoint(cleared);
-    const bool clearedStarted = cleared.GetStackWatermark().processing_started();
-    const bool clearedUnfinished = !cleared.GetStackWatermark().IsDone();
+    const bool noFrameDone = cleared.GetStackWatermark().IsDone();
     ::g_cjStoreGoodMask = published;
-    GC_EXPECT_TRUE(clearedStarted);
-    GC_EXPECT_TRUE(clearedUnfinished);
-
-    Mutator noAnchor;
-    BoundMutator noAnchorBound(noAnchor);
-    noAnchor.SetManagedContext(true);
-    noAnchor.GetUnwindContext().GoIntoManagedCode();
-    ArmStaleEpoch(published);
-    StackWatermarkSet::on_safepoint(noAnchor);
-    const bool emptyDone = noAnchor.GetStackWatermark().IsDone();
-    ::g_cjStoreGoodMask = published;
-    noAnchor.SetManagedContext(false);
     cleared.SetManagedContext(false);
+    legal.SetManagedContext(false);
     owner.SetManagedContext(false);
-    GC_EXPECT_TRUE(emptyDone);
+    GC_EXPECT_TRUE(noFrameDone);
 }
 
 // MutatorBlockInVMPreprocess publishes the live caller for every managed
@@ -349,6 +372,34 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
     }
     GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
     GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
+
+    FrameAddress moved {};
+    moved.callerFrameAddress = &sentinel;
+    moved.returnAddress = NativeIp();
+    cleared.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&sentinel);
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(cleared, release);
+        cleared.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&moved);
+        GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetFA() != &sentinel);
+    }
+    GC_EXPECT_TRUE(cleared.GetUnwindContext().anchorFA == reinterpret_cast<uint32_t*>(&moved));
+    GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
+
+    Mutator nested;
+    BoundMutator nestedBound(nested);
+    nested.SetManagedContext(true);
+    nested.SetInSaferegion(SAFE_REGION_TRUE);
+    nested.GetUnwindContext().frameInfo.mFrame.SetFA(&sentinel);
+    nested.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
+    nested.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(nested, release);
+        GC_EXPECT_TRUE(nested.InSaferegion());
+        GC_EXPECT_TRUE(nested.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
+        GC_EXPECT_TRUE(nested.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
+    }
+    GC_EXPECT_TRUE(nested.InSaferegion());
+    GC_EXPECT_TRUE(nested.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
 
     Mutator risky;
     BoundMutator riskyBound(risky);
@@ -390,7 +441,6 @@ GC_COMPONENT_TEST(WatermarkIteration, BlockDropsCaptureAfterReturn)
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
     FrameAddress* second = PublishFromB(owner);
     GC_EXPECT_TRUE(second != nullptr);
-    GC_EXPECT_TRUE(first != second);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
 }

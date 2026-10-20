@@ -215,12 +215,11 @@ void StackFrameStream::Start()
     }
     CheckTopUnwindContextAndInit(current);
     // ip==nullptr is an empty context (GoIntoManagedCode), not a frame.
-    // A real instruction at anchorFA is the oldest frame: process it, do not sender().
-    // HotSpot stackFrameStream.inline.hpp:33 / stackWatermark.inline.hpp:103-104.
-    // An anchor that was never visited is not that end (stackWatermark.cpp:199-222).
+    // javaFrameAnchor.hpp:77: no last_Java_sp is not a walk that missed its end.
+    // anchorFA stops a walk that has a start (stackFrameStream.inline.hpp:33).
     const bool noInstruction = current.frameInfo.mFrame.GetIP() == nullptr;
     done = noInstruction;
-    broken = noInstruction && anchorFA != nullptr;
+    broken = false;
     stopBeforeUnwind = !noInstruction && AtOldestFrame(current.frameInfo.mFrame);
     if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }

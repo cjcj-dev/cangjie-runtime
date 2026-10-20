@@ -17,26 +17,36 @@ template<class Preprocess>
 class MutatorBlockInVMPreprocess {
 public:
     MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
-        : mutator(mutator), preprocess(preprocess), saved(mutator.GetUnwindContext())
+        : mutator(mutator), preprocess(preprocess)
     {
-        // javaFrameAnchor.hpp:59-66 / frame_x86.cpp:710-716: a non-empty anchor is
-        // not proof the frame is still the caller of this block. Refresh every
-        // managed entry. RISKY is the C2N anchor; do not replace it.
-        // interfaceSupport.inline.hpp:213-223: leave and process while that caller
-        // is alive, then drop this capture so it cannot outlive the return.
-        UnwindContext& context = mutator.GetUnwindContext();
-        published = mutator.IsManagedContext() &&
-            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY;
-        if (published) {
-            mutator.UpdateUnwindContext();
+        // interfaceSupport.inline.hpp:209-211 only transitions a thread that is
+        // still in the VM. An outer saferegion stays as it is.
+        if (mutator.InSaferegion()) {
+            return;
         }
-        (void)mutator.EnterSaferegion(false);
+        UnwindContext& context = mutator.GetUnwindContext();
+        // frame_x86.cpp:710-716 fills the pc from the live stack before the
+        // thread is blocked. RISKY is GoIntoNativeCode; do not replace it.
+        // Only the overwritten frame identity is restored. anchorFA is the walk
+        // stop and stack move writes it on the live context (Mutator.cpp).
+        if (mutator.IsManagedContext() &&
+            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
+            savedIP = context.frameInfo.mFrame.GetIP();
+            savedFA = context.frameInfo.mFrame.GetFA();
+            mutator.UpdateUnwindContext();
+            published = true;
+        }
+        entered = mutator.EnterSaferegion(false);
     }
     ~MutatorBlockInVMPreprocess()
     {
-        mutator.DoLeaveSaferegion(preprocess);
+        if (entered) {
+            mutator.DoLeaveSaferegion(preprocess);
+        }
         if (published) {
-            mutator.GetUnwindContext() = saved;
+            UnwindContext& context = mutator.GetUnwindContext();
+            context.frameInfo.mFrame.SetIP(savedIP);
+            context.frameInfo.mFrame.SetFA(savedFA);
         }
     }
     MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;
@@ -44,8 +54,10 @@ public:
 private:
     Mutator& mutator;
     Preprocess& preprocess;
-    UnwindContext saved;
+    const uint32_t* savedIP = nullptr;
+    FrameAddress* savedFA = nullptr;
     bool published = false;
+    bool entered = false;
 };
 
 // Scoped guard for saferegion.

@@ -195,14 +195,27 @@ uintptr_t StackWatermark::last_processed_raw() const
     return iterator == nullptr ? 0 : iterator->caller();
 }
 
+// javaFrameAnchor.hpp:77 has_last_Java_frame is last_Java_sp != nullptr.
+// anchorFA is the oldest-frame stop, not that youngest frame.
+static bool HasExposableFrame(Mutator& owner)
+{
+    if (!owner.IsManagedContext()) {
+        return false;
+    }
+    const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
+    return top.GetFA() != nullptr && top.GetIP() != nullptr;
+}
+
 void StackWatermark::update_watermark()
 {
+    // stackWatermark.cpp:230-238 completes when the iterator is exhausted.
+    // A walk that started and stopped before the anchor does not return:
+    // finish_processing, process_one and on_safepoint all come through here.
+    if (iterator != nullptr && iterator->chain_broken()) {
+        CHECK_DETAIL(false, "stack watermark stopped before the anchor");
+    }
     if (iterator != nullptr && iterator->has_next()) {
         waterMark.store(iterator->callee(), std::memory_order_release);
-        state.store(PackState(epoch_id(), false), std::memory_order_release);
-    } else if (iterator != nullptr && iterator->chain_broken()) {
-        // stackWatermark.cpp:199-222 completes only after the last Java frame.
-        // A chain that never reached anchorFA stays incomplete.
         state.store(PackState(epoch_id(), false), std::memory_order_release);
     } else {
         waterMark.store(0, std::memory_order_release);
@@ -213,7 +226,8 @@ void StackWatermark::update_watermark()
 void StackWatermark::start_processing_impl(void* context)
 {
     iterator.reset();
-    if (owner.IsManagedContext()) {
+    // stackWatermark.cpp:203-221: no last Java frame leaves the iterator null.
+    if (HasExposableFrame(owner)) {
         iterator.reset(new StackWatermarkFramesIterator(*this));
         // runtime/stackWatermark.cpp:205-228: callee, caller, unwind margin.
         iterator->process_one(context);
@@ -288,17 +302,6 @@ void StackWatermark::ensure_safe(const FrameInfo& frame)
 }
 
 void StackWatermark::on_safepoint() { start_processing(); }
-
-namespace {
-bool HasExposableFrame(Mutator& owner)
-{
-    if (!owner.IsManagedContext()) {
-        return false;
-    }
-    const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
-    return top.GetFA() != nullptr && top.GetIP() != nullptr;
-}
-}
 
 void StackWatermark::before_unwind()
 {
