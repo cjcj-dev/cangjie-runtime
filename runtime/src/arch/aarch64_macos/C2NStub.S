@@ -97,6 +97,9 @@ _CJ_MCC_C2NStub:
     add  sp, sp, #FuncAddrAndCpStacksizeOffset
 
     .cfi_startproc
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    paciasp
+#endif
     stp  x29, x30, [sp, #-StubFrameContextSize]!
     cfi_adjust_cfa_offset (StubFrameContextSize)
     cfi_rel_offset (x29, 0)
@@ -243,6 +246,10 @@ L_copy_end:
     // Call merged leave function: LeaveSaferegion + DeleteC2NContext + ThrowPendingException
     ldr x0, [x29, #SafeStateOffset]
     bl  _MRT_C2N_Leave             // return: thread local data
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    .globl _unwindPCForC2NStubExceptionReturn
+_unwindPCForC2NStubExceptionReturn:
+#endif
     str x0, [sp, #.Lmrt_a64_callee_x28]
 
     /* set potential return value */
@@ -282,6 +289,10 @@ L_stack_restore:
     cfi_adjust_cfa_offset (-StubFrameContextSize)
     cfi_restore (x29)
     cfi_restore (x30)
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    // The restored SP is the modifier used on entry and by exception return.
+    autiasp
+#endif
     ret
 L_stack_check_fail:
     bl  _MCC_ThrowStackOverflowError
@@ -292,3 +303,11 @@ L_stack_check_fail:
 
     .globl _unwindPCForC2NStub
 _unwindPCForC2NStub = L_unwindPCForC2NStub
+
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    .section __TEXT,__const
+    .p2align 3
+    .globl _C2NStubFrameSize
+_C2NStubFrameSize:
+    .quad StubFrameContextSize
+#endif
