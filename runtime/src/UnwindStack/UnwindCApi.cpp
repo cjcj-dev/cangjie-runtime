@@ -35,8 +35,14 @@ static void PublishLiveCallerOrClear(UnwindContext& uwContext)
     // MachineFrame::UnwindToCallerMachineFrame is the platform walk.
     // Windows GetCallerFrameInfo adds the managed frame size or the runtime
     // unwind info; a bare callerFrameAddress is only the non-Windows chain.
+    // Its status argument is the walk cursor. The existing walk sets RELIABLE
+    // when the next frame is CJ_MCC_C2NStub. C2N leave already starts on that
+    // stub, so the owner RISKY left by GoIntoNativeCode is not the cursor.
 #ifdef _WIN64
     UnwindContextStatus status = uwContext.GetUnwindContextStatus();
+    if (top.IsC2NStubFrame() && status == UnwindContextStatus::RISKY) {
+        status = UnwindContextStatus::RELIABLE;
+    }
     FrameInfo caller;
     const bool advanced = top.UnwindToCallerMachineFrame(caller, status);
     if (!advanced || caller.mFrame.GetFA() == nullptr || caller.mFrame.GetIP() == nullptr) {

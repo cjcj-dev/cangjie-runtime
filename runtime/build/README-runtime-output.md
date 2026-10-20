@@ -1,122 +1,33 @@
-# Runtime configuration outputs
+# Normal runtime build and consumers
 
-Runtime and boundscheck link into `BUILD/runtime-staging`, private to the CMake
-build tree. After both libraries exist, the product POST_BUILD step publishes an
-immutable pair below `runtime/output/temp/<CANGJIE_RUNTIME_CONFIG_ID>/` and runs
-the GC gate against that published pair. Multi-config generators are rejected.
-CMake 3.19 or newer is required for generation-time target input exports.
+CMake writes libraries, executables and generated CJThread headers beneath
+`BUILD/runtime-staging`. `cmake --install BUILD --prefix INSTALL` installs the
+runtime and boundscheck pair through the normal platform install rules. No
+hash-named source output, inventory scan or publication target is involved.
 
-The final ID exists **after build**, not at configure time. The cache records the
-last successfully published ID; reconfiguring does not publish a new product.
-This replaces the old configure-time ID contract: generator expressions can
-read custom target properties which are only resolved during generation.
+For internal C++ consumers of an existing build/install, select the actual
+library directory with `GCV2_RUNTIME_LIB_DIR`, the matching generated-header
+root with `GCV2_RUNTIME_OUTPUT_ROOT=BUILD/runtime-staging`, and the normal CMake
+build directory with `GCV2_RUNTIME_BUILD_DIR=BUILD`. The latter supplies
+`compile_commands.json` so tests use the product's data-layout macros. These
+paths are explicit inputs, not a certificate of a copied library's origin.
+On AArch64, an external internal-test build additionally supplies
+`GCV2_RUNTIME_COPY_OBJECT` from that same build's RuntimeCopy target. In-tree
+CMake tests consume the target object directly.
 
-```sh
-cmake --build BUILD --parallel 16
-id=$(sed -n 's/^CANGJIE_RUNTIME_CONFIG_ID:INTERNAL=//p' BUILD/CMakeCache.txt)
-lib=$(bash runtime/build/resolve_runtime_output.sh runtime "$id")
-sha256sum "$lib/libcangjie-runtime.so" "$lib/libboundscheck.so"
-GCV2_RUNTIME_CONFIG="$id" bash runtime/tests/gc_unit/gate_gc_unit.sh
-# Re-publish/check the same linked pair without requiring a new link:
-cmake --build BUILD --target publish_runtime_output
-```
+The post-link GC gate consumes that build-tree pair directly. Its normal mode
+runs C++ and language consumers. `GC_UNIT_GATE_LANGUAGE_TESTS=defer` records
+language NOT_RUN/deferred while running C++; `only` runs language consumers.
+`GC_UNIT_GATE_SKIP=1` records NOT_RUN. Each invocation keeps its own logs and
+actual runner exit codes. There is no cached PASS or product-copy step.
 
-Identity is derived from generated `compile_commands.json`, generation-time
-exports of evaluated compiler/linker inputs for every compiled target, the native
-generated link commands (Makefile link.txt or Ninja's command export),
-persisted compiler state, toolchain contents, and CJThread's actual headers and
-archives. It does not classify variables or collect a whitelist of arbitrary
-target properties. Private build/staging paths and CMake process-local directory
-markers are normalized. Linked library hashes additionally bind the signature
-to the product bytes and embedded source revision. A source change can therefore
-produce a new publication even when compiler options are unchanged.
+Language inputs are documented in `tests/gc_unit/LANGUAGE_TOOLCHAIN.md`.
+The A2 fixture requires zx and an explicit same-version CJ linker via
+`MANAGED_METADATA_LINKER`; a host C++ compiler does not supply that ABI.
 
-The publisher hashes inputs and both SOs, copies the pair and CJThread inputs to
-a temporary sibling directory, verifies the copies, then atomically renames the
-directory. An existing ID is accepted only if all owned files are byte-identical;
-it is never overwritten with different contents. The manifest, signature input
-JSON and product hash inventory travel with the publication. Gate status files
-are observations and may be updated by later gate executions. The receipt is
-also mirrored beside the linker SO for the existing outer build gate; the
-product gate itself always executes against the published directory.
-
-Each gate invocation allocates `GC_UNIT_OUT/gate-runs/run.XXXXXXXXXX` before
-validation or contract tests. This directory owns native runner outputs,
-`gate.status`, captured stdout/stderr, and `invocation.json` (schema 1).
-Requested inputs and verified product identity are distinct. Interrupted
-invocations remain STARTED until exit. Root summaries and caller-selected
-status are latest-only compatibility mirrors, not history. Direct standalone
-OUT semantics do not change. `gate-cache.json` atomically references a completed
-invocation rather than a shared writable test output directory. The publisher
-supplies a unique `GC_UNIT_GATE_RESULT` handoff per call and mirrors only that
-invocation's status, including when the caller selects an external status path.
-
-CJThread configures early because runtime needs its generated headers. Both its
-nested build directory and intermediate outputs are private to the parent build
-tree. Packaging continues to install from CMake targets. Consumers must select
-an explicit published configuration; there is no mutable “latest” alias.
-
-The GC gate and standalone runner also accept a directory containing only a
-copied runtime/boundscheck pair, as supplied by the composition gate. With no
-explicit `GCV2_RUNTIME_OUTPUT_ROOT`, they locate published headers by **both** SO
-hashes and verify the complete header inventory before compiling. Multiple
-matching publications are accepted only when their header bytes agree. External
-builds without a local publication must supply `GCV2_RUNTIME_OUTPUT_ROOT`.
-The library selection itself remains the caller's explicitly supplied pair.
-
-`tests/test_runtime_copied_headers.py --runtime runtime --publication <root>
---work <isolated-work>` runs the real standalone unit build and suite with a copied pair,
-records the actual compiler arguments, and compares consumed header hashes to
-the publication inventory. A compatible stale-header control permits unit
-compilation to finish so the identity assertion can detect a wrong consumer.
-Add `--entry gate` to exercise the GC gate's selection and complete C++ suite.
-
-Run the regression on the build host (its work directory must be outside source):
-
-```sh
-python3 runtime/tests/test_runtime_output_product.py \
-  --source runtime --work /absolute/isolated/work --mode override --build
-```
-
-The `toolchain`, `environment`, `initial-cache`, `override`, `arbitrary`, and
-`indirect` modes check OFF/ON/OFF input changes through the real CMake entry,
-compiled product results, repeat publication, earlier-directory preservation,
-resolver selection/hashes, and restored bytes. `indirect` changes only an
-ordinary custom target property read via a generator expression; no new identity
-option name is registered for it.
-
-The manual `run_young_weak_product_cut.sh` fault-injection runner bypasses the
-POST_BUILD step when it executes `link.txt`. It therefore retains the just-linked
-runtime and boundscheck paths from `BUILD/runtime-publish-args.txt`, rather than
-resolving a prior publication. Each cut/restoration snapshot records source path,
-link timestamp and SHA-256 in `linked-product.json`; tests load that snapshot.
-In an isolated Unix Makefiles checkout with `runtime/CMakebuild` configured and
-`cj_gc_unit` built with both test options enabled, verify the serial cut using:
-
-```sh
-python3 runtime/tests/gc_unit/test_young_weak_cut_identity.py \
-  --runtime runtime --elf /absolute/path/to/cj_gc_unit \
-  --evidence /absolute/new/evidence-directory
-```
-
-This checks the same ELF against baseline/cut/restored pairs, requires exactly
-the serial target to change result, and checks restored bytes and source identity.
-
-On aarch64 non-Windows builds, `RuntimeCopy` owns the single compilation of
-`Copy_aarch64.S`. Base and in-tree gc_unit consume that object's bytes. The
-publisher copies it to `lib/<arch>_<type>/gc-unit/Copy_aarch64.o` before running
-the unit gate. `internal_test_objects.copy_disjoint_words` in the signed input
-recipe records its relative path and SHA-256; the product hash inventory also
-covers it. Standalone and external CMake tests verify this record against the
-selected SO pair, compiler target and object ELF before linking. A relocated
-publication must retain the complete publication root. Missing or mismatched
-ARM objects are errors; consumers never recompile the assembly or search another
-build. x64 publications do not require this record.
-
-The in-tree `cj_gc_unit` link uses the runtime and boundscheck files with explicit
-target dependencies. It does not inherit the runtime target's implementation
-archives: otherwise Base can silently supply Copy after its explicit input is
-removed. ARM SO pairs copied outside their publication need an explicit
-`GCV2_RUNTIME_OUTPUT_ROOT`; the pair alone cannot distinguish publications with
-different internal object bytes. The publication's own library directory resolves
-to its enclosing root directly.
+The isolated `run_young_weak_product_cut.sh` compatibility entry forwards to
+zx. Set `GCV2_RUNTIME_BUILD_DIR` and `GCV2_RUNTIME_LIB_DIR` to the actual selected
+CMake build and target output directory. It rebuilds the archive and real SO
+through CMake, retains each executed pair as evidence, and restores the cut.
+It never selects a hash publication. Its companion regression checks the
+exact changed failure set, unchanged test ELF and restored product bytes.

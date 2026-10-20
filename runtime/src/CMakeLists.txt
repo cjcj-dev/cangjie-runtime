@@ -266,14 +266,20 @@ endif()
         VERBATIM)
     add_dependencies(runtime check_diag_not_hollow)
     add_dependencies(cangjie-runtime check_diag_not_hollow)
-    # RuntimeOutputLayout.cmake wires publication and the GC gate after every
-    # target has its final compilation shape. The gate consumes the published
-    # pair, never the mutable linker staging directory.
-    add_custom_command(TARGET cangjie-runtime POST_BUILD
-        COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
-            "@$<TARGET_PROPERTY:cangjie-runtime,CJ_RUNTIME_PUBLISH_ARGS>"
-        COMMENT "Publishing the configured runtime pair and checking the published products"
-        VERBATIM)
+    # Consume the linked build-tree pair directly. Normal install remains a
+    # separate CMake operation; no publication copies or configuration IDs.
+    if(NOT CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_custom_command(TARGET cangjie-runtime POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E env
+                "GCV2_RUNTIME_LIB_DIR=$<TARGET_FILE_DIR:cangjie-runtime>"
+                "GCV2_RUNTIME_OUTPUT_ROOT=${CJ_RUNTIME_STAGING_ROOT}"
+                "GCV2_RUNTIME_BUILD_DIR=${CMAKE_BINARY_DIR}"
+                "GC_UNIT_OUT=${CMAKE_BINARY_DIR}/gc-unit-runs"
+                "GC_UNIT_GATE_LANGUAGE_TESTS=defer"
+                bash "${CMAKE_SOURCE_DIR}/tests/gc_unit/gate_gc_unit.sh"
+            COMMENT "Checking the linked runtime through its normal GC consumers"
+            VERBATIM)
+    endif()
     if (WINDOWS_FLAG MATCHES 1)
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check

@@ -1124,6 +1124,3 @@ if (MRT_GC_UNIT_TESTS)
     add_subdirectory(tests/gc_unit)
     add_subdirectory(tests/typeinfo_catalog)
 endif()
-
-# All directory, source and target inputs now exist, including unit hooks.
-cj_runtime_finalize_output_layout()

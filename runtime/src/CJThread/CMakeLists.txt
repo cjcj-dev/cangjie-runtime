@@ -22,7 +22,7 @@ endif()
 project(cjthread C CXX)
 
 if(NOT RUNTIME_OUTPUT_ROOT)
-    set(RUNTIME_OUTPUT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../output/temp")
+    set(RUNTIME_OUTPUT_ROOT "${CMAKE_BINARY_DIR}/runtime-staging")
 endif()
 
 if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
