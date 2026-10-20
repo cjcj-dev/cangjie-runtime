@@ -661,7 +661,12 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             RebaseDerived(newDerivedSlot, newBase, offset);
         }
 
-        uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
+        // A null anchor is not a frame. Adding the copy offset would publish
+        // that offset as an anchor, and the next walk would stop before it.
+        if (uwContext.anchorFA != nullptr) {
+            uwContext.anchorFA = reinterpret_cast<uint32_t*>(
+                reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
+        }
         MutatorUnlock();
 
         return stackOffset;
