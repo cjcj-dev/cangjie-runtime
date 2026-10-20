@@ -15,11 +15,13 @@
 #include <unistd.h>
 
 #include "gc_unittest.hpp"
+#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "UnwindStack/PrintStackInfo.h"
+#include "UnwindStack/StackFrameCursor.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -101,4 +103,162 @@ GC_COMPONENT_TEST(WatermarkIteration, DiagnosticWalkRejectsUnstartedEpoch)
     GC_EXPECT_TRUE(precondition);
     GC_EXPECT_TRUE(targetHeld);
     GC_EXPECT_TRUE(controlStarted);
+}
+
+extern uintptr_t unwindPCForSafepointHandlerStub;
+
+namespace {
+const uint32_t* SafepointStubIp()
+{
+    return reinterpret_cast<const uint32_t*>(&unwindPCForSafepointHandlerStub);
+}
+
+void ArmStaleEpoch(uintptr_t& published)
+{
+    published = ::g_cjStoreGoodMask;
+    ::g_cjStoreGoodMask = published | ZPointerRememberedMask;
+}
+} // namespace
+
+// Recorded frames return before any physical unwind. A null fa/ip on the first
+// record must not swallow the rest of the stream.
+GC_COMPONENT_TEST(WatermarkIteration, RecordedNullHeadStillAdvances)
+{
+    static uint32_t secondIp = 0;
+    std::vector<FrameInfo> frames;
+    frames.push_back(FrameInfo(MachineFrame(nullptr, nullptr), FrameType::NATIVE));
+    frames.push_back(FrameInfo(MachineFrame(nullptr, &secondIp), FrameType::NATIVE));
+    StackFrameCursor cursor(frames);
+    GC_EXPECT_TRUE(!cursor.Done());
+    GC_EXPECT_TRUE(cursor.CurrentFrame() != nullptr);
+    GC_EXPECT_TRUE(cursor.CurrentFrame()->mFrame.GetFA() == nullptr);
+    GC_EXPECT_TRUE(cursor.CurrentFrame()->mFrame.GetIP() == nullptr);
+    cursor.Advance();
+    GC_EXPECT_TRUE(!cursor.Done());
+    GC_EXPECT_TRUE(cursor.CurrentFrame() != nullptr);
+    GC_EXPECT_TRUE(cursor.CurrentFrame()->mFrame.GetIP() == &secondIp);
+}
+
+// Physical chain: young SAFEPOINT, then the anchor. The anchor's caller slot is
+// null. The cursor must observe both frames and stop without loading that slot.
+// SAFEPOINT has no stackmap roots (StackFrameCursor::ProcessFrame). Managed
+// stackmap coverage is not this test.
+GC_COMPONENT_TEST(WatermarkIteration, AnchorStopsBeforeNullCaller)
+{
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = nullptr;
+    FrameAddress young {};
+    young.callerFrameAddress = &anchor;
+    young.returnAddress = SafepointStubIp();
+
+    UnwindContext top;
+    top.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    top.frameInfo.mFrame.SetFA(&young);
+    top.frameInfo.mFrame.SetIP(SafepointStubIp());
+    top.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+
+    StackFrameCursor cursor(top);
+    int seen = 0;
+    bool sawYoung = false;
+    bool sawAnchor = false;
+    while (!cursor.Done()) {
+        const FrameInfo* frame = cursor.CurrentFrame();
+        GC_EXPECT_TRUE(frame != nullptr);
+        ++seen;
+        if (frame->mFrame.GetFA() == &young) { sawYoung = true; }
+        if (frame->mFrame.GetFA() == &anchor) { sawAnchor = true; }
+        GC_EXPECT_TRUE(frame->GetFrameType() == FrameType::SAFEPOINT);
+        cursor.Advance();
+    }
+    GC_EXPECT_TRUE(seen == 2);
+    GC_EXPECT_TRUE(sawYoung);
+    GC_EXPECT_TRUE(sawAnchor);
+
+    FrameAddress broken {};
+    int iteratorSlot = 0;
+    broken.callerFrameAddress = nullptr;
+    broken.returnAddress = reinterpret_cast<const uint32_t*>(&iteratorSlot);
+    UnwindContext bad;
+    bad.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    bad.frameInfo.mFrame.SetFA(&broken);
+    bad.frameInfo.mFrame.SetIP(SafepointStubIp());
+    bad.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    StackFrameCursor badCursor(bad);
+    GC_EXPECT_TRUE(!badCursor.Done());
+    GC_EXPECT_TRUE(badCursor.CurrentFrame()->mFrame.GetFA() == &broken);
+    badCursor.Advance();
+    GC_EXPECT_TRUE(badCursor.Done());
+    GC_EXPECT_TRUE(badCursor.CurrentFrame() == nullptr);
+}
+
+// Same chain through the watermark consumer. Epoch is forced stale so
+// on_safepoint cannot return before start_processing_impl.
+GC_COMPONENT_TEST(WatermarkIteration, SafepointWalkStopsOnAnchor)
+{
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = nullptr;
+    FrameAddress young {};
+    young.callerFrameAddress = &anchor;
+    young.returnAddress = SafepointStubIp();
+
+    Mutator owner;
+    owner.SetManagedContext(true);
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(&young);
+    context.frameInfo.mFrame.SetIP(SafepointStubIp());
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+
+    uintptr_t published = 0;
+    ArmStaleEpoch(published);
+    GC_EXPECT_TRUE(!owner.GetStackWatermark().processing_started());
+    StackWatermarkSet::on_safepoint(owner);
+    const bool started = owner.GetStackWatermark().processing_started();
+    const bool finished = owner.GetStackWatermark().IsDone();
+    ::g_cjStoreGoodMask = published;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(started);
+    GC_EXPECT_TRUE(finished);
+}
+
+// MutatorBlockInVMPreprocess publishes a live frame only for a cleared managed
+// context. RISKY and native contexts keep the bytes they already had.
+GC_COMPONENT_TEST(WatermarkIteration, BlockPublishesClearedManagedFrame)
+{
+    auto release = [] {};
+    Mutator cleared;
+    cleared.SetManagedContext(true);
+    cleared.SetInSaferegion(SAFE_REGION_FALSE);
+    cleared.GetUnwindContext().GoIntoManagedCode();
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(cleared, release);
+        GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetFA() != nullptr);
+        GC_EXPECT_TRUE(cleared.GetUnwindContext().frameInfo.mFrame.GetIP() != nullptr);
+    }
+
+    FrameAddress sentinel {};
+    sentinel.callerFrameAddress = &sentinel;
+    sentinel.returnAddress = SafepointStubIp();
+    Mutator risky;
+    risky.SetManagedContext(true);
+    risky.SetInSaferegion(SAFE_REGION_FALSE);
+    risky.GetUnwindContext().GoIntoNativeCode(SafepointStubIp(), &sentinel);
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(risky, release);
+        GC_EXPECT_TRUE(risky.GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RISKY);
+        GC_EXPECT_TRUE(risky.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
+        GC_EXPECT_TRUE(risky.GetUnwindContext().frameInfo.mFrame.GetIP() == SafepointStubIp());
+    }
+
+    Mutator native;
+    native.SetManagedContext(false);
+    native.SetInSaferegion(SAFE_REGION_FALSE);
+    native.GetUnwindContext().GoIntoManagedCode();
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(native, release);
+        GC_EXPECT_TRUE(native.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr);
+        GC_EXPECT_TRUE(native.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
+    }
 }

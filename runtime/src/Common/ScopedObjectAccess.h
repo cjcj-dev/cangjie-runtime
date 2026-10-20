@@ -19,7 +19,16 @@ public:
     MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
         : mutator(mutator), preprocess(preprocess)
     {
-        (void)mutator.EnterSaferegion(false);
+        // A cleared managed context (GoIntoManagedCode) has no frame to walk.
+        // Publish the live C++ frame so the rbp chain reaches anchorFA.
+        // RISKY already holds the C2N managed frame; do not overwrite it.
+        // EnterSaferegion(false) elsewhere keeps its context on purpose.
+        UnwindContext& context = mutator.GetUnwindContext();
+        const MachineFrame& frame = context.frameInfo.mFrame;
+        const bool cleared = frame.GetFA() == nullptr || frame.GetIP() == nullptr;
+        const bool publish = mutator.IsManagedContext() &&
+            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY && cleared;
+        (void)mutator.EnterSaferegion(publish);
     }
     ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
     MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;

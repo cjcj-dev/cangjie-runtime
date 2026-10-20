@@ -196,6 +196,12 @@ uint32_t* StackFrameStream::GetAnchorFAFromMutatorContext() const
     return localContext.anchorFA;
 }
 
+bool StackFrameStream::AtOldestFrame(const MachineFrame& frame) const
+{
+    return frame.GetIP() != nullptr && anchorFA != nullptr &&
+        reinterpret_cast<uintptr_t>(anchorFA) == reinterpret_cast<uintptr_t>(frame.GetFA());
+}
+
 void StackFrameStream::Start()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -208,7 +214,12 @@ void StackFrameStream::Start()
         return;
     }
     CheckTopUnwindContextAndInit(current);
-    done = current.frameInfo.mFrame.IsAnchorFrame(anchorFA);
+    // ip==nullptr is an empty context (GoIntoManagedCode), not a frame.
+    // A real instruction at anchorFA is the oldest frame: process it, do not sender().
+    // HotSpot stackFrameStream.inline.hpp:33 / stackWatermark.inline.hpp:103-104.
+    const bool noInstruction = current.frameInfo.mFrame.GetIP() == nullptr;
+    done = noInstruction;
+    stopBeforeUnwind = !noInstruction && AtOldestFrame(current.frameInfo.mFrame);
     if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }
 
@@ -306,7 +317,19 @@ void StackFrameStream::Next()
         }
         return;
     }
+    if (stopBeforeUnwind) {
+        done = true;
+        return;
+    }
     ElfUnloadQuiescence::ReadScope metadataReader;
+    // No machine frame. Non-Windows UnwindToCallerMachineFrame and Windows
+    // GetCallerFrameInfo (UnwindWin.cpp:123) both load through fa. N2C
+    // GetSlotData(fa) does too (UnwindContext.cpp:16,71). Do not call them.
+    // Recorded frames and UpdateRegisterMap already ran above.
+    if (current.frameInfo.mFrame.GetFA() == nullptr) {
+        done = true;
+        return;
+    }
     lastFrameType = current.frameInfo.GetFrameType();
     UnwindContext caller;
 #ifndef _WIN64
@@ -314,10 +337,18 @@ void StackFrameStream::Next()
 #else
     const bool advanced = current.UnwindToCallerContext(caller, uwCtxStatus);
 #endif
-    done = !advanced || caller.frameInfo.mFrame.IsAnchorFrame(anchorFA);
+    // A null caller fa is not a frame. Do not install it (that is the
+    // {fa=0, ip=iterator} shape). This is not a claim that every null fa
+    // has already had its managed roots scanned.
+    if (!advanced || caller.frameInfo.mFrame.GetFA() == nullptr || caller.frameInfo.mFrame.GetIP() == nullptr) {
+        done = true;
+        return;
+    }
     caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
     current = caller;
-    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
+    stopBeforeUnwind = AtOldestFrame(current.frameInfo.mFrame);
+    AnalyseAndSetFrameType(current);
+    CheckRegisterRoots();
 }
 
 void StackFrameStream::Rebase(intptr_t offset)

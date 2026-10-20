@@ -63,10 +63,13 @@ private:
     void UpdateRegisterMap(const FrameInfo& frame);
     void CheckRegisterRoots() const;
     uint32_t* GetAnchorFAFromMutatorContext() const;
+    bool AtOldestFrame(const MachineFrame& frame) const;
     const UnwindContext* topContext;
     bool isReliableN2CStub;
     UnwindContext current;
     bool done = true;
+    // Set once the oldest anchored frame is current. The next Next() must not sender().
+    bool stopBeforeUnwind = false;
     RegSlotsMap regSlotsMap;
     const std::vector<FrameInfo>* recordedFrames = nullptr;
     const std::vector<FrameInfo*>* recordedFramePointers = nullptr;
