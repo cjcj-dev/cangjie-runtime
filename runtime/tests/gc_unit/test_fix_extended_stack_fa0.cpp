@@ -11,7 +11,6 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 #if defined(__linux__) && defined(__x86_64__)
-#include "Exception/Exception.h"
 #include <ucontext.h>
 
 extern "C" {
@@ -48,11 +47,10 @@ struct GrowResult {
     bool reachedChainEnd;
     bool anchorReady;
     intptr_t offset;
+    uintptr_t anchorBefore;
     uintptr_t anchor;
-    uintptr_t expectedAnchor;
     size_t before;
     size_t after;
-    int exceptionType;
 };
 
 GrowResult g_result;
@@ -96,18 +94,15 @@ void GrowBody()
         return;
     }
     g_result.before = CJ_CJThreadStackSizeGetByCJThrd(g_thread);
+    g_result.anchorBefore = reinterpret_cast<uintptr_t>(anchorBefore);
     const intptr_t frameBase = g_arm == GrowArm::kFfi ? 0
         : reinterpret_cast<intptr_t>(__builtin_frame_address(0));
+    std::fprintf(stderr, "FIX_EXTENDED_STACK_FA0_REACH arm=%d owner=1 fa=%#zx frame_base=%ld before=%zu\n",
+        static_cast<int>(g_arm), fa, static_cast<long>(frameBase), g_result.before);
     const intptr_t offset = MRT_StackGrow(frameBase, 0, nullptr);
     g_result.offset = offset;
     g_result.anchor = reinterpret_cast<uintptr_t>(context.anchorFA);
-    if (offset > 0) {
-        g_result.expectedAnchor = reinterpret_cast<uintptr_t>(anchorBefore) + static_cast<uintptr_t>(offset);
-    } else {
-        g_result.expectedAnchor = reinterpret_cast<uintptr_t>(anchorBefore);
-    }
     g_result.after = CJ_CJThreadStackSizeGetByCJThrd(g_thread);
-    g_result.exceptionType = static_cast<int>(owner->GetExceptionWrapper().GetExceptionType());
 }
 
 void RunArm(GrowArm arm)
@@ -140,33 +135,23 @@ void RunArm(GrowArm arm)
     stackContext.uc_link = &g_back;
     makecontext(&stackContext, GrowEntry, 0);
     GC_EXPECT_EQ(swapcontext(&g_back, &stackContext), 0);
+    const uintptr_t expectedAnchor = g_result.anchorBefore + static_cast<uintptr_t>(g_result.offset);
     std::fprintf(stderr,
         "FIX_EXTENDED_STACK_FA0 arm=%d owner=%d chain=%d anchor_ready=%d offset=%ld before=%zu after=%zu "
-        "anchor=%#zx expected=%#zx exception=%d\n",
+        "anchor=%#zx expected=%#zx\n",
         static_cast<int>(arm), g_result.ownerOk ? 1 : 0, g_result.reachedChainEnd ? 1 : 0,
         g_result.anchorReady ? 1 : 0, static_cast<long>(g_result.offset), g_result.before, g_result.after,
-        g_result.anchor, g_result.expectedAnchor, g_result.exceptionType);
+        g_result.anchor, expectedAnchor);
     GC_EXPECT_TRUE(g_result.ownerOk);
     GC_EXPECT_TRUE(g_result.anchorReady);
     if (arm == GrowArm::kChainEnd) {
         GC_EXPECT_TRUE(g_result.reachedChainEnd);
     }
-    if (g_result.offset > 0) {
-        GC_EXPECT_TRUE(g_result.before < kChainEndStack);
-        GC_EXPECT_TRUE(g_result.after >= kChainEndStack);
-        GC_EXPECT_TRUE(g_result.after > g_result.before);
-        GC_EXPECT_EQ(g_result.anchor, g_result.expectedAnchor);
-        GC_EXPECT_TRUE(g_result.exceptionType != static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
-    } else {
-        GC_EXPECT_EQ(g_result.offset, static_cast<intptr_t>(0));
-        GC_EXPECT_EQ(g_result.after, g_result.before);
-        GC_EXPECT_EQ(g_result.anchor, g_result.expectedAnchor);
-        if (arm == GrowArm::kChainEnd) {
-            GC_EXPECT_EQ(g_result.exceptionType, static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
-        } else {
-            GC_EXPECT_TRUE(g_result.exceptionType != static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
-        }
-    }
+    GC_EXPECT_TRUE(g_result.offset != 0 && g_result.offset != static_cast<intptr_t>(-1));
+    GC_EXPECT_TRUE(g_result.before < kChainEndStack);
+    GC_EXPECT_TRUE(g_result.after >= kChainEndStack);
+    GC_EXPECT_TRUE(g_result.after > g_result.before);
+    GC_EXPECT_EQ(g_result.anchor, expectedAnchor);
     if (g_mutator != nullptr) {
         (void)g_mutator->EnterSaferegion(false);
     }
