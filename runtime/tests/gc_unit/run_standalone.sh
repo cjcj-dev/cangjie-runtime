@@ -426,6 +426,7 @@ MAIN_SOURCES=(
   "$SRC/test_gctibzero.cpp"
   "$SRC/test_field_iterator.cpp"
   "$SRC/test_pinroot.cpp"
+  "$SRC/test_fix_extended_stack_fa0.cpp"
   "$SRC/test_followedge.cpp"
   "$SRC/test_colour_is_checks.cpp"
   "$SRC/test_remap_young_roots.cpp"

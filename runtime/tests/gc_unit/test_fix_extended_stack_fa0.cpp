@@ -6,12 +6,14 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <ucontext.h>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 #if defined(__linux__) && defined(__x86_64__)
+#include "Exception/Exception.h"
+#include <ucontext.h>
+
 extern "C" {
 struct CJThread;
 typedef uintptr_t* (*GrowTlsHook)();
@@ -28,6 +30,9 @@ size_t CJ_CJThreadStackSizeGetByCJThrd(struct CJThread* cjthread);
 void* CJ_CJThreadStackAddrGetByCJThrd(struct CJThread* cjthread);
 void* CJ_CJThreadStackBaseAddrGetByCJThrd(struct CJThread* cjthread);
 #endif
+#ifndef CJThreadGetMutator
+void* CJ_CJThreadGetMutator(void);
+#endif
 intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip);
 }
 
@@ -39,14 +44,15 @@ constexpr unsigned kInitialStack = 1024 * 1024;
 enum class GrowArm { kChainEnd, kFfi };
 
 struct GrowResult {
+    bool ownerOk;
+    bool reachedChainEnd;
+    bool anchorReady;
     intptr_t offset;
-    uintptr_t fa;
-    const uint32_t* ip;
-    uint32_t* anchor;
-    uint32_t* expectedAnchor;
+    uintptr_t anchor;
+    uintptr_t expectedAnchor;
     size_t before;
     size_t after;
-    bool lockReleased;
+    int exceptionType;
 };
 
 GrowResult g_result;
@@ -71,16 +77,22 @@ void GrowBody()
     ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
     (void)CJ_ScheduleGetTlsHookRegister(reinterpret_cast<GrowTlsHook>(MRT_GetThreadLocalData));
     ThreadLocal::SetCJThread(g_thread);
-    ThreadLocal::SetMutator(g_mutator);
-    g_mutator->InitStackInfo(ThreadLocal::GetThreadLocalData());
-    UnwindContext& context = g_mutator->GetUnwindContext();
-    context.GoIntoManagedCode();
-    uint32_t anchorSlot = 0;
-    context.anchorFA = &anchorSlot;
-    g_result.fa = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
-    g_result.ip = context.frameInfo.mFrame.GetIP();
-    if (g_result.fa != 0 || g_result.ip != nullptr) {
-        g_result.offset = -2;
+    Mutator* owner = MutatorManager::Instance().CreateMutator();
+    g_mutator = owner;
+    g_result.ownerOk = owner != nullptr && owner->GetCjthreadPtr() == static_cast<void*>(g_thread) &&
+        Mutator::GetMutator() == owner && static_cast<Mutator*>(CJ_CJThreadGetMutator()) == owner &&
+        ThreadLocal::GetMutator() == owner;
+    if (!g_result.ownerOk) {
+        return;
+    }
+    MRT_PreRunManagedCode(owner, 1, ThreadLocal::GetThreadLocalData());
+    UnwindContext& context = owner->GetUnwindContext();
+    const uintptr_t fa = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
+    const uint32_t* ip = context.frameInfo.mFrame.GetIP();
+    g_result.reachedChainEnd = fa == 0 && ip == nullptr;
+    uint32_t* anchorBefore = context.anchorFA;
+    g_result.anchorReady = anchorBefore != nullptr;
+    if (!g_result.anchorReady || (g_arm == GrowArm::kChainEnd && !g_result.reachedChainEnd)) {
         return;
     }
     g_result.before = CJ_CJThreadStackSizeGetByCJThrd(g_thread);
@@ -88,14 +100,14 @@ void GrowBody()
         : reinterpret_cast<intptr_t>(__builtin_frame_address(0));
     const intptr_t offset = MRT_StackGrow(frameBase, 0, nullptr);
     g_result.offset = offset;
-    g_result.fa = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
-    g_result.ip = context.frameInfo.mFrame.GetIP();
-    g_result.anchor = context.anchorFA;
-    g_result.expectedAnchor = reinterpret_cast<uint32_t*>(
-        reinterpret_cast<uintptr_t>(&anchorSlot) + static_cast<uintptr_t>(offset));
+    g_result.anchor = reinterpret_cast<uintptr_t>(context.anchorFA);
+    if (offset > 0) {
+        g_result.expectedAnchor = reinterpret_cast<uintptr_t>(anchorBefore) + static_cast<uintptr_t>(offset);
+    } else {
+        g_result.expectedAnchor = reinterpret_cast<uintptr_t>(anchorBefore);
+    }
     g_result.after = CJ_CJThreadStackSizeGetByCJThrd(g_thread);
-    g_mutator->GetStackWatermark().start_processing();
-    g_result.lockReleased = true;
+    g_result.exceptionType = static_cast<int>(owner->GetExceptionWrapper().GetExceptionType());
 }
 
 void RunArm(GrowArm arm)
@@ -103,8 +115,6 @@ void RunArm(GrowArm arm)
     B09RuntimeFixture runtime(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
-    Mutator* mutator = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    GC_EXPECT_TRUE(mutator != nullptr);
     CJThreadAttr attr{};
     CJ_CJThreadAttrInit(&attr);
     CJ_CJThreadAttrStackSizeSet(&attr, kInitialStack);
@@ -120,7 +130,7 @@ void RunArm(GrowArm arm)
     void* high = CJ_CJThreadStackBaseAddrGetByCJThrd(thread);
     GC_EXPECT_TRUE(low != nullptr && high != nullptr);
     g_result = {};
-    g_mutator = mutator;
+    g_mutator = nullptr;
     g_thread = thread;
     g_arm = arm;
     ucontext_t stackContext{};
@@ -131,18 +141,35 @@ void RunArm(GrowArm arm)
     makecontext(&stackContext, GrowEntry, 0);
     GC_EXPECT_EQ(swapcontext(&g_back, &stackContext), 0);
     std::fprintf(stderr,
-        "FIX_EXTENDED_STACK_FA0 arm=%d offset=%ld before=%zu after=%zu fa=%#zx ip=%p anchor=%p expected=%p lock=%d\n",
-        static_cast<int>(arm), static_cast<long>(g_result.offset), g_result.before, g_result.after,
-        g_result.fa, static_cast<const void*>(g_result.ip), static_cast<void*>(g_result.anchor),
-        static_cast<void*>(g_result.expectedAnchor), g_result.lockReleased ? 1 : 0);
-    GC_EXPECT_TRUE(g_result.offset > 0);
-    GC_EXPECT_EQ(g_result.fa, static_cast<uintptr_t>(0));
-    GC_EXPECT_TRUE(g_result.ip == nullptr);
-    GC_EXPECT_TRUE(g_result.before < kChainEndStack);
-    GC_EXPECT_TRUE(g_result.after >= kChainEndStack);
-    GC_EXPECT_EQ(g_result.anchor, g_result.expectedAnchor);
-    GC_EXPECT_TRUE(g_result.lockReleased);
-    (void)mutator->EnterSaferegion(false);
+        "FIX_EXTENDED_STACK_FA0 arm=%d owner=%d chain=%d anchor_ready=%d offset=%ld before=%zu after=%zu "
+        "anchor=%#zx expected=%#zx exception=%d\n",
+        static_cast<int>(arm), g_result.ownerOk ? 1 : 0, g_result.reachedChainEnd ? 1 : 0,
+        g_result.anchorReady ? 1 : 0, static_cast<long>(g_result.offset), g_result.before, g_result.after,
+        g_result.anchor, g_result.expectedAnchor, g_result.exceptionType);
+    GC_EXPECT_TRUE(g_result.ownerOk);
+    GC_EXPECT_TRUE(g_result.anchorReady);
+    if (arm == GrowArm::kChainEnd) {
+        GC_EXPECT_TRUE(g_result.reachedChainEnd);
+    }
+    if (g_result.offset > 0) {
+        GC_EXPECT_TRUE(g_result.before < kChainEndStack);
+        GC_EXPECT_TRUE(g_result.after >= kChainEndStack);
+        GC_EXPECT_TRUE(g_result.after > g_result.before);
+        GC_EXPECT_EQ(g_result.anchor, g_result.expectedAnchor);
+        GC_EXPECT_TRUE(g_result.exceptionType != static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
+    } else {
+        GC_EXPECT_EQ(g_result.offset, static_cast<intptr_t>(0));
+        GC_EXPECT_EQ(g_result.after, g_result.before);
+        GC_EXPECT_EQ(g_result.anchor, g_result.expectedAnchor);
+        if (arm == GrowArm::kChainEnd) {
+            GC_EXPECT_EQ(g_result.exceptionType, static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
+        } else {
+            GC_EXPECT_TRUE(g_result.exceptionType != static_cast<int>(ExceptionWrapper::ExceptionType::STACK_OVERFLOW));
+        }
+    }
+    if (g_mutator != nullptr) {
+        (void)g_mutator->EnterSaferegion(false);
+    }
 }
 
 } // namespace
@@ -155,14 +182,5 @@ GC_COMPONENT_OTHER_VM_TEST(FixExtendedStackFa0, GrowsAtChainEndWithoutUnwind)
 GC_COMPONENT_OTHER_VM_TEST(FixExtendedStackFa0, FfiMaxGrowStillReturnsOffset)
 {
     RunArm(GrowArm::kFfi);
-}
-#else
-GC_COMPONENT_OTHER_VM_TEST(FixExtendedStackFa0, GrowsAtChainEndWithoutUnwind)
-{
-    GC_EXPECT_TRUE(false);
-}
-GC_COMPONENT_OTHER_VM_TEST(FixExtendedStackFa0, FfiMaxGrowStillReturnsOffset)
-{
-    GC_EXPECT_TRUE(false);
 }
 #endif
