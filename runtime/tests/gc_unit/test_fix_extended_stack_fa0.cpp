@@ -2,6 +2,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/Mutator.inline.h"
 #include "Mutator/ThreadLocal.h"
 
 #include <cstdint>
