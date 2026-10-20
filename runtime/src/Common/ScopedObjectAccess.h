@@ -41,18 +41,18 @@ public:
     }
     ~MutatorBlockInVMPreprocess()
     {
-        if (published) {
-            StackWatermark& watermark = mutator.GetStackWatermark();
-            // Finish a walk that already started before this scope replaces the frame.
-            if (watermark.processing_started() && !watermark.IsDone()) {
-                StackWatermarkSet::finish_processing(mutator);
-            }
-            UnwindContext& context = mutator.GetUnwindContext();
-            context.frameInfo.mFrame.SetIP(savedIP);
-            context.frameInfo.mFrame.SetFA(savedFA);
-        }
+        // interfaceSupport.inline.hpp:215-220 publishes the active state, then
+        // runs the preprocess and the safepoint while the anchor is still the
+        // frame captured on entry. Restoring the saved top first lets a new
+        // epoch's on_safepoint observe only that saved top.
         if (entered) {
             mutator.DoLeaveSaferegion(preprocess);
+        }
+        if (published) {
+            // An iterator started on this capture must finish before the top
+            // changes. Both happen under the watermark lock, so a concurrent
+            // start either sees the capture or the restored top.
+            mutator.GetStackWatermark().restore_saved_top(savedIP, savedFA);
         }
     }
     MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;

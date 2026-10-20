@@ -277,6 +277,19 @@ void StackWatermark::finish_processing(void* context)
     lock.unlock();
 }
 
+void StackWatermark::restore_saved_top(const uint32_t* ip, FrameAddress* fa)
+{
+    lock.lock();
+    if (processing_started() && !IsDone() && iterator != nullptr) {
+        iterator->process_all(nullptr);
+        update_watermark();
+    }
+    MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
+    top.SetIP(ip);
+    top.SetFA(fa);
+    lock.unlock();
+}
+
 void StackWatermark::process_one()
 {
     lock.lock();

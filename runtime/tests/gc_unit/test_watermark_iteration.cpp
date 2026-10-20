@@ -511,10 +511,11 @@ GC_COMPONENT_TEST(WatermarkIteration, SingleEmptyTopIsRejected)
     GC_EXPECT_TRUE(stayed);
 }
 
-// Cut: delete process_head in ZStackWatermark::start_processing_impl (the call
-// that now runs before the managed double-empty return). The base return does
-// not visit head roots, so it cannot keep nativeHits == 1. Restoring the old
-// return ahead of process_head leaves nativeHits at 0.
+// Cut: delete process_head in ZStackWatermark::start_processing_impl.
+// UnpublishedManagedFinishVisitsNativeHead then leaves nativeRootHits at 0.
+// ManagedEmptyFinishLeavesEpochUnstarted does not read that count and must
+// stay green. NativeContextFinishVisitsHead also calls process_head, so it
+// is not this cut's control.
 namespace {
 ObjectRef* expectedNativeRoot = nullptr;
 int nativeRootHits = 0;
@@ -555,13 +556,40 @@ GC_COMPONENT_TEST(WatermarkIteration, UnpublishedManagedFinishVisitsNativeHead)
     owner.SetManagedContext(false);
     GC_EXPECT_TRUE(visited);
     GC_EXPECT_TRUE(stayed);
+}
 
+GC_COMPONENT_TEST(WatermarkIteration, ManagedEmptyFinishLeavesEpochUnstarted)
+{
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    owner.GetUnwindContext().GoIntoManagedCode();
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+    owner.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    uintptr_t published = 0;
+    const uint32_t packedBefore = owner.GetStackWatermark().PackedState();
+    ArmStaleEpoch(published);
+    StackWatermarkSet::finish_processing(owner, nullptr);
+    const bool stayed = !owner.GetStackWatermark().processing_started() &&
+        !owner.GetStackWatermark().IsDone(StackWatermark::epoch_id()) &&
+        owner.GetStackWatermark().PackedState() == packedBefore;
+    ::g_cjStoreGoodMask = published;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(stayed);
+}
+
+GC_COMPONENT_TEST(WatermarkIteration, NativeContextFinishVisitsHead)
+{
+    alignas(8) static char storage[8] = {};
     Mutator native;
     BoundMutator nativeBound(native);
     native.SetManagedContext(false);
     native.GetUnwindContext().GoIntoManagedCode();
     expectedNativeRoot = native.AddNativeFrameRoot(reinterpret_cast<BaseObject*>(storage));
     nativeRootHits = 0;
+    uintptr_t published = 0;
     ArmStaleEpoch(published);
     StackWatermarkSet::finish_processing(native, reinterpret_cast<void*>(CountNativeHeadRoot));
     const bool nativeVisited = nativeRootHits == 1;
@@ -647,8 +675,9 @@ GC_COMPONENT_TEST(WatermarkIteration, SaveOfEmptyLeavesEpochUnstarted)
     GC_EXPECT_TRUE(stayed);
 }
 
-// The stub's own frame must not stay published, and a caller that is still
-// live must. No caller link still clears both ends.
+// Cut: make MRT_DeleteC2NContext call GoIntoManagedCode instead of
+// PublishLiveCallerOrClear. DeleteC2NKeepsLiveCaller then fails the caller
+// frame. DeleteC2NClearsFrameWithoutCaller must stay green.
 GC_COMPONENT_TEST(WatermarkIteration, DeleteC2NKeepsLiveCaller)
 {
     Mutator owner;
@@ -667,13 +696,90 @@ GC_COMPONENT_TEST(WatermarkIteration, DeleteC2NKeepsLiveCaller)
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == &caller);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
     GC_EXPECT_TRUE(owner.GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RELIABLE);
+    owner.SetManagedContext(false);
+}
 
+GC_COMPONENT_TEST(WatermarkIteration, DeleteC2NClearsFrameWithoutCaller)
+{
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    FrameAddress caller {};
+    caller.callerFrameAddress = nullptr;
+    caller.returnAddress = NativeIp();
     owner.GetUnwindContext().frameInfo.mFrame.SetFA(&caller);
     owner.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
     MRT_DeleteC2NContext(ThreadLocal::GetThreadLocalData());
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr);
     GC_EXPECT_TRUE(owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr);
     owner.SetManagedContext(false);
+}
+
+// Cut: in ~MutatorBlockInVMPreprocess, restore savedIP/savedFA before
+// DoLeaveSaferegion. SafeWaitStartsUnstartedEpoch then leaves
+// processing_started false. BlockRestoresSavedTopWithoutNewEpoch must stay green.
+// The published frame is the real caller from UpdateUnwindContext, stopped at
+// its own anchor. This does not decode a managed stackmap slot.
+GC_COMPONENT_TEST(WatermarkIteration, SafeWaitStartsUnstartedEpoch)
+{
+    auto release = [] {};
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    owner.SetInSaferegion(SAFE_REGION_FALSE);
+    owner.GetUnwindContext().GoIntoManagedCode();
+    uintptr_t published = 0;
+    ArmStaleEpoch(published);
+    ThreadLocal::GetThreadLocalData()->SetPollWord(ThreadLocalData::PollBit);
+    const bool unstarted = !owner.GetStackWatermark().processing_started();
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(owner, release);
+        FrameAddress* capture = owner.GetUnwindContext().frameInfo.mFrame.GetFA();
+        GC_EXPECT_TRUE(owner.InSaferegion());
+        GC_EXPECT_TRUE(capture != nullptr);
+        GC_EXPECT_TRUE(!owner.GetStackWatermark().processing_started());
+        owner.GetUnwindContext().anchorFA = reinterpret_cast<uint32_t*>(capture);
+    }
+    const bool started = owner.GetStackWatermark().processing_started() &&
+        owner.GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    const bool restored = owner.GetUnwindContext().frameInfo.mFrame.GetFA() == nullptr &&
+        owner.GetUnwindContext().frameInfo.mFrame.GetIP() == nullptr;
+    const bool active = !owner.InSaferegion();
+    ::g_cjStoreGoodMask = published;
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(unstarted);
+    GC_EXPECT_TRUE(started);
+    GC_EXPECT_TRUE(restored);
+    GC_EXPECT_TRUE(active);
+}
+
+GC_COMPONENT_TEST(WatermarkIteration, BlockRestoresSavedTopWithoutNewEpoch)
+{
+    auto release = [] {};
+    Mutator owner;
+    BoundMutator bound(owner);
+    owner.SetManagedContext(true);
+    owner.SetInSaferegion(SAFE_REGION_FALSE);
+    FrameAddress sentinel {};
+    sentinel.callerFrameAddress = &sentinel;
+    sentinel.returnAddress = NativeIp();
+    owner.GetUnwindContext().frameInfo.mFrame.SetFA(&sentinel);
+    owner.GetUnwindContext().frameInfo.mFrame.SetIP(NativeIp());
+    owner.GetUnwindContext().SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    ThreadLocal::GetThreadLocalData()->SetPollWord(ThreadLocalData::DisarmedPollWord);
+    const bool already = owner.GetStackWatermark().processing_started() &&
+        owner.GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    {
+        MutatorBlockInVMPreprocess<decltype(release)> blocked(owner, release);
+    }
+    const bool restored = owner.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel &&
+        owner.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp();
+    const bool stillDone = owner.GetStackWatermark().processing_started() &&
+        owner.GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    owner.SetManagedContext(false);
+    GC_EXPECT_TRUE(already);
+    GC_EXPECT_TRUE(restored);
+    GC_EXPECT_TRUE(stillDone);
 }
 
 // EnterSaferegion(false) must publish a managed unpublished top. It must not

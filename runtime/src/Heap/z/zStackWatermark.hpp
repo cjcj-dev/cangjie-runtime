@@ -46,6 +46,9 @@ public:
     uintptr_t last_processed_raw() const;
     void start_processing();
     void finish_processing(void* context);
+    // Finish a walk already started on the published top, then install the
+    // saved top, before releasing the watermark lock.
+    void restore_saved_top(const uint32_t* ip, FrameAddress* fa);
     void on_safepoint();
     void before_unwind();
     void after_unwind();

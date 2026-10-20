@@ -28,14 +28,34 @@ static void PublishLiveCallerOrClear(UnwindContext& uwContext)
     const bool hasFA = top.GetFA() != nullptr;
     const bool hasIP = top.GetIP() != nullptr;
     CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
-    FrameAddress* fa = top.GetFA();
-    if (fa != nullptr && fa->callerFrameAddress != nullptr && fa->returnAddress != nullptr) {
-        top.SetFA(fa->callerFrameAddress);
-        top.SetIP(fa->returnAddress);
-        uwContext.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    if (!hasFA) {
+        uwContext.GoIntoManagedCode();
         return;
     }
-    uwContext.GoIntoManagedCode();
+    // MachineFrame::UnwindToCallerMachineFrame is the platform walk.
+    // Windows GetCallerFrameInfo adds the managed frame size or the runtime
+    // unwind info; a bare callerFrameAddress is only the non-Windows chain.
+#ifdef _WIN64
+    UnwindContextStatus status = uwContext.GetUnwindContextStatus();
+    FrameInfo caller;
+    const bool advanced = top.UnwindToCallerMachineFrame(caller, status);
+    if (!advanced || caller.mFrame.GetFA() == nullptr || caller.mFrame.GetIP() == nullptr) {
+        uwContext.GoIntoManagedCode();
+        return;
+    }
+    uwContext.frameInfo = caller;
+    uwContext.SetUnwindContextStatus(status);
+#else
+    MachineFrame caller;
+    const bool advanced = top.UnwindToCallerMachineFrame(caller);
+    if (!advanced || caller.GetFA() == nullptr || caller.GetIP() == nullptr) {
+        uwContext.GoIntoManagedCode();
+        return;
+    }
+    top.SetFA(caller.GetFA());
+    top.SetIP(caller.GetIP());
+    uwContext.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+#endif
 }
 
 extern "C" void MRT_RestoreTopManagedContextFromN2CStub(FrameAddress* fa)
