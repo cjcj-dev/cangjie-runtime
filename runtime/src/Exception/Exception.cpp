@@ -105,6 +105,7 @@ void ExceptionHandling::BuildEHFrameInfo()
     EHStackInfo ehStackInfo;
     ehStackInfo.SetProcessingOwner(Mutator::GetMutator());
     ehStackInfo.FillInStackTrace();
+    CHECK_DETAIL(!ehStackInfo.ChainBroken(), "stack watermark stopped before the anchor");
     std::vector<FrameInfo>& stackInfo = ehStackInfo.GetStack();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (UNLIKELY(ENABLE_LOG(EXCEPTION))) {

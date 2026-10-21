@@ -15,9 +15,19 @@
 #include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
+namespace {
+void RequireCompleteWalk(const StackInfo& info)
+{
+    // zStackWatermark.cpp:219. A walk that stops before the anchor has not
+    // produced the root set. Callers that only classify the break do not visit.
+    CHECK_DETAIL(!info.ChainBroken(), "stack watermark stopped before the anchor");
+}
+}
+
 #ifdef __arm__
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stack);
     cursor.ProcessAll(func, mutator);
 }
@@ -31,16 +41,18 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, con
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const RootVisitor& slotRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
-                                             bool young) const
+                                              bool young) const
 {
     (void)slotRootVisitor;
     (void)young;
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stack);
     cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 }
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stacks);
     while (!cursor.Done()) {
         if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
@@ -52,6 +64,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 #else
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stack);
     cursor.ProcessAll(func, mutator);
 
@@ -92,9 +105,10 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, con
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const RootVisitor& slotRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
-                                             bool young) const
+                                              bool young) const
 {
     (void)young;
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stack);
     cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 
@@ -124,6 +138,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
+    RequireCompleteWalk(*this);
     StackFrameCursor cursor(stacks);
     while (!cursor.Done()) {
         if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
@@ -151,10 +166,6 @@ void GCStackInfo::FillInStackTrace()
         ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
         if (!ReadCallerFrame(uwContext, caller)) {
-            // L742: fail-observable; do not elevate to FATAL (preserve route-verifier order).
-            LOG(RTLOG_ERROR,
-                "GCStackInfo unwind truncated at frames=%zu ip=%p fa=%p (GC roots may be incomplete)",
-                stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
