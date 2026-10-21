@@ -12,6 +12,9 @@
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
+#include "Common/Handle.h"
+#include "Exception/Exception.h"
+#include "ExceptionManager.inline.h"
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -174,6 +177,107 @@ void CheckExit(unsigned entry, bool reject)
     if (!reject) { GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0); }
     else { GC_EXPECT_TRUE(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0)); }
 }
+
+Handle* g_chirPending = nullptr;
+bool g_chirInstall = false;
+int g_chirRaiserType = -1;
+void ChirOomRaiser(intptr_t type, void*, void*)
+{
+    g_chirRaiserType = static_cast<int>(type);
+    if (!g_chirInstall || g_chirPending == nullptr) { return; }
+    auto& wrapper = Mutator::GetMutator()->GetExceptionWrapper();
+    wrapper.SetExceptionType(ExceptionWrapper::ExceptionType::OUT_OF_MEMORY);
+    wrapper.SetExceptionRef(reinterpret_cast<ExceptionRef>((*g_chirPending)()));
+}
+
+void* ChirOomBody(void* opaque)
+{
+    const bool install = *static_cast<bool*>(opaque);
+    g_chirInstall = install;
+    g_chirRaiserType = -1;
+    Runtime::Current().GetExceptionManager().RegisterExceptionRaiser(reinterpret_cast<void*>(&ChirOomRaiser));
+    alignas(TypeInfo) static unsigned char smallStorage[sizeof(TypeInfo)]{};
+    auto* small = reinterpret_cast<TypeInfo*>(smallStorage);
+    small->SetType(TypeKind::TYPE_KIND_CLASS);
+    small->SetInstanceSize(256 - TYPEINFO_PTR_SIZE);
+    small->SetAlign(8);
+    small->SetName("chir-oom-pending");
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    small->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(smallStorage),
+                                                            sizeof(smallStorage));
+    BaseObject* first = MCC_NewObject(small, 256);
+    if (first == nullptr) { _exit(7); }
+    Handle pending(Mutator::GetMutator(), first);
+    g_chirPending = &pending;
+    constexpr MSize huge = 8 * 1024 * 1024;
+    alignas(TypeInfo) static unsigned char hugeStorage[sizeof(TypeInfo)]{};
+    auto* hugeType = reinterpret_cast<TypeInfo*>(hugeStorage);
+    hugeType->SetType(TypeKind::TYPE_KIND_CLASS);
+    hugeType->SetInstanceSize(huge - TYPEINFO_PTR_SIZE);
+    hugeType->SetAlign(8);
+    hugeType->SetName("chir-oom-huge");
+    hugeType->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(hugeStorage),
+                                                            sizeof(hugeStorage));
+    BaseObject* result = MCC_NewObject(hugeType, huge);
+    const auto pendingRef = ExceptionManager::GetPendingException();
+    const auto pendingType = Mutator::GetMutator()->GetExceptionWrapper().GetExceptionType();
+    std::fprintf(stderr,
+                 "CHIR_OOM_RETURN install=%d null=%d pending=%p rooted=%p type=%d raiser=%d\n",
+                 install, result == nullptr, static_cast<void*>(pendingRef), static_cast<void*>(pending()),
+                 static_cast<int>(pendingType), g_chirRaiserType);
+    if (!install) { _exit(5); }
+    const bool oom = result == nullptr && pendingRef != nullptr && pending() != nullptr &&
+                     pendingType == ExceptionWrapper::ExceptionType::OUT_OF_MEMORY &&
+                     g_chirRaiserType == static_cast<int>(ExceptionManager::OOM);
+    _exit(oom ? 0 : 4);
+}
+
+void CheckChir(bool install)
+{
+    int fds[2];
+    GC_EXPECT_EQ(pipe(fds), 0);
+    pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(fds[0]);
+        if (dup2(fds[1], STDERR_FILENO) < 0) { _exit(120); }
+        close(fds[1]);
+        unsetenv("cjHeapDumpOnOOM");
+        RuntimeParam param{};
+        param.heapParam.heapSize = 2 * 1024;
+        param.coParam.processorNum = 1;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        bool input = install;
+        auto handle = RunCJTask(ChirOomBody, &input);
+        void* ignored = nullptr;
+        if (handle == nullptr || GetTaskRet(handle, &ignored) != E_OK) { _exit(122); }
+        _exit(123);
+    }
+    close(fds[1]);
+    std::string output;
+    char buffer[1024];
+    ssize_t count;
+    while ((count = read(fds[0], buffer, sizeof(buffer))) > 0) { output.append(buffer, count); }
+    close(fds[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fwrite(output.data(), 1, output.size(), stderr);
+    const bool diagnostic = output.find("no pending exception") != std::string::npos;
+    const bool returned = output.find("CHIR_OOM_RETURN") != std::string::npos;
+    std::fprintf(stderr, "CHIR_OOM_TARGET install=%d diagnostic=%d returned=%d status=%d\n",
+                 install, diagnostic, returned, status);
+    if (install) {
+        GC_EXPECT_TRUE(returned);
+        GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        GC_EXPECT_FALSE(diagnostic);
+    } else {
+        GC_EXPECT_TRUE(diagnostic);
+        GC_EXPECT_TRUE(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
+    }
+}
 }
 GC_RUNTIME_OTHER_VM_TEST(RawNullInstall, SmallPromotion) { CheckSelection(false, true, 1); }
 GC_RUNTIME_OTHER_VM_TEST(RawNullInstall, MediumPromotion) { CheckSelection(true, true, 2); }
@@ -190,6 +294,8 @@ RAW_NULL_EXIT_TEST(Array16, 6)
 RAW_NULL_EXIT_TEST(Array32, 7)
 RAW_NULL_EXIT_TEST(Array64, 8)
 #undef RAW_NULL_EXIT_TEST
+GC_RUNTIME_OTHER_VM_TEST(ChirPending, InitialOomReturnsPending) { CheckChir(true); }
+GC_RUNTIME_OTHER_VM_TEST(ChirPending, OtherNullAborts) { CheckChir(false); }
 
 GC_COMPONENT_OTHER_VM_TEST(RawNullPage, OldPageRejectsRawNull)
 {

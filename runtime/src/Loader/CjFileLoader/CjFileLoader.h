@@ -19,6 +19,7 @@
 #include "os/Loader.h"
 #include "Loader/CjSemanticVersion/CjSemanticVersion.h"
 #include "RuntimeConfig.h"
+#include "UnwindStack/StackInfo.h"
 namespace MapleRuntime {
 class CJFileLoader : public ILoader {
     friend class CJFileLoaderTest;
@@ -86,6 +87,7 @@ protected:
     struct BinLoadApi binLoadApi;
 
 private:
+    ImagePreflight ImageFramePreflight(BaseFile* baseFile) const;
     bool HasActiveImageFrames(BaseFile* baseFile) const;
     void PurgeLoadedFile(BaseFile* baseFile);
     void UnlinkLoadedFile(BaseFile* baseFile);

@@ -21,6 +21,11 @@ inline void Mutator::RejectInconsistentUnwindTop()
 
 inline void Mutator::PublishUnpublishedManagedTop()
 {
+    const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
+    const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
+    if (hasFA != hasIP) {
+        return;
+    }
     RejectInconsistentUnwindTop();
     if (uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) {
         CHECK_DETAIL(uwContext.frameInfo.mFrame.GetFA() != nullptr, "native transition has no walkable top");
@@ -42,12 +47,15 @@ inline void Mutator::DoEnterSaferegion()
 inline bool Mutator::EnterSaferegion(bool updateUnwindContext) noexcept
 {
     if (LIKELY(!InSaferegion())) {
-        // RISKY already stored the native frame. A cleared managed top has not.
-        if (updateUnwindContext && uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
-            RejectInconsistentUnwindTop();
-            UpdateUnwindContext();
-        } else {
-            PublishUnpublishedManagedTop();
+        const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
+        const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
+        if (hasFA == hasIP) {
+            if (updateUnwindContext && uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
+                RejectInconsistentUnwindTop();
+                UpdateUnwindContext();
+            } else {
+                PublishUnpublishedManagedTop();
+            }
         }
         DoEnterSaferegion();
         return true;

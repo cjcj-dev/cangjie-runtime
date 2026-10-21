@@ -526,7 +526,11 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
     if (!authorizedByCaller && ElfUnloadQuiescence::HasCallerPurgeProtection()) {
         CHECK_DETAIL(!ElfUnloadQuiescence::CallerProtectionHasPendingForImage(imageAddress),
                      "ELF dependent image has a pending task during public unload");
-        CHECK_DETAIL(!HasActiveImageFrames(baseFile),
+        const ImagePreflight dependent = ImageFramePreflight(baseFile);
+        if (dependent == ImagePreflight::Unprovable) {
+            return;
+        }
+        CHECK_DETAIL(dependent != ImagePreflight::Active,
                      "ELF dependent image has an active frame during public unload");
         callbackAuthorization =
             std::make_unique<ElfUnloadQuiescence::PurgeAuthorizationScope>(imageAddress);
@@ -544,7 +548,12 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
                 ElfUnloadQuiescence::WaitForPendingTasks(imageAddress);
                 continue;
             }
-            if (!HasActiveImageFrames(baseFile)) {
+            const ImagePreflight preflight = ImageFramePreflight(baseFile);
+            if (preflight == ImagePreflight::Unprovable) {
+                directAdmission.reset();
+                return;
+            }
+            if (preflight == ImagePreflight::Idle) {
                 break;
             }
             directAdmission.reset();
@@ -866,7 +875,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
     return ret;
 }
 
-bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
+ImagePreflight CJFileLoader::ImageFramePreflight(BaseFile* baseFile) const
 {
     class ActiveImageClosure final : public HandshakeClosure {
     public:
@@ -892,15 +901,15 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
             }
         }
 
-        bool IsComplete() const { return active || remaining == 0; }
-        bool HasActiveFrames() const { return active; }
+        bool IsComplete() const { return verdict == ImagePreflight::Unprovable || remaining == 0; }
+        ImagePreflight Verdict() const { return verdict; }
 
     private:
         void Scan(Mutator* mutator, bool requireSafe)
         {
             std::lock_guard<std::mutex> resultLock(lock);
             auto it = scanned.find(mutator);
-            if (active || it == scanned.end() || it->second) { return; }
+            if (verdict == ImagePreflight::Unprovable || it == scanned.end() || it->second) { return; }
             mutator->MutatorLock();
             // Pairs with DoLeaveSaferegion: a parked participant cannot resume
             // while its saved frames are being inspected by this executor.
@@ -923,9 +932,8 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
                         break;
                     }
                 }
-                if (ImagePreflightFromWalk(stackInfo.ChainBroken(), sawImage) == ImagePreflight::Retain) {
-                    active = true;
-                }
+                verdict = CombineImagePreflight(
+                    verdict, ImagePreflightFromWalk(stackInfo.ChainBroken(), sawImage));
             }
             it->second = true;
             --remaining;
@@ -936,13 +944,31 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
         std::unordered_map<Mutator*, bool> scanned;
         std::mutex lock;
         size_t remaining = 0;
-        bool active = false;
+        ImagePreflight verdict = ImagePreflight::Idle;
     };
 
     // zStackWatermark.cpp:43: on-stack code stays alive,
     // including unmounted tasks. Cangjie saves these stacks on logical Mutators
     // rather than heap stackChunks, so retain their complete SMR membership.
-    ScopedEnterSaferegion enterSaferegion(false);
+    // Do not publish a new top here. A legal empty top must stay empty, and a
+    // one-sided top must stay one-sided so the walk can classify it.
+    struct SavedTopSaferegion {
+        Mutator* self;
+        bool entered;
+        SavedTopSaferegion() : self(Mutator::GetMutator()), entered(false)
+        {
+            if (self != nullptr && !self->InSaferegion()) {
+                self->DoEnterSaferegion();
+                entered = true;
+            }
+        }
+        ~SavedTopSaferegion()
+        {
+            if (entered) {
+                (void)self->LeaveSaferegion();
+            }
+        }
+    } savedTopSaferegion;
     ThreadsListHandle threads;
     ActiveImageClosure closure(baseFile->GetFileMetaAddr(), threads);
     for (;;) {
@@ -952,7 +978,12 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
         Handshake::execute(&closure);
         if (closure.IsComplete()) { break; }
     }
-    return closure.HasActiveFrames();
+    return closure.Verdict();
+}
+
+bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
+{
+    return ImageFramePreflight(baseFile) != ImagePreflight::Idle;
 }
 
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const

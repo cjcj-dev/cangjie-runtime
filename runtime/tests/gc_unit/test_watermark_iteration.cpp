@@ -914,7 +914,7 @@ GC_COMPONENT_TEST(WatermarkIteration, ExitPreflightRetainsBrokenChain)
     stackInfo.FillInStackTrace();
     GC_EXPECT_TRUE(stackInfo.ChainBroken());
     GC_EXPECT_TRUE(stackInfo.GetStack().empty());
-    GC_EXPECT_TRUE(ImagePreflightFromWalk(stackInfo.ChainBroken(), false) == ImagePreflight::Retain);
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(stackInfo.ChainBroken(), false) == ImagePreflight::Unprovable);
 
     Mutator empty;
     BoundMutator emptyBound(empty);
@@ -926,5 +926,8 @@ GC_COMPONENT_TEST(WatermarkIteration, ExitPreflightRetainsBrokenChain)
     GC_EXPECT_TRUE(!emptyInfo.ChainBroken());
     GC_EXPECT_TRUE(emptyInfo.GetStack().empty());
     GC_EXPECT_TRUE(ImagePreflightFromWalk(emptyInfo.ChainBroken(), false) == ImagePreflight::Idle);
-    GC_EXPECT_TRUE(ImagePreflightFromWalk(false, true) == ImagePreflight::Retain);
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(false, true) == ImagePreflight::Active);
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(true, true) == ImagePreflight::Active);
+    GC_EXPECT_TRUE(CombineImagePreflight(ImagePreflight::Active, ImagePreflight::Unprovable) ==
+                   ImagePreflight::Unprovable);
 }

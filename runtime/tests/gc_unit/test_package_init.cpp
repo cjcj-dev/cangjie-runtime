@@ -1163,6 +1163,65 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
     Target("static-root-runtime-finish", FiniCJRuntime() == E_OK);
 }
 #endif
+struct ExitUnloadProbe {
+    std::atomic<bool> started { false };
+    std::atomic<bool> retained { false };
+    std::atomic<bool> removed { false };
+};
+void ProbeExitUnload(void* argument)
+{
+    auto& probe = *static_cast<ExitUnloadProbe*>(argument);
+    auto* self = Mutator::GetMutator();
+    Target("exit-unload-mutator", self != nullptr);
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = reinterpret_cast<uint32_t*>(&ProbeExitUnload);
+    UnwindContext& context = self->GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(nullptr);
+    context.frameInfo.mFrame.SetIP(anchor.returnAddress);
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    self->SetManagedContext(true);
+    const auto started = std::chrono::steady_clock::now();
+    loader->RemoveLoadedFiles(image);
+    const bool quick = std::chrono::steady_clock::now() - started < std::chrono::seconds(2);
+    bool stillThere = false;
+    loader->VisitBaseFile([&](BaseFile* file) {
+        if (file == image) {
+            stillThere = true;
+            return true;
+        }
+        return false;
+    });
+    probe.started.store(quick, std::memory_order_release);
+    probe.retained.store(stillThere, std::memory_order_release);
+    context.GoIntoManagedCode();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    loader->RemoveLoadedFiles(image);
+    bool gone = true;
+    loader->VisitBaseFile([&](BaseFile* file) {
+        if (file == image) {
+            gone = false;
+            return true;
+        }
+        return false;
+    });
+    probe.removed.store(gone, std::memory_order_release);
+    image = nullptr;
+    self->SetManagedContext(false);
+    context.GoIntoManagedCode();
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, BrokenExitUnloadReturnsAndIdleUnloadProceeds)
+{
+    Init();
+    ExitUnloadProbe probe;
+    Start(ProbeExitUnload, &probe);
+    Target("broken-unload-returned", Await(probe.started));
+    Target("broken-unload-retained", probe.retained.load(std::memory_order_acquire));
+    Target("idle-unload-removed", Await(probe.removed));
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);

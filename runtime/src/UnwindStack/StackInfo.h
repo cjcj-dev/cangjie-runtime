@@ -17,15 +17,30 @@
 
 namespace MapleRuntime {
 
-// Unload preflight. A walk that stops before the anchor has not proved the
-// image idle, so the caller retains it and returns. A finished walk retains
-// only a frame that was actually seen in the image.
-enum class ImagePreflight : uint8_t { Idle, Retain };
+// Unload preflight. A finished walk is Idle only when no frame was in the
+// image. A frame that was actually seen stays Active and the caller waits.
+// A walk that stops before the anchor is Unprovable: waiting cannot make it
+// idle, so the caller keeps the image and returns.
+enum class ImagePreflight : uint8_t { Idle, Active, Unprovable };
 
 inline ImagePreflight ImagePreflightFromWalk(bool chainBroken, bool sawImageFrame)
 {
-    if (chainBroken || sawImageFrame) {
-        return ImagePreflight::Retain;
+    if (sawImageFrame) {
+        return ImagePreflight::Active;
+    }
+    if (chainBroken) {
+        return ImagePreflight::Unprovable;
+    }
+    return ImagePreflight::Idle;
+}
+
+inline ImagePreflight CombineImagePreflight(ImagePreflight current, ImagePreflight step)
+{
+    if (current == ImagePreflight::Unprovable || step == ImagePreflight::Unprovable) {
+        return ImagePreflight::Unprovable;
+    }
+    if (current == ImagePreflight::Active || step == ImagePreflight::Active) {
+        return ImagePreflight::Active;
     }
     return ImagePreflight::Idle;
 }
