@@ -20,6 +20,7 @@
 #include "Heap/z/zStackWatermark.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
+#include "UnwindStack/GcStackInfo.h"
 #include "UnwindStack/PrintStackInfo.h"
 #include "UnwindStack/StackFrameCursor.h"
 
@@ -836,4 +837,94 @@ GC_COMPONENT_TEST(WatermarkIteration, EnterPublishesUnpublishedManagedTop)
     GC_EXPECT_TRUE(keptEntered);
     GC_EXPECT_TRUE(kept.GetUnwindContext().frameInfo.mFrame.GetFA() == &sentinel);
     GC_EXPECT_TRUE(kept.GetUnwindContext().frameInfo.mFrame.GetIP() == NativeIp());
+}
+
+// javaFrameAnchor.hpp:74-81. One end without the other is not a last frame.
+GC_COMPONENT_TEST(WatermarkIteration, PublishUnwindTopRejectsOneSided)
+{
+    MachineFrame frame;
+    FrameAddress kept {};
+    kept.callerFrameAddress = nullptr;
+    kept.returnAddress = NativeIp();
+    frame.SetFA(&kept);
+    frame.SetIP(NativeIp());
+    PublishUnwindTop(frame, NativeIp(), nullptr);
+    GC_EXPECT_TRUE(frame.GetFA() == &kept);
+    GC_EXPECT_TRUE(frame.GetIP() == NativeIp());
+    PublishUnwindTop(frame, nullptr, &kept);
+    GC_EXPECT_TRUE(frame.GetFA() == &kept);
+    GC_EXPECT_TRUE(frame.GetIP() == NativeIp());
+    FrameAddress caller {};
+    caller.callerFrameAddress = nullptr;
+    caller.returnAddress = NativeIp();
+    PublishUnwindTop(frame, NativeIp(), &caller);
+    GC_EXPECT_TRUE(frame.GetFA() == &caller);
+    GC_EXPECT_TRUE(frame.GetIP() == NativeIp());
+    PublishUnwindTop(frame, nullptr, nullptr);
+    GC_EXPECT_TRUE(frame.GetFA() == nullptr);
+    GC_EXPECT_TRUE(frame.GetIP() == nullptr);
+}
+
+// FillInStackTrace must not load a null fa. An empty top is not a broken chain.
+GC_COMPONENT_TEST(WatermarkIteration, OneSidedTopStopsWithoutUnwind)
+{
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+
+    Mutator owner;
+    BoundMutator bound(owner);
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(nullptr);
+    context.frameInfo.mFrame.SetIP(NativeIp());
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    GCStackInfo stackInfo(&context);
+    stackInfo.FillInStackTrace();
+    GC_EXPECT_TRUE(stackInfo.ChainBroken());
+    GC_EXPECT_TRUE(stackInfo.GetStack().empty());
+
+    Mutator empty;
+    BoundMutator emptyBound(empty);
+    UnwindContext& emptyContext = empty.GetUnwindContext();
+    emptyContext.GoIntoManagedCode();
+    emptyContext.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    GCStackInfo emptyInfo(&emptyContext);
+    emptyInfo.FillInStackTrace();
+    GC_EXPECT_TRUE(!emptyInfo.ChainBroken());
+    GC_EXPECT_TRUE(emptyInfo.GetStack().empty());
+}
+
+// Exit unload must return. A one-sided top is not proved idle, so the image
+// stays. The legal empty top is idle. Neither result is a fatal check.
+GC_COMPONENT_TEST(WatermarkIteration, ExitPreflightRetainsBrokenChain)
+{
+    FrameAddress anchor {};
+    anchor.callerFrameAddress = nullptr;
+    anchor.returnAddress = NativeIp();
+
+    Mutator owner;
+    BoundMutator bound(owner);
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    context.frameInfo.mFrame.SetFA(nullptr);
+    context.frameInfo.mFrame.SetIP(NativeIp());
+    context.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+    GCStackInfo stackInfo(&context);
+    stackInfo.FillInStackTrace();
+    GC_EXPECT_TRUE(stackInfo.ChainBroken());
+    GC_EXPECT_TRUE(stackInfo.GetStack().empty());
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(stackInfo.ChainBroken(), false) == ImagePreflight::Retain);
+
+    Mutator empty;
+    BoundMutator emptyBound(empty);
+    UnwindContext& emptyContext = empty.GetUnwindContext();
+    emptyContext.GoIntoManagedCode();
+    emptyContext.anchorFA = reinterpret_cast<uint32_t*>(&anchor);
+    GCStackInfo emptyInfo(&emptyContext);
+    emptyInfo.FillInStackTrace();
+    GC_EXPECT_TRUE(!emptyInfo.ChainBroken());
+    GC_EXPECT_TRUE(emptyInfo.GetStack().empty());
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(emptyInfo.ChainBroken(), false) == ImagePreflight::Idle);
+    GC_EXPECT_TRUE(ImagePreflightFromWalk(false, true) == ImagePreflight::Retain);
 }

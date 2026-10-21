@@ -23,6 +23,11 @@ void EHStackInfo::FillInStackTrace()
         uwContext.frameInfo.GetFuncName().Str());
 
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
         if (n2cCount == 1) {
@@ -33,16 +38,9 @@ void EHStackInfo::FillInStackTrace()
         DLOG(INTERPRETER, "  Added frame to EH stack info, frame type: %d, name: %s",
             uwContext.frameInfo.GetFrameType(), uwContext.frameInfo.GetFuncName().Str());
 
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             return;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }

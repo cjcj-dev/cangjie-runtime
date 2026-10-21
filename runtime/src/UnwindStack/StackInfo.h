@@ -17,6 +17,19 @@
 
 namespace MapleRuntime {
 
+// Unload preflight. A walk that stops before the anchor has not proved the
+// image idle, so the caller retains it and returns. A finished walk retains
+// only a frame that was actually seen in the image.
+enum class ImagePreflight : uint8_t { Idle, Retain };
+
+inline ImagePreflight ImagePreflightFromWalk(bool chainBroken, bool sawImageFrame)
+{
+    if (chainBroken || sawImageFrame) {
+        return ImagePreflight::Retain;
+    }
+    return ImagePreflight::Idle;
+}
+
 #ifdef INTERPRETER_ENABLED
 constexpr int INTERPRETED_FRAME_FDESC = 0;
 #endif
@@ -44,6 +57,9 @@ public:
     void Start();
     void Next();
     void Rebase(intptr_t offset);
+    // Null fa is not unwound. A caller missing fa or ip is not installed.
+    // broken is set when that stop is before anchorFA (javaFrameAnchor.hpp:74-81).
+    bool ReadCallerFrame(UnwindContext& frame, UnwindContext& caller);
     bool IsDone() const { return done; }
     // Physical stop before anchorFA. Recorded frames and a legal anchor end leave this false.
     bool ChainBroken() const { return broken; }
@@ -109,9 +125,8 @@ protected:
     do { \
         void* ip = __builtin_return_address(0); \
         void* fa = __builtin_frame_address(0); \
-        FrameAddress* thisFrame = reinterpret_cast<FrameAddress*>(fa); \
-        (frame).mFrame.SetIP(reinterpret_cast<uint32_t*>(ip)); \
-        (frame).mFrame.SetFA(thisFrame->callerFrameAddress); \
+        FrameAddress* caller = fa == nullptr ? nullptr : reinterpret_cast<FrameAddress*>(fa)->callerFrameAddress; \
+        PublishUnwindTop((frame).mFrame, reinterpret_cast<const uint32_t*>(ip), caller); \
     } while (0)
 } // namespace MapleRuntime
 #endif // MRT_STACKINFO_H

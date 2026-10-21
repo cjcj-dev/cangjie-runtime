@@ -72,7 +72,12 @@ void StackFrameStream::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
             GetContextWin64(&rip, &rsp);
             FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
             UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+            FrameInfo caller = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+            const uint32_t* callerIp = caller.mFrame.GetIP();
+            FrameAddress* callerFa = caller.mFrame.GetFA();
+            if ((callerIp == nullptr) == (callerFa == nullptr)) {
+                uwContext.frameInfo = caller;
+            }
 #else
             MRT_UNW_GETCALLERFRAME(uwContext.frameInfo);
 #endif
@@ -202,6 +207,28 @@ bool StackFrameStream::AtOldestFrame(const MachineFrame& frame) const
         reinterpret_cast<uintptr_t>(anchorFA) == reinterpret_cast<uintptr_t>(frame.GetFA());
 }
 
+bool StackFrameStream::ReadCallerFrame(UnwindContext& frame, UnwindContext& caller)
+{
+    // UnwindToCallerMachineFrame and GetCallerFrameInfo load through fa.
+    // N2C GetSlotData(fa) does too. A missing fa is not a sender.
+    if (frame.frameInfo.mFrame.GetFA() == nullptr) {
+        broken = anchorFA != nullptr && !AtOldestFrame(frame.frameInfo.mFrame);
+        return false;
+    }
+    lastFrameType = frame.frameInfo.GetFrameType();
+#ifndef _WIN64
+    const bool advanced = frame.UnwindToCallerContext(caller);
+#else
+    const bool advanced = frame.UnwindToCallerContext(caller, uwCtxStatus);
+#endif
+    if (!advanced || caller.frameInfo.mFrame.GetFA() == nullptr || caller.frameInfo.mFrame.GetIP() == nullptr) {
+        broken = anchorFA != nullptr && !AtOldestFrame(frame.frameInfo.mFrame);
+        return false;
+    }
+    caller.frameInfo.mFrame.SetSP(frame.frameInfo.CallerSP());
+    return true;
+}
+
 void StackFrameStream::Start()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -324,31 +351,11 @@ void StackFrameStream::Next()
         return;
     }
     ElfUnloadQuiescence::ReadScope metadataReader;
-    // No machine frame. Non-Windows UnwindToCallerMachineFrame and Windows
-    // GetCallerFrameInfo (UnwindWin.cpp:123) both load through fa. N2C
-    // GetSlotData(fa) does too (UnwindContext.cpp:16,71). Do not call them.
-    // Recorded frames and UpdateRegisterMap already ran above.
-    if (current.frameInfo.mFrame.GetFA() == nullptr) {
-        done = true;
-        broken = anchorFA != nullptr && !AtOldestFrame(current.frameInfo.mFrame);
-        return;
-    }
-    lastFrameType = current.frameInfo.GetFrameType();
     UnwindContext caller;
-#ifndef _WIN64
-    const bool advanced = current.UnwindToCallerContext(caller);
-#else
-    const bool advanced = current.UnwindToCallerContext(caller, uwCtxStatus);
-#endif
-    // A null caller fa is not a frame. Do not install it (that is the
-    // {fa=0, ip=iterator} shape). Stopping here has not reached anchorFA,
-    // so the watermark must not treat the epoch as complete.
-    if (!advanced || caller.frameInfo.mFrame.GetFA() == nullptr || caller.frameInfo.mFrame.GetIP() == nullptr) {
+    if (!ReadCallerFrame(current, caller)) {
         done = true;
-        broken = anchorFA != nullptr && !AtOldestFrame(current.frameInfo.mFrame);
         return;
     }
-    caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
     current = caller;
     stopBeforeUnwind = AtOldestFrame(current.frameInfo.mFrame);
     AnalyseAndSetFrameType(current);

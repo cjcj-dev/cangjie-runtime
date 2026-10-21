@@ -17,6 +17,11 @@ void PrintStackInfo::FillInStackTrace()
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
 
@@ -30,16 +35,9 @@ void PrintStackInfo::FillInStackTrace()
         }
 #endif
 
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             return;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -62,16 +60,17 @@ CString PrintStackInfo::GetStackTraceString()
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            break;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
-
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-        if (uwContext.UnwindToCallerContext(caller) == false) {
+        if (!ReadCallerFrame(uwContext, caller)) {
             break;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 

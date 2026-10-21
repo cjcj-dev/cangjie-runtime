@@ -18,6 +18,11 @@ void PrintSignalStackInfo::FillInStackTrace()
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         if (uwContext.frameInfo.GetFrameType() == FrameType::C2N_STUB && lastFrameType == FrameType::N2C_STUB) {
             // Check whether out-of-bounds array occurs. If the value is about to exceed the limit,
@@ -34,13 +39,7 @@ void PrintSignalStackInfo::FillInStackTrace()
         }
         signalStack[stackIndex++] = uwContext.frameInfo;
 
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             return;
         }
         uwContext = caller;

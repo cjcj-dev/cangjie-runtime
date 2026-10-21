@@ -162,15 +162,23 @@ public:
         GetContextWin64(&rip, &rsp);
         FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
         UnwindContextStatus ucs = uwContext.GetUnwindContextStatus();
-        uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+        FrameInfo saved = uwContext.frameInfo;
+        FrameInfo caller = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+        const uint32_t* callerIp = caller.mFrame.GetIP();
+        FrameAddress* callerFa = caller.mFrame.GetFA();
+        if ((callerIp == nullptr) == (callerFa == nullptr)) {
+            uwContext.frameInfo = caller;
+        } else {
+            uwContext.frameInfo = saved;
+        }
     }
 #else
     __attribute__((always_inline)) void UpdateUnwindContext()
     {
         void* ip = __builtin_return_address(0);
         void* fa = __builtin_frame_address(0);
-        uwContext.frameInfo.mFrame.SetIP(static_cast<uint32_t*>(ip));
-        uwContext.frameInfo.mFrame.SetFA(static_cast<FrameAddress*>(fa)->callerFrameAddress);
+        FrameAddress* caller = fa == nullptr ? nullptr : static_cast<FrameAddress*>(fa)->callerFrameAddress;
+        PublishUnwindTop(uwContext.frameInfo.mFrame, static_cast<uint32_t*>(ip), caller);
     }
 #endif
 

@@ -424,6 +424,16 @@ private:
 #endif
 };
 
+// javaFrameAnchor.hpp:74-81. Both ends present replaces the top. Both absent
+// is the legal empty top. One end without the other leaves the previous top.
+inline void PublishUnwindTop(MachineFrame& frame, const uint32_t* ip, FrameAddress* caller)
+{
+    if ((ip == nullptr) == (caller == nullptr)) {
+        frame.SetIP(ip);
+        frame.SetFA(caller);
+    }
+}
+
 // This class contains all stacks except native stacks, including cangjie and runtime and C2N Stub
 // and R2C Stub.
 class UnwindContext {

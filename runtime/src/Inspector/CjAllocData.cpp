@@ -298,6 +298,12 @@ void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            ClearFrames();
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         FrameInfo* f = new FrameInfo(uwContext.frameInfo);
         // 1. If the node has been recorded, add the content in the stack to the end of the node.
@@ -316,13 +322,7 @@ void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
             return;
         }
         frames.push(f);
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             ClearFrames();
             return;
         }

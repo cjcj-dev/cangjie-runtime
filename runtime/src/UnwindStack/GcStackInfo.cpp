@@ -142,23 +142,21 @@ void GCStackInfo::FillInStackTrace()
 
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             // L742: fail-observable; do not elevate to FATAL (preserve route-verifier order).
             LOG(RTLOG_ERROR,
                 "GCStackInfo unwind truncated at frames=%zu ip=%p fa=%p (GC roots may be incomplete)",
                 stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -170,23 +168,21 @@ void RecordStackInfo::FillInStackTrace()
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
         FrameInfo* f = new FrameInfo(uwContext.frameInfo);
         stacks.emplace_back(f);
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             LOG(RTLOG_ERROR,
                 "RecordStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
                 stacks.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -198,22 +194,20 @@ void CJThreadStackInfo::FillInStackTrace()
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
+        UnwindContext caller;
+        if (uwContext.frameInfo.mFrame.GetFA() == nullptr) {
+            (void)ReadCallerFrame(uwContext, caller);
+            return;
+        }
         AnalyseAndSetFrameType(uwContext);
         ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
-        UnwindContext caller;
-        lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-        if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-        if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
+        if (!ReadCallerFrame(uwContext, caller)) {
             LOG(RTLOG_ERROR,
                 "CJThreadStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
                 stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
-        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
     filledStackSize = stack.size();
@@ -301,12 +295,17 @@ int InitCJThreadStackInfoFromCurrFunc(uint32_t maxStrSize,
     GetContextWin64(&rip, &rsp);
     frameInfo = GetCurFrameInfo(winModuleManager, rip, rsp);
     UnwindContextStatus ucs = UnwindContextStatus::UNKNOWN;
-    unwindCxt.frameInfo = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs);
+    FrameInfo caller = GetCallerFrameInfo(winModuleManager, frameInfo.mFrame, ucs);
+    const uint32_t* callerIp = caller.mFrame.GetIP();
+    FrameAddress* callerFa = caller.mFrame.GetFA();
+    if ((callerIp == nullptr) == (callerFa == nullptr)) {
+        unwindCxt.frameInfo = caller;
+    }
 #else
     void* ip = __builtin_return_address(0);
     void* fa = __builtin_frame_address(0);
-    frameInfo.mFrame.SetIP(static_cast<uint32_t*>(ip));
-    frameInfo.mFrame.SetFA(static_cast<FrameAddress*>(fa)->callerFrameAddress);
+    FrameAddress* caller = fa == nullptr ? nullptr : static_cast<FrameAddress*>(fa)->callerFrameAddress;
+    PublishUnwindTop(frameInfo.mFrame, static_cast<uint32_t*>(ip), caller);
     unwindCxt.frameInfo = frameInfo;
 #endif
     CJThreadStackInfo stackInfo(&unwindCxt, maxStrSize);

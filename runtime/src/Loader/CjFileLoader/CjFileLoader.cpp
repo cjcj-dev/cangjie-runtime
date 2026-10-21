@@ -913,14 +913,18 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
                 GCStackInfo stackInfo(&mutator->GetUnwindContext());
                 stackInfo.SetProcessingOwner(mutator);
                 stackInfo.FillInStackTrace();
+                bool sawImage = false;
                 for (const FrameInfo& frame : stackInfo.GetStack()) {
                     Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
                     Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
                     if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
                         ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
-                        active = true;
+                        sawImage = true;
                         break;
                     }
+                }
+                if (ImagePreflightFromWalk(stackInfo.ChainBroken(), sawImage) == ImagePreflight::Retain) {
+                    active = true;
                 }
             }
             it->second = true;
