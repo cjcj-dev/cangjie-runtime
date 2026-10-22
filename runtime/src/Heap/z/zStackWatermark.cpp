@@ -102,18 +102,27 @@ private:
 #else
         if (MFuncDesc::GetFuncDesc(startPC) == nullptr) { return; }
 #endif
-        StackPtrMap pointers = StackMapBuilder(startPC,
-            reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
-            reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
-        if (!pointers.IsValid()) { return; }
-        StackPtrVisitor visit = [&](ObjectRef& slot) {
+        const uintptr_t instruction = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+        const uintptr_t frameBase = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+        auto noteStackTarget = [&](ObjectRef& slot) {
             const uintptr_t target = raw(slot.LoadPlain());
             if (owner.owner.IsStackAddr(target) && target > stackTarget) { stackTarget = target; }
         };
-        if (!pointers.VisitStackPointerRegs(visit, nullptr, cursor.RegMap())) {
-            LOG(RTLOG_FATAL, "wrong stack pointer register info at %p", frame.mFrame.GetIP());
+        StackPtrMap pointers = StackMapBuilder(startPC, instruction, frameBase).Build<StackPtrMap>();
+        if (pointers.IsValid()) {
+            if (!pointers.VisitStackPointerRegs(noteStackTarget, nullptr, cursor.RegMap())) {
+                LOG(RTLOG_FATAL, "wrong stack pointer register info at %p", frame.mFrame.GetIP());
+            }
+            pointers.VisitSlot(noteStackTarget, noteStackTarget, nullptr);
         }
-        pointers.VisitSlot(visit, visit, nullptr);
+        // A heap root can name a caller stack object without a stack-pointer root.
+        // stackWatermark.cpp:96-110 must still keep that caller's frame unexposed.
+        HeapReferenceMap heapRefs = StackMapBuilder(startPC, instruction, frameBase).Build<HeapReferenceMap>();
+        if (!heapRefs.IsValid()) { return; }
+        if (!heapRefs.VisitRegRoots(noteStackTarget, nullptr, cursor.RegMap())) {
+            LOG(RTLOG_FATAL, "wrong heap reference register info at %p", frame.mFrame.GetIP());
+        }
+        heapRefs.VisitSlotRoots(noteStackTarget, nullptr);
     }
     bool covers_stack_target(uintptr_t stackTarget) const
     {
