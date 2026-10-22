@@ -698,7 +698,7 @@ static bool IsHeaderedStackObject(BaseObject* obj)
 // zVerify.cpp:333 / zHeapIterator.cpp:145 consume heap-oop slots. Cangjie
 // stack maps can instead name a stack object or a headerless ABI record.
 // Expand those containers without healing roots or publishing marking work.
-void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
+void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor, bool dedupStackFields)
 {
     std::set<BaseObject*> seen;
     std::vector<ObjectRef*> pending { &root };
@@ -707,6 +707,11 @@ void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
         pending.pop_back();
         const uintptr_t address = raw(slot.LoadPlain(std::memory_order_acquire));
         if (!IsStackAddr(address)) {
+            const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(&slot);
+            if (dedupStackFields && IsStackAddr(slotAddr) &&
+                !stackWatermark.claim_fixed_stack_field(slotAddr)) {
+                continue;
+            }
             // Preserve invalid non-stack addresses for the verifier to reject.
             visitor(slot);
             continue;

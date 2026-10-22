@@ -158,6 +158,25 @@ void StackWatermark::Reset()
     iterator.reset();
     waterMark.store(0, std::memory_order_relaxed);
     state.store(PackState(epoch_id(), true), std::memory_order_relaxed);
+    retire_fixed_stack_fields();
+}
+
+void StackWatermark::begin_fixed_stack_fields()
+{
+    fixedStackFields.clear();
+    fixedStackFieldsLive = true;
+}
+
+void StackWatermark::retire_fixed_stack_fields()
+{
+    fixedStackFields.clear();
+    fixedStackFieldsLive = false;
+}
+
+bool StackWatermark::claim_fixed_stack_field(uintptr_t field)
+{
+    if (!fixedStackFieldsLive) { return true; }
+    return fixedStackFields.insert(field).second;
 }
 
 void StackWatermark::OnStackGrow(intptr_t offset)
@@ -171,6 +190,7 @@ void StackWatermark::OnStackGrow(intptr_t offset)
 void StackWatermark::BeginGrowFlush()
 {
     lock.lock();
+    begin_fixed_stack_fields();
     if (!processing_started()) {
         start_processing_impl(nullptr);
     }
@@ -178,6 +198,7 @@ void StackWatermark::BeginGrowFlush()
         iterator->process_all_no_yield(nullptr);
         update_watermark();
     }
+    retire_fixed_stack_fields();
 }
 
 void StackWatermark::EndGrowFlush()
@@ -251,32 +272,39 @@ void StackWatermark::start_processing_impl(void* context)
 void StackWatermark::yield_processing()
 {
     update_watermark();
+    retire_fixed_stack_fields();
     lock.unlock();
     lock.lock();
+    begin_fixed_stack_fields();
 }
 
 void StackWatermark::start_processing()
 {
     if (processing_started()) { return; }
     lock.lock();
+    begin_fixed_stack_fields();
     if (!processing_started()) { start_processing_impl(nullptr); }
+    retire_fixed_stack_fields();
     lock.unlock();
 }
 
 void StackWatermark::finish_processing(void* context)
 {
     lock.lock();
+    begin_fixed_stack_fields();
     if (!processing_started()) { start_processing_impl(context); }
     if (processing_started() && !IsDone()) {
         iterator->process_all(context);
         update_watermark();
     }
+    retire_fixed_stack_fields();
     lock.unlock();
 }
 
 void StackWatermark::restore_saved_top(const uint32_t* ip, FrameAddress* fa)
 {
     lock.lock();
+    begin_fixed_stack_fields();
     if (processing_started() && !IsDone() && iterator != nullptr) {
         iterator->process_all(nullptr);
         update_watermark();
@@ -284,17 +312,20 @@ void StackWatermark::restore_saved_top(const uint32_t* ip, FrameAddress* fa)
     MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
     top.SetIP(ip);
     top.SetFA(fa);
+    retire_fixed_stack_fields();
     lock.unlock();
 }
 
 void StackWatermark::process_one()
 {
     lock.lock();
+    begin_fixed_stack_fields();
     if (!processing_started()) { start_processing_impl(nullptr); }
     else if (!IsDone()) {
         iterator->process_one(nullptr);
         update_watermark();
     }
+    retire_fixed_stack_fields();
     lock.unlock();
 }
 
@@ -424,7 +455,7 @@ void ZStackWatermark::process_head(void* context)
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
-        });
+        }, true);
     };
     owner.VisitExceptionRoots(roots);
     owner.VisitNativeFrameRoots(roots);
@@ -464,7 +495,7 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
-        });
+        }, true);
     };
     DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots, owner);
     StackFrameCursor::ProcessFrame(frame, registers, roots, owner, &derived, false);

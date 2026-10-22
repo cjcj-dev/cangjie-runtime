@@ -354,7 +354,7 @@ public:
     bool TransitionToCpuProfile(bool bySelf);
 
     void VisitProcessedRoots(const RootVisitor& visitor);
-    void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
+    void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor, bool dedupStackFields = false);
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {

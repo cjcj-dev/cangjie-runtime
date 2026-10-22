@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include "Common/StackType.h"
 #include "Common/BaseObject.h"
 #include "StackMap/StackMapTypeDef.h"
@@ -69,9 +70,12 @@ public:
     virtual void ShiftForGrow(intptr_t offset);
     virtual void Reset();
     virtual void OnStackGrow(intptr_t offset);
+    bool claim_fixed_stack_field(uintptr_t field);
 
 protected:
     virtual void start_processing_impl(void* context);
+    void begin_fixed_stack_fields();
+    void retire_fixed_stack_fields();
     virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) = 0;
     void update_watermark();
     void yield_processing();
@@ -83,6 +87,8 @@ private:
     bool is_frame_safe(const FrameInfo& frame) const;
     std::atomic<uintptr_t> waterMark { 0 };
     std::unique_ptr<StackWatermarkFramesIterator> iterator;
+    std::unordered_set<uintptr_t> fixedStackFields;
+    bool fixedStackFieldsLive = false;
     friend class StackWatermarkFramesIterator;
 };
 
