@@ -466,7 +466,7 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
             static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
         });
     };
-    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots);
+    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots, owner);
     StackFrameCursor::ProcessFrame(frame, registers, roots, owner, &derived, false);
 }
 

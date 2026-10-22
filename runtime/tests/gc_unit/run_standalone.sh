@@ -497,6 +497,7 @@ MAIN_SOURCES=(
   "$SRC/test_package_init.cpp"
   "$SRC/test_global_gc_requests.cpp"
   "$SRC/test_verify_roots.cpp"
+  "$SRC/test_derived_base_once.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
   "$SRC/test_weak_roots.cpp"
   "$SRC/test_sync_native_wait.cpp"

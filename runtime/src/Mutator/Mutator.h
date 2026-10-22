@@ -345,7 +345,7 @@ public:
     void WaitForCpuProfiling() const;
 
     AllocBuffer* tlab() { return &allocBuffer; }
-    static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
+    static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor, Mutator& owner);
 
     inline void HandleCpuProfile();
 

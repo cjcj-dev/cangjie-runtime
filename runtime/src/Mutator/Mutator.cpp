@@ -724,11 +724,14 @@ void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
     }
 }
 
-DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
+DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor, Mutator& owner)
 {
     // oopMap.cpp:400-421, ProcessDerivedOop: retain the old offset and apply
     // the same ordinary-root closure to a copy of the base in the derived slot.
-    return [visitor](BasePtrType base, DerivedSlot& derived) {
+    // A stack base is not relocated. Expanding it here visits the same fields
+    // again when the real base root is processed, and an in-place forwarding
+    // entry then resolves the relocated address back to null.
+    return [visitor, &owner](BasePtrType base, DerivedSlot& derived) {
         if (is_null(base) || is_null(derived.LoadDerived())) {
             return;
         }
@@ -739,7 +742,9 @@ DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
         // ProcessDerivedOop temporarily treats this very derived word as an oop.
         // Preserve its slot identity for closures that deduplicate physical roots.
         RootSlot& currentBase = RootSlotAt(static_cast<void*>(&derived));
-        visitor(currentBase);
+        if (!owner.IsStackAddr(raw(base))) {
+            visitor(currentBase);
+        }
         RebaseDerived(derived, currentBase, offset);
     };
 }

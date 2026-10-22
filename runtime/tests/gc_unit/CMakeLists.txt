@@ -113,6 +113,7 @@ set(GC_UNIT_SOURCES
     test_package_init.cpp
     test_global_gc_requests.cpp
     test_verify_roots.cpp
+    test_derived_base_once.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
     test_sync_native_wait.cpp

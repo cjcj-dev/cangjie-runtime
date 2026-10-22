@@ -161,7 +161,7 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
     DerivedPtrVisitor derived =
-        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
+        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor, mutator);
     if (heapMap.IsValid()) {
         heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
         heapMap.VisitSlotRoots(visitor, slotDebugFunc);
