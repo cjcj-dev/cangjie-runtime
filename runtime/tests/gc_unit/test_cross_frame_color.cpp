@@ -553,9 +553,9 @@ void LinkNode(ChainNode& node, uintptr_t start, FrameAddress* caller, const uint
     node.fa.returnAddress = ret;
 }
 
-// Caller F's callee-saved register is spilled in the already processed callee.
-// F itself is not processed until the value is still from. The spill address is
-// the saved watermark, so an address colour is load-good and skips relocation.
+// The safepoint stub spills F's callee-saved RBX in its own frame (FP > SP).
+// That slot is the saved watermark, so an address colour is load-good. F's SP is
+// the callee CallerSP, and F's own FP sits above it in the old segment.
 void CheckRegisterRoot()
 {
     const StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
@@ -604,7 +604,7 @@ void CheckRegisterRoot()
     auto* callerB = reinterpret_cast<ChainNode*>(spillAddr - 16 - offsetof(ChainNode, fa));
     auto* frameA = reinterpret_cast<ChainNode*>(base + 0x100);
     auto* frameC = reinterpret_cast<ChainNode*>(base + 0x180);
-    auto* frameF = reinterpret_cast<ChainNode*>(base + 0x200);
+    auto* frameF = reinterpret_cast<ChainNode*>(base + 0x880);
     auto* frameS = reinterpret_cast<ChainNode*>(safepointFa - offsetof(ChainNode, fa));
     std::fprintf(stderr, "XFRAME_REG spill=%llx bfa=%llx sfa=%llx fsp=%llx\n",
         static_cast<unsigned long long>(spillAddr),
@@ -621,6 +621,21 @@ void CheckRegisterRoot()
     frameF->startWord = regStart + 9;
     frameF->fa.callerFrameAddress = nullptr;
     frameF->fa.returnAddress = nullptr;
+    // x86_64 CallerSP is fp+16 and the stub spills RBX at FA-16. The third
+    // return-poll barrier is frameC, so its SP is the saved watermark and must
+    // sit on the spill. That forces callerB above frameC. C→S→F stays ordered,
+    // S contains the spill, and F's own FP stays above F.SP in the old segment.
+    const uintptr_t faC = reinterpret_cast<uintptr_t>(&frameC->fa);
+    const uintptr_t faS = safepointFa;
+    const uintptr_t faF = reinterpret_cast<uintptr_t>(&frameF->fa);
+    const uintptr_t spS = faC + sizeof(FrameAddress);
+    const uintptr_t spF = faS + sizeof(FrameAddress);
+    GC_EXPECT_TRUE(faC < faS);
+    GC_EXPECT_TRUE(faS < faF);
+    GC_EXPECT_TRUE(faS > spS);
+    GC_EXPECT_TRUE(faF > spF);
+    GC_EXPECT_TRUE(spillAddr >= spS);
+    GC_EXPECT_TRUE(spillAddr < faS);
 
     GcVerifyFixture fixture;
     Mutator owner;
