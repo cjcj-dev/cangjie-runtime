@@ -448,10 +448,36 @@ uintptr_t ZStackWatermark::prev_frame_color(const FrameInfo& frame) const
 {
     return color_for_address(frame.mFrame.GetSP());
 }
-void ZStackWatermark::process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor)
+// zStackWatermark.cpp:83 judges the frame by fr.sp(), and :210 applies that
+// colour to every oop the frame lists. A register spill can sit in an already
+// processed callee; its address must not pick the colour. Only a field expanded
+// from a stack object takes the colour of the frame that contains it. A native
+// root can name a stack object outside every walked frame; that field keeps
+// the colour of the frame that listed it.
+bool ZStackWatermark::color_for_containing_frame(uintptr_t address, uintptr_t& color) const
 {
+    StackFrameCursor cursor(owner.GetUnwindContext());
+    while (!cursor.Done()) {
+        const FrameInfo* frame = cursor.CurrentFrame();
+        const uintptr_t sp = frame->mFrame.GetSP();
+        const uintptr_t cfa = frame->CallerSP();
+        if (cfa > sp && address >= sp && address < cfa) {
+            color = prev_frame_color(*frame);
+            return true;
+        }
+        cursor.Advance();
+    }
+    return false;
+}
+void ZStackWatermark::process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor,
+                                   bool listedByFrame)
+{
+    uintptr_t used = frameColor;
     const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(&slot);
-    const uintptr_t used = owner.IsStackAddr(slotAddr) ? color_for_address(slotAddr) : frameColor;
+    uintptr_t contained = 0;
+    if (!listedByFrame && owner.IsStackAddr(slotAddr) && color_for_containing_frame(slotAddr, contained)) {
+        used = contained;
+    }
     closure.apply(ZUncoloredRoot::cast(&HeapSlotAt<>(static_cast<void*>(&slot))), used);
 }
 
@@ -475,7 +501,7 @@ void ZStackWatermark::process_head(void* context)
     StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            process_slot(closure, slot, color);
+            process_slot(closure, slot, color, &slot == &root);
         }, true);
     };
     owner.VisitExceptionRoots(roots);
@@ -516,7 +542,7 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
     StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            process_slot(closure, slot, color);
+            process_slot(closure, slot, color, &slot == &root);
         }, true);
     };
     DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots, owner);

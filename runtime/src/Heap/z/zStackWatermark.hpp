@@ -117,7 +117,9 @@ private:
     int newest = 0;
     TLABStatistics allocStats;
     void save_old_watermark();
-    void process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor);
+    void process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor,
+                      bool listedByFrame);
+    bool color_for_containing_frame(uintptr_t address, uintptr_t& color) const;
     void process_head(void* context);
     void start_processing_impl(void* context) override;
     void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;

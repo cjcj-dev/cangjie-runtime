@@ -1,10 +1,11 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 //
-// zStackWatermark.cpp:609-617, :696-704 and Mutator.cpp:762-785.
-// A callee heap root that names a caller stack object is expanded with the
-// callee frame's colour. The field must still be relocated with the colour of
-// the frame that contains it (ZGC zStackWatermark.cpp:83-92).
+// zStackWatermark.cpp:83-92 and :210.
+// A callee heap root that names a caller stack object is expanded from the
+// callee frame. The field is relocated with the colour of the frame that
+// contains it. A slot or register the frame lists directly keeps that frame's
+// colour, even when the spill sits in an already processed callee.
 
 #include "gc_unittest.hpp"
 #include "gc_verify_fixture.hpp"
@@ -25,6 +26,8 @@
 #include "TypeInfoManager.h"
 #include <cstdio>
 #include <cstring>
+#include <elf.h>
+#include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
 
@@ -48,10 +51,10 @@ bool gLinked = false;
 struct Bits {
     uint8_t* data;
     uint32_t bit = 0;
-    void Put(uint32_t value, unsigned width)
+    void Put(uint64_t value, unsigned width)
     {
         for (unsigned i = 0; i < width; ++i, ++bit) {
-            data[bit / 8] |= static_cast<uint8_t>(((value >> i) & 1u) << (bit % 8));
+            data[bit / 8] |= static_cast<uint8_t>(((value >> i) & 1ull) << (bit % 8));
         }
     }
     void Var(uint32_t value)
@@ -246,13 +249,17 @@ uintptr_t ColorAt(ZStackWatermark& mark, uintptr_t sp)
     return mark.prev_frame_color(frame);
 }
 
+enum class ColorArm { Listed, CalleeOnly, Boundary };
+
 // Four return-poll frames: Lo, Mid, G, F. The first start stores a completed
 // bad colour. A mark flip then stores G's SP with a load-good colour. G's
 // heap root names a headered object in F; one process_one hold covers both.
-// The field in F must become the forwarded address. callerListsField is false
-// when F's return-poll map names no slot, so only G's root reaches the field.
-void CheckOwningFrame(bool callerListsField)
+// The field in F must become the forwarded address. CalleeOnly leaves F's
+// return-poll map with no slot, so only G's root reaches the field. Boundary
+// puts an already forwarded field in G, above G.sp, which is the saved watermark.
+void CheckOwningFrame(ColorArm arm)
 {
+    const bool callerListsField = arm == ColorArm::Listed;
     const StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
     CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
     struct GrowRestore {
@@ -413,12 +420,33 @@ void CheckOwningFrame(bool callerListsField)
     GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
     GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(field) > boundary);
 
-    frames[2].field = reinterpret_cast<uint64_t>(stackObj);
+    uint64_t* boundaryField = nullptr;
+    if (arm == ColorArm::Boundary) {
+        boundaryField = reinterpret_cast<uint64_t*>(boundary) + 1;
+        std::fprintf(stderr, "XFRAME_BOUNDARY sp=%llx field=%llx header=%llx slot=%llx\n",
+            static_cast<unsigned long long>(boundary),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(boundaryField)),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&frames[2].header)),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&frames[2].field)));
+        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(boundaryField), reinterpret_cast<uintptr_t>(&frames[2].header));
+        GC_EXPECT_NE(reinterpret_cast<uintptr_t>(boundaryField), reinterpret_cast<uintptr_t>(&frames[2].field));
+        BaseObject* local = reinterpret_cast<BaseObject*>(boundary);
+        local->SetClassInfo(stackType);
+        StorePlain(RootSlotAt(static_cast<void*>(boundaryField)), from_object(to));
+        frames[2].field = reinterpret_cast<uint64_t>(local);
+        GC_EXPECT_TRUE(owner.IsStackAddr(reinterpret_cast<uintptr_t>(local)));
+        GC_EXPECT_TRUE(owner.IsStackAddr(reinterpret_cast<uintptr_t>(boundaryField)));
+        GC_EXPECT_TRUE(local->IsValidObject());
+    } else {
+        frames[2].field = reinterpret_cast<uint64_t>(stackObj);
+    }
     GC_EXPECT_TRUE(owner.IsStackAddr(frames[2].field));
     owner.GetStackWatermark().process_one();
     const uintptr_t gColor = ColorAt(owner.GetStackWatermark(), boundary);
     const uintptr_t fColor = ColorAt(owner.GetStackWatermark(), boundary + 1);
-    const uintptr_t after = raw(RootSlotAt(static_cast<void*>(field)).LoadPlain());
+    const uintptr_t after = arm == ColorArm::Boundary
+        ? raw(RootSlotAt(static_cast<void*>(boundaryField)).LoadPlain())
+        : raw(RootSlotAt(static_cast<void*>(field)).LoadPlain());
     std::fprintf(stderr,
         "XFRAME_FIELD after=%llx from=%llx to=%llx g=%llx f=%llx g_load=%d f_load=%llx done=%d\n",
         static_cast<unsigned long long>(after),
@@ -431,16 +459,253 @@ void CheckOwningFrame(bool callerListsField)
     GC_EXPECT_TRUE(LoadGood(gColor));
     GC_EXPECT_FALSE(LoadGood(fColor));
     GC_EXPECT_EQ(after, reinterpret_cast<uintptr_t>(to));
+    if (arm == ColorArm::Boundary) {
+        const uintptr_t addressColor = ColorAt(owner.GetStackWatermark(), reinterpret_cast<uintptr_t>(boundaryField));
+        std::fprintf(stderr, "XFRAME_BOUNDARY_COLOR frame=%llx addr=%llx frame_load=%d addr_load=%d\n",
+            static_cast<unsigned long long>(gColor), static_cast<unsigned long long>(addressColor),
+            LoadGood(gColor) ? 1 : 0, LoadGood(addressColor) ? 1 : 0);
+        GC_EXPECT_TRUE(LoadGood(gColor));
+        GC_EXPECT_FALSE(LoadGood(addressColor));
+    }
+}
+
+uintptr_t LocalRuntimeSymbol(const char* name)
+{
+    char path[768] {};
+    FILE* maps = std::fopen("/proc/self/maps", "r");
+    GC_EXPECT_TRUE(maps != nullptr);
+    char line[1024];
+    bool found = false;
+    while (std::fgets(line, sizeof(line), maps) != nullptr) {
+        unsigned long start = 0;
+        unsigned long offset = 0;
+        char perms[8] {};
+        char file[768] {};
+        if (std::sscanf(line, "%lx-%*lx %7s %lx %*s %*u %767s", &start, perms, &offset, file) != 4) {
+            continue;
+        }
+        if (perms[0] == 'r' && perms[2] == 'x' && std::strstr(file, "libcangjie-runtime.so") != nullptr) {
+            std::snprintf(path, sizeof(path), "%s", file);
+            found = true;
+            break;
+        }
+    }
+    std::fclose(maps);
+    GC_EXPECT_TRUE(found);
+    FILE* elf = std::fopen(path, "rb");
+    GC_EXPECT_TRUE(elf != nullptr);
+    Elf64_Ehdr header {};
+    GC_EXPECT_EQ(std::fread(&header, sizeof(header), 1, elf), size_t { 1 });
+    GC_EXPECT_EQ(std::fseek(elf, static_cast<long>(header.e_phoff), SEEK_SET), 0);
+    std::vector<Elf64_Phdr> programs(header.e_phnum);
+    GC_EXPECT_EQ(std::fread(programs.data(), sizeof(Elf64_Phdr), header.e_phnum, elf), size_t { header.e_phnum });
+    GC_EXPECT_EQ(std::fseek(elf, static_cast<long>(header.e_shoff), SEEK_SET), 0);
+    std::vector<Elf64_Shdr> sections(header.e_shnum);
+    GC_EXPECT_EQ(std::fread(sections.data(), sizeof(Elf64_Shdr), header.e_shnum, elf), size_t { header.e_shnum });
+    uintptr_t value = 0;
+    for (const Elf64_Shdr& section : sections) {
+        if (section.sh_type != SHT_SYMTAB) { continue; }
+        const Elf64_Shdr& stringsHeader = sections[section.sh_link];
+        std::vector<char> strings(stringsHeader.sh_size);
+        GC_EXPECT_EQ(std::fseek(elf, static_cast<long>(stringsHeader.sh_offset), SEEK_SET), 0);
+        GC_EXPECT_EQ(std::fread(strings.data(), 1, strings.size(), elf), strings.size());
+        const size_t count = section.sh_size / sizeof(Elf64_Sym);
+        std::vector<Elf64_Sym> symbols(count);
+        GC_EXPECT_EQ(std::fseek(elf, static_cast<long>(section.sh_offset), SEEK_SET), 0);
+        GC_EXPECT_EQ(std::fread(symbols.data(), sizeof(Elf64_Sym), count, elf), count);
+        for (const Elf64_Sym& symbol : symbols) {
+            if (symbol.st_name == 0 || symbol.st_name >= strings.size() || symbol.st_value == 0) { continue; }
+            if (std::strcmp(strings.data() + symbol.st_name, name) == 0) { value = symbol.st_value; }
+        }
+    }
+    std::fclose(elf);
+    GC_EXPECT_NE(value, uintptr_t { 0 });
+    maps = std::fopen("/proc/self/maps", "r");
+    GC_EXPECT_TRUE(maps != nullptr);
+    uintptr_t address = 0;
+    while (std::fgets(line, sizeof(line), maps) != nullptr) {
+        unsigned long start = 0;
+        unsigned long offset = 0;
+        char file[768] {};
+        if (std::sscanf(line, "%lx-%*lx %*s %lx %*s %*u %767s", &start, &offset, file) != 3) { continue; }
+        if (std::strcmp(file, path) != 0) { continue; }
+        for (const Elf64_Phdr& program : programs) {
+            if (program.p_type != PT_LOAD || program.p_offset != offset) { continue; }
+            if (value < program.p_vaddr || value >= program.p_vaddr + program.p_memsz) { continue; }
+            address = static_cast<uintptr_t>(start) - program.p_vaddr + value;
+        }
+    }
+    std::fclose(maps);
+    GC_EXPECT_NE(address, uintptr_t { 0 });
+    return address;
+}
+
+struct ChainNode {
+    uint64_t startWord;
+    FrameAddress fa;
+};
+static_assert(offsetof(ChainNode, startWord) + 8 == offsetof(ChainNode, fa), "start word must sit at FA-8");
+
+void LinkNode(ChainNode& node, uintptr_t start, FrameAddress* caller, const uint32_t* ret)
+{
+    node.startWord = start + 9;
+    node.fa.callerFrameAddress = caller;
+    node.fa.returnAddress = ret;
+}
+
+// Caller F's callee-saved register is spilled in the already processed callee.
+// F itself is not processed until the value is still from. The spill address is
+// the saved watermark, so an address colour is load-good and skips relocation.
+void CheckRegisterRoot()
+{
+    const StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
+    CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
+    struct GrowRestore {
+        StackGrowConfig* slot;
+        StackGrowConfig value;
+        ~GrowRestore() { *slot = value; }
+    } growRestore { &CangjieRuntime::stackGrowConfig, savedGrow };
+
+    const uintptr_t empty = EmptySlotStartPC();
+    const uintptr_t emptySite = empty + 16;
+    static SlotFuncDesc regDesc;
+    static bool regLinked = false;
+    if (!regLinked) {
+        std::memset(&regDesc, 0, sizeof(regDesc));
+        regDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&regDesc.stackMapOffset) -
+            reinterpret_cast<char*>(&regDesc.descriptorOffset));
+        regDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(regDesc.bits) -
+            reinterpret_cast<char*>(&regDesc.stackMapOffset));
+        regDesc.returnPollFlag = 1;
+        Bits bits { regDesc.bits };
+        bits.Var(0); bits.Var(0); bits.Var(0);
+        bits.Var(2); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(0);
+        bits.Put(0, 32); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
+        bits.Put(16, 32); bits.Put(1, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
+        bits.Var(1); bits.Var(33); bits.Put(uint64_t { 1 } << RBX, 33);
+        bits.Var(0); bits.Var(0); bits.Var(0);
+        bits.Var(0); bits.Var(0);
+        bits.Var(0);
+        ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(regDesc.pc));
+        regLinked = true;
+    }
+    const uintptr_t regStart = reinterpret_cast<uintptr_t>(regDesc.pc);
+    const uintptr_t regSite = regStart + 16;
+    const uintptr_t safepoint = LocalRuntimeSymbol("unwindPCForSafepointHandlerStub");
+
+    alignas(16) uint8_t mem[4096] {};
+    const uintptr_t base = reinterpret_cast<uintptr_t>(mem);
+    const uintptr_t safepointFa = base + 0x800;
+    RegSlotsMap spills;
+    RegRoot::RecordStubAllRegister(spills, safepointFa);
+    GC_EXPECT_TRUE(spills.HasReg(RBX));
+    RootSlot* spill = spills.addrMap[RBX];
+    const uintptr_t spillAddr = reinterpret_cast<uintptr_t>(spill);
+    auto* callerB = reinterpret_cast<ChainNode*>(spillAddr - 16 - offsetof(ChainNode, fa));
+    auto* frameA = reinterpret_cast<ChainNode*>(base + 0x100);
+    auto* frameC = reinterpret_cast<ChainNode*>(base + 0x180);
+    auto* frameF = reinterpret_cast<ChainNode*>(base + 0x200);
+    auto* frameS = reinterpret_cast<ChainNode*>(safepointFa - offsetof(ChainNode, fa));
+    std::fprintf(stderr, "XFRAME_REG spill=%llx bfa=%llx sfa=%llx fsp=%llx\n",
+        static_cast<unsigned long long>(spillAddr),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&callerB->fa)),
+        static_cast<unsigned long long>(safepointFa),
+        static_cast<unsigned long long>(safepointFa + sizeof(FrameAddress)));
+    GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(callerB) > base);
+    GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(callerB) + sizeof(ChainNode) < base + sizeof(mem));
+    LinkNode(*frameA, empty, &callerB->fa, reinterpret_cast<const uint32_t*>(emptySite));
+    LinkNode(*callerB, empty, &frameC->fa, reinterpret_cast<const uint32_t*>(emptySite));
+    LinkNode(*frameC, empty, &frameS->fa, reinterpret_cast<const uint32_t*>(safepoint));
+    frameS->fa.callerFrameAddress = &frameF->fa;
+    frameS->fa.returnAddress = reinterpret_cast<const uint32_t*>(regSite);
+    frameF->startWord = regStart + 9;
+    frameF->fa.callerFrameAddress = nullptr;
+    frameF->fa.returnAddress = nullptr;
+
+    GcVerifyFixture fixture;
+    Mutator owner;
+    ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+    Mutator* savedMutator = tls->mutator;
+    struct TlsRestore {
+        ThreadLocalData* tls;
+        Mutator* saved;
+        ~TlsRestore() { tls->SetMutator(saved); }
+    } tlsRestore { tls, savedMutator };
+    tls->SetMutator(&owner);
+    const uintptr_t badEpoch = owner.GetStackWatermark().GetEpoch();
+    int flips = 0;
+    while (LoadGood(badEpoch) || StackWatermark::epoch_id() == badEpoch) {
+        if ((flips & 1) == 0) { ZGlobalsPointers::flip_young_relocate_start(); }
+        else { ZGlobalsPointers::flip_old_relocate_start(); }
+        ++flips;
+        GC_EXPECT_TRUE(flips <= 8);
+    }
+    PageForwarding installed;
+    BaseObject* to = InstallInPlace(installed, fixture, badEpoch);
+    BaseObject* from = fixture.obj0;
+    owner.SetStackTopAddr(base);
+    owner.SetStackSize(sizeof(mem));
+    GC_EXPECT_TRUE(owner.IsStackAddr(spillAddr));
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&frameF->fa);
+    context.frameInfo.mFrame.SetFA(&frameA->fa);
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(emptySite));
+    context.frameInfo.mFrame.SetSP(base + 0x40);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    owner.SetManagedContext(true);
+
+    owner.GetStackWatermark().process_one();
+    const uintptr_t boundary = owner.GetStackWatermark().last_processed_raw();
+    std::fprintf(stderr, "XFRAME_REG_SETUP boundary=%llx spill=%llx fsp=%llx started=%d done=%d\n",
+        static_cast<unsigned long long>(boundary), static_cast<unsigned long long>(spillAddr),
+        static_cast<unsigned long long>(safepointFa + sizeof(FrameAddress)),
+        owner.GetStackWatermark().processing_started() ? 1 : 0,
+        owner.GetStackWatermark().IsDone() ? 1 : 0);
+    GC_EXPECT_FALSE(owner.GetStackWatermark().IsDone());
+    GC_EXPECT_TRUE(spillAddr <= boundary);
+    GC_EXPECT_TRUE(safepointFa + sizeof(FrameAddress) > boundary);
+
+    ZGlobalsPointers::flip_young_mark_start();
+    if (StackWatermark::epoch_id() == owner.GetStackWatermark().GetEpoch()) {
+        ZGlobalsPointers::flip_old_mark_start();
+    }
+    GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
+    owner.GetStackWatermark().process_one();
+    StorePlain(*spill, from_object(from));
+    const uintptr_t spillColor = ColorAt(owner.GetStackWatermark(), spillAddr);
+    const uintptr_t frameColor = ColorAt(owner.GetStackWatermark(), safepointFa + sizeof(FrameAddress));
+    std::fprintf(stderr, "XFRAME_REG_COLOR spill=%llx frame=%llx spill_load=%d frame_load=%d\n",
+        static_cast<unsigned long long>(spillColor), static_cast<unsigned long long>(frameColor),
+        LoadGood(spillColor) ? 1 : 0, LoadGood(frameColor) ? 1 : 0);
+    GC_EXPECT_TRUE(LoadGood(spillColor));
+    GC_EXPECT_FALSE(LoadGood(frameColor));
+    owner.GetStackWatermark().process_one();
+    const uintptr_t after = raw(spill->LoadPlain());
+    std::fprintf(stderr, "XFRAME_REG_FIELD after=%llx from=%llx to=%llx\n",
+        static_cast<unsigned long long>(after),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(from)),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(to)));
+    GC_EXPECT_EQ(after, reinterpret_cast<uintptr_t>(to));
 }
 
 GC_OTHER_VM_TEST(CrossFrameColor, OwningFrameRemapsField)
 {
-    CheckOwningFrame(true);
+    CheckOwningFrame(ColorArm::Listed);
 }
 
 GC_OTHER_VM_TEST(CrossFrameColor, CalleeRootOnlyRemapsField)
 {
-    CheckOwningFrame(false);
+    CheckOwningFrame(ColorArm::CalleeOnly);
+}
+
+GC_OTHER_VM_TEST(CrossFrameColor, BoundaryFrameKeepsGoodField)
+{
+    CheckOwningFrame(ColorArm::Boundary);
+}
+
+GC_OTHER_VM_TEST(CrossFrameColor, RegisterRootUsesListingFrame)
+{
+    CheckRegisterRoot();
 }
 
 } // namespace
