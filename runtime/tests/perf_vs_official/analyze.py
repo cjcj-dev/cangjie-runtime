@@ -153,7 +153,7 @@ def parse_attempt(directory: Path, root: Path, manifest: dict[str, dict[str, str
         "classification": (directory / "classification").read_text().strip(),
         "stdout_sha256": stdout_sha,
         "wall_s": wall,
-        "throughput": float(manifest[workload]["work_units"]) / wall,
+        "throughput": ratio(float(manifest[workload]["work_units"]), wall),
         "maxrss_kb": rss,
         "pause_events": len(pauses),
         "pauses": pauses,
@@ -165,6 +165,11 @@ def parse_attempt(directory: Path, root: Path, manifest: dict[str, dict[str, str
 
 
 def aggregate(runs: list[dict[str, object]], metric: str) -> float:
+    # A zero-duration observation is below the timer's resolution, not a
+    # measured zero cost. Keep it in attempts, but do not silently drop it or
+    # let median's ordering of NaNs turn it into a performance claim.
+    if metric in ("wall", "throughput") and any(float(run["wall_s"]) <= 0 for run in runs):
+        return math.nan
     if metric == "wall":
         return median(float(run["wall_s"]) for run in runs)
     if metric == "throughput":
@@ -187,6 +192,11 @@ def bootstrap_interval(
     seed: int,
 ) -> tuple[float, float]:
     if not pairs:
+        return math.nan, math.nan
+    # Resampling must not omit unresolved durations and manufacture a finite
+    # confidence interval for an unavailable full-sample timing estimate.
+    if math.isnan(ratio(aggregate([pair[0] for pair in pairs], metric),
+                        aggregate([pair[1] for pair in pairs], metric))):
         return math.nan, math.nan
     generator = random.Random(seed)
     estimates: list[float] = []
@@ -237,7 +247,11 @@ def main() -> int:
         "stdout_sha256", "wall_s", "throughput", "maxrss_kb", "pause_events", "cycles",
         "minor_cycles", "major_cycles", "path",
     ]
-    write_tsv(output / "attempts.tsv", attempts, attempt_fields)
+    write_tsv(output / "attempts.tsv", [
+        {**attempt, "throughput": "NA" if math.isnan(float(attempt["throughput"]))
+         else attempt["throughput"]}
+        for attempt in attempts
+    ], attempt_fields)
 
     groups: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
     for attempt in attempts:
