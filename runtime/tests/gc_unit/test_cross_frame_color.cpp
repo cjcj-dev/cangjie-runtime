@@ -688,6 +688,131 @@ void CheckRegisterRoot()
     GC_EXPECT_EQ(after, reinterpret_cast<uintptr_t>(to));
 }
 
+// Five return-poll frames. Session A processes through frame 3, so the saved
+// watermark is frame 3's SP: frame 3 is load-good and frame 4 is not. The next
+// start walks frames 0-2 and stops on frame 3. Only then are frame 0's return
+// address and saved caller FP replaced. A stack-top rewalk loads that FP and
+// faults in UnwindToCallerMachineFrame. The iterator cursor is already on
+// frame 3, so a caller-only walk still remaps the field in frame 4.
+void CheckYoungReturn()
+{
+    const StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
+    CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
+    struct GrowRestore {
+        StackGrowConfig* slot;
+        StackGrowConfig value;
+        ~GrowRestore() { *slot = value; }
+    } growRestore { &CangjieRuntime::stackGrowConfig, savedGrow };
+
+    const uintptr_t slotStart = SlotStartPC();
+    const uintptr_t emptyStart = EmptySlotStartPC();
+    const uintptr_t slotSite = slotStart + 16;
+    const uintptr_t emptySite = emptyStart + 16;
+
+    alignas(8) uint8_t typeStorage[sizeof(TypeInfo)] {};
+    TypeInfo* stackType = reinterpret_cast<TypeInfo*>(typeStorage);
+    stackType->SetType(TypeKind::TYPE_KIND_CLASS);
+    stackType->SetFlagHasRefField();
+    stackType->SetInstanceSize(16);
+    GCTib tib {};
+    tib.tag = SIGN_BIT | 1;
+    stackType->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
+
+    GcVerifyFixture fixture;
+    Mutator owner;
+    ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+    Mutator* savedMutator = tls->mutator;
+    struct TlsRestore {
+        ThreadLocalData* tls;
+        Mutator* saved;
+        ~TlsRestore() { tls->SetMutator(saved); }
+    } tlsRestore { tls, savedMutator };
+    tls->SetMutator(&owner);
+
+    const uintptr_t badEpoch = owner.GetStackWatermark().GetEpoch();
+    int flips = 0;
+    while (LoadGood(badEpoch) || StackWatermark::epoch_id() == badEpoch) {
+        if ((flips & 1) == 0) { ZGlobalsPointers::flip_young_relocate_start(); }
+        else { ZGlobalsPointers::flip_old_relocate_start(); }
+        ++flips;
+        GC_EXPECT_TRUE(flips <= 8);
+    }
+    const uintptr_t goodEpoch = StackWatermark::epoch_id();
+    GC_EXPECT_FALSE(LoadGood(badEpoch));
+    GC_EXPECT_TRUE(LoadGood(goodEpoch));
+
+    PageForwarding installed;
+    BaseObject* to = InstallInPlace(installed, fixture, badEpoch);
+    BaseObject* from = fixture.obj0;
+
+    alignas(16) RawFrame frames[5] {};
+    for (int i = 0; i < 5; ++i) {
+        const bool listing = i == 3;
+        frames[i].startWord = (listing ? slotStart : emptyStart) + 9;
+        // MachineFrame reads the caller IP from this frame's return slot.
+        const bool callerLists = i + 1 == 3;
+        frames[i].fa.returnAddress = reinterpret_cast<uint32_t*>(callerLists ? slotSite : emptySite);
+        frames[i].fa.callerFrameAddress = i == 4 ? nullptr : &frames[i + 1].fa;
+    }
+    BaseObject* stackObj = reinterpret_cast<BaseObject*>(&frames[4].header);
+    stackObj->SetClassInfo(stackType);
+    uint64_t* field = &frames[4].field;
+    StorePlain(RootSlotAt(static_cast<void*>(field)), from_object(from));
+    int payloadVisits = 0;
+    stackObj->ForEachRefField([&](RefField<>&) { ++payloadVisits; });
+    GC_EXPECT_EQ(payloadVisits, 1);
+    GC_EXPECT_TRUE(stackObj->IsValidObject());
+
+    owner.SetStackTopAddr(reinterpret_cast<uintptr_t>(&frames[0]) - 8);
+    owner.SetStackSize(sizeof(frames) + 16);
+    GC_EXPECT_TRUE(owner.IsStackAddr(reinterpret_cast<uintptr_t>(field)));
+    UnwindContext& context = owner.GetUnwindContext();
+    context.anchorFA = reinterpret_cast<uint32_t*>(&frames[4].fa);
+    context.frameInfo.mFrame.SetFA(&frames[0].fa);
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(emptySite));
+    context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[0]));
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    owner.SetManagedContext(true);
+
+    owner.GetStackWatermark().process_one();
+    owner.GetStackWatermark().process_one();
+    const uintptr_t saved = owner.GetStackWatermark().last_processed_raw();
+    std::fprintf(stderr, "XFRAME_YOUNG_SAVED saved=%llx frame3=%llx frame4=%llx\n",
+        static_cast<unsigned long long>(saved),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&frames[3])),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&frames[4])));
+    GC_EXPECT_NE(saved, uintptr_t { 0 });
+    GC_EXPECT_TRUE(saved <= reinterpret_cast<uintptr_t>(&frames[3]));
+    GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(&frames[4]) > saved);
+
+    ZGlobalsPointers::flip_young_mark_start();
+    if (StackWatermark::epoch_id() == goodEpoch) { ZGlobalsPointers::flip_old_mark_start(); }
+    GC_EXPECT_NE(StackWatermark::epoch_id(), goodEpoch);
+    GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
+    owner.GetStackWatermark().process_one();
+    const uintptr_t listColor = ColorAt(owner.GetStackWatermark(), saved);
+    const uintptr_t containColor = ColorAt(owner.GetStackWatermark(), saved + 1);
+    std::fprintf(stderr, "XFRAME_YOUNG_COLOR list=%llx contain=%llx list_load=%d contain_load=%d\n",
+        static_cast<unsigned long long>(listColor), static_cast<unsigned long long>(containColor),
+        LoadGood(listColor) ? 1 : 0, LoadGood(containColor) ? 1 : 0);
+    GC_EXPECT_NE(listColor, containColor);
+    GC_EXPECT_TRUE(LoadGood(listColor));
+    GC_EXPECT_FALSE(LoadGood(containColor));
+
+    frames[3].field = reinterpret_cast<uint64_t>(stackObj);
+    frames[0].fa.returnAddress = reinterpret_cast<uint32_t*>(uintptr_t { 1 });
+    frames[0].fa.callerFrameAddress = reinterpret_cast<FrameAddress*>(uintptr_t { 1 });
+    owner.GetStackWatermark().process_one();
+    const uintptr_t after = raw(RootSlotAt(static_cast<void*>(field)).LoadPlain());
+    std::fprintf(stderr, "XFRAME_YOUNG_FIELD after=%llx from=%llx to=%llx\n",
+        static_cast<unsigned long long>(after),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(from)),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(to)));
+    GC_EXPECT_EQ(after, reinterpret_cast<uintptr_t>(to));
+}
+
 GC_OTHER_VM_TEST(CrossFrameColor, OwningFrameRemapsField)
 {
     CheckOwningFrame(ColorArm::Listed);
@@ -706,6 +831,11 @@ GC_OTHER_VM_TEST(CrossFrameColor, BoundaryFrameKeepsGoodField)
 GC_OTHER_VM_TEST(CrossFrameColor, RegisterRootUsesListingFrame)
 {
     CheckRegisterRoot();
+}
+
+GC_OTHER_VM_TEST(CrossFrameColor, YoungReturnDoesNotRecolorOlderField)
+{
+    CheckYoungReturn();
 }
 
 } // namespace

@@ -16,6 +16,7 @@
 
 namespace MapleRuntime {
 class Mutator;
+class StackFrameCursor;
 class StackWatermarkFramesIterator;
 
 class StackWatermarkProcessOopClosure : public ZUncoloredRootClosure {
@@ -77,7 +78,10 @@ protected:
     virtual void start_processing_impl(void* context);
     void begin_fixed_stack_fields();
     void retire_fixed_stack_fields();
-    virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) = 0;
+    // forwardFrom is the iterator cursor at the frame being processed. Colour
+    // lookup may copy it and walk callers only. It must not rewind.
+    virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context,
+                         StackFrameCursor* forwardFrom) = 0;
     void update_watermark();
     void yield_processing();
     std::mutex lock;
@@ -118,11 +122,12 @@ private:
     TLABStatistics allocStats;
     void save_old_watermark();
     void process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor,
-                      bool listedByFrame);
-    bool color_for_containing_frame(uintptr_t address, uintptr_t& color) const;
+                      bool listedByFrame, const StackFrameCursor* forwardFrom);
+    bool color_for_containing_frame(uintptr_t address, uintptr_t& color, const StackFrameCursor& forward) const;
     void process_head(void* context);
     void start_processing_impl(void* context) override;
-    void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;
+    void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context,
+                 StackFrameCursor* forwardFrom) override;
 };
 
 class StackWatermarkSet {

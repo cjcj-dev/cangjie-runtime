@@ -28,11 +28,12 @@ public:
     {
         uintptr_t stackTarget = 0;
         while (has_next()) {
+            StackFrameCursor forward = cursor;
             const FrameInfo frame = *cursor.CurrentFrame();
             const bool barrier = has_barrier(frame);
             const bool returning = frame.GetFrameType() == FrameType::RETURN_SAFEPOINT;
             if (returning) { cursor.Advance(); }
-            process_frame(frame, context, stackTarget);
+            process_frame(frame, context, stackTarget, forward);
             if (!returning) { cursor.Advance(); }
             if (barrier) {
                 set_watermark(frame.mFrame.GetSP());
@@ -45,11 +46,12 @@ public:
         unsigned processed = 0;
         uintptr_t stackTarget = 0;
         while (has_next()) {
+            StackFrameCursor forward = cursor;
             const FrameInfo frame = *cursor.CurrentFrame();
             const bool barrier = has_barrier(frame);
             const bool returning = frame.GetFrameType() == FrameType::RETURN_SAFEPOINT;
             if (returning) { cursor.Advance(); }
-            process_frame(frame, context, stackTarget);
+            process_frame(frame, context, stackTarget, forward);
             if (!returning) { cursor.Advance(); }
             if (barrier) {
                 set_watermark(frame.mFrame.GetSP());
@@ -66,11 +68,12 @@ public:
     void process_all_no_yield(void* context)
     {
         while (has_next()) {
+            StackFrameCursor forward = cursor;
             const FrameInfo frame = *cursor.CurrentFrame();
             const bool barrier = has_barrier(frame);
             const bool returning = frame.GetFrameType() == FrameType::RETURN_SAFEPOINT;
             if (returning) { cursor.Advance(); }
-            owner.process(frame, cursor.RegMap(), context);
+            owner.process(frame, cursor.RegMap(), context, &forward);
             if (!returning) { cursor.Advance(); }
             if (barrier) {
                 set_watermark(frame.mFrame.GetSP());
@@ -87,11 +90,13 @@ private:
     // HotSpot stackWatermark.cpp:96-110,205-220 protects exposed frames and
     // their callers. Cangjie value-type sret arguments can name a more distant
     // caller frame: close over those live stack pointers before exposing it.
-    void process_frame(const FrameInfo& frame, void* context, uintptr_t& stackTarget)
+    void process_frame(const FrameInfo& frame, void* context, uintptr_t& stackTarget, StackFrameCursor& forward)
     {
         // The stream map already names saves from younger frames. Prologue slots
         // are published by Next() after this frame is read. stackWatermark.cpp:140.
-        owner.process(frame, cursor.RegMap(), context);
+        // forward stays on this frame so a stack field can walk callers without
+        // rereading frames the mutator may already have reused below the watermark.
+        owner.process(frame, cursor.RegMap(), context, &forward);
         if (frame.GetFrameType() != FrameType::MANAGED) {
             return;
         }
@@ -451,17 +456,22 @@ uintptr_t ZStackWatermark::prev_frame_color(const FrameInfo& frame) const
 // zStackWatermark.cpp:83 judges the frame by fr.sp(), and :210 applies that
 // colour to every oop the frame lists. A register spill can sit in an already
 // processed callee; its address must not pick the colour. Only a field expanded
-// from a stack object takes the colour of the frame that contains it. A native
-// root can name a stack object outside every walked frame; that field keeps
-// the colour of the frame that listed it.
-bool ZStackWatermark::color_for_containing_frame(uintptr_t address, uintptr_t& color) const
+// from a stack object takes the colour of the frame that contains it. That frame
+// is the one being processed or an older caller, so the walk starts at the
+// iterator cursor and moves toward callers. Frames below the watermark stay
+// mutable; rereading them from the published top faults in
+// MachineFrame::UnwindToCallerMachineFrame. A native root can name a stack
+// object outside every walked frame; that field keeps the listing colour.
+bool ZStackWatermark::color_for_containing_frame(uintptr_t address, uintptr_t& color,
+                                                 const StackFrameCursor& forward) const
 {
-    StackFrameCursor cursor(owner.GetUnwindContext());
+    StackFrameCursor cursor = forward;
     while (!cursor.Done()) {
         const FrameInfo* frame = cursor.CurrentFrame();
         const uintptr_t sp = frame->mFrame.GetSP();
+        if (address < sp) { return false; }
         const uintptr_t cfa = frame->CallerSP();
-        if (cfa > sp && address >= sp && address < cfa) {
+        if (cfa > sp && address < cfa) {
             color = prev_frame_color(*frame);
             return true;
         }
@@ -470,12 +480,13 @@ bool ZStackWatermark::color_for_containing_frame(uintptr_t address, uintptr_t& c
     return false;
 }
 void ZStackWatermark::process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor,
-                                   bool listedByFrame)
+                                   bool listedByFrame, const StackFrameCursor* forwardFrom)
 {
     uintptr_t used = frameColor;
     const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(&slot);
     uintptr_t contained = 0;
-    if (!listedByFrame && owner.IsStackAddr(slotAddr) && color_for_containing_frame(slotAddr, contained)) {
+    if (!listedByFrame && forwardFrom != nullptr && owner.IsStackAddr(slotAddr) &&
+        color_for_containing_frame(slotAddr, contained, *forwardFrom)) {
         used = contained;
     }
     closure.apply(ZUncoloredRoot::cast(&HeapSlotAt<>(static_cast<void*>(&slot))), used);
@@ -497,11 +508,23 @@ void ZStackWatermark::save_old_watermark()
 
 void ZStackWatermark::process_head(void* context)
 {
+    // No frame cursor yet: this runs at the start of the locked epoch, before
+    // StackWatermark::start_processing_impl builds the iterator and before
+    // yield_processing can drop the lock. The published top is still the
+    // snapshot taken while the mutator was stopped, so one walk from that top
+    // is safe. Callers are the mutator itself (on_safepoint, process_one via
+    // ensure_safe, Exception.cpp RestoreContext, HandshakeState::process_by_self)
+    // or another thread only while the mutator is stopped
+    // (safepoint_synchronize_begin, HandshakeState::try_process's observed_safe,
+    // finish_processing from zMark.cpp and from remap_young_roots inside
+    // SuspendibleThreadSetJoiner, ZVerify::threads_start_processing,
+    // BeginGrowFlush).
     const uintptr_t color = prev_head_color();
+    StackFrameCursor snapshot(owner.GetUnwindContext());
     StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            process_slot(closure, slot, color, &slot == &root);
+            process_slot(closure, slot, color, &slot == &root, &snapshot);
         }, true);
     };
     owner.VisitExceptionRoots(roots);
@@ -536,13 +559,14 @@ void ZStackWatermark::start_processing_impl(void* context)
     StackWatermark::start_processing_impl(context);
 }
 
-void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
+void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context,
+                              StackFrameCursor* forwardFrom)
 {
     const uintptr_t color = prev_frame_color(frame);
     StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            process_slot(closure, slot, color, &slot == &root);
+            process_slot(closure, slot, color, &slot == &root, forwardFrom);
         }, true);
     };
     DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots, owner);
