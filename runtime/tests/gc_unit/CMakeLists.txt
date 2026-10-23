@@ -115,6 +115,7 @@ set(GC_UNIT_SOURCES
     test_verify_roots.cpp
     test_derived_base_once.cpp
     test_heap_root_stack_target.cpp
+    test_cross_frame_color.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
     test_sync_native_wait.cpp

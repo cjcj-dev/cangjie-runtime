@@ -414,6 +414,7 @@ StackWatermarkProcessOopClosure::RootFunction StackWatermarkProcessOopClosure::s
 StackWatermarkProcessOopClosure::StackWatermarkProcessOopClosure(void* context, uintptr_t color)
     : function(select_function(context)), color(color) {}
 void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p) { function(p, color); }
+void StackWatermarkProcessOopClosure::apply(zaddress_unsafe* p, uintptr_t slotColor) { function(p, slotColor); }
 
 bool ZColorWatermark::covers(const ZColorWatermark& other) const
 {
@@ -433,15 +434,25 @@ void ZStackWatermark::Reset()
     allocStats = TLABStatistics{};
 }
 uintptr_t ZStackWatermark::prev_head_color() const { return oldWatermarks[newest].color; }
-uintptr_t ZStackWatermark::prev_frame_color(const FrameInfo& frame) const
+uintptr_t ZStackWatermark::color_for_address(uintptr_t address) const
 {
     for (int i = newest; i >= 0; --i) {
-        if (oldWatermarks[i].watermark == 0 || frame.mFrame.GetSP() <= oldWatermarks[i].watermark) {
+        if (oldWatermarks[i].watermark == 0 || address <= oldWatermarks[i].watermark) {
             return oldWatermarks[i].color;
         }
     }
     LOG(RTLOG_FATAL, "Found no matching previous color for the frame");
     return 0;
+}
+uintptr_t ZStackWatermark::prev_frame_color(const FrameInfo& frame) const
+{
+    return color_for_address(frame.mFrame.GetSP());
+}
+void ZStackWatermark::process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor)
+{
+    const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(&slot);
+    const uintptr_t used = owner.IsStackAddr(slotAddr) ? color_for_address(slotAddr) : frameColor;
+    closure.apply(ZUncoloredRoot::cast(&HeapSlotAt<>(static_cast<void*>(&slot))), used);
 }
 
 void ZStackWatermark::save_old_watermark()
@@ -460,10 +471,11 @@ void ZStackWatermark::save_old_watermark()
 
 void ZStackWatermark::process_head(void* context)
 {
-    StackWatermarkProcessOopClosure closure(context, prev_head_color());
+    const uintptr_t color = prev_head_color();
+    StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
+            process_slot(closure, slot, color);
         }, true);
     };
     owner.VisitExceptionRoots(roots);
@@ -500,10 +512,11 @@ void ZStackWatermark::start_processing_impl(void* context)
 
 void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
 {
-    StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
+    const uintptr_t color = prev_frame_color(frame);
+    StackWatermarkProcessOopClosure closure(context, color);
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
+            process_slot(closure, slot, color);
         }, true);
     };
     DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots, owner);

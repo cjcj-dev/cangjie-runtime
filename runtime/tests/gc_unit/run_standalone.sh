@@ -499,6 +499,7 @@ MAIN_SOURCES=(
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_derived_base_once.cpp"
   "$SRC/test_heap_root_stack_target.cpp"
+  "$SRC/test_cross_frame_color.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
   "$SRC/test_weak_roots.cpp"
   "$SRC/test_sync_native_wait.cpp"

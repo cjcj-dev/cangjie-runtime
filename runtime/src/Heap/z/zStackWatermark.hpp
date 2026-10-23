@@ -23,6 +23,7 @@ public:
     using RootFunction = ZUncoloredRoot::RootFunction;
     StackWatermarkProcessOopClosure(void* context, uintptr_t color);
     void do_root(zaddress_unsafe* p) override;
+    void apply(zaddress_unsafe* p, uintptr_t slotColor);
 private:
     static RootFunction select_function(void* context);
     const RootFunction function;
@@ -107,6 +108,7 @@ public:
     void ShiftForGrow(intptr_t offset) override;
     TLABStatistics& stats() { return allocStats; }
     uintptr_t prev_head_color() const;
+    uintptr_t color_for_address(uintptr_t address) const;
     uintptr_t prev_frame_color(const FrameInfo& frame) const;
 
 private:
@@ -115,6 +117,7 @@ private:
     int newest = 0;
     TLABStatistics allocStats;
     void save_old_watermark();
+    void process_slot(StackWatermarkProcessOopClosure& closure, RootSlot& slot, uintptr_t frameColor);
     void process_head(void* context);
     void start_processing_impl(void* context) override;
     void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;
