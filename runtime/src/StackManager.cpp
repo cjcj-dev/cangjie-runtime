@@ -625,7 +625,10 @@ void StackManager::InitAddressScopeForInterpreter(const char* libName, const voi
 #if defined(__APPLE__) && defined(__IOS__)
     InitAddressInfoOnIOS(symbol, StackManager::interpreterSoStartAddr, StackManager::interpreterSoEndAddr);
 #elif defined(__linux__)
-    std::vector<CString> interpreterSoName = {CString(libName).Combine("\n").Str()};
+    // InitCJInterpreter accepts a library path, while GetEachSoAddrScope
+    // compares the basename of each executable mapping.
+    const CString libraryPath(libName);
+    std::vector<CString> interpreterSoName = {CString(CString::BaseName(libraryPath)).Combine("\n").Str()};
     GetEachSoAddrScope(interpreterSoName);
 #elif defined(__APPLE__) && !defined(__IOS__) // MacOS
     InitAddressInfoOnDarwin(
