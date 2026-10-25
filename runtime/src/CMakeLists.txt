@@ -269,19 +269,30 @@ endif()
     # RuntimeOutputLayout.cmake wires publication and the GC gate after every
     # target has its final compilation shape. The gate consumes the published
     # pair, never the mutable linker staging directory.
+    if (WINDOWS_FLAG MATCHES 1)
+        find_program(WINDOWS_EXPORT_READOBJ NAMES llvm-readobj REQUIRED)
+        # Preserve successful link output before a contract rejection. A failing
+        # POST_BUILD can remove the target; its DLL/raw evidence must survive.
+        set(WINDOWS_EXPORT_LINK_EVIDENCE "${CMAKE_BINARY_DIR}/windows-export-link")
+        add_custom_command(TARGET cangjie-runtime POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${WINDOWS_EXPORT_LINK_EVIDENCE}"
+            COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:cangjie-runtime>"
+                "${WINDOWS_EXPORT_LINK_EVIDENCE}/$<TARGET_FILE_NAME:cangjie-runtime>"
+            COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/windows_x86_64_exports.raw.def"
+                "${WINDOWS_EXPORT_LINK_EVIDENCE}/windows_x86_64_exports.raw.def"
+            COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
+                "${WINDOWS_EXPORT_LINK_EVIDENCE}/windows_x86_64_exports.raw.def"
+                "${CMAKE_CURRENT_SOURCE_DIR}/windows_x86_64_exports.def"
+                --dll "${WINDOWS_EXPORT_LINK_EVIDENCE}/$<TARGET_FILE_NAME:cangjie-runtime>"
+                --readobj "${WINDOWS_EXPORT_READOBJ}"
+            COMMENT "Checking the Windows runtime export surface"
+            VERBATIM)
+    endif()
     add_custom_command(TARGET cangjie-runtime POST_BUILD
         COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
             "@$<TARGET_PROPERTY:cangjie-runtime,CJ_RUNTIME_PUBLISH_ARGS>"
         COMMENT "Publishing the configured runtime pair and checking the published products"
         VERBATIM)
-    if (WINDOWS_FLAG MATCHES 1)
-        add_custom_command(TARGET cangjie-runtime POST_BUILD
-            COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
-                "${CMAKE_BINARY_DIR}/windows_x86_64_exports.raw.def"
-                "${CMAKE_CURRENT_SOURCE_DIR}/windows_x86_64_exports.def"
-            COMMENT "Checking the Windows runtime export surface"
-            VERBATIM)
-    endif()
     if (((IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1) AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")) OR
         ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" AND IOS_FLAG MATCHES 1) OR IOS_SIMULATOR_FLAG MATCHES 2))
 	target_compile_options(cangjie-runtime PRIVATE -Wno-elaborated-enum-base)

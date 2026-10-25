@@ -28,8 +28,14 @@ class Contract(unittest.TestCase):
         self.raw.write_text('EXPORTS\n CJ_MCC_Object @1\n state @2 DATA\n _ZNSt3__1swapB9nqn220107Ev @3\n')
         self.refs.write_text(json.dumps({'symbols': {'CJ_MCC_Object': ['compiler/emitter.cpp:1'], 'state': ['std/native.cj:1']}}))
         self.expected.write_text('EXPORTS\n CJ_MCC_Object @1\n state @2 DATA\n')
+        self.runtime = self.root / 'runtime'
+        self.runtime.mkdir()
+        (self.runtime / 'exports.cpp').write_text('extern "C" void CJ_MCC_Object() {}\n')
 
     def cli(self, *args):
+        if args[0] == 'collect':
+            args = (*args, '--runtime-source', f'runtime@{"b" * 40}={self.runtime}',
+                    '--historical', self.expected)
         return subprocess.run([sys.executable, str(SCRIPT), *map(str, args)], capture_output=True, text=True)
 
     def check(self, raw=None):
@@ -52,11 +58,13 @@ class Contract(unittest.TestCase):
         self.assertIn('missing=1 changed=0', result.stdout)
         print('ASSERT missing_contract_is_exact_failure PASS', flush=True)
 
-    def test_abi_marker_and_ordinal_change_are_not_contract(self):
+    def test_abi_marker_is_not_contract_but_historical_ordinals_are(self):
         for marker in ('220107', '220108'):
-            self.raw.write_text(f'EXPORTS\n CJ_MCC_Object @17\n state @29 DATA\n _ZNSt3__1swapB9nqn{marker}Ev @42\n')
+            self.raw.write_text(f'EXPORTS\n CJ_MCC_Object @1\n state @2 DATA\n _ZNSt3__1swapB9nqn{marker}Ev @42\n')
             result = self.check()
             self.assertEqual(result.returncode, 0, result.stderr)
+        self.raw.write_text('EXPORTS\n CJ_MCC_Object @17\n state @2 DATA\n')
+        self.assertEqual(self.check().returncode, 1)
         print('ASSERT two_abi_markers PASS', flush=True)
 
     def test_data_kind_remains_strict(self):

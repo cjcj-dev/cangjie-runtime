@@ -1,0 +1,68 @@
+#!/usr/bin/env zx
+// Exercise the shipped CLI. Synthetic tables prove the contract checker only.
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
+const here=path.dirname(fileURLToPath(import.meta.url));
+const generator=process.env.WINDOWS_EXPORT_GENERATOR || path.resolve(here,'../../build/generate_windows_exports.py');
+const out=process.argv[2];
+if(!out)throw Error('usage: test_completeness.mjs <new-evidence-directory>');
+fs.mkdirSync(out,{recursive:true});
+const runtime=path.join(out,'runtime'),caller=path.join(out,'caller');
+fs.mkdirSync(runtime);fs.mkdirSync(caller);
+const raw=path.join(out,'raw.def'),history=path.join(out,'history.def'),refs=path.join(out,'refs.json'),diag=path.join(out,'diagnostics.json');
+const services=['CJ_MCC_SetReferenceMethods','CJ_MCC_ReferenceInvokeFinalize','CJ_MCC_ReferenceWaitPending','CJ_MCC_ReferenceRuntimeRunning','CJ_MCC_ReferenceNanoTime'];
+fs.writeFileSync(path.join(runtime,'reference.cpp'),services.map(n=>`extern "C" MRT_EXPORT void ${n}() {}`).join('\n')+'\n// extern "C" void CommentOnly() {}\n');
+fs.writeFileSync(path.join(caller,'emit.cj'),services.map(n=>`emit("${n}")`).join('\n')+'\nemit("OtherDLL")\nemit("CommentOnly")\n');
+fs.writeFileSync(history,'EXPORTS\n Historical @1\n state @2 DATA\n');
+fs.copyFileSync(history,raw);
+let serial=0;
+function cli(label,args,expected){
+ const p=spawnSync('python3',[generator,...args],{encoding:'utf8'});
+ const stem=path.join(out,`${++serial}-${label}`);
+ fs.writeFileSync(stem+'.log',p.stdout+p.stderr);
+ fs.writeFileSync(stem+'.json',JSON.stringify({cmd:'python3',args:[generator,...args],status:p.status,signal:p.signal},null,2));
+ assert.equal(p.status,expected,`${label}: ${p.stdout}${p.stderr}`);return p;
+}
+const collect=['collect',raw,refs,'--runtime-source',`runtime@${'a'.repeat(40)}=${runtime}`,'--consumer',`emitter:caller@${'b'.repeat(40)}=${caller}`,'--historical',history,'--diagnostics',diag];
+cli('old-raw-must-reject-new-definitions',collect,2);
+assert.deepEqual(JSON.parse(fs.readFileSync(diag)).missing_from_raw,services.toSorted());
+assert.ok(!fs.existsSync(refs),'incomplete collection must not write a contract');
+console.log('ASSERT missing_real_definitions_rejected count=5');
+const complete=fs.readFileSync(history,'utf8')+services.map((n,i)=>` ${n} @${i+3}\n`).join('');
+fs.writeFileSync(raw,complete);
+cli('complete-collection',collect,0);
+const document=JSON.parse(fs.readFileSync(refs));
+assert.deepEqual(Object.keys(document.symbols),services.toSorted());
+assert.equal(document.historical.exports.length,2);
+const expected=path.join(out,'generated.def');
+cli('write-preserves-history',['write',raw,expected,'--source-ref','fixture','--references',refs,'--historical',history],0);
+assert.match(fs.readFileSync(expected,'utf8'),/Historical @1/);
+cli('normal-check',['check',raw,expected,'--references',refs],0);
+fs.writeFileSync(raw,complete.replace(' Historical @1\n',''));
+const missing=cli('unused-historical-export-remains-required',['check',raw,expected,'--references',refs],1);
+assert.match(missing.stderr,/missing export: Historical/);
+fs.writeFileSync(raw,complete);
+fs.writeFileSync(expected,fs.readFileSync(expected,'utf8').replace(/.*Historical @1\n/,''));
+cli('shrunk-history-rejected',['check',raw,expected,'--references',refs],2);
+cli('shrunk-history-write-rejected',['write',raw,expected,'--source-ref','fixture','--references',refs],2);
+cli('restore-registration',['write',raw,expected,'--source-ref','fixture','--references',refs,'--historical',history],0);
+fs.writeFileSync(raw,complete.replace('state @2 DATA','state @2'));
+cli('data-change-rejected',['check',raw,expected,'--references',refs],1);
+cli('data-change-write-rejected',['write',raw,expected,'--source-ref','fixture','--references',refs,'--historical',history],2);
+fs.writeFileSync(raw,complete.replace('Historical @1','Historical @99'));
+cli('ordinal-change-rejected',['check',raw,expected,'--references',refs],1);
+fs.writeFileSync(raw,complete);
+// Reader fixture is explicitly an adapter unit test, not a Windows DLL.
+const reader=path.join(out,'readobj-fixture.mjs'),dll=path.join(out,'DLL-TABLE-FIXTURE.txt');
+fs.writeFileSync(reader,'#!/usr/bin/env node\nimport fs from "node:fs"; process.stdout.write(fs.readFileSync(process.argv[3],"utf8"));\n',{mode:0o755});
+const table=complete.split('\n').filter(l=>l.includes('@')).map(l=>{const m=l.trim().match(/(\S+) @(\d+)/);return `Export {\n Ordinal: ${m[2]}\n Name: ${m[1]}\n RVA: 0x1000\n}\n`;}).join('');
+fs.writeFileSync(dll,table);
+cli('complete-dll-table-adapter',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],0);
+fs.writeFileSync(dll,table.replace(/Export \{\n Ordinal: 1\n[^}]+\}\n/,''));
+cli('dll-table-disagrees-with-raw',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],2);
+fs.writeFileSync(raw,'EXPORTS\n one @1\n two @1\n');
+cli('malformed-independent-control',collect,2);
+console.log(`ASSERT completeness_cli PASS commands=${serial} fixture_only=1`);

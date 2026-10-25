@@ -13,6 +13,7 @@ import json
 import re
 import sys
 import tempfile
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +61,7 @@ def parse_exports(path: Path) -> list[Export]:
 
 # The contract is captured from consumers, never from the DLL under test.
 DEFAULT_REFERENCES = Path(__file__).resolve().parents[1] / "src/windows_export_references.json"
+DEFAULT_HISTORY = DEFAULT_REFERENCES.with_name("windows_x86_64_exports.def")
 SOURCE_SUFFIXES = {".cj", ".c", ".cpp", ".cc", ".h", ".hpp", ".inc", ".def", ".td", ".S", ".s"}
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9$]*")
 COMMENT_RE = re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')|//[^\n]*|/\*.*?\*/', re.S)
@@ -115,8 +117,45 @@ def source_files(root: Path, kind: str, selection: Path | None) -> list[Path]:
     return [p for p in files if p.suffix == ".cj" or p.relative_to(root).as_posix() in selected]
 
 
-def collect_references(raw_path: Path, consumers: list[str], output: Path, native_sources: list[str]) -> None:
+def runtime_definitions(identity: str) -> tuple[dict, dict[str, list[str]]]:
+    """Find explicit C-linkage definitions, independently of the candidate raw.
+
+    This is additional ownership evidence, not a C++ parser or a claim that every
+    platform compiles every definition. The complete Windows raw remains needed
+    for asm aliases, C++ mangling, DATA and ordinal evidence.
+    """
+    label_ref, directory = identity.split("=", 1)
+    label, revision = label_ref.split("@", 1)
+    if not label or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("runtime source must be LABEL@40-digit-revision=directory")
+    root = Path(directory)
+    files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in {".cpp", ".cc", ".c"})
+    if not files:
+        raise ValueError(f"no runtime definitions in {root}")
+    definitions: dict[str, list[str]] = {}
+    digest = hashlib.sha256()
+    pattern = re.compile(r'extern\s+"C"\s+(?:[\w:*&<>]+\s+)*?([A-Za-z_]\w*)\s*'
+                         r'\([^;{}]*\)\s*(?:noexcept\s*)?\{')
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        contents = path.read_bytes()
+        digest.update(relative.encode() + b"\0" + contents + b"\0")
+        text = consumer_text(contents.decode("utf-8"))
+        for match in pattern.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            definitions.setdefault(match[1], []).append(f"{label}/{relative}:{line}")
+    if not definitions:
+        raise ValueError("runtime source contains no explicit C-linkage definitions")
+    return {"label": label, "revision": revision, "sha256": digest.hexdigest(), "files": len(files)}, definitions
+
+
+def collect_references(raw_path: Path, consumers: list[str], output: Path, native_sources: list[str],
+                       runtime_source: str, historical: Path, diagnostics: Path | None) -> None:
     available = {export.name for export in parse_exports(raw_path)}
+    history = parse_exports(historical)
+    runtime_input, definitions = runtime_definitions(runtime_source)
+    # Ownership must not depend solely on a DLL that may be missing a new export.
+    owned = available | definitions.keys() | {entry.name for entry in history}
     references: dict[str, list[str]] = {}
     inputs = []
     selections = dict(item.split("=", 1) for item in native_sources)
@@ -164,7 +203,7 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
                 names = {token for fragment in fragments for token in TOKEN_RE.findall(fragment)}
                 names.update(constants[m.group(1)] + m.group(2) for m in concat.finditer(line)
                              if m.group(1) in constants)
-                for name in sorted(names & available):
+                for name in sorted(names & owned):
                     references.setdefault(name, []).append(f"{label}/{relative}:{line_number}")
         identity = {"kind": kind, "label": label, "revision": revision, "sha256": digest.hexdigest(), "files": len(files)}
         if selection is not None:
@@ -172,7 +211,18 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
         inputs.append(identity)
     if not references:
         raise ValueError("consumer sources reference no exports")
-    output.write_text(json.dumps({"inputs": inputs, "symbols": dict(sorted(references.items()))}, indent=2) + "\n")
+    document = {"inputs": inputs, "symbols": dict(sorted(references.items())),
+                "runtime": runtime_input,
+                "definitions": {name: definitions[name] for name in sorted(references) if name in definitions},
+                "historical": {"sha256": hashlib.sha256(historical.read_bytes()).hexdigest(),
+                               "exports": [entry.__dict__ for entry in history]}}
+    required = set(references) | {entry.name for entry in history}
+    missing = sorted(required - available)
+    if diagnostics is not None:
+        diagnostics.write_text(json.dumps({**document, "missing_from_raw": missing}, indent=2) + "\n")
+    if missing:
+        raise ValueError(f"incomplete Windows raw; missing required exports: {', '.join(missing)}")
+    output.write_text(json.dumps(document, indent=2) + "\n")
     print(f"WINDOWS_EXPORT_REFERENCES symbols={len(references)} output={output}")
 
 
@@ -184,6 +234,15 @@ def read_references(path: Path) -> set[str]:
     return set(symbols)
 
 
+def captured_history(path: Path) -> dict[str, Export]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    entries = document.get("historical", {}).get("exports", [])
+    result = {entry["name"]: Export(**entry) for entry in entries}
+    if len(result) != len(entries):
+        raise ValueError("duplicate captured historical exports")
+    return result
+
+
 def select_exports(exports: list[Export], references: set[str]) -> dict[str, Export]:
     return {export.name: export for export in exports if export.name in references}
 
@@ -192,7 +251,7 @@ def render_exports(exports: list[Export], source_ref: str) -> str:
     lines = [
         "; Generated by runtime/build/generate_windows_exports.py.",
         f"; source-ref: {source_ref}",
-        "; source: consumer references intersected with a complete Windows linker --output-def.",
+        "; source: consumer references plus historical contract, checked against complete Windows linker --output-def.",
         "; DO NOT hand-edit: regenerate from a reviewed Windows runtime build.",
         "",
         "EXPORTS",
@@ -203,12 +262,22 @@ def render_exports(exports: list[Export], source_ref: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_exports(raw_path: Path, output_path: Path, source_ref: str, references_path: Path) -> None:
+def write_exports(raw_path: Path, output_path: Path, source_ref: str, references_path: Path,
+                  historical: Path | None) -> None:
     references = read_references(references_path)
-    selected = select_exports(parse_exports(raw_path), references)
-    missing = sorted(references - selected.keys())
+    history = parse_exports(historical or output_path)
+    historical_by_name = {entry.name: entry for entry in history}
+    for name, entry in captured_history(references_path).items():
+        if historical_by_name.get(name) != entry:
+            raise ValueError(f"historical definition lost or changed captured export: {name}")
+    required = references | {entry.name for entry in history}
+    selected = select_exports(parse_exports(raw_path), required)
+    missing = sorted(required - selected.keys())
     if missing:
         raise ValueError(f"missing consumer exports: {', '.join(missing)}")
+    for entry in history:
+        if selected[entry.name] != entry:
+            raise ValueError(f"historical export changed: expected={entry} actual={selected[entry.name]}")
     contents = render_exports(list(selected.values()), source_ref)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output_path.name}.", dir=output_path.parent)
@@ -225,17 +294,39 @@ def write_exports(raw_path: Path, output_path: Path, source_ref: str, references
     print(f"WINDOWS_EXPORT_DEF_WRITE output={output_path} exports={len(parse_exports(output_path))}")
 
 
-def check_exports(raw_path: Path, expected_path: Path, references_path: Path) -> int:
+def check_exports(raw_path: Path, expected_path: Path, references_path: Path,
+                  dll: Path | None = None, readobj: str = "llvm-readobj") -> int:
     references = read_references(references_path)
-    actual = select_exports(parse_exports(raw_path), references)
+    raw = parse_exports(raw_path)
+    if dll is not None:
+        # Inspect the complete linked table, including exports outside the
+        # registered subset. A raw sidecar is not proof of the actual DLL.
+        result = subprocess.run([readobj, "--coff-exports", str(dll)], capture_output=True, text=True)
+        print(result.stdout, end="")
+        if result.returncode:
+            raise ValueError(f"DLL export reader failed rc={result.returncode}: {result.stderr}")
+        actual_dll = {}
+        for block in re.findall(r"Export\s*\{([^{}]*)\}", result.stdout):
+            name = re.search(r"^\s*Name:\s*(\S+)\s*$", block, re.M)
+            ordinal = re.search(r"^\s*Ordinal:\s*(\d+)\s*$", block, re.M)
+            rva = re.search(r"^\s*RVA:\s*(0x[0-9A-Fa-f]+)\s*$", block, re.M)
+            if not name or not ordinal or not rva or int(rva[1], 16) == 0 or name[1] in actual_dll:
+                raise ValueError("invalid or unnamed DLL export entry")
+            actual_dll[name[1]] = int(ordinal[1])
+        if actual_dll != {entry.name: entry.ordinal for entry in raw}:
+            raise ValueError("complete DLL export names/ordinals differ from linker raw")
     registered = parse_exports(expected_path)
-    expected = select_exports(registered, references)
-    if set(expected) != references or len(expected) != len(registered):
+    expected = {entry.name: entry for entry in registered}
+    for name, entry in captured_history(references_path).items():
+        if expected.get(name) != entry:
+            raise ValueError(f"registered definition lost or changed captured historical export: {name}")
+    if not references <= expected.keys():
         raise ValueError("registered definition does not match the consumer reference set; regenerate it")
+    actual = select_exports(raw, set(expected))
     missing = sorted(expected.keys() - actual.keys())
     changed = sorted(
         name for name in actual.keys() & expected.keys()
-        if actual[name].is_data != expected[name].is_data
+        if actual[name] != expected[name]
     )
     print(
         f"WINDOWS_EXPORT_DEF_CHECK actual={len(actual)} expected={len(expected)} "
@@ -256,16 +347,22 @@ def main() -> int:
     write_parser.add_argument("raw", type=Path)
     write_parser.add_argument("output", type=Path)
     write_parser.add_argument("--source-ref", required=True)
+    write_parser.add_argument("--historical", type=Path, help="previous registered definition; defaults to output")
 
     check_parser = subparsers.add_parser("check", help="compare linker --output-def with the committed definition")
     check_parser.add_argument("raw", type=Path)
     check_parser.add_argument("expected", type=Path)
+    check_parser.add_argument("--dll", type=Path)
+    check_parser.add_argument("--readobj", default="llvm-readobj")
 
     collect_parser = subparsers.add_parser("collect", help="capture consumer references from pinned source trees")
     collect_parser.add_argument("raw", type=Path)
     collect_parser.add_argument("output", type=Path)
     collect_parser.add_argument("--consumer", action="append", required=True)
     collect_parser.add_argument("--native-sources", action="append", default=[], metavar="LABEL=MANIFEST")
+    collect_parser.add_argument("--runtime-source", required=True, metavar="LABEL@REVISION=DIRECTORY")
+    collect_parser.add_argument("--historical", type=Path, default=DEFAULT_HISTORY)
+    collect_parser.add_argument("--diagnostics", type=Path, help="retain provenance and missing symbols, even on failure")
     capture_parser = subparsers.add_parser("capture-native", help="capture all configured std native translation units")
     capture_parser.add_argument("build", type=Path)
     capture_parser.add_argument("root", type=Path, help="stdlib/libs source root")
@@ -279,12 +376,13 @@ def main() -> int:
             capture_native_sources(arguments.build, arguments.root, arguments.output)
             return 0
         if arguments.command == "collect":
-            collect_references(arguments.raw, arguments.consumer, arguments.output, arguments.native_sources)
+            collect_references(arguments.raw, arguments.consumer, arguments.output, arguments.native_sources,
+                               arguments.runtime_source, arguments.historical, arguments.diagnostics)
             return 0
         if arguments.command == "write":
-            write_exports(arguments.raw, arguments.output, arguments.source_ref, arguments.references)
+            write_exports(arguments.raw, arguments.output, arguments.source_ref, arguments.references, arguments.historical)
             return 0
-        return check_exports(arguments.raw, arguments.expected, arguments.references)
+        return check_exports(arguments.raw, arguments.expected, arguments.references, arguments.dll, arguments.readobj)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"FATAL: {error}", file=sys.stderr)
         return 2
