@@ -550,7 +550,8 @@ STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
 STANDALONE_PRODUCT_FULL="$OUT/standalone-product.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
 nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
-nm --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$STANDALONE_PRODUCT_FULL"
+# Installed Release libraries are stripped; callable product definitions remain dynamic exports.
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$STANDALONE_PRODUCT_FULL"
 if ! /usr/bin/grep -Eq '[[:space:]]main$' "$STANDALONE_SYMBOL_FULL"; then
   echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_BROKEN positive_control=main" >&2
   exit 7
