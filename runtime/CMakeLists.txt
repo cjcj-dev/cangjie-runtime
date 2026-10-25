@@ -59,6 +59,9 @@ endif()
 
 if (WINDOWS_FLAG MATCHES 1)
     set(CMAKE_SYSTEM_NAME Windows)
+    # The export collector consumes the actual normal runtime translation units
+    # and COFF objects, including platform selection and compiler definitions.
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 # Windows target must be set before project(CangjieRuntime).
 if (WINDOWS_FLAG MATCHES 1)
