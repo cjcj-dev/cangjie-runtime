@@ -631,7 +631,9 @@ if (DOPRA_FLAG MATCHES 1 AND RUNTIME_TRACE_FLAG MATCHES 1)
     install(TARGETS cangjie-trace DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 endif()
 
-install(TARGETS cangjie-runtime DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
+# The runtime has a dynamic dependency on boundscheck. Install the built pair
+# together so a standalone runtime installation is consumable after relocation.
+install(TARGETS cangjie-runtime boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 
 # Compiler copies of the generated ABI header must match these compiled assertions.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
