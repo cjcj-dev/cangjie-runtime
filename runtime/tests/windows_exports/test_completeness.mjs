@@ -62,6 +62,10 @@ fs.writeFileSync(reader,'#!/usr/bin/env node\nimport fs from "node:fs"; process.
 const table=complete.split('\n').filter(l=>l.includes('@')).map(l=>{const m=l.trim().match(/(\S+) @(\d+)/);return `Export {\n Ordinal: ${m[2]}\n Name: ${m[1]}\n RVA: 0x1000\n}\n`;}).join('');
 fs.writeFileSync(dll,table);
 cli('complete-dll-table-adapter',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],0);
+fs.writeFileSync(dll,table+'Export {\n Ordinal: 277\n Name: \n RVA: 0x0\n}\n');
+cli('empty-retired-ordinal-hole',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],0);
+fs.writeFileSync(dll,table+'Export {\n Ordinal: 277\n Name: NamedNull\n RVA: 0x0\n}\n');
+cli('named-null-export-rejected',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],2);
 fs.writeFileSync(dll,table.replace(/Export \{\n Ordinal: 1\n[^}]+\}\n/,''));
 cli('dll-table-disagrees-with-raw',['check',raw,expected,'--references',refs,'--dll',dll,'--readobj',reader],2);
 fs.writeFileSync(raw,'EXPORTS\n one @1\n two @1\n');

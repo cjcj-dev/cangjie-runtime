@@ -354,11 +354,19 @@ def check_exports(raw_path: Path, expected_path: Path, references_path: Path,
         if result.returncode:
             raise ValueError(f"DLL export reader failed rc={result.returncode}: {result.stderr}")
         actual_dll = {}
+        dll_ordinals = set()
         for block in re.findall(r"Export\s*\{([^{}]*)\}", result.stdout):
-            name = re.search(r"^\s*Name:\s*(\S+)\s*$", block, re.M)
+            name = re.search(r"^[ \t]*Name:[ \t]*(\S*)[ \t]*$", block, re.M)
             ordinal = re.search(r"^\s*Ordinal:\s*(\d+)\s*$", block, re.M)
             rva = re.search(r"^\s*RVA:\s*(0x[0-9A-Fa-f]+)\s*$", block, re.M)
-            if not name or not ordinal or not rva or int(rva[1], 16) == 0 or name[1] in actual_dll:
+            if not name or not ordinal or not rva or int(ordinal[1]) in dll_ordinals:
+                raise ValueError("invalid or duplicate DLL export entry")
+            dll_ordinals.add(int(ordinal[1]))
+            # PE export address tables include empty ordinal holes, including
+            # reviewed retirements. They are not named/forwarded exports.
+            if not name[1] and int(rva[1], 16) == 0:
+                continue
+            if not name[1] or int(rva[1], 16) == 0 or name[1] in actual_dll:
                 raise ValueError("invalid or unnamed DLL export entry")
             actual_dll[name[1]] = int(ordinal[1])
         if actual_dll != {entry.name: entry.ordinal for entry in raw}:
