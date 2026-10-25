@@ -32,3 +32,43 @@ The fixed allocation also reserves 32 bytes below all saves for native helper ho
 References: [Microsoft x64 unwind encoding](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64), and [fixed Microsoft .NET unwind implementation](https://github.com/dotnet/runtime/blob/421be955e4b70cddf583b10f5ad99814b713fb87/src/coreclr/unwinder/amd64/unwinder.cpp) (SET_FPREG and SAVE_NONVOL/XMM processing). The bounded test uses these operations; it is not a substitute for the native OS consumer.
 
 C2NStub and other Windows assembly are outside this N2C candidate's dynamic evidence. In particular, C2NStub still has body `.seh_pushreg` declarations; do not infer complete Windows unwind correctness from this scoped repair. Official runtime link/export collection/install/package and managed exception consumers remain separate gates.
+
+## Selected Windows assembly closure
+
+The normal CMake compilation database selects nine runtime assembly sources,
+Cjstart, and the Exception archive's RestoreContextForEH (11 source files;
+20 dynamic/static compile commands in run 40242564639). Derive this set from
+that database and CMake target sources, including the CalleeSavedStub macro
+expansions; do not replace it with a hand-picked list of transition names.
+The `closure` mode consumes each resulting actual COFF object and checks
+encoding order, completed fixed-frame bias, every prologue boundary, and
+nonvolatile saves under native home-space writes. `c2n` additionally checks
+normal/guard shared restore, RSI frame recovery, refreshed managed r15,
+return registers, and the private 16-byte cleanup. This remains a model.
+
+C2N now uses real GPR pushes before allocation, RSI as its fixed Windows FP,
+and offset-based XMM records after FP establishment. The original RBP anchor,
+GPR/XMM slots, safe-state slot and incoming argument locations remain. The
+additional fixed 32-byte home area is distinct from outgoing copied arguments.
+Loop/shadow allocations are body state recovered through that FP, not repeated
+prologue push records. Its epilogue preserves the caller frame and uses RET16.
+
+The fixed-frame helpers keep their managed RBP slot layouts. Safepoint and
+StackGrow include native home space in the recorded fixed allocation and do
+not publish an unrepresentable Windows RBP offset. CalleeSaved macro results
+no longer overwrite the saved r15 slot; five-argument wrappers retain RSP+32
+argument placement. Exclusive N2C helpers reserve the actual 24-byte N2CSlotData
+before saved registers, and keep result slots outside native home space.
+
+RestoreContextForEH is entered by a rewritten managed return, without an
+ordinary native caller PC on entry RSP (Exception.cpp redirects the last
+runtime frame). Its empty existing SEH encoding is enumerated separately.
+The normal-call model explicitly does not qualify that transfer trampoline;
+its landing-pad/OS semantics are NOT_RUN and must not be counted as a
+normal-frame pass. No native exception handler or synthetic return convention
+is invented by this consumer.
+
+The OS C++ consumer now enumerates both public N2C and C2N exports in the
+actual installed DLL for four body depths each. It still requires the real
+Windows producer and does not qualify partial prologues, epilogues, managed
+exceptions, stack migration, or exclusive stack switching.

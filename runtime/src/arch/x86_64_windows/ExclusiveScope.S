@@ -19,7 +19,7 @@
 #define CONTEXT_FPU_CW              0x44
 
 #define THREAD_PROCESSOR_OFFSET     0x38
-#define ExclusiveScopeFrameSize     (8 * 22)
+#define ExclusiveScopeFrameSize     (8 * 26)
 
 // Debug function to print thread context info
     .text
@@ -28,10 +28,18 @@ ExclusiveScopeDebugInfo:
     .seh_proc ExclusiveScopeDebugInfo
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
     subq    $64, %rsp
     .seh_stackalloc 64
+    leaq    64(%rsp), %rbp
+    .seh_setframe %rbp, 64
+    movq    %rbx, -8(%rbp)
+    .seh_savereg %rbx, 56
+    movq    %r12, -16(%rbp)
+    .seh_savereg %r12, 48
+    movq    %r13, -24(%rbp)
+    .seh_savereg %r13, 40
+    movq    %r14, -32(%rbp)
+    .seh_savereg %r14, 32
     .seh_endprologue
     
     // Get cjthread
@@ -60,17 +68,29 @@ ExclusiveScopeDebugInfo:
     // r13 = &thread->context
     // r14 = thread->context.rsp
     
-    movq    %rbp, %rsp
+    movq    -8(%rbp), %rbx
+    movq    -16(%rbp), %r12
+    movq    -24(%rbp), %r13
+    movq    -32(%rbp), %r14
+    leaq    0(%rbp), %rsp
     popq    %rbp
     ret
     
 .L_debug_no_cjthread:
-    movq    %rbp, %rsp
+    movq    -8(%rbp), %rbx
+    movq    -16(%rbp), %r12
+    movq    -24(%rbp), %r13
+    movq    -32(%rbp), %r14
+    leaq    0(%rbp), %rsp
     popq    %rbp
     ret
     
 .L_debug_no_thread:
-    movq    %rbp, %rsp
+    movq    -8(%rbp), %rbx
+    movq    -16(%rbp), %r12
+    movq    -24(%rbp), %r13
+    movq    -32(%rbp), %r14
+    leaq    0(%rbp), %rsp
     popq    %rbp
     ret
     .seh_endproc
@@ -94,18 +114,23 @@ CJ_MCC_ExclusiveScope:
     
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
     subq    $ExclusiveScopeFrameSize, %rsp
     .seh_stackalloc ExclusiveScopeFrameSize
-    .seh_endprologue
+    leaq    ExclusiveScopeFrameSize(%rsp), %rbp
+    .seh_setframe %rbp, ExclusiveScopeFrameSize
     
     // Save callee-saved registers
     movq    %r15, -8(%rbp)
+    .seh_savereg %r15, ExclusiveScopeFrameSize - 8
     movq    %r14, -16(%rbp)
+    .seh_savereg %r14, ExclusiveScopeFrameSize - 16
     movq    %r13, -24(%rbp)
+    .seh_savereg %r13, ExclusiveScopeFrameSize - 24
     movq    %r12, -32(%rbp)
+    .seh_savereg %r12, ExclusiveScopeFrameSize - 32
     movq    %rbx, -40(%rbp)
+    .seh_savereg %rbx, ExclusiveScopeFrameSize - 40
+    .seh_endprologue
     
     // Save arguments
     movq    %rcx, -48(%rbp)     // executeClosure
@@ -293,7 +318,7 @@ unwindPCForExclusiveStub:
     movq    -40(%rbp), %rbx
     
     // Restore stack and return
-    movq    %rbp, %rsp
+    leaq    0(%rbp), %rsp
     popq    %rbp
     ret
     .seh_endproc
@@ -307,25 +332,30 @@ ExecuteExclusiveCangjieStub:
     
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
-    subq    $128, %rsp          // 80 bytes locals + 32 bytes shadow space + 16 bytes alignment
-    .seh_stackalloc 128
-    .seh_endprologue
+    subq    $176, %rsp          // Context, saved registers/results and native home area
+    .seh_stackalloc 176
+    leaq    176(%rsp), %rbp
+    .seh_setframe %rbp, 176
     
     // Save callee-saved registers
-    movq    %r15, -8(%rbp)
-    movq    %r14, -16(%rbp)
-    movq    %r13, -24(%rbp)
-    movq    %r12, -32(%rbp)
-    movq    %rbx, -40(%rbp)
+    movq    %r15, -32(%rbp)
+    .seh_savereg %r15, 176 - 32
+    movq    %r14, -40(%rbp)
+    .seh_savereg %r14, 176 - 40
+    movq    %r13, -48(%rbp)
+    .seh_savereg %r13, 176 - 48
+    movq    %r12, -56(%rbp)
+    .seh_savereg %r12, 176 - 56
+    movq    %rbx, -64(%rbp)
+    .seh_savereg %rbx, 176 - 64
+    .seh_endprologue
     
     // Windows x64: rcx=sret, rdx=arg1, r8=closureObj, r9=executeClosure, stack=[threadData]
-    movq    %rcx, -48(%rbp)     // sret
-    movq    %r8, -56(%rbp)      // closureObj
-    movq    %r9, -64(%rbp)      // executeClosure
+    movq    %rcx, -72(%rbp)     // sret
+    movq    %r8, -80(%rbp)      // closureObj
+    movq    %r9, -88(%rbp)      // executeClosure
     movq    48(%rbp), %rax      // threadData (5th param on stack)
-    movq    %rax, -80(%rbp)
+    movq    %rax, -96(%rbp)
     
     // Update r15 with threadData
     movq    %rax, %r15
@@ -335,27 +365,33 @@ ExecuteExclusiveCangjieStub:
     callq   MRT_SaveTopManagedContextToN2CStub
     
     // Get closure function pointer
-    movq    -64(%rbp), %r11     // executeClosure
+    movq    -88(%rbp), %r11     // executeClosure
     movq    8(%r11), %r11       // func = executeClosure->vtable[1]
     
     // Call closure: func(sret, closureObj)
-    movq    -48(%rbp), %rcx     // sret
-    movq    -56(%rbp), %rdx     // closureObj
+    movq    -72(%rbp), %rcx     // sret
+    movq    -80(%rbp), %rdx     // closureObj
     callq   *%r11
+    movq    %rax, -104(%rbp)
+    movapd  %xmm0, -128(%rbp)
+    movapd  %xmm1, -144(%rbp)
     
     .global unwindPCForExclusiveStubFull
 unwindPCForExclusiveStubFull:
     // RestoreTopManagedContext
     movq    %rbp, %rcx
     callq   MRT_RestoreTopManagedContextFromN2CStub
+    movq    -104(%rbp), %rax
+    movapd  -128(%rbp), %xmm0
+    movapd  -144(%rbp), %xmm1
     // Restore callee-saved registers
-    movq    -8(%rbp), %r15
-    movq    -16(%rbp), %r14
-    movq    -24(%rbp), %r13
-    movq    -32(%rbp), %r12
-    movq    -40(%rbp), %rbx
+    movq    -32(%rbp), %r15
+    movq    -40(%rbp), %r14
+    movq    -48(%rbp), %r13
+    movq    -56(%rbp), %r12
+    movq    -64(%rbp), %rbx
     
-    movq    %rbp, %rsp
+    leaq    0(%rbp), %rsp
     popq    %rbp
     ret
     .seh_endproc

@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#define C2NStubFrameSize           (8 * 42)
+#define C2NStubFrameSize           (8 * 46)
 
 // On execution of "bl MCC_C2NStub", the frame layout of stack(growing downwards) looks like:
 // Nativefunc address will be passed to %rax after MCC_C2NStub is built.
@@ -101,19 +101,26 @@ CJ_MCC_C2NStub:
     pushq	%rbp
     .seh_pushreg %rbp
     movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
-    subq    $C2NStubFrameSize, %rsp
-    .seh_stackalloc C2NStubFrameSize
-    .seh_endprologue
-
-    // save callee-saved to stack
-    movq    %r15, -8(%rbp)
-    movq    %r14, -16(%rbp)
-    movq    %r13, -24(%rbp)
-    movq    %r12, -32(%rbp)
-    movq    %rdi, -40(%rbp)
-    movq    %rsi, -48(%rbp)
-    movq    %rbx, -56(%rbp)
+    // Preserve the managed RBP-relative register slots with real pushes.
+    // All PUSH_NONVOL operations precede allocation and frame establishment.
+    pushq   %r15
+    .seh_pushreg %r15
+    pushq   %r14
+    .seh_pushreg %r14
+    pushq   %r13
+    .seh_pushreg %r13
+    pushq   %r12
+    .seh_pushreg %r12
+    pushq   %rdi
+    .seh_pushreg %rdi
+    pushq   %rsi
+    .seh_pushreg %rsi
+    pushq   %rbx
+    .seh_pushreg %rbx
+    subq    $(C2NStubFrameSize - 56), %rsp
+    .seh_stackalloc C2NStubFrameSize - 56
+    movq    %rsp, %rsi
+    .seh_setframe %rsi, 0
 
     // save args to stack
     movq    %rcx,  -64(%rbp)
@@ -129,15 +136,28 @@ CJ_MCC_C2NStub:
 
     // save callee-saved to stack
     movapd  %xmm6, -176(%rbp)
+    .seh_savexmm %xmm6, C2NStubFrameSize - 176
     movapd  %xmm7, -192(%rbp)
+    .seh_savexmm %xmm7, C2NStubFrameSize - 192
     movapd  %xmm8, -208(%rbp)
+    .seh_savexmm %xmm8, C2NStubFrameSize - 208
     movapd  %xmm9, -224(%rbp)
+    .seh_savexmm %xmm9, C2NStubFrameSize - 224
     movapd  %xmm10, -240(%rbp)
+    .seh_savexmm %xmm10, C2NStubFrameSize - 240
     movapd  %xmm11, -256(%rbp)
+    .seh_savexmm %xmm11, C2NStubFrameSize - 256
     movapd  %xmm12, -272(%rbp)
+    .seh_savexmm %xmm12, C2NStubFrameSize - 272
     movapd  %xmm13, -288(%rbp)
+    .seh_savexmm %xmm13, C2NStubFrameSize - 288
     movapd  %xmm14, -304(%rbp)
+    .seh_savexmm %xmm14, C2NStubFrameSize - 304
     movapd  %xmm15, -320(%rbp)
+    .seh_savexmm %xmm15, C2NStubFrameSize - 320
+    .seh_endprologue
+
+    // The lowest 32 bytes of the fixed frame are native helper home space.
 
     callq   CJ_CJThreadStackGuardGet
     // rbx = cpStackSize
@@ -176,20 +196,15 @@ unwindPCForC2NStub:
     subq    $8,      %r14
     movq    0(%r14), %r15
     pushq   %r15
-    .seh_pushreg %r15
     jmp     .L_copy
 .L_copy_end:
 
-    // shadow space, here just for aligning with Windows stack frame, so the content pushed here can be anything.
-    // push 0 data will losing CFI info, thus we choose r15 as pushed content.
+    // Outgoing argument/home allocation is dynamic body state. RSI anchors
+    // unwind to the fixed frame; loop iterations are not prologue saves.
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
 
     // Prepare arg0 to arg3
     movq    -64(%rbp),  %rcx
@@ -221,27 +236,8 @@ unwindPCForTPE:
     movq    -64(%rbp), %rax
     movapd  -80(%rbp), %xmm0
 
-    // Restore the value of rsp before coping arg4, arg5...
-    addq    %rbx, %rsp
-
-    // delete callee&cpStackSize, Restore the caller stack.
+    // Both normal and stack-check exits restore from the fixed frame.
 .L_stack_check:
-    movq    0(%rbp),   %r12
-    movq    %r12,      16(%rbp)
-    movq    8(%rbp),   %r12
-    movq    %r12,      24(%rbp)
-    addq    $16, %rsp
-
-    addq    $C2NStubFrameSize, %rsp
-
-    movq    -8(%rbp),  %r15
-    movq    -16(%rbp), %r14
-    movq    -24(%rbp), %r13
-    movq    -32(%rbp), %r12
-    movq    -40(%rbp), %rdi
-    movq    -48(%rbp), %rsi
-    movq    -56(%rbp), %rbx
-
     movapd  -176(%rbp), %xmm6
     movapd  -192(%rbp), %xmm7
     movapd  -208(%rbp), %xmm8
@@ -253,8 +249,18 @@ unwindPCForTPE:
     movapd  -304(%rbp), %xmm14
     movapd  -320(%rbp), %xmm15
 
+    // A legal Win64 epilogue: frame-relative LEA, POPs, private RET cleanup.
+    // Do not relocate the caller's frame/return address before unwinding it.
+    leaq    (C2NStubFrameSize - 56)(%rsi), %rsp
+    popq    %rbx
+    popq    %rsi
+    popq    %rdi
+    popq    %r12
+    popq    %r13
+    popq    %r14
+    popq    %r15
     popq    %rbp
-    retq
+    retq    $16
 .L_stack_check_fail:
     call    MCC_ThrowStackOverflowError
     callq   MRT_GetThreadLocalData

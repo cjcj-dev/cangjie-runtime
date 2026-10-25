@@ -15,10 +15,13 @@ CJ_MCC_ThrowStackOverflowError:                   # @CJ_MCC_ThrowStackOverflowEr
 # %bb.0:
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
+    subq    $32, %rsp
+    .seh_stackalloc 32
+    leaq    32(%rsp), %rbp
+    .seh_setframe %rbp, 32
     .seh_endprologue
     callq  MCC_ThrowStackOverflowError
+    leaq    0(%rbp), %rsp
     popq    %rbp
     retq
     .seh_endproc

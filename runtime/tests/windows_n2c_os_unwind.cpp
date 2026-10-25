@@ -1,4 +1,4 @@
-// Native Windows consumer of the installed product's public CJ_MCC_N2CStub.
+// Native Windows consumer of the installed product's public transition stubs.
 // This checks RtlVirtualUnwind, not a replacement stub or a language invocation.
 #include <windows.h>
 #include <array>
@@ -11,7 +11,10 @@ int main(int argc, char** argv)
     if (argc != 2) return 2; // absolute path to the product DLL
     HMODULE module = LoadLibraryExA(argv[1], nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (module == nullptr) { std::fprintf(stderr, "load error=%lu\n", GetLastError()); return 3; }
-    auto entry = reinterpret_cast<DWORD64>(GetProcAddress(module, "CJ_MCC_N2CStub"));
+    struct Frame { const char* name; unsigned size; unsigned gpr; unsigned xmm; };
+    for (const auto& layout : {Frame{"CJ_MCC_N2CStub", 416, 72, 240},
+                               Frame{"CJ_MCC_C2NStub", 368, 8, 176}}) {
+    auto entry = reinterpret_cast<DWORD64>(GetProcAddress(module, layout.name));
     DWORD64 image = 0;
     auto* function = RtlLookupFunctionEntry(entry, &image, nullptr);
     if (entry == 0 || function == nullptr) return 4;
@@ -36,22 +39,24 @@ int main(int argc, char** argv)
         for (int i = 0; i < 10; ++i) {
             vectors[i].Low = 0x1234567800000000ULL + i;
             vectors[i].High = 0x2345678900000000LL + i;
-            put(frame - 240 - 16 * i, &vectors[i], 16);
+            put(frame - layout.xmm - 16 * i, &vectors[i], 16);
         }
         std::memcpy(&original.Xmm6, vectors, sizeof(vectors));
         const DWORD64 saved[] = {original.R15, original.R14, original.R13, original.R12,
                                  original.Rdi, original.Rsi, original.Rbx};
-        for (int i = 0; i < 7; ++i) put(frame - 72 - 8 * i, &saved[i], 8);
-        put(frame - 32, &original.Rsi, 8); // actual PUSH_NONVOL frame-register save
-        for (int i = 1; i <= 3; ++i) {
-            const DWORD64 contextWord = 0xBAD000 + i;
-            put(frame - 8 * i, &contextWord, 8);
+        for (int i = 0; i < 7; ++i) put(frame - layout.gpr - 8 * i, &saved[i], 8);
+        if (layout.gpr == 72) {
+            put(frame - 32, &original.Rsi, 8); // N2C frame-register push
+            for (int i = 1; i <= 3; ++i) {
+                const DWORD64 contextWord = 0xBAD000 + i;
+                put(frame - 8 * i, &contextWord, 8);
+            }
         }
         put(frame, &original.Rbp, 8); put(entrySp, &callerPc, 8);
         CONTEXT context{};
         context.ContextFlags = CONTEXT_FULL;
         context.Rbp = frame;
-        context.Rsi = frame - 416;
+        context.Rsi = frame - layout.size;
         context.Rsp = context.Rsi - dynamic;
         context.Rip = entry + info[1] + 1;
         std::memset(reinterpret_cast<void*>(context.Rsp), 0xA5, 32);
@@ -65,8 +70,9 @@ int main(int argc, char** argv)
             context.R12 == original.R12 && context.R13 == original.R13 &&
             context.R14 == original.R14 && context.R15 == original.R15 &&
             std::memcmp(&context.Xmm6, &original.Xmm6, 10 * sizeof(M128A)) == 0;
-        std::printf("N2C_OS_UNWIND dynamic=%u pass=%d\n", dynamic, ok);
+        std::printf("TRANSITION_OS_UNWIND stub=%s dynamic=%u pass=%d\n", layout.name, dynamic, ok);
         if (!ok) return 1;
+    }
     }
     FreeLibrary(module);
     return 0;

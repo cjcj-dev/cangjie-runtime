@@ -5,8 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // stub need to be 16-byte aligned, so we should use (8 * even numbers)
-#define CalleeSavedRegistersStubFrameSize           (8 * 8)
-#define CalleeSavedRegistersStubFrameSize1           (12 * 8)
+#define CalleeSavedRegistersStubFrameSize           (12 * 8)
+#define CalleeSavedRegistersStubFrameSize1           (14 * 8)
 
 ////////////////////////////////////////////////////////////////////////////////
 // CalleeSavedRegistersStub simply forwards arguments passed by runtime, i.e., arguments for compiled method are passed
@@ -44,24 +44,30 @@
     .seh_stackalloc CalleeSavedRegistersStubFrameSize
     leaq	CalleeSavedRegistersStubFrameSize(%rsp), %rbp
     .seh_setframe %rbp, CalleeSavedRegistersStubFrameSize
-    .seh_endprologue
 
     movq    %r15, -8(%rbp)
+    .seh_savereg %r15, CalleeSavedRegistersStubFrameSize - 8
     movq    %r14, -16(%rbp)
+    .seh_savereg %r14, CalleeSavedRegistersStubFrameSize - 16
     movq    %r13, -24(%rbp)
+    .seh_savereg %r13, CalleeSavedRegistersStubFrameSize - 24
     movq    %r12, -32(%rbp)
+    .seh_savereg %r12, CalleeSavedRegistersStubFrameSize - 32
     movq    %rdi, -40(%rbp)
+    .seh_savereg %rdi, CalleeSavedRegistersStubFrameSize - 40
     movq    %rsi, -48(%rbp)
+    .seh_savereg %rsi, CalleeSavedRegistersStubFrameSize - 48
     movq    %rbx, -56(%rbp)
+    .seh_savereg %rbx, CalleeSavedRegistersStubFrameSize - 56
+    .seh_endprologue
 
     callq   \funcName
-    movq    %rax, -8(%rbp)
+    movq    %rax, -64(%rbp)
 
     callq   MRT_GetThreadLocalData
     movq    %rax, %r15
 
-    addq    $CalleeSavedRegistersStubFrameSize, %rsp
-    movq    -8(%rbp),  %rax
+    movq    -64(%rbp),  %rax
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
     movq    -32(%rbp), %r12
@@ -69,6 +75,7 @@
     movq    -48(%rbp), %rsi
     movq    -56(%rbp), %rbx
 
+    leaq    0(%rbp), %rsp
     popq    %rbp
     retq
     .seh_endproc
@@ -90,28 +97,34 @@
     .seh_stackalloc CalleeSavedRegistersStubFrameSize1
     leaq	CalleeSavedRegistersStubFrameSize1(%rsp), %rbp
     .seh_setframe %rbp, CalleeSavedRegistersStubFrameSize1
+
+
+    movq    %r15, -8(%rbp)
+    .seh_savereg %r15, CalleeSavedRegistersStubFrameSize1 - 8
+    movq    %r14, -16(%rbp)
+    .seh_savereg %r14, CalleeSavedRegistersStubFrameSize1 - 16
+    movq    %r13, -24(%rbp)
+    .seh_savereg %r13, CalleeSavedRegistersStubFrameSize1 - 24
+    movq    %r12, -32(%rbp)
+    .seh_savereg %r12, CalleeSavedRegistersStubFrameSize1 - 32
+    movq    %rdi, -40(%rbp)
+    .seh_savereg %rdi, CalleeSavedRegistersStubFrameSize1 - 40
+    movq    %rsi, -48(%rbp)
+    .seh_savereg %rsi, CalleeSavedRegistersStubFrameSize1 - 48
+    movq    %rbx, -56(%rbp)
+    .seh_savereg %rbx, CalleeSavedRegistersStubFrameSize1 - 56
     .seh_endprologue
 
     movq    0x30(%rbp), %rax
-
-    movq    %r15, -8(%rbp)
-    movq    %r14, -16(%rbp)
-    movq    %r13, -24(%rbp)
-    movq    %r12, -32(%rbp)
-    movq    %rdi, -40(%rbp)
-    movq    %rsi, -48(%rbp)
-    movq    %rbx, -56(%rbp)
-
-    movq    %rax, -64(%rbp)
+    movq    %rax, -80(%rbp)
 
     callq   \funcName
-    movq    %rax, -8(%rbp)
+    movq    %rax, -64(%rbp)
 
     callq   MRT_GetThreadLocalData
     movq    %rax, %r15
 
-    addq    $CalleeSavedRegistersStubFrameSize1, %rsp
-    movq    -8(%rbp),  %rax
+    movq    -64(%rbp),  %rax
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
     movq    -32(%rbp), %r12
@@ -119,6 +132,7 @@
     movq    -48(%rbp), %rsi
     movq    -56(%rbp), %rbx
 
+    leaq    0(%rbp), %rsp
     popq    %rbp
     retq
     .seh_endproc

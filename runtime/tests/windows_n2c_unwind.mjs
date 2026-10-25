@@ -37,20 +37,28 @@ function execute(s, [op, args]) {
   else if (op === 'popq') { s.r[a[0].slice(1)] = read(s.mem, s.r.rsp, 8); s.r.rsp += 8n; }
   else if (op === 'retq') { s.r.rip = read(s.mem, s.r.rsp, 8); s.r.rsp += 8n + BigInt(a[0] ? a[0].slice(1) : 0); }
   else if (op === 'subq') s.r[a[1].slice(1)] -= BigInt(a[0].slice(1));
+  else if (op === 'addq') s.r[a[1].slice(1)] += BigInt(a[0].slice(1));
   else if (op === 'leaq') s.r[a[1].slice(1)] = address(s, a[0]);
   else if (['movq', 'movapd'].includes(op)) {
     const n = op === 'movapd' ? 16 : 8;
-    const v = a[0].startsWith('%') ? s.r[a[0].slice(1)] : read(s.mem, address(s, a[0]), n);
+    const v = a[0].startsWith('%') ? s.r[a[0].slice(1)] : a[0].startsWith('$') ? BigInt(a[0].slice(1)) : read(s.mem, address(s, a[0]), n);
     if (a[1].startsWith('%')) s.r[a[1].slice(1)] = v; else write(s.mem, address(s, a[1]), v, n);
   } else throw Error('unsupported production prologue instruction: ' + op + ' ' + args);
 }
 let checks = 0;
 for (const block of blocks) {
   const name = block.match(/StartAddress: (\w+)/)?.[1];
-  const selected = mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name);
+  const selected = mode === 'closure' || (mode === 'c2n' ? name === 'CJ_MCC_C2NStub' : mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name));
   if (!selected) continue;
   const start = symbols.get(name), prolog = Number(block.match(/PrologSize: (\d+)/)[1]);
   assert.ok(start !== undefined, name + ' real production symbol missing');
+  if (name === 'RestoreContextForEH') {
+    // Entered by a redirected managed return, without a native call/return slot.
+    // Do not feed this transfer trampoline to the normal-call stack model.
+    assert.equal(prolog, 0, 'context-transfer encoding changed; explicit consumer required');
+    console.log(name + ': selected Exception TU; native-call unwind model NOT_APPLICABLE; transfer/OS semantics NOT_RUN');
+    continue;
+  }
   const frame = block.match(/FrameRegister: (\w+)/)?.[1]?.toLowerCase();
   const bias = Number.parseInt(block.match(/FrameOffset: (0x[0-9A-F]+)/)?.[1] || '0') * 16;
   const codes = [...block.matchAll(/0x([0-9A-F]+): (\w+)([^\n]*)/g)].map(m => ({pc: parseInt(m[1], 16), op: m[2], detail: m[3]}));
@@ -95,16 +103,48 @@ for (const block of blocks) {
     for (let i = 1; i <= 3; i++) write(s.mem, s.r.rbp - BigInt(8 * i), 0xBAD000n + BigInt(i), 8);
     assert.equal(read(s.mem, s.r.rbp - 112n, 8), initial.rsi, 'managed RSI slot changed');
   }
-  for (const delta of mode === 'control' ? [0] : [0, 32, 80, 4096]) {
+  if (setFrame) assert.equal(s.r[frame] - BigInt(bias), s.r.rsp, name + ': frame register does not describe the completed fixed allocation');
+  const nextStart = Math.min(...blocks.map(b => symbols.get(b.match(/StartAddress: (\w+)/)?.[1])).filter(x => x > start), Infinity);
+  const functionBody = [...instructions].filter(([pc]) => pc >= start + prolog && pc < nextStart).sort((a,b)=>a[0]-b[0]);
+  const hasCall = functionBody.some(([,i])=>i[0] === 'callq');
+  const firstCall = functionBody.find(([pc,i])=>i[0] === 'callq')?.[0] ?? nextStart;
+  const beforeCall = [...instructions].filter(([pc])=>pc>=start && pc<firstCall);
+  const recorded = new Set(codes.map(c=>c.detail.match(/reg=(\w+)/)?.[1]?.toLowerCase()).filter(Boolean));
+  for(const [,i] of beforeCall){
+    const save=i[1].match(/^%(\w+), .*\(%\w+\)$/);
+    if(save && nonvolatile.includes(save[1]))assert.ok(recorded.has(save[1]),name+': nonvolatile save has no unwind record: '+save[1]);
+  }
+
+  const stored = new Set(ins.flatMap(([,i])=>{const m=i[1].match(/^%(\w+), .*\(%\w+\)$/);return m && nonvolatile.includes(m[1]) ? [m[1]] : i[0] === 'pushq' ? [i[1].slice(1)] : [];}));
+  for (const delta of mode === 'control' || !hasCall ? [0] : [0, 32, 80, 4096]) {
     const body = {r: {...s.r}, mem: new Map(s.mem)};
     if (!setFrame && delta) continue;
     body.r.rsp -= BigInt(delta);
     // Simulate a native callee using all of its permitted home space.
-    for (let i = 0; i < 32; i++) body.mem.set(body.r.rsp + BigInt(i), 0xA5);
+    if (hasCall) for (let i = 0; i < 32; i++) body.mem.set(body.r.rsp + BigInt(i), 0xA5);
     const saved = new Set(codes.map(c => c.detail.match(/reg=(\w+)/)?.[1]?.toLowerCase()).filter(Boolean));
-    const changed = mode === 'n2c' && name !== 'ExecuteCangjieStub' ? nonvolatile : saved;
+    const changed = mode === 'closure' || mode === 'c2n' ? stored : mode === 'n2c' && name !== 'ExecuteCangjieStub' ? nonvolatile : saved;
     for (const reg of changed) if (reg !== frame && reg !== 'rbp') body.r[reg] = 0xDEADn;
     unwind(body, prolog + 1);
+  }
+  if (mode === 'c2n' || (mode === 'closure' && name === 'CJ_MCC_C2NStub')) {
+    const index = functionBody.findIndex(([,i])=>i[0] === 'movapd' && i[1] === '-176(%rbp), %xmm6');
+    assert.ok(index >= 0, 'C2N production restore must be present');
+    const tail = functionBody.slice(index);const end=tail.findIndex(([,i])=>i[0]==='retq');assert.ok(end>=0);tail.length=end+1;
+    const epilogue=tail.findIndex(([,i])=>i[0]==='leaq' && i[1].endsWith(', %rsp'));assert.ok(epilogue>=0);
+    assert.ok(tail[epilogue][1][1].includes('(%'+frame+')'), 'C2N epilogue actual FP');
+    for(const [,i] of tail.slice(epilogue+1,-1))assert.equal(i[0],'popq','C2N epilogue contains a non-POP');
+    for(const delta of [0,32,48,96,4096]){
+      const state={r:{...s.r},mem:new Map(s.mem)};state.r.rsp-=BigInt(delta);
+      for(const r of nonvolatile)if(r!==frame && r!=='rbp')state.r[r]=0xDEADn;
+      state.r.rax=0x123456789n;state.r.xmm0=0x123456789ABCDEF123456789n;
+      // MRT_C2N_Leave refreshes the managed TLS register in its established slot.
+      const tls=0xCAFE1234n;write(state.mem,state.r.rbp-8n,tls,8);
+      for(const [,i] of tail)execute(state,i);
+      for(const r of nonvolatile)assert.equal(state.r[r],r==='r15'?tls:initial[r],'C2N normal/guard exit lost '+r);
+      assert.equal(state.r.rax,0x123456789n);assert.equal(state.r.xmm0,0x123456789ABCDEF123456789n);
+      assert.equal(state.r.rip,returnPc);assert.equal(state.r.rsp,stack+24n,'C2N private callee/size cleanup');checks++;
+    }
   }
   if (mode === 'n2c') {
     const nextFunction = Math.min(...['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].map(n => symbols.get(n)).filter(x => x > start), Infinity);
@@ -153,7 +193,7 @@ for (const block of blocks) {
       checks++;
     }
   }
-  console.log(name + ': production COFF prologue, body and return unwind assertions reached');
+  console.log(name + (mode === 'closure' ? ': production COFF encoding/prologue/body assertions reached; full execution NOT_RUN' : ': production COFF prologue, body and return unwind assertions reached'));
 }
-assert.ok(checks > 0, 'no selected production function tested');
+assert.ok(checks > 0 || (mode === 'closure' && symbols.has('RestoreContextForEH')), 'no selected production function tested');
 console.log(JSON.stringify({mode, checks, scope: 'decoded COFF + instruction semantics; Windows OS unwinder and execution NOT_RUN'}));
