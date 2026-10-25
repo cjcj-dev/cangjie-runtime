@@ -1,3 +1,4 @@
+#define MRT_USE_CJTHREAD_RENAME 1
 #include <atomic>
 #include <cstdio>
 #include <dlfcn.h>
@@ -128,8 +129,7 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ResumedEntryAfterCollection)
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "b09_runtime_fixture.hpp"
-extern "C" void* CJ_CJThreadNew(void*, const void*, void* (*)(void*, unsigned int), const void*,
-                                 unsigned int, int, uintptr_t);
+#include "schedule.h"
 namespace {
 void* LoadFiniteInterpreter()
 {
@@ -182,8 +182,11 @@ GC_COMPONENT_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreter
     GC_EXPECT_TRUE(setHook != nullptr);
     AttachObservation observed;
     setHook(FlipDuringInterpreterStart, &observed);
-    void* task = CJ_CJThreadNew(runtime.GetConcurrencyModel().GetThreadScheduler(), nullptr,
-                               UnstartedTask, nullptr, 0, 0, 0);
+    CJThreadAttr attr{};
+    CJThreadAttrInit(&attr);
+    CJThreadAttrStackSizeSet(&attr, 1024 * 1024);
+    void* task = CJThreadNew(runtime.GetConcurrencyModel().GetThreadScheduler(), &attr,
+                            UnstartedTask, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0);
     setHook(nullptr, nullptr);
     GC_EXPECT_TRUE(task != nullptr && observed.owner != nullptr);
     ThreadsListHandle members;
@@ -205,12 +208,21 @@ GC_COMPONENT_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreter
 
 namespace {
 size_t interpreterRoots = 0;
+size_t interpreterHeadRoots = 0;
+uintptr_t* interpreterSlots[2]{};
 uintptr_t interpreterOldColor = 0;
 void ObserveInterpreterRoot(zaddress_unsafe* slot, uintptr_t color)
 {
-    ++interpreterRoots;
     GC_EXPECT_EQ(color, interpreterOldColor);
-    *reinterpret_cast<uintptr_t*>(slot) += 0x40;
+    auto* location = reinterpret_cast<uintptr_t*>(slot);
+    if (location == interpreterSlots[0] || location == interpreterSlots[1]) {
+        ++interpreterRoots;
+        *location += 0x40;
+    } else {
+        // The head's exception root is visited even when it contains null.
+        ++interpreterHeadRoots;
+        GC_EXPECT_EQ(*location, uintptr_t{0});
+    }
 }
 void CheckInterpreterWatermark(bool interpreted)
 {
@@ -237,10 +249,14 @@ void CheckInterpreterWatermark(bool interpreted)
     interpreterOldColor = owner.GetStackWatermark().GetEpoch();
     ZGlobalsPointers::flip_old_relocate_start();
     interpreterRoots = 0;
+    interpreterHeadRoots = 0;
+    interpreterSlots[0] = &frames[0][2];
+    interpreterSlots[1] = &frames[1][2];
     StackWatermarkSet::finish_processing(owner, reinterpret_cast<void*>(&ObserveInterpreterRoot));
     std::fprintf(stderr, "INTERPRETER_WATERMARK_TARGET executed=1 interpreted=%d roots=%zu "
                          "first=%#zx second=%#zx done=%d\n", interpreted, interpreterRoots,
                  frames[0][2], frames[1][2], owner.GetStackWatermark().IsDone());
+    GC_EXPECT_EQ(interpreterHeadRoots, 1u);
     GC_EXPECT_EQ(interpreterRoots, interpreted ? 2u : 0u);
     GC_EXPECT_EQ(frames[0][2], interpreted ? 0x1040u : 0x1000u);
     GC_EXPECT_EQ(frames[1][2], interpreted ? 0x2040u : 0x2000u);
