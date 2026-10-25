@@ -4,7 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#define N2CStubFrameSize           (8 * 48)
+// Keep the managed RBP-relative slots unchanged. The lowest 32 bytes are
+// outgoing Windows home space, separate from the saved XMM14/XMM15 slots.
+#define N2CStubFrameSize           (8 * 52)
 
 // On execution of "bl MCC_N2CStub", the frame layout of stack(growing downwards) looks like:
 //                 |  ...         |
@@ -108,18 +110,30 @@ CJ_MCC_N2CStub:
     pushq   %rbp
     .seh_pushreg %rbp
     movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
     subq    $N2CStubFrameSize, %rsp
     .seh_stackalloc N2CStubFrameSize
-    .seh_endprologue
+
+    // RBP remains the managed frame anchor. RSI is a stable Windows frame
+    // base below every save slot (the SEH frame bias is limited to 240 bytes).
+    // Save RSI before changing it; the unwind order resets RSP before restoring
+    // RSI. Before SET_FPREG executes, unwinding uses the current fixed RSP.
+    movq    %rsi, -112(%rbp)
+    .seh_savereg %rsi, N2CStubFrameSize - 112
+    movq    %rsp, %rsi
+    .seh_setframe %rsi, 0
 
     movq    %r15,  -72(%rbp)
+    .seh_savereg %r15, N2CStubFrameSize - 72
     movq    %r14,  -80(%rbp)
+    .seh_savereg %r14, N2CStubFrameSize - 80
     movq    %r13,  -88(%rbp)
+    .seh_savereg %r13, N2CStubFrameSize - 88
     movq    %r12,  -96(%rbp)
+    .seh_savereg %r12, N2CStubFrameSize - 96
     movq    %rdi,  -104(%rbp)
-    movq    %rsi,  -112(%rbp)
+    .seh_savereg %rdi, N2CStubFrameSize - 104
     movq    %rbx,  -120(%rbp)
+    .seh_savereg %rbx, N2CStubFrameSize - 120
 
     movq    %rcx,  -128(%rbp)
     movq    %rdx,  -136(%rbp)
@@ -132,15 +146,26 @@ CJ_MCC_N2CStub:
     movapd  %xmm3, -224(%rbp)
 
     movapd  %xmm6, -240(%rbp)
+    .seh_savexmm %xmm6, N2CStubFrameSize - 240
     movapd  %xmm7, -256(%rbp)
+    .seh_savexmm %xmm7, N2CStubFrameSize - 256
     movapd  %xmm8, -272(%rbp)
+    .seh_savexmm %xmm8, N2CStubFrameSize - 272
     movapd  %xmm9, -288(%rbp)
+    .seh_savexmm %xmm9, N2CStubFrameSize - 288
     movapd  %xmm10, -304(%rbp)
+    .seh_savexmm %xmm10, N2CStubFrameSize - 304
     movapd  %xmm11, -320(%rbp)
+    .seh_savexmm %xmm11, N2CStubFrameSize - 320
     movapd  %xmm12, -336(%rbp)
+    .seh_savexmm %xmm12, N2CStubFrameSize - 336
     movapd  %xmm13, -352(%rbp)
+    .seh_savexmm %xmm13, N2CStubFrameSize - 352
     movapd  %xmm14, -368(%rbp)
+    .seh_savexmm %xmm14, N2CStubFrameSize - 368
     movapd  %xmm15, -384(%rbp)
+    .seh_savexmm %xmm15, N2CStubFrameSize - 384
+    .seh_endprologue
 
     // store whether new CJThread result in -60(%rbp)
     // and use it after calling Cangjie function.
@@ -176,20 +201,15 @@ CJ_MCC_N2CStub:
     subq    $8,      %r14
     movq    0(%r14), %r15
     pushq   %r15
-    .seh_pushreg %r15
     jmp     .L_copy
 .L_copy_end:
 
     // shadow space, here just for aligning with Windows stack frame, so the content pushed here can be anything.
-    // push 0 data will losing CFI info, thus we choose r15 as pushed content.
+    // These body pushes do not describe prologue register saves.
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
     pushq   %r15
-    .seh_pushreg %r15
 
     callq  MRT_GetThreadLocalData
     movq   %rax, %r15
@@ -243,23 +263,11 @@ unwindPCForN2CStub:
     movq    -128(%rbp), %rax
     movapd  -144(%rbp), %xmm0
 
-    // Restore the value of rsp before coping arg4, arg5...
-    addq    %rbx, %rsp
-    addq    $N2CStubFrameSize, %rsp
-
-    // delete callee&cpStackSize, Restore the caller stack.
-    movq    0(%rbp),   %r12
-    movq    %r12,      16(%rbp)
-    movq    8(%rbp),   %r12
-    movq    %r12,      24(%rbp)
-    addq    $16, %rsp
-
     movq    -72(%rbp),  %r15
     movq    -80(%rbp),  %r14
     movq    -88(%rbp),  %r13
     movq    -96(%rbp),  %r12
     movq    -104(%rbp), %rdi
-    movq    -112(%rbp), %rsi
     movq    -120(%rbp), %rbx
 
     movapd  -240(%rbp), %xmm6
@@ -273,8 +281,13 @@ unwindPCForN2CStub:
     movapd  -368(%rbp), %xmm14
     movapd  -384(%rbp), %xmm15
 
+    // Keep the Windows frame register live until RSP is recovered. Once
+    // RSI is restored, the remaining POP/RET is an independently recognizable
+    // Windows epilogue, so no subsequent unwind needs the old frame register.
+    leaq    N2CStubFrameSize(%rsi), %rsp
+    movq    -112(%rbp), %rsi
     popq    %rbp
-    retq
+    retq    $16
     .seh_endproc
 
     .text
@@ -288,35 +301,29 @@ ExecuteCangjieStub:
 .seh_proc ExecuteCangjieStub
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
+    pushq   %r15
+    .seh_pushreg %r15
+    subq    $72, %rsp
+    .seh_stackalloc 72
+    leaq    80(%rsp), %rbp
+    .seh_setframe %rbp, 80
     .seh_endprologue
 
-    // we push a extra value for aligning.
-    pushq   %r15
-    .seh_pushreg %r15
-    pushq   %r15
-    .seh_pushreg %r15
-
-    // save caller arg to stack
-    pushq   %rcx
-    pushq   %rdx
-    pushq   %r8
-    pushq   %r9
-
+    // The first 32 bytes belong to the callee, not our saved arguments.
+    movq    %rcx, 32(%rsp)
+    movq    %rdx, 40(%rsp)
+    movq    %r8,  48(%rsp)
+    movq    %r9,  56(%rsp)
     callq   MRT_GetThreadLocalData
     movq    %rax, %r15
-
-    // restore caller arg
-    popq    %r9
-    popq    %r8
-    popq    %rdx
-    popq    %rcx
-
+    movq    32(%rsp), %rcx
+    movq    40(%rsp), %rdx
+    movq    48(%rsp), %r8
+    movq    56(%rsp), %r9
     callq   *%r9
 
+    leaq    -8(%rbp), %rsp
     popq    %r15
-    popq    %r15
-
     popq    %rbp
     retq
 .seh_endproc
@@ -336,18 +343,30 @@ ApplyCangjieMethodStubFloat64:
     pushq   %rbp
     .seh_pushreg %rbp
     movq    %rsp, %rbp
-    .seh_setframe %rbp, 0
     subq    $N2CStubFrameSize, %rsp
     .seh_stackalloc N2CStubFrameSize
-    .seh_endprologue
+
+    // RBP remains the managed frame anchor. RSI is a stable Windows frame
+    // base below every save slot (the SEH frame bias is limited to 240 bytes).
+    // Save RSI before changing it; the unwind order resets RSP before restoring
+    // RSI. Before SET_FPREG executes, unwinding uses the current fixed RSP.
+    movq    %rsi, -112(%rbp)
+    .seh_savereg %rsi, N2CStubFrameSize - 112
+    movq    %rsp, %rsi
+    .seh_setframe %rsi, 0
 
     movq    %r15,  -72(%rbp)
+    .seh_savereg %r15, N2CStubFrameSize - 72
     movq    %r14,  -80(%rbp)
+    .seh_savereg %r14, N2CStubFrameSize - 80
     movq    %r13,  -88(%rbp)
+    .seh_savereg %r13, N2CStubFrameSize - 88
     movq    %r12,  -96(%rbp)
+    .seh_savereg %r12, N2CStubFrameSize - 96
     movq    %rdi,  -104(%rbp)
-    movq    %rsi,  -112(%rbp)
+    .seh_savereg %rdi, N2CStubFrameSize - 104
     movq    %rbx,  -120(%rbp)
+    .seh_savereg %rbx, N2CStubFrameSize - 120
 
     movq    %rcx,  -128(%rbp)
     movq    %rdx,  -136(%rbp)
@@ -360,15 +379,26 @@ ApplyCangjieMethodStubFloat64:
     movq    %xmm3, -224(%rbp)
 
     movapd  %xmm6, -240(%rbp)
+    .seh_savexmm %xmm6, N2CStubFrameSize - 240
     movapd  %xmm7, -256(%rbp)
+    .seh_savexmm %xmm7, N2CStubFrameSize - 256
     movapd  %xmm8, -272(%rbp)
+    .seh_savexmm %xmm8, N2CStubFrameSize - 272
     movapd  %xmm9, -288(%rbp)
+    .seh_savexmm %xmm9, N2CStubFrameSize - 288
     movapd  %xmm10, -304(%rbp)
+    .seh_savexmm %xmm10, N2CStubFrameSize - 304
     movapd  %xmm11, -320(%rbp)
+    .seh_savexmm %xmm11, N2CStubFrameSize - 320
     movapd  %xmm12, -336(%rbp)
+    .seh_savexmm %xmm12, N2CStubFrameSize - 336
     movapd  %xmm13, -352(%rbp)
+    .seh_savexmm %xmm13, N2CStubFrameSize - 352
     movapd  %xmm14, -368(%rbp)
+    .seh_savexmm %xmm14, N2CStubFrameSize - 368
     movapd  %xmm15, -384(%rbp)
+    .seh_savexmm %xmm15, N2CStubFrameSize - 384
+    .seh_endprologue
 
     movq    -128(%rbp), %rcx // value
     movq    -136(%rbp), %rdx // stackSize
@@ -390,7 +420,6 @@ ApplyCangjieMethodStubFloat64:
     subq    $8,    %r9
     movq    (%r9), %r12
     pushq   %r12
-    .seh_pushreg %r12
     jmp     .L_copy_args
 .L_copy_end_args:
 
@@ -410,15 +439,11 @@ ApplyCangjieMethodStubFloat64:
     movsd   24(%r13), %xmm3
 
     // shadow space, here just for aligning with Windows stack frame, so the content pushed here can be anything.
-    // push 0 data will losing CFI info, thus we choose r12 as pushed content.
+    // These body pushes do not describe prologue register saves.
     pushq   %r12
-    .seh_pushreg %r12
     pushq   %r12
-    .seh_pushreg %r12
     pushq   %r12
-    .seh_pushreg %r12
     pushq   %r12
-    .seh_pushreg %r12
 
     callq   *%r14
 
@@ -437,16 +462,11 @@ ApplyCangjieMethodStubFloat64:
     movq    -128(%rbp), %rax
     movapd  -176(%rbp), %xmm0
 
-    // Restore the value of rsp before coping arg4, arg5...
-    addq    -136(%rbp), %rsp
-    addq    $N2CStubFrameSize, %rsp
-
     movq    -72(%rbp),  %r15
     movq    -80(%rbp),  %r14
     movq    -88(%rbp),  %r13
     movq    -96(%rbp),  %r12
     movq    -104(%rbp), %rdi
-    movq    -112(%rbp), %rsi
     movq    -120(%rbp), %rbx
 
     movapd  -240(%rbp), %xmm6
@@ -460,6 +480,11 @@ ApplyCangjieMethodStubFloat64:
     movapd  -368(%rbp), %xmm14
     movapd  -384(%rbp), %xmm15
 
+    // Keep the Windows frame register live until RSP is recovered. Once
+    // RSI is restored, the remaining POP/RET is an independently recognizable
+    // Windows epilogue, so no subsequent unwind needs the old frame register.
+    leaq    N2CStubFrameSize(%rsi), %rsp
+    movq    -112(%rbp), %rsi
     popq    %rbp
     retq
 .seh_endproc

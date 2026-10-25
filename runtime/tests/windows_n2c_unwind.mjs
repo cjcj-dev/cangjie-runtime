@@ -1,0 +1,139 @@
+#!/usr/bin/env zx
+// Consume the production COFF object and llvm-readobj/objdump output. This is a
+// bounded unwind-record test, not a Windows RtlVirtualUnwind or language test.
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const [object, unwindFile, disassemblyFile, mode = 'n2c'] = process.argv.slice(2);
+const data = fs.readFileSync(object);
+assert.equal(data.readUInt16LE(0), 0x8664, 'production object must remain AMD64 COFF');
+const symoff = data.readUInt32LE(8), count = data.readUInt32LE(12);
+const strings = symoff + count * 18, symbols = new Map();
+for (let i = 0; i < count;) {
+  const at = symoff + i * 18;
+  const name = data.readUInt32LE(at) === 0
+    ? data.subarray(strings + data.readUInt32LE(at + 4)).toString().split('\0')[0]
+    : data.subarray(at, at + 8).toString().split('\0')[0];
+  if (data.readInt16LE(at + 12) > 0) symbols.set(name, data.readUInt32LE(at + 8));
+  i += 1 + data[at + 17];
+}
+const instructions = new Map();
+for (const line of fs.readFileSync(disassemblyFile, 'utf8').split('\n')) {
+  const m = line.match(/^\s*([0-9a-f]+):\s+([a-z][a-z0-9]*)\s*(.*?)\s*$/);
+  if (m) instructions.set(parseInt(m[1], 16), [m[2], m[3].split('#')[0].trim()]);
+}
+const blocks = fs.readFileSync(unwindFile, 'utf8').split('  RuntimeFunction {').slice(1);
+const general = ['rbx', 'rbp', 'rsi', 'rdi', 'r12', 'r13', 'r14', 'r15'];
+const nonvolatile = [...general, ...Array.from({length: 10}, (_, i) => 'xmm' + (i + 6))];
+const stack = 0x100008n, returnPc = 0x23456789n;
+const initial = Object.fromEntries([...general, 'rax', 'rcx', 'rdx', 'r8', 'r9', ...Array.from({length: 16}, (_, i) => 'xmm' + i)]
+  .map((r, i) => [r, r.startsWith('xmm') ? (BigInt(i + 1) << 96n) + BigInt(i + 101) : BigInt(i + 1) * 0x10101n]));
+initial.rsp = stack;
+function write(mem, a, v, n) { for (let i = 0; i < n; i++) mem.set(a + BigInt(i), Number((v >> BigInt(i * 8)) & 255n)); }
+function read(mem, a, n) { let v = 0n; for (let i = 0; i < n; i++) { assert.ok(mem.has(a + BigInt(i)), 'unwind reads unsaved memory at ' + a.toString(16)); v |= BigInt(mem.get(a + BigInt(i))) << BigInt(i * 8); } return v; }
+function address(s, op) { const m = op.match(/^(-?(?:0x[0-9a-f]+|\d+))?\(%(\w+)\)$/); assert.ok(m, 'unsupported memory operand ' + op); return s.r[m[2]] + BigInt(m[1] || 0); }
+function execute(s, [op, args]) {
+  const a = args.split(/,\s*/);
+  if (op === 'pushq') { s.r.rsp -= 8n; write(s.mem, s.r.rsp, s.r[a[0].slice(1)], 8); }
+  else if (op === 'popq') { s.r[a[0].slice(1)] = read(s.mem, s.r.rsp, 8); s.r.rsp += 8n; }
+  else if (op === 'retq') { s.r.rip = read(s.mem, s.r.rsp, 8); s.r.rsp += 8n + BigInt(a[0] ? a[0].slice(1) : 0); }
+  else if (op === 'subq') s.r[a[1].slice(1)] -= BigInt(a[0].slice(1));
+  else if (op === 'leaq') s.r[a[1].slice(1)] = address(s, a[0]);
+  else if (['movq', 'movapd'].includes(op)) {
+    const n = op === 'movapd' ? 16 : 8;
+    const v = a[0].startsWith('%') ? s.r[a[0].slice(1)] : read(s.mem, address(s, a[0]), n);
+    if (a[1].startsWith('%')) s.r[a[1].slice(1)] = v; else write(s.mem, address(s, a[1]), v, n);
+  } else throw Error('unsupported production prologue instruction: ' + op + ' ' + args);
+}
+let checks = 0;
+for (const block of blocks) {
+  const name = block.match(/StartAddress: (\w+)/)?.[1];
+  const selected = mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name);
+  if (!selected) continue;
+  const start = symbols.get(name), prolog = Number(block.match(/PrologSize: (\d+)/)[1]);
+  assert.ok(start !== undefined, name + ' real production symbol missing');
+  const frame = block.match(/FrameRegister: (\w+)/)?.[1]?.toLowerCase();
+  const bias = Number.parseInt(block.match(/FrameOffset: (0x[0-9A-F]+)/)?.[1] || '0') * 16;
+  const codes = [...block.matchAll(/0x([0-9A-F]+): (\w+)([^\n]*)/g)].map(m => ({pc: parseInt(m[1], 16), op: m[2], detail: m[3]}));
+  let previous = 256;
+  for (const c of codes) { assert.ok(c.pc <= prolog && c.pc <= previous, name + ': unwind offset outside prologue or not descending'); previous = c.pc; }
+  const setFrame = codes.find(c => c.op === 'SET_FPREG');
+  function unwind(s, pc) {
+    const r = {...s.r}, base = setFrame && pc >= setFrame.pc ? r[frame] - BigInt(bias) : r.rsp;
+    for (const c of codes.filter(c => c.pc <= pc)) {
+      const reg = c.detail.match(/reg=(\w+)/)?.[1]?.toLowerCase();
+      if (c.op === 'PUSH_NONVOL') { r[reg] = read(s.mem, r.rsp, 8); r.rsp += 8n; }
+      else if (c.op.startsWith('ALLOC_')) r.rsp += BigInt(c.detail.match(/size=(\d+)/)[1]);
+      else if (c.op === 'SET_FPREG') r.rsp = r[frame] - BigInt(bias);
+      else if (c.op.startsWith('SAVE_')) {
+        const offset = BigInt(c.detail.match(/offset=(0x[0-9A-F]+)/)[1]);
+        r[reg] = read(s.mem, base + offset, c.op.startsWith('SAVE_XMM') ? 16 : 8);
+      } else throw Error('unsupported unwind opcode ' + c.op);
+    }
+    for (const reg of nonvolatile) assert.equal(r[reg], initial[reg], name + ': lost ' + reg + ' at PC ' + pc);
+    assert.equal(read(s.mem, r.rsp, 8), returnPc, name + ': wrong caller PC');
+    assert.equal(r.rsp + 8n, stack + 8n, name + ': wrong caller stack');
+    checks++;
+  }
+  const s = {r: {...initial}, mem: new Map()}; write(s.mem, stack, returnPc, 8);
+  unwind(s, 0);
+  const ins = [...instructions].filter(([pc]) => pc >= start && pc < start + prolog).sort((a,b) => a[0]-b[0]);
+  for (let i = 0; i < ins.length; i++) { execute(s, ins[i][1]); unwind(s, (ins[i+1]?.[0] ?? start + prolog) - start); }
+  for (const delta of mode === 'control' ? [0] : [0, 32, 80, 4096]) {
+    const body = {r: {...s.r}, mem: new Map(s.mem)};
+    if (!setFrame && delta) continue;
+    body.r.rsp -= BigInt(delta);
+    // Simulate a native callee using all of its permitted home space.
+    for (let i = 0; i < 32; i++) body.mem.set(body.r.rsp + BigInt(i), 0xA5);
+    const saved = new Set(codes.map(c => c.detail.match(/reg=(\w+)/)?.[1]?.toLowerCase()).filter(Boolean));
+    const changed = mode === 'n2c' && name !== 'ExecuteCangjieStub' ? nonvolatile : saved;
+    for (const reg of changed) if (reg !== frame && reg !== 'rbp') body.r[reg] = 0xDEADn;
+    unwind(body, prolog + 1);
+  }
+  if (mode === 'n2c') {
+    const nextFunction = Math.min(...['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].map(n => symbols.get(n)).filter(x => x > start), Infinity);
+    const bodyIns = [...instructions].filter(([pc]) => pc >= start + prolog && pc < nextFunction).sort((a,b) => a[0]-b[0]);
+    if (name === 'ExecuteCangjieStub') {
+      const callState = {r: {...s.r}, mem: new Map(s.mem)};
+      let calls = 0;
+      for (const [,insn] of bodyIns) {
+        if (insn[0] === 'callq') {
+          if (++calls === 2) {
+            for (const reg of ['rcx', 'rdx', 'r8', 'r9']) assert.equal(callState.r[reg], initial[reg], 'ExecuteCangjieStub: home space corrupted ' + reg);
+            assert.equal(callState.r.r15, 0x1234n); checks++; break;
+          }
+          for (let i = 0; i < 32; i++) callState.mem.set(callState.r.rsp + BigInt(i), 0xA5);
+          for (const reg of ['rcx', 'rdx', 'r8', 'r9']) callState.r[reg] = 0xBADn;
+          callState.r.rax = 0x1234n;
+        } else execute(callState, insn);
+      }
+      assert.equal(calls, 2, 'ExecuteCangjieStub: real helper and managed call must both be reached');
+    }
+    const restoreStart = name === 'ExecuteCangjieStub'
+      ? bodyIns.findIndex(([,i]) => i[0] === 'leaq' && i[1] === '-8(%rbp), %rsp')
+      : bodyIns.findIndex(([,i]) => i[0] === 'movq' && i[1] === '-72(%rbp), %r15');
+    assert.ok(restoreStart >= 0, name + ': production restore sequence missing');
+    const tail = bodyIns.slice(restoreStart);
+    const retIndex = tail.findIndex(([,i]) => i[0] === 'retq');
+    assert.ok(retIndex >= 0); tail.length = retIndex + 1;
+    const officialTail = name === 'ExecuteCangjieStub' ? 0 : tail.findIndex(([,i]) => i[0] === 'popq');
+    for (const delta of [32, 80, 4096]) {
+      const state = {r: {...s.r}, mem: new Map(s.mem)};
+      state.r.rsp -= BigInt(delta);
+      if (name === 'ExecuteCangjieStub') state.r.r15 = 0xBADn;
+      else for (const reg of nonvolatile) if (reg !== frame && reg !== 'rbp') state.r[reg] = 0xBADn;
+      state.r.rax = 0x123456789n; state.r.xmm0 = 0x123456789ABCDEF123456789n;
+      for (let i = 0; i < tail.length; i++) {
+        if (i < officialTail) unwind(state, prolog + 1);
+        execute(state, tail[i][1]);
+      }
+      for (const reg of nonvolatile) assert.equal(state.r[reg], initial[reg], name + ': normal return lost ' + reg);
+      assert.equal(state.r.rax, 0x123456789n); assert.equal(state.r.xmm0, 0x123456789ABCDEF123456789n);
+      assert.equal(state.r.rip, returnPc);
+      assert.equal(state.r.rsp, stack + (name === 'CJ_MCC_N2CStub' ? 24n : 8n), name + ': private cleanup/return stack');
+      checks++;
+    }
+  }
+  console.log(name + ': production COFF prologue, body and return unwind assertions reached');
+}
+assert.ok(checks > 0, 'no selected production function tested');
+console.log(JSON.stringify({mode, checks, scope: 'decoded COFF + instruction semantics; Windows OS unwinder and execution NOT_RUN'}));
