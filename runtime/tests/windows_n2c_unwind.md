@@ -45,6 +45,12 @@ encoding order, completed fixed-frame bias, every prologue boundary, and
 nonvolatile saves under native home-space writes. `c2n` additionally checks
 normal/guard shared restore, RSI frame recovery, refreshed managed r15,
 return registers, and the private 16-byte cleanup. This remains a model.
+The `callee` mode also executes every emitted CalleeSaved macro body's decoded
+instructions around two modeled native calls, including the five-argument
+variant, native home writes, preserved result and refreshed TLS register.
+The `exclusive` mode follows ExecuteExclusiveCangjieStub's actual argument,
+N2CSlotData and result slots through its three call sites. The modeled calls
+exercise their ABI effects; they do not execute the helpers or managed closure.
 
 C2N now uses real GPR pushes before allocation, RSI as its fixed Windows FP,
 and offset-based XMM records after FP establishment. The original RBP anchor,

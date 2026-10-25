@@ -48,7 +48,7 @@ function execute(s, [op, args]) {
 let checks = 0;
 for (const block of blocks) {
   const name = block.match(/StartAddress: (\w+)/)?.[1];
-  const selected = mode === 'closure' || (mode === 'c2n' ? name === 'CJ_MCC_C2NStub' : mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name));
+  const selected = ['closure', 'callee', 'exclusive'].includes(mode) || (mode === 'c2n' ? name === 'CJ_MCC_C2NStub' : mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name));
   if (!selected) continue;
   const start = symbols.get(name), prolog = Number(block.match(/PrologSize: (\d+)/)[1]);
   assert.ok(start !== undefined, name + ' real production symbol missing');
@@ -123,9 +123,75 @@ for (const block of blocks) {
     // Simulate a native callee using all of its permitted home space.
     if (hasCall) for (let i = 0; i < 32; i++) body.mem.set(body.r.rsp + BigInt(i), 0xA5);
     const saved = new Set(codes.map(c => c.detail.match(/reg=(\w+)/)?.[1]?.toLowerCase()).filter(Boolean));
-    const changed = mode === 'closure' || mode === 'c2n' ? stored : mode === 'n2c' && name !== 'ExecuteCangjieStub' ? nonvolatile : saved;
+    const changed = ['closure', 'c2n', 'callee', 'exclusive'].includes(mode) ? stored : mode === 'n2c' && name !== 'ExecuteCangjieStub' ? nonvolatile : saved;
     for (const reg of changed) if (reg !== frame && reg !== 'rbp') body.r[reg] = 0xDEADn;
     unwind(body, prolog + 1);
+  }
+  if (mode === 'callee') {
+    const state = {r: {...s.r}, mem: new Map(s.mem)};
+    const fifth = 0x512345n, result = 0x678901n, tls = 0xCAFE1234n;
+    write(state.mem, stack + 40n, fifth, 8);
+    const moreArgs = functionBody.some(([, i]) => i[0] === 'movq' && i[1] === '48(%rbp), %rax');
+    let calls = 0, returned = false;
+    for (const [, insn] of functionBody) {
+      if (insn[0] === 'callq') {
+        calls++;
+        if (calls === 1) {
+          for (const reg of ['rcx', 'rdx', 'r8', 'r9']) assert.equal(state.r[reg], initial[reg], name + ': forwarded argument changed');
+          if (moreArgs) assert.equal(read(state.mem, state.r.rsp + 32n, 8), fifth, name + ': fifth argument outside native slot');
+        } else {
+          assert.equal(calls, 2, name + ': unexpected wrapper call');
+          // The result must not overwrite the saved r15 used for unwinding
+          // while MRT_GetThreadLocalData is executing.
+          unwind(state, prolog + 1);
+        }
+        for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
+        for (const reg of ['rcx', 'rdx', 'r8', 'r9', 'r10', 'r11']) state.r[reg] = 0xBADn;
+        state.r.rax = calls === 1 ? result : tls;
+      } else {
+        execute(state, insn);
+        if (insn[0] === 'retq') { returned = true; break; }
+      }
+    }
+    assert.equal(calls, 2); assert.ok(returned, name + ': wrapper return not reached');
+    for (const reg of nonvolatile) assert.equal(state.r[reg], reg === 'r15' ? tls : initial[reg], name + ': wrapper return lost ' + reg);
+    assert.equal(state.r.rax, result, name + ': wrapper result lost');
+    assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
+  }
+  if (mode === 'exclusive' && name === 'ExecuteExclusiveCangjieStub') {
+    const state = {r: {...s.r}, mem: new Map(s.mem)};
+    const tls = 0xCAFE1234n, functionPc = 0x456789n;
+    const result = 0x123456789n, float0 = 0x123456789ABCDEFn, float1 = 0xFEDCBA987654321n;
+    write(state.mem, stack + 40n, tls, 8);
+    write(state.mem, initial.r9 + 8n, functionPc, 8);
+    let calls = 0, returned = false;
+    for (const [, insn] of functionBody) {
+      if (insn[0] === 'callq') {
+        calls++;
+        if (calls === 1) {
+          assert.equal(state.r.rcx, s.r.rbp); assert.equal(state.r.r15, tls);
+          // Actual N2CSlotData occupies three words immediately below FA.
+          for (let i = 1; i <= 3; i++) write(state.mem, state.r.rcx - BigInt(i * 8), 0xBAD000n + BigInt(i), 8);
+        } else if (calls === 2) {
+          assert.equal(insn[1], '*%r11'); assert.equal(state.r.r11, functionPc);
+          assert.equal(state.r.rcx, initial.rcx, 'exclusive sret argument');
+          assert.equal(state.r.rdx, initial.r8, 'exclusive closure argument');
+        } else {
+          assert.equal(calls, 3); assert.equal(state.r.rcx, s.r.rbp);
+        }
+        for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
+        for (const reg of ['rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', 'xmm0', 'xmm1']) state.r[reg] = 0xBADn;
+        if (calls === 2) { state.r.rax = result; state.r.xmm0 = float0; state.r.xmm1 = float1; }
+        unwind(state, prolog + 1);
+      } else {
+        execute(state, insn);
+        if (insn[0] === 'retq') { returned = true; break; }
+      }
+    }
+    assert.equal(calls, 3); assert.ok(returned, 'exclusive managed return not reached');
+    for (const reg of nonvolatile) assert.equal(state.r[reg], initial[reg], 'exclusive return lost ' + reg);
+    assert.equal(state.r.rax, result); assert.equal(state.r.xmm0, float0); assert.equal(state.r.xmm1, float1);
+    assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
   }
   if (mode === 'c2n' || (mode === 'closure' && name === 'CJ_MCC_C2NStub')) {
     const index = functionBody.findIndex(([,i])=>i[0] === 'movapd' && i[1] === '-176(%rbp), %xmm6');
