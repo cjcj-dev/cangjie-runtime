@@ -95,7 +95,6 @@ public:
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
-    bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
     MarkingSMR& Smr() { return smr; }

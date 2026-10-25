@@ -56,6 +56,14 @@ MarkStackEntry ObjectEntry(BaseObject* object)
 }
 
 
+// Exercise the shipped checkpoint, including its STS membership contract.
+bool CheckStopAtRebalance(ZMark& domain)
+{
+    SuspendibleThreadSetJoiner membership;
+    MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
+    return domain.RebalanceWork(context, 0);
+}
+
 size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 {
     MarkStripeStack* stack = stripe.StealStack(smr, workerId);
@@ -468,7 +476,7 @@ GC_OTHER_VM_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.ResizeWorkers(1);
-    GC_EXPECT_TRUE(!domain.PollStop());
+    GC_EXPECT_TRUE(!CheckStopAtRebalance(domain));
     ZStatWorkers statWorkers;
     MapleRuntime::GcUnit::WorkerBudgetFixture workersBudget(2);
     ZWorkers workers(ZGenerationId::young, &statWorkers);
@@ -476,13 +484,13 @@ GC_OTHER_VM_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     workers.set_active_workers(1);
     domain.BindWorkers(&workers);
     domain.PrepareWork();
-    GC_EXPECT_TRUE(!domain.PollStop());
+    GC_EXPECT_TRUE(!CheckStopAtRebalance(domain));
     workers.request_resize_workers(2);
-    GC_EXPECT_TRUE(domain.PollStop());
+    GC_EXPECT_TRUE(CheckStopAtRebalance(domain));
     domain.BindWorkers(nullptr);
-    GC_EXPECT_TRUE(!domain.PollStop());
+    GC_EXPECT_TRUE(!CheckStopAtRebalance(domain));
     ZAbort::abort();
-    GC_EXPECT_TRUE(domain.PollStop());
+    GC_EXPECT_TRUE(CheckStopAtRebalance(domain));
 }
 
 // ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while
@@ -513,7 +521,8 @@ GC_OTHER_VM_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     // zMarkStack.cpp: ZMarkStackList::length counts segments, not entries.
     // The resume below proves every remaining entry is still owned and consumed.
     GC_EXPECT_TRUE(domain.Stripes().Population() > 0);
-    GC_EXPECT_TRUE(domain.PollStop());
+    MarkContext checkpoint(1, 0, domain.Stripes(), domain.Stacks());
+    GC_EXPECT_TRUE(domain.RebalanceWork(checkpoint, 0));
 }
 
 // ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected

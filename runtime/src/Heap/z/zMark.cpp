@@ -466,7 +466,9 @@ bool ZMark::RebalanceWork(MarkContext& context, size_t workerId)
     } else if (!terminate.Saturated()) {
         (void)context.Stacks().Flush(stripes);
     }
-    return PollStop();
+    // ZGC 5b2d6991a1279d375f9a3c00c7bcd0bbcc7081d6 zMark.cpp:466-468.
+    SuspendibleThreadSet::yield();
+    return ZAbort::should_abort() || (gcWorkers != nullptr && gcWorkers->should_worker_resize());
 }
 
 bool ZMark::Drain(MarkContext& context, size_t workerId)
@@ -625,16 +627,7 @@ void ZMark::FinishWork()
     nterminateflush += workNTerminateFlush.load(std::memory_order_relaxed);
 }
 
-bool ZMark::PollStop()
-{
-    if (ZAbort::should_abort()) {
-        return true;
-    }
-    if (gcWorkers != nullptr && gcWorkers->should_worker_resize()) {
-        return true;
-    }
-    return false;
-}
+
 
 MarkThreadLocalStacks& ZMark::Stacks()
 {
