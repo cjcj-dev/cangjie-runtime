@@ -11,7 +11,7 @@ trap 'rm -rf "$fixture"' EXIT
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
 # one can turn a negative arm into a false PASS.
 unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
-  GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
+  GCV2_RUNTIME_OUTPUT_ROOT GCV2_RUNTIME_BUILD_DIR MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER GC_UNIT_GATE_RESULT \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
@@ -65,6 +65,7 @@ done
 
 # Synthetic products still carry the real parser's hash-bound compile recipe.
 write_product_recipe() {
+  node "$ROOT/runtime/tests/gc_unit/gate_contract_build_fixture.mjs" "$ROOT" "$fixture" "$1" "$3" "${4:-0}"
   python3 - "$1" "$2" "$3" "${4:-0}" <<'PYRECIPE'
 import hashlib, json, sys
 from pathlib import Path

@@ -185,7 +185,7 @@ def publish(args):
     if args.gate:
         handoff_dir = Path(tempfile.mkdtemp(prefix='gate-handoff.', dir=args.staging))
         handoff = handoff_dir / 'result.json'
-        env = dict(os.environ, GCV2_RUNTIME_CONFIG=config_id,
+        env = dict(os.environ, GCV2_RUNTIME_CONFIG=config_id, GCV2_RUNTIME_BUILD_DIR=str(args.build),
                    GCV2_RUNTIME_LIB_DIR=str(lib), GCV2_RUNTIME_OUTPUT_ROOT=str(root),
                    MRT_TESTABLE_INTERNALS=args.testable, MRT_GC_UNIT_OHOS_HOST=args.ohos,
                    GC_UNIT_GATE_RESULT=str(handoff))
