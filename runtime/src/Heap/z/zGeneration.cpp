@@ -13,6 +13,7 @@
 #include "Mutator/Mutator.inline.h"
 #include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBreakpoint.hpp"
+#include "Common/Mutex.h"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
@@ -196,6 +197,14 @@ public:
     virtual bool block_jni_critical() const { return false; }
     bool skip_thread_oop_barriers() const override { return true; }
     bool is_gc_operation() const override { return true; }
+    // ZGC 5b2d6991 zGeneration.cpp: VM_ZOperation's caller holds Heap_lock
+    // across the pause, excluding Reference pending-list transfers.
+    bool doit_prologue() override
+    {
+        HeapMonitor().lock();
+        return true;
+    }
+    void doit_epilogue() override { HeapMonitor().unlock(); }
     void doit() override
     {
         GCIdMark gcIdMark(gcId);
@@ -607,8 +616,8 @@ void ZGenerationOld::process_non_strong_references()
 namespace MapleRuntime {
 
 
-// Registered finalizers are discovered during old root marking and fixed by
-// VisitNativePointers. Only queued/running finalizables are strong mark roots.
+// Managed FinalReference carriers own registration; the external pending
+// chain is rooted by FinalizerProcessor until the managed handler transfers it.
 
 
 } // namespace MapleRuntime

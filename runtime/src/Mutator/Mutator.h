@@ -195,6 +195,8 @@ public:
         DoLeaveSaferegion(preprocess);
     }
 
+    __attribute__((always_inline)) inline void RejectInconsistentUnwindTop();
+
     // If current mutator is not in saferegion, enter and return true
     // If current mutator has been in saferegion, return false
     __attribute__((always_inline)) inline bool EnterSaferegion(bool updateUnwindContext) noexcept;

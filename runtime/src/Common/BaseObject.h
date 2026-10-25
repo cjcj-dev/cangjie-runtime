@@ -25,7 +25,7 @@ public:
 
     inline bool IsWeakRef() const { return GetTypeInfo()->IsWeakRefType(); }
 
-    static ptrdiff_t referent_offset();
+    static ptrdiff_t referent_offset(BaseObject* object);
     static bool is_referent_field(BaseObject* obj, ptrdiff_t offset);
 
     inline bool IsValidObject() const { return stateWord.IsValidStateWord(); }
@@ -86,7 +86,7 @@ public:
 
     void UnlockObject(const ObjectState newState) { stateWord.UnlockStateWord(newState); }
 
-    void OnFinalizerCreated();
+    BaseObject* OnFinalizerCreated();
 
     static intptr_t FieldOffset(const BaseObject* obj, const void* field)
     {

@@ -40,7 +40,6 @@ public:
 
 
     static void MarkYoungGoodBarrierOnOopField(NativeSlot& field);
-    static void MarkFinalizableBarrierOnRoot(NativeSlot& field);
     static void MarkBarrierOnOldOopField(RefField<>& field, bool finalizable);
     static void MarkBarrierOnYoungOopField(RefField<>& field);
     static zaddress RemsetBarrierOnOopField(RefField<>& field);
@@ -79,6 +78,8 @@ public:
 #else
     static void verify_on_weak(volatile zpointer*) {}
 #endif
+    static bool clean_barrier_on_weak_oop_field(volatile zpointer* p);
+    static bool clean_barrier_on_final_oop_field(volatile zpointer* p);
     static bool clean_barrier_on_phantom_oop_field(volatile zpointer* p);
     static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 

@@ -65,7 +65,6 @@ class ZMark {
     friend class ZMarkCheckpointTest;
 public:
     static void EnumAllCommonRoots(ZWorkers& workers);
-    static void DiscoverFinalizableRoot(NativeSlot& slot);
     static void DoEnumeration();
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);
     static void ProcessFinalizers();

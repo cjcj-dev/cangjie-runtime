@@ -143,35 +143,24 @@ extern "C" ObjRef MCC_NewWeakRefObject(const TypeInfo* klass, MSize size)
     return obj;
 }
 
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool isFinalizer)
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size)
 {
     DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
-    ObjRef obj = ObjectManager::NewPinnedObject(klass, size, isFinalizer);
+    ObjRef obj = ObjectManager::NewPinnedObject(klass, size);
     if (obj == nullptr) {
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewPinnedObject return nullptr");
+        return nullptr;
     }
     BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
-extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
-{
-    DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
-    ObjRef obj = ObjectManager::NewFinalizer(klass, size);
-    if (obj == nullptr) {
-        VLOG(REPORT, "Allocating object with ~init %s (%zu B) failed and throw OutOfMemoryError",
-            klass->GetName(), size);
-        ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewFinalizer return nullptr");
-    }
-    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
-    return obj;
-}
 
+// Register on normal return from the root Object.init, before a derived init continues.
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref)
 {
-    ref->OnFinalizerCreated();
-    return ref;
+    return static_cast<ObjRef>(ref->OnFinalizerCreated());
 }
 extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
 {
@@ -2165,6 +2154,7 @@ extern "C" ArrayRef MCC_NewArrayGeneric(const TypeInfo* arrayInfo, MIndex nElems
         case TypeKind::TYPE_KIND_CLASS:
         case TypeKind::TYPE_KIND_EXPORTED_REF:
         case TypeKind::TYPE_KIND_FOREIGN_PROXY:
+        case TypeKind::TYPE_KIND_FINALREF_CLASS:
         case TypeKind::TYPE_KIND_WEAKREF_CLASS:
         case TypeKind::TYPE_KIND_INTERFACE:
         case TypeKind::TYPE_KIND_TEMP_ENUM:
@@ -2244,6 +2234,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_CLASS:
         case TypeKind::TYPE_KIND_EXPORTED_REF:
         case TypeKind::TYPE_KIND_FOREIGN_PROXY:
+        case TypeKind::TYPE_KIND_FINALREF_CLASS:
         case TypeKind::TYPE_KIND_WEAKREF_CLASS:
         case TypeKind::TYPE_KIND_INTERFACE:
         case TypeKind::TYPE_KIND_TEMP_ENUM:

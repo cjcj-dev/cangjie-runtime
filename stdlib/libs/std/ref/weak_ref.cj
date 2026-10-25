@@ -20,16 +20,11 @@ func getDeferredWeakRefPolicy(): CleanupPolicy {
 /**
  * A base non-generic class with all necessary fields to simplify the backend implementation.
  */
-sealed abstract class WeakRefBase {
-
-    // This field must be the first reference field in the class.
-    // The runtime relies on this fact to process weak references.
-    var _value: Option<Object>
-
+sealed abstract class WeakRefBase <: Reference {
     let _cleanupPolicy: CleanupPolicy
 
     init(value: Option<Object>, cleanupPolicy: CleanupPolicy) {
-        _value = value
+        super(value, referenceNullQueue)
         _cleanupPolicy = cleanupPolicy
     }
 }

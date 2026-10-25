@@ -326,10 +326,10 @@ GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureShutdownWith
 // initialize the entire TLAB, while page/object allocation leaves its suffix alone.
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo*, MIndex);
-extern "C" ObjRef MCC_NewFinalizer(const TypeInfo*, MSize);
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize);
 }
 namespace {
-enum class ZeroCase { Page, TLAB, Medium, Large, Array, Finalizer, SegmentedArray };
+enum class ZeroCase { Page, TLAB, Medium, Large, Array, Pinned, SegmentedArray };
 bool BytesAre(uintptr_t begin, uintptr_t end, unsigned char value)
 {
     for (; begin < end; ++begin) {
@@ -396,8 +396,8 @@ void* AllocateFromDirtyCache(void*)
     }
     if (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) {
         object = reinterpret_cast<uintptr_t>(MCC_NewArray8(arrayType, bytes - MArray::GetContentOffset()));
-    } else if (kind == ZeroCase::Finalizer) {
-        object = reinterpret_cast<uintptr_t>(MCC_NewFinalizer(type, bytes));
+    } else if (kind == ZeroCase::Pinned) {
+        object = reinterpret_cast<uintptr_t>(MCC_NewPinnedObject(type, bytes));
     } else {
         object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
     }
@@ -432,9 +432,9 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, ArrayClearsOnlyObject)
 {
     RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Array>);
 }
-GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, FinalizerClearsOnlyObject)
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, PinnedClearsOnlyObject)
 {
-    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Finalizer>);
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Pinned>);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, SegmentedArrayKeepsItsOwnInitializer)

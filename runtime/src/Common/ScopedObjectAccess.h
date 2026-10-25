@@ -11,6 +11,61 @@
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
+// HotSpot interfaceSupport.inline.hpp:203-223: release an in-flight lock
+// before processing a request while returning from the blocked state.
+template<class Preprocess>
+class MutatorBlockInVMPreprocess {
+public:
+    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
+        : mutator(mutator), preprocess(preprocess)
+    {
+        // interfaceSupport.inline.hpp:209-211 only transitions a thread that is
+        // still in the VM. An outer saferegion stays as it is.
+        if (mutator.InSaferegion()) {
+            return;
+        }
+        UnwindContext& context = mutator.GetUnwindContext();
+        // frame_x86.cpp:710-716 fills the pc from the live stack before the
+        // thread is blocked. RISKY is GoIntoNativeCode; do not replace it.
+        // Only the overwritten frame identity is restored. anchorFA is the walk
+        // stop and stack move writes it on the live context (Mutator.cpp).
+        if (mutator.IsManagedContext() &&
+            context.GetUnwindContextStatus() != UnwindContextStatus::RISKY) {
+            mutator.RejectInconsistentUnwindTop();
+            savedIP = context.frameInfo.mFrame.GetIP();
+            savedFA = context.frameInfo.mFrame.GetFA();
+            mutator.UpdateUnwindContext();
+            published = true;
+        }
+        entered = mutator.EnterSaferegion(false);
+    }
+    ~MutatorBlockInVMPreprocess()
+    {
+        // interfaceSupport.inline.hpp:215-220 publishes the active state, then
+        // runs the preprocess and the safepoint while the anchor is still the
+        // frame captured on entry. Restoring the saved top first lets a new
+        // epoch's on_safepoint observe only that saved top.
+        if (entered) {
+            mutator.DoLeaveSaferegion(preprocess);
+        }
+        if (published) {
+            // An iterator started on this capture must finish before the top
+            // changes. Both happen under the watermark lock, so a concurrent
+            // start either sees the capture or the restored top.
+            mutator.GetStackWatermark().restore_saved_top(savedIP, savedFA);
+        }
+    }
+    MutatorBlockInVMPreprocess(const MutatorBlockInVMPreprocess&) = delete;
+    MutatorBlockInVMPreprocess& operator=(const MutatorBlockInVMPreprocess&) = delete;
+private:
+    Mutator& mutator;
+    Preprocess& preprocess;
+    const uint32_t* savedIP = nullptr;
+    FrameAddress* savedFA = nullptr;
+    bool published = false;
+    bool entered = false;
+};
+
 // Scoped guard for saferegion.
 class ScopedEnterSaferegion {
 public:

@@ -19,8 +19,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
-extern "C" ObjRef MCC_NewFinalizer(const TypeInfo*, MSize);
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize, bool);
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize);
 extern "C" ArrayRef MCC_NewArray(const TypeInfo*, MIndex);
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex);
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo*, MIndex);
@@ -123,8 +122,8 @@ void* AllocateAtExit(void* opaque)
     BaseObject* result = nullptr;
     switch (input.entry) {
         case 0: result = MCC_NewObject(objectType, 24); break;
-        case 1: result = MCC_NewFinalizer(objectType, 24); break;
-        case 2: result = MCC_NewPinnedObject(objectType, 24, false); break;
+        case 1: result = MCC_NewObject(objectType, 24); break; // Retired allocation entry; constructor registration is tested separately.
+        case 2: result = MCC_NewPinnedObject(objectType, 24); break;
         case 3: result = MCC_NewArray(arrayType, 2); break;
         case 4: result = MCC_NewObjArray(arrayType, 2); break;
         case 5: result = MCC_NewArray8(arrayType, 2); break;

@@ -29,8 +29,7 @@ public:
     static inline ObjRef NewObject(const TypeInfo* ti, MSize size, AllocType allocType = AllocType::MOVEABLE_OBJECT);
     static inline ObjRef NewWeakRefObject(const TypeInfo* ti, MSize size,
                                           AllocType allocType = AllocType::MOVEABLE_OBJECT);
-    static inline ObjRef NewPinnedObject(const TypeInfo* ti, MSize size, bool isFinalizer);
-    static inline ObjRef NewFinalizer(const TypeInfo* ti, MSize size);
+    static inline ObjRef NewPinnedObject(const TypeInfo* ti, MSize size);
 
     static inline GCTib GetGCInfo(const TypeInfo* ti);
 

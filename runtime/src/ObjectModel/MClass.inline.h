@@ -89,7 +89,7 @@ inline MSize TypeInfo::GetComponentSize() const { return componentSize; }
 inline bool TypeInfo::IsObjectType() const
 {
     return type == TypeKind::TYPE_KIND_CLASS ||
-           type == TypeKind::TYPE_KIND_WEAKREF_CLASS ||
+           type == TypeKind::TYPE_KIND_WEAKREF_CLASS || type == TypeKind::TYPE_KIND_FINALREF_CLASS ||
            type == TypeKind::TYPE_KIND_TEMP_ENUM ||
            type == TypeKind::TYPE_KIND_FUNC ||
            type == TypeKind::TYPE_KIND_FOREIGN_PROXY ||
@@ -97,6 +97,10 @@ inline bool TypeInfo::IsObjectType() const
 }
 
 inline bool TypeInfo::IsWeakRefType() const { return type == TypeKind::TYPE_KIND_WEAKREF_CLASS; }
+
+inline bool TypeInfo::IsFinalReferenceType() const { return type == TypeKind::TYPE_KIND_FINALREF_CLASS; }
+
+inline bool TypeInfo::IsReferenceType() const { return IsWeakRefType() || IsFinalReferenceType(); }
 
 inline bool TypeInfo::IsForeignType() const { return type == TypeKind::TYPE_KIND_FOREIGN_PROXY; }
 
@@ -124,7 +128,7 @@ inline bool TypeInfo::IsClass() const
 {
     return type == TypeKind::TYPE_KIND_CLASS ||
            type == TypeKind::TYPE_KIND_TEMP_ENUM ||
-           type == TypeKind::TYPE_KIND_WEAKREF_CLASS || type == TypeKind::TYPE_KIND_EXPORTED_REF ||
+           type == TypeKind::TYPE_KIND_WEAKREF_CLASS || type == TypeKind::TYPE_KIND_FINALREF_CLASS || type == TypeKind::TYPE_KIND_EXPORTED_REF ||
            type == TypeKind::TYPE_KIND_FOREIGN_PROXY;
 }
 

@@ -5,6 +5,7 @@
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zIterator.inline.hpp"
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 using namespace MapleRuntime;
@@ -18,6 +19,18 @@ struct Layout {
     TypeInfo* type = reinterpret_cast<TypeInfo*>(typeStorage);
     TypeInfo* component = reinterpret_cast<TypeInfo*>(componentStorage);
     BaseObject* object = reinterpret_cast<BaseObject*>(storage);
+
+    U32 referenceOffsets[4] = {0, 8, 16, 24};
+
+    void reference(I8 kind = TypeKind::TYPE_KIND_WEAKREF_CLASS)
+    {
+        type->SetType(kind);
+        type->SetFieldNum(4);
+        type->SetOffsets(referenceOffsets);
+        GCTib tib{};
+        tib.tag = SIGN_BIT | 0x2f; // referent/queue/next/discovered and an ordinary field.
+        type->SetGCTib(tib);
+    }
 
     Layout()
     {
@@ -84,34 +97,56 @@ public:
 GC_TEST(FieldIterator, ReferenceFieldsIncludesReferent)
 {
     Layout layout;
-    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    layout.reference();
     std::vector<MAddress> actual;
     ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS> closure(actual);
     ZIterator::oop_iterate(layout.object, &closure);
-    ExpectSlots("reference-fields", actual, layout.payload(), {2, 5, 0});
+    ExpectSlots("reference-fields", actual, layout.payload(), {1, 2, 5, 0, 3});
 }
 
 GC_TEST(FieldIterator, ReferenceFieldsExceptReferent)
 {
     Layout layout;
-    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    layout.reference();
     std::vector<MAddress> actual;
     ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT> closure(actual);
     ZIterator::oop_iterate(layout.object, &closure);
-    ExpectSlots("reference-fields-except", actual, layout.payload(), {2, 5});
+    ExpectSlots("reference-fields-except", actual, layout.payload(), {1, 2, 5, 3});
 }
 
 GC_TEST(FieldIterator, NullDiscovererUsesFields)
 {
     Layout layout;
-    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    layout.reference();
     std::vector<MAddress> actual;
     auto visitor = [&](HeapSlot<>& field) { actual.push_back(reinterpret_cast<MAddress>(&field)); };
     ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
     GC_EXPECT_TRUE(closure.ref_discoverer() == nullptr);
     GC_EXPECT_EQ(closure.reference_iteration_mode(), OopIterateClosure::DO_DISCOVERY);
     ZIterator::oop_iterate(layout.object, &closure);
-    ExpectSlots("null-discoverer", actual, layout.payload(), {2, 5, 0});
+    ExpectSlots("null-discoverer", actual, layout.payload(), {1, 2, 5, 0, 3});
+}
+
+GC_TEST(FieldIterator, FinalReferenceFieldsExceptReferent)
+{
+    Layout layout;
+    layout.reference(TypeKind::TYPE_KIND_FINALREF_CLASS);
+    std::vector<MAddress> actual;
+    ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT> closure(actual);
+    ZIterator::oop_iterate(layout.object, &closure);
+    ExpectSlots("final-reference-fields-except", actual, layout.payload(), {1, 2, 5, 3});
+}
+
+GC_TEST(FieldIterator, ReferenceExplicitKlassDispatch)
+{
+    Layout layout;
+    layout.reference();
+    std::memcpy(layout.componentStorage, layout.typeStorage, sizeof(TypeInfo));
+    layout.type->SetType(TypeKind::TYPE_KIND_CLASS);
+    std::vector<MAddress> actual;
+    ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS> closure(actual);
+    ZIterator::oop_iterate_safe(layout.object, layout.component, &closure);
+    ExpectSlots("reference-explicit-klass", actual, layout.payload(), {1, 2, 5, 0, 3});
 }
 
 GC_TEST(FieldIterator, ShortBitmapConcreteVisitor)

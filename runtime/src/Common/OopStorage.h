@@ -102,35 +102,4 @@ private:
     NumDeadCallback numDeadCallback = nullptr;
 };
 
-// Language finalizer scheduling adapter. This list owns no root slots: its
-// iterators expose the storage slots, preserving the published handle identity.
-class NativeRootHandles {
-    using List = std::list<NativeSlot*>;
-    List handles;
-public:
-    class iterator {
-        friend class NativeRootHandles;
-        List::iterator value;
-        explicit iterator(List::iterator value) : value(value) {}
-    public:
-        NativeSlot& operator*() const { return **value; }
-        NativeSlot* operator->() const { return *value; }
-        iterator& operator++() { ++value; return *this; }
-        bool operator!=(const iterator& other) const { return value != other.value; }
-        bool operator==(const iterator& other) const { return value == other.value; }
-    };
-    iterator begin() { return iterator(handles.begin()); }
-    iterator end() { return iterator(handles.end()); }
-    NativeSlot& front() { return *handles.front(); }
-    NativeSlot& back() { return *handles.back(); }
-    bool empty() const { return handles.empty(); }
-    size_t size() const { return handles.size(); }
-    void push_back(NativeSlot* slot) { handles.push_back(slot); }
-    iterator erase(iterator position) { return iterator(handles.erase(position.value)); }
-    void swap(NativeRootHandles& other) { handles.swap(other.handles); }
-    void splice(iterator position, NativeRootHandles& other)
-    {
-        handles.splice(position.value, other.handles);
-    }
-};
 } // namespace MapleRuntime

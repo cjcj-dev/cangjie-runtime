@@ -11,6 +11,13 @@
 #include "MutatorManager.h"
 
 namespace MapleRuntime {
+inline void Mutator::RejectInconsistentUnwindTop()
+{
+    const bool hasFA = uwContext.frameInfo.mFrame.GetFA() != nullptr;
+    const bool hasIP = uwContext.frameInfo.mFrame.GetIP() != nullptr;
+    CHECK_DETAIL(hasFA == hasIP, "unwind top is missing only the frame address or only the instruction");
+}
+
 inline void Mutator::DoEnterSaferegion()
 {
     SetInSaferegion(SAFE_REGION_TRUE);

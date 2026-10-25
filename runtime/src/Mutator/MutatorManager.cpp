@@ -1,3 +1,4 @@
+#include "Common/ScopedObjectAccess.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -319,21 +320,6 @@ private:
     bool released = false;
 };
 
-// interfaceSupport.inline.hpp:203-223: the transition owns preprocessing;
-// the lock acquisition must not cache the request decision before it.
-template<class Preprocess>
-class MutatorBlockInVMPreprocess {
-public:
-    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
-        : mutator(mutator), preprocess(preprocess)
-    {
-        (void)mutator.EnterSaferegion(false);
-    }
-    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
-private:
-    Mutator& mutator;
-    Preprocess& preprocess;
-};
 } // namespace
 
 void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)

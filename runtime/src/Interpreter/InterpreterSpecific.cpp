@@ -40,7 +40,7 @@ extern "C" void CJ_MCC_I2NStubEnd(...);
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf);
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData);
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool isFinalizer);
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size);
 extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field);
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field);
 extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress srcField, size_t size, GCTib gctib);

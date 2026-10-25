@@ -34,22 +34,13 @@ inline ObjRef ObjectManager::NewWeakRefObject(const TypeInfo* ti, MSize size, Al
     return static_cast<ObjRef>(obj);
 }
 
-inline ObjRef ObjectManager::NewPinnedObject(const TypeInfo* ti, MSize size, bool isFinalizer)
+inline ObjRef ObjectManager::NewPinnedObject(const TypeInfo* ti, MSize size)
 {
     CHECK_DETAIL(ti != nullptr, "ti is nullptr");
     auto obj = MObject::NewPinnedObject(const_cast<TypeInfo*>(ti), size);
-    if (isFinalizer && obj != nullptr) {
-        static_cast<ObjRef>(obj)->OnFinalizerCreated();
-    }
     return static_cast<ObjRef>(obj);
 }
 
-inline ObjRef ObjectManager::NewFinalizer(const TypeInfo* ti, MSize size)
-{
-    CHECK_DETAIL(ti != nullptr, "ti is nullptr");
-    auto obj = MObject::NewFinalizer(ti, size);
-    return static_cast<ObjRef>(obj);
-}
 
 inline GCTib ObjectManager::GetGCInfo(const TypeInfo* ti) { return ti->GetGCTib(); }
 

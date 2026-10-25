@@ -1,4 +1,5 @@
 #include "Heap/z/zRootsIterator.hpp"
+#include "Common/Mutex.h"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -10,6 +11,8 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "reference_layout_fixture.hpp"
+#include "Heap/z/zResurrection.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
@@ -57,7 +60,9 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(targetTypeStorage), sizeof(targetTypeStorage));
     fx.obj1->SetClassInfo(targetType);
-    if (!strong) fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    ReferenceLayoutFixture weakLayout;
+    ReferenceLayoutFixture finalLayout(true);
+    if (!strong) { weakLayout.Place(reinterpret_cast<MAddress>(fx.obj0), fx.obj1); }
     auto& referent = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(StoreGoodPointer(fx.obj1));
     HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE)
@@ -92,14 +97,23 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     const bool targetLive = fx.region1()->is_object_live(from_object(fx.obj1));
     auto& processor = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const size_t discovered = processor.Discovered(ReferenceType::WEAK);
-    processor.ProcessReferences([](BaseObject*) { return false; });
-    processor.EnqueueReferences([](BaseObject*) { return true; });
+    if (!young) {
+        while (!heap.old().pause_mark_end()) { heap.old().concurrent_mark_continue(); }
+        // Enter the production phase: it classifies references, rendezvous,
+        // unblocks resurrection and publishes pending work in product order.
+        // Do not assemble processor/process/enqueue calls in the test.
+        heap.old().process_non_strong_references();
+    }
+    BaseObject* pending;
+    {
+        MonitorLocker lock(HeapMonitor());
+        pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
+    }
     const bool cleared = referent.GetTargetObject() == zaddress::null;
     if (handle != 0) heap.cross_vm().export_roots().RemoveExportRoot(handle);
+    const bool finalCarrier = !finalizable || (pending == finalReference && MReference::next(finalReference) == finalReference);
     if (finalizable) {
-        heap.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
-            root.StoreColoured(zpointer::null);
-        });
+        std::fprintf(stderr, "MARK1036_FINAL_CARRIER result=%d\n", finalCarrier);
     }
     std::fprintf(stderr,
         "MARK1036_TARGET finalizable=%d strong=%d young=%d workers=%zu old_referent=%d cycle=%d discovered=%zu target_live=%d target_strong=%d cleared=%d\n",
@@ -108,6 +122,7 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         (strong || young || cycle) ? (targetStrong && targetLive && !cleared && discovered == 0) :
         finalizable ? (!targetStrong && targetLive && !cleared && discovered == 0) :
                       (!targetStrong && !targetLive && cleared && discovered == 1));
+    GC_EXPECT_TRUE(finalCarrier);
 }
 }
 

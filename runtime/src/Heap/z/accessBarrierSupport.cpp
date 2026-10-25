@@ -6,7 +6,7 @@ DecoratorSet AccessBarrierSupport::resolve_unknown_oop_ref_strength(DecoratorSet
                                                                     ptrdiff_t offset)
 {
     DecoratorSet ds = decorators & ~ON_UNKNOWN_OOP_REF;
-    if (!BaseObject::is_referent_field(base, offset)) {
+    if (!BaseObject::is_referent_field(base, offset) || base->GetTypeInfo()->IsFinalReferenceType()) {
         ds |= ON_STRONG_OOP_REF;
     } else {
         ds |= ON_WEAK_OOP_REF;

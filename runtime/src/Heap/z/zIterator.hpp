@@ -42,19 +42,21 @@ public:
 };
 
 class OopIteratorClosureDispatch {
-    static BaseObject* load_referent(BaseObject* object, ReferenceType type);
+    static BaseObject* load_referent(BaseObject* object, TypeInfo* klass, ReferenceType type);
     template <typename OopClosureT>
-    static bool try_discover(BaseObject* object, ReferenceType type, OopClosureT* closure);
+    static bool try_discover(BaseObject* object, TypeInfo* klass, ReferenceType type, OopClosureT* closure);
     template <typename OopClosureT>
-    static void do_referent(BaseObject* object, OopClosureT* closure);
+    static void do_referent(BaseObject* object, TypeInfo* klass, OopClosureT* closure);
     template <typename OopClosureT>
-    static void oop_oop_iterate_discovery(BaseObject* object, ReferenceType type, OopClosureT* closure);
+    static void do_discovered(BaseObject* object, TypeInfo* klass, OopClosureT* closure);
     template <typename OopClosureT>
-    static void oop_oop_iterate_fields(BaseObject* object, OopClosureT* closure);
+    static void oop_oop_iterate_discovery(BaseObject* object, TypeInfo* klass, ReferenceType type, OopClosureT* closure);
     template <typename OopClosureT>
-    static void oop_oop_iterate_fields_except_referent(BaseObject* object, OopClosureT* closure);
+    static void oop_oop_iterate_fields(BaseObject* object, TypeInfo* klass, OopClosureT* closure);
     template <typename OopClosureT>
-    static void oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object);
+    static void oop_oop_iterate_fields_except_referent(BaseObject* object, TypeInfo* klass, OopClosureT* closure);
+    template <typename OopClosureT>
+    static void oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object, TypeInfo* klass);
 public:
     template <typename OopClosureT>
     static void oop_oop_iterate(OopClosureT* closure, BaseObject* object, TypeInfo* klass);

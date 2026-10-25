@@ -8,32 +8,6 @@
 
 package std.sync
 
-/* Mutex-related intrinsics*/
-@Intrinsic
-func mutexInit(mutex: Mutex): Bool
-
-@Intrinsic
-func mutexLock(mutex: Mutex): Unit
-
-@Intrinsic
-func mutexTryLock(mutex: Mutex): Bool
-
-@Intrinsic
-func mutexCheckStatus(mutex: Mutex): Bool
-
-@Intrinsic
-func mutexUnlock(mutex: Mutex): Unit
-
-/* Monitor-related intrinsics*/
-@Intrinsic
-func monitorWait(monitor: Monitor, timeout: Int64): Bool
-
-@Intrinsic
-func monitorNotify(monitor: Monitor): Unit
-
-@Intrinsic
-func monitorNotifyAll(monitor: Monitor): Unit
-
 /* MultiConditionMonitor-related intrinsics*/
 @Intrinsic
 func multiConditionMonitorWait(multiConditionMonitor: MultiConditionMonitor, obj: Object, timeout: Int64): Bool
@@ -47,7 +21,3 @@ func multiConditionMonitorNotifyAll(multiConditionMonitor: MultiConditionMonitor
 /* Waitqueue-related intrinsics*/
 @Intrinsic
 func waitQueueInit(obj: WaitQueue): Bool
-
-/* Monitor-related intrinsics*/
-@Intrinsic
-func monitorInit(obj: Monitor): Bool

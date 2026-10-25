@@ -28,10 +28,8 @@
 namespace MapleRuntime {
 // create new objects
 extern "C" ObjRef MCC_NewObject(const TypeInfo* classInfo, MSize size);
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size, bool isFinalizer);
-extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* classInfo, MSize size);
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref);
-extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size, bool isFinalizer);
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size);
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
 extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnOopFieldPreloaded(ObjectPtr o, volatile zpointer* p);
 extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr o, volatile zpointer* p);

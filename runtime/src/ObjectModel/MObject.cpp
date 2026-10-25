@@ -32,23 +32,4 @@ MObject* MObject::NewPinnedObject(TypeInfo* ti, MSize size)
     // ZGC zCollectedHeap.cpp:153-155: every heap object uses ordinary allocation.
     return NewObject(ti, size, AllocType::MOVEABLE_OBJECT);
 }
-
-MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
-{
-    CHECK_DETAIL(ti->IsObjectType() == true, "must be object class.");
-    auto addr = HeapManager::Allocate(size);
-    if (LIKELY(addr != NULL_ADDRESS)) {
-        ClearMemory(addr, size);
-        (void)SetClassInfo(addr, const_cast<TypeInfo*>(ti));
-        from_alloc_addr(addr)->OnFinalizerCreated();
-    } else {
-        return nullptr;
-    }
-#if defined(__OHOS__) && (__OHOS__ == 1)
-    if (CjAllocData::GetCjAllocData()->IsRecording()) {
-        CjAllocData::GetCjAllocData()->RecordAllocNodes(ti, size);
-    }
-#endif
-    return Cast<MObject>(addr);
-}
 } // namespace MapleRuntime
