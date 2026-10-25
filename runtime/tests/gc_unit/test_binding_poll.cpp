@@ -230,7 +230,7 @@ void CheckInterpreterWatermark(bool interpreted)
     Mutator owner;
     owner.SetManagedContext(true);
     owner.GetUnwindContext().frameInfo = FrameInfo {
-        MachineFrame(reinterpret_cast<uint32_t*>(pc), reinterpret_cast<FrameAddress*>(&frames[0][0])),
+        MachineFrame(reinterpret_cast<FrameAddress*>(&frames[0][0]), reinterpret_cast<uint32_t*>(pc)),
         FrameType::RUNTIME };
     owner.GetUnwindContext().frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[0][0]));
     owner.GetStackWatermark().Reset();
