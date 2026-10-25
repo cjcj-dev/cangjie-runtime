@@ -238,6 +238,7 @@ def do_build(args):
             "-DCOPYGC_FLAG=1",
             "-DDOPRA_FLAG=1",
             "-DMRT_GC_UNIT_OHOS_HOST={}".format("ON" if args.gc_unit_ohos_host else "OFF"),
+            "-DMRT_TESTABLE_INTERNALS={}".format("ON" if args.testable_internals else "OFF"),
             "-DOHOS_FLAG=0",
             "-DANDROID_FLAG=0",
             "-DIOS_FLAG=0",
@@ -514,6 +515,7 @@ if __name__ == "__main__":
         help="Target platform: native, windows-x86_64, ohos-aarch64, ohos-x86_64, ohos-arm, ios-simulator-aarch64, ios-simulator-x86_64, \
               ios-aarch64, android-aarch64, android23-aarch64, android26-aarch64, android31-aarch64, android-x86_64, android23-arm"
     )
+    b.add_argument("--testable-internals", action="store_true", help="Enable native runtime internal test hooks.")
     b.add_argument(
         "-t", "--build-type",
         choices=["release", "debug", "relwithdebinfo"],
