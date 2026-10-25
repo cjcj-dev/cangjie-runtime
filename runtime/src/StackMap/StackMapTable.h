@@ -21,8 +21,8 @@ using DerivedPtrPair = std::pair<U32, U32>;
 class BitsManager {
 public:
     BitsManager() = default;
-    BitsManager(U8* ptr, U32 pos) : addr(ptr), bitPos(pos) {}
-    BitsManager(const BitsManager& other) : addr(other.addr), bitPos(other.bitPos) {}
+    BitsManager(U8* ptr, U32 pos, Uptr end = 0) : addr(ptr), bitPos(pos), limit(end) {}
+    BitsManager(const BitsManager& other) : addr(other.addr), bitPos(other.bitPos), limit(other.limit) {}
     BitsManager& operator=(const BitsManager& other)
     {
         if (this == &other) {
@@ -30,9 +30,10 @@ public:
         }
         addr = other.addr;
         bitPos = other.bitPos;
+        limit = other.limit;
         return *this;
     }
-    BitsManager(BitsManager&& other) : addr(other.addr), bitPos(other.bitPos)
+    BitsManager(BitsManager&& other) : addr(other.addr), bitPos(other.bitPos), limit(other.limit)
     {
         other.addr = nullptr;
         other.bitPos = 0;
@@ -44,6 +45,7 @@ public:
         }
         addr = other.addr;
         bitPos = other.bitPos;
+        limit = other.limit;
         other.addr = nullptr;
         other.bitPos = 0;
         return *this;
@@ -52,28 +54,35 @@ public:
 
     U32 GetBits(U32 bitLen) const
     {
+        CHECK_DETAIL(bitLen <= 32 && bitPos < BITS_NUM_PER_BYTE, "invalid stackmap bit width");
         U32 bitsMask = static_cast<U32>((1ULL << bitLen) - 1);
-        return ((ConnectBytesToU64() >> bitPos) & bitsMask);
+        return ((ConnectBytesToU64(bitLen) >> bitPos) & bitsMask);
     }
     ATTR_NO_INLINE BitsManager GetNext(U32 bitsLen) const
     {
         U32 addrStep = bitsLen >> BITS_SHIFT_PER_BYTE;
         constexpr U32 bitsMask = (1 << BITS_SHIFT_PER_BYTE) - 1;
         U32 bitPosStep = bitsLen & bitsMask;
-        U8* nextAddr = addr + addrStep;
+        const Uptr address = reinterpret_cast<Uptr>(addr);
+        CHECK_DETAIL(addrStep <= UINTPTR_MAX - address, "stackmap cursor overflow");
+        U8* nextAddr = reinterpret_cast<U8*>(address + addrStep);
         U32 nextBitPos = bitPos + bitPosStep;
         if (nextBitPos >= BITS_NUM_PER_BYTE) {
             ++nextAddr;
             nextBitPos -= BITS_NUM_PER_BYTE;
         }
-        return BitsManager(nextAddr, nextBitPos);
+        CHECK_DETAIL(limit == 0 || (reinterpret_cast<Uptr>(nextAddr) <= limit &&
+                     (reinterpret_cast<Uptr>(nextAddr) != limit || nextBitPos == 0)), "stackmap cursor exceeds function payload");
+        return BitsManager(nextAddr, nextBitPos, limit);
     }
 
 private:
     // we don't use reinterpret_cast<U64*> because of the effect of big-endien.
-    U64 ConnectBytesToU64() const
+    U64 ConnectBytesToU64(U32 bitLen) const
     {
-        constexpr U32 len = sizeof(U32) / sizeof(U8) + 1;
+        const U32 len = (bitPos + bitLen + BITS_NUM_PER_BYTE - 1) / BITS_NUM_PER_BYTE;
+        CHECK_DETAIL(limit == 0 || (reinterpret_cast<Uptr>(addr) <= limit && len <= limit - reinterpret_cast<Uptr>(addr)),
+                     "stackmap read exceeds function payload");
         U64 value = 0;
         U32 shiftSteps = 0;
         for (U32 i = 0; i < len; ++i, shiftSteps += BITS_NUM_PER_BYTE) {
@@ -87,6 +96,7 @@ private:
     static constexpr U16 HALF_BYTE_MASK = (1 << BITS_NUM_HALF_BYTE) - 1;
     U8* addr{ nullptr };
     U32 bitPos{ 0 };
+    Uptr limit { 0 };
 };
 
 // VarInt has two section
@@ -161,7 +171,11 @@ public:
 protected:
     ATTR_NO_INLINE BitsManager ResolveHeader(U32 headerInfo[], U32 size)
     {
-        BitsManager cur(tableBits);
+        return ResolveHeader(headerInfo, size, tableBits);
+    }
+    ATTR_NO_INLINE BitsManager ResolveHeader(U32 headerInfo[], U32 size, const BitsManager& start)
+    {
+        BitsManager cur(start);
         for (U32 i = 0; i < size; ++i) {
             VarInt varInt(cur);
             VarPair headerPair = varInt.GetValue();
@@ -220,7 +234,7 @@ struct PrologueRegisterClosure {
 // needs the compiler's saved-register prologue for movable-stack pointers.
 class FramePrologue {
 public:
-    explicit FramePrologue(const Uptr* table) : nextTable(reinterpret_cast<U8*>(const_cast<Uptr*>(table)), 0)
+    explicit FramePrologue(const Uptr* table, Uptr limit = 0) : nextTable(reinterpret_cast<U8*>(const_cast<Uptr*>(table)), 0, limit)
     {
         CHECK_DETAIL(table != nullptr, "FramePrologue missing stackmap");
         frameSize = Read();
@@ -626,8 +640,17 @@ private:
     }
     void Init()
     {
+        BitsManager cur = ResolveHeader(headerInfo, 1);
+        // oopMap.cpp:85-91 checks count before reading an absent value. The
+        // Cangjie producer emits only padding after a zero record count.
+        if (headerInfo[RECORD_NUM] == 0) {
+            const VarPair padding = VarInt(cur).GetValue();
+            data = cur.GetNext(padding.second).GetNext(padding.first);
+            nextTable = data;
+            return;
+        }
         U32 cols = HeaderColCount();
-        data = ResolveHeader(headerInfo, cols).GetNext(headerInfo[cols - 1]);
+        data = ResolveHeader(headerInfo + 1, cols - 1, cur).GetNext(headerInfo[cols - 1]);
         rowBitsLen = PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
             headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
         if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {

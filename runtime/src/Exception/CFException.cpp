@@ -72,26 +72,18 @@ void CFException::WriteBacktraceToBuffer(ExceptionWrapper& eWrapper, char* buffe
         return;
     }
 
-    std::vector<uint64_t>& liteFrameInfos = eWrapper.GetLiteFrameInfos();
+    const auto& frames = eWrapper.GetRawFrames();
     char* bufferPointer = buffer;
     unsigned long remainingBytes = bufferSize;
 
     *(bufferPointer++) = '(';
     --remainingBytes;
 
-    uint32_t count = 0;
-    for (auto frameInfo : liteFrameInfos) {
-        if (count % 3 == 0) {
-            int bytes = snprintf(bufferPointer, remainingBytes, "0x%" PRIxPTR " ", static_cast<uintptr_t>(frameInfo));
-
-            if (bytes < 0 || static_cast<unsigned long>(bytes) >= remainingBytes) {
-                break;
-            }
-
-            bufferPointer += bytes;
-            remainingBytes -= bytes;
-        }
-        count++;
+    for (const auto& frame : frames) {
+        int bytes = snprintf(bufferPointer, remainingBytes, "0x%" PRIxPTR " ", frame.capturedPC);
+        if (bytes < 0 || static_cast<unsigned long>(bytes) >= remainingBytes) { break; }
+        bufferPointer += bytes;
+        remainingBytes -= bytes;
     }
 
     *(bufferPointer - 1) = ')'; // Replace last space.

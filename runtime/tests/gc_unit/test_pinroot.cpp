@@ -3,6 +3,7 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "metadata_code_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "Heap/z/zHeuristics.hpp"
@@ -359,22 +360,21 @@ struct FrameRootInput : FrameInfo {
     using FrameInfo::START_PC_OFFSET_IN_STACK;
 };
 struct FrameRootMapImage {
-    int32_t descriptorOffset;
-    uint32_t pc[4];
+    const uint32_t* pc;
     int32_t stackMapOffset;
     uint32_t descriptorRest[6];
     uint32_t returnPollFlag;
     uint8_t bits[256];
 };
-FrameRootMapImage frameRootMapImage;
+extern "C" { FrameRootMapImage frameRootMapImage; }
+GC_METADATA_CODE(frameRootMapCode, frameRootMapImage, FrameRootMapImage, stackMapOffset, 1)
 
 void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, bool everyCallRoot = false)
 {
     auto& image = frameRootMapImage;
     std::memset(&image, 0, sizeof(image));
     image.returnPollFlag = 1;
-    image.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&image.stackMapOffset) -
-        reinterpret_cast<char*>(&image.descriptorOffset));
+    image.pc = frameRootMapCodePC();
     image.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(image.bits) -
         reinterpret_cast<char*>(&image.stackMapOffset));
     ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));

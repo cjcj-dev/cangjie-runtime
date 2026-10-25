@@ -77,7 +77,8 @@ public:
         adjustedSize = 0;
         fatalException = false;
         ehFrameInfos.clear();
-        liteFrameInfos.clear();
+        rawFrames.clear();
+        traceFold = SofStackFlag::NOT_FOLDED;
         if (message != nullptr) {
             free(message);
             message = nullptr;
@@ -165,7 +166,9 @@ public:
         return nameTable[static_cast<uint8_t>(exceptionType)];
     }
 
-    std::vector<uint64_t>& GetLiteFrameInfos() { return liteFrameInfos; }
+    std::vector<RawTraceFrame>& GetRawFrames() { return rawFrames; }
+    SofStackFlag GetTraceFold() const { return traceFold; }
+    void SetTraceFold(SofStackFlag fold) { traceFold = fold; }
 
     void ClearEHFrameInfos() { ehFrameInfos.clear(); }
 
@@ -207,7 +210,8 @@ private:
     // function2 pc
     // function2 startpc
     // ...
-    std::vector<uint64_t> liteFrameInfos;
+    std::vector<RawTraceFrame> rawFrames;
+    SofStackFlag traceFold = SofStackFlag::NOT_FOLDED;
     char* message;
     size_t messageLength;
     uintptr_t topManagedPC;
