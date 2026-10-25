@@ -1,4 +1,3 @@
-#include "reference_layout_fixture.hpp"
 #define MRT_USE_CJTHREAD_RENAME 1
 // Observe the existing product pool getter without adding a runtime hook.
 #include <atomic>
@@ -19,6 +18,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "gc_verify_fixture.hpp"
+#include "reference_layout_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"

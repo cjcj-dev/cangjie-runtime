@@ -652,9 +652,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkStripeStack::Destroy(published);
             MarkingSMRTest::reclaim(smr);
             current.verify_all_stacks_empty();
-            });
         }
-        if (rejectedCallReturned) { return; }
     }
 }
 

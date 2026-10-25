@@ -351,7 +351,7 @@ void* AllocateFromDirtyCache(void*)
         heap.object_allocator().retire_pages(kPageAgeRangeEden);
     }
     const bool small = kind == ZeroCase::TLAB;
-    const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer || kind == ZeroCase::SegmentedArray;
+    const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Pinned || kind == ZeroCase::SegmentedArray;
     const size_t bytes = small ? 256 : medium ? ZObjectSizeLimitSmall + 32 : ZObjectSizeLimitMedium + 32;
     const auto pageType = small ? ZPageType::small : medium ? ZPageType::medium : ZPageType::large;
     const size_t pageBytes = small ? ZPageSizeSmall : medium ? ZPageSizeMediumMin : AlignUp(bytes, ZGranuleSize);

@@ -72,8 +72,12 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), workers);
     heap.old().set_phase(ZGenerationPhase::Relocate);
     U64 handle = 0;
-    if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);
-    else handle = heap.cross_vm().export_roots().RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
+    BaseObject* finalReference = nullptr;
+    if (finalizable) {
+        finalReference = finalLayout.Place(fx.heapStart + 128, fx.obj0);
+        fx.region0()->SetRegionAllocPtr(fx.heapStart + 192);
+        handle = heap.cross_vm().export_roots().RegisterExportRoot(finalReference);
+    } else { handle = heap.cross_vm().export_roots().RegisterExportRoot(cycle ? fx.obj1 : fx.obj0); }
     if (young) {
         if (oldReferent) {
             // ZPage::is_object_strongly_live treats allocating pages as live.
