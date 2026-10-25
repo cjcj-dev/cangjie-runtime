@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <new>
+
 #include "NativeAllocator.h"
 #include "Mutator/ThreadLocal.h"
 

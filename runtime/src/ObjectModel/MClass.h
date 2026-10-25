@@ -8,6 +8,8 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <new>
+
 #include <atomic>
 #include <cstring>
 #include <functional>

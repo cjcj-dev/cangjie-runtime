@@ -8,6 +8,8 @@
 #ifndef MRT_CYCLEQUEUE_H_
 #define MRT_CYCLEQUEUE_H_
 
+#include <new>
+
 #include <queue>
 
 #include "Base/Log.h"

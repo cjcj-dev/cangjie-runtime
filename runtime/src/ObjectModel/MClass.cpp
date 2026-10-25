@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <new>
+
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "ObjectModel/MClass.h"

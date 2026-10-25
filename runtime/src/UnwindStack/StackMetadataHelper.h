@@ -8,6 +8,8 @@
 #ifndef MRT_STACK_METADATA_H
 #define MRT_STACK_METADATA_H
 
+#include <new>
+
 #include "Base/Macros.h"
 #include "Base/Types.h"
 #include "Common/TypeDef.h"

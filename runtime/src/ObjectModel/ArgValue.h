@@ -8,6 +8,8 @@
 #ifndef MRT_ARGVALUE_H
 #define MRT_ARGVALUE_H
 
+#include <new>
+
 #include "Common/Handle.h"
 #include <vector>
 

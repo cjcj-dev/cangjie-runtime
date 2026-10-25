@@ -8,6 +8,8 @@
 #ifndef MRT_MUTATOR_H
 #define MRT_MUTATOR_H
 
+#include <new>
+
 #include <deque>
 #include <climits>
 #include "Common/OopStorage.h"
