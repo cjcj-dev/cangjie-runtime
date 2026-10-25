@@ -12,7 +12,7 @@ node runtime/tests/windows_n2c_unwind.mjs N2CStub.S.obj unwind.txt instructions.
 
 It decodes the actual COFF symbol positions and unwind records, follows the disassembled prologue instruction effects, and checks caller registers/PC/SP at each prologue boundary and with four dynamic stack depths. It also checks the actual return instruction sequence, private N2C 16-byte cleanup, preserved result registers, and ExecuteCangjieStub's argument slots against native home-space writes. The `control` mode consumes the separately built production Cjstart object. This model is deliberately limited: it does not execute Windows instructions or the Windows OS unwinder.
 
-The independent native OS consumer uses the public product export at its existing ordinal 267. After a real Windows runtime DLL and dependencies exist, build it with the normal MINGW64 compiler, then pass the absolute installed DLL path:
+The independent native OS consumer uses the existing public N2C and C2N exports; it adds no runtime export. After a real Windows runtime DLL and dependencies exist, build it with the normal MINGW64 compiler, then pass the absolute installed DLL path:
 
 ```text
 clang++ -std=c++14 runtime/tests/windows_n2c_os_unwind.cpp -lntdll -o windows_n2c_os_unwind.exe
@@ -31,7 +31,7 @@ The fixed allocation also reserves 32 bytes below all saves for native helper ho
 
 References: [Microsoft x64 unwind encoding](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64), and [fixed Microsoft .NET unwind implementation](https://github.com/dotnet/runtime/blob/421be955e4b70cddf583b10f5ad99814b713fb87/src/coreclr/unwinder/amd64/unwinder.cpp) (SET_FPREG and SAVE_NONVOL/XMM processing). The bounded test uses these operations; it is not a substitute for the native OS consumer.
 
-C2NStub and other Windows assembly are outside this N2C candidate's dynamic evidence. In particular, C2NStub still has body `.seh_pushreg` declarations; do not infer complete Windows unwind correctness from this scoped repair. Official runtime link/export collection/install/package and managed exception consumers remain separate gates.
+The original 517a evidence covers N2C only. The successor closure below extends source and bounded consumers to the other selected assembly; it does not retroactively extend that earlier evidence. Official runtime link/export collection/install/package and managed exception consumers remain separate gates.
 
 ## Selected Windows assembly closure
 

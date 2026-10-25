@@ -25,7 +25,7 @@ const blocks = fs.readFileSync(unwindFile, 'utf8').split('  RuntimeFunction {').
 const general = ['rbx', 'rbp', 'rsi', 'rdi', 'r12', 'r13', 'r14', 'r15'];
 const nonvolatile = [...general, ...Array.from({length: 10}, (_, i) => 'xmm' + (i + 6))];
 const stack = 0x100008n, returnPc = 0x23456789n;
-const initial = Object.fromEntries([...general, 'rax', 'rcx', 'rdx', 'r8', 'r9', ...Array.from({length: 16}, (_, i) => 'xmm' + i)]
+const initial = Object.fromEntries([...general, 'rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', ...Array.from({length: 16}, (_, i) => 'xmm' + i)]
   .map((r, i) => [r, r.startsWith('xmm') ? (BigInt(i + 1) << 96n) + BigInt(i + 101) : BigInt(i + 1) * 0x10101n]));
 initial.rsp = stack;
 function write(mem, a, v, n) { for (let i = 0; i < n; i++) mem.set(a + BigInt(i), Number((v >> BigInt(i * 8)) & 255n)); }
