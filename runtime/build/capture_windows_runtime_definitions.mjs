@@ -30,6 +30,8 @@ export function planRuntimeObjects(build, source) {
     if (!indexes.length) throw Error('normal CMake file-api index is missing');
     const indexFile = path.join(reply, indexes.at(-1));
     const index = JSON.parse(fs.readFileSync(indexFile));
+    if (!/Makefiles/.test(index.cmake?.generator?.name || ''))
+        throw Error('runtime build.py capture requires its normal Makefiles generator');
     const entry = index.reply?.['client-runtime-exports']?.['codemodel-v2'];
     if (!entry?.jsonFile) throw Error('normal runtime codemodel-v2 reply is missing');
     const modelFile = path.join(reply, entry.jsonFile);
@@ -46,12 +48,14 @@ export function planRuntimeObjects(build, source) {
     if (roots.length !== 1 || roots[0].type !== 'SHARED_LIBRARY') throw Error('runtime DLL target is missing or ambiguous');
     const root = roots[0];
     // CMake's actual link-library fragments distinguish linked archives from
-    // order-only dependencies. Never infer this set from object-name prefixes.
+    // order-only dependencies. Makefile link fragments are relative to the
+    // target's build directory, whereas artifact paths are build-root-relative.
+    // Never infer this set from object-name prefixes.
     const libraries = new Set();
     for (const fragment of root.link?.commandFragments || []) {
         if (fragment.role !== 'libraries') continue;
         for (const token of fragment.fragment.matchAll(/"([^"]+)"|'([^']+)'|(\S+)/g))
-            libraries.add(key(path.resolve(build, token[1] || token[2] || token[3])));
+            libraries.add(key(path.resolve(build, root.paths.build, token[1] || token[2] || token[3])));
     }
     const selected = [root], visited = new Set([root.id]);
     function visit(target) {
