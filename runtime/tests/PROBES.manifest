@@ -123,3 +123,5 @@ check_signal_platform.sh                 manual     Product signal platform/orde
 signal_exception_gdb.py                  manual     Invoked by check_signal_platform.sh; observes first ThrowException pending state and invokes second compiler ABI entry.
 
 return_abi                              manual     qualified private SDK compiles main.cj + native.c; Linux x64 N2C result/pending assertions, see return_abi/README.md
+
+reference_carrier_product.cj               manual     matching latest compiler/LLVM/runtime and rebuilt std.core/ref/sync; actual managed registration, once-only finalization, weak clearing and synchronization; native components do not qualify this consumer
