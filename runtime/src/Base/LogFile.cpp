@@ -109,7 +109,7 @@ void LogFile::OpenLogFiles()
 
     for (int i = 0; i < LOG_TYPE_NUMBER; ++i) {
         if (logFile[i].enableLog) {
-            CString fileName = dirName + "/" + dateDigit + "_" + pid + "." + LOG_TYPE_NAMES[i] + ".txt";
+            CString fileName = dirName + "/" + LOG_TYPE_NAMES[i] + "." + dateDigit + "_" + pid + ".txt";
             LOG(RTLOG_INFO, "create log file %s", fileName.Str());
             logFile[i].file = fopen(fileName.Str(), "a+"); // Assignment closes the old file.
             if (logFile[i].file == nullptr) {
