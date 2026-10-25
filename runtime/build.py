@@ -443,6 +443,11 @@ def build_target(cmake_command, args=None):
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:
+        if "-DWINDOWS_FLAG=1" in cmake_command:
+            query = os.path.join(script_path, "CMakebuild", ".cmake", "api", "v1", "query", "client-runtime-exports")
+            os.makedirs(query, exist_ok=True)
+            with open(os.path.join(query, "codemodel-v2"), "w"):
+                pass
         subprocess.run(cmake_command, check=True, env=env)
 
         build_dir = os.path.join(script_path, "CMakebuild")

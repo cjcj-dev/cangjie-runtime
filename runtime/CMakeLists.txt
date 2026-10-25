@@ -62,10 +62,8 @@ if (WINDOWS_FLAG MATCHES 1)
     # The export collector consumes the actual normal runtime translation units
     # and COFF objects, including platform selection and compiler definitions.
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-    # The capture must include linked static libraries (Heap owns Reference),
-    # not just the DLL target's directly compiled top-level source files.
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/.cmake/api/v1/query/client-runtime-exports")
-    file(WRITE "${CMAKE_BINARY_DIR}/.cmake/api/v1/query/client-runtime-exports/codemodel-v2" "")
+    # build.py writes the file-api query before CMake starts, so cold builds
+    # include the linked static-library graph even with the minimum CMake 3.19.
 endif()
 # Windows target must be set before project(CangjieRuntime).
 if (WINDOWS_FLAG MATCHES 1)

@@ -177,7 +177,10 @@ python3 runtime/build/generate_windows_exports.py collect complete.raw.def new-r
 ```
 
 Supply the complete remaining consumer arguments and std native manifest from the
-previous sections. Normal Windows CMake requests its file-api codemodel-v2.
+previous sections. The normal Windows build.py entry writes the codemodel-v2 file-api query
+before starting CMake; creating it inside CMakeLists is too late on cold
+configures with CMake versions before3.27. Direct CMake users must likewise
+place the query in the build directory before configuring.
 Capture follows the DLL target's actual link-library fragments/dependencies,
 including linked static archives such as Heap and Common, then matches every
 selected source to its existing object in compile_commands.json. Order-only

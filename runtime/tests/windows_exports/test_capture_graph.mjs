@@ -9,14 +9,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const modulePath = process.env.WINDOWS_CAPTURE_MODULE || path.resolve(here, '../../build/capture_windows_runtime_definitions.mjs');
 const {planRuntimeObjects, symbolBlocks} = await import(pathToFileURL(modulePath));
 const out = path.resolve(process.argv[2]);
-const source = path.join(out, 'runtime'), build = path.join(out, 'build');
+const source = path.join(out, 'runtime'), build = path.join(source, 'CMakebuild');
 fs.mkdirSync(source, {recursive: true});
 const write = (name, text) => { const file = path.join(source, name); fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, text); };
 write('CMakeLists.txt', `cmake_minimum_required(VERSION 3.19)
 project(RuntimeLinkGraphFixture C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-file(MAKE_DIRECTORY "\${CMAKE_BINARY_DIR}/.cmake/api/v1/query/client-runtime-exports")
-file(WRITE "\${CMAKE_BINARY_DIR}/.cmake/api/v1/query/client-runtime-exports/codemodel-v2" "")
 add_subdirectory(src)
 `);
 write('src/CMakeLists.txt', `add_library(Common STATIC common.c)
@@ -30,11 +28,23 @@ target_link_libraries(cangjie-runtime PRIVATE Heap boundscheck)
 add_dependencies(cangjie-runtime Unrelated)
 `);
 for (const name of ['common', 'reference', 'unused', 'bounds', 'runtime']) write('src/' + name + '.c', `int ${name}_fixture(void) { return 0; }\n`);
-const args = ['-S', source, '-B', build];
-const p = spawnSync('cmake', args, {encoding: 'utf8'});
+// The real build_target producer must create the query before the first
+// configure. Only its source root is this declared Linux graph fixture; no
+// Windows toolchain/DLL or runtime product is produced by this test.
+const driver = path.resolve(here, '../../build.py');
+const code = `import importlib.util, sys
+from types import SimpleNamespace
+spec = importlib.util.spec_from_file_location("runtime_build", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.script_path = sys.argv[2]
+m.build_target(["cmake", "-S", sys.argv[2], "-B", sys.argv[3], "-DWINDOWS_FLAG=1"], SimpleNamespace(jobs=1, gcc_toolchain=None, target="native"))
+`;
+const args = ['-c', code, driver, source, build];
+const p = spawnSync('python3', args, {encoding: 'utf8'});
 fs.writeFileSync(path.join(out, 'cmake.log'), (p.stdout || '') + (p.stderr || ''));
-fs.writeFileSync(path.join(out, 'cmake.json'), JSON.stringify({cmd: 'cmake', args, status: p.status, signal: p.signal, error: p.error?.message}, null, 2));
-assert.equal(p.status, 0, 'normal fixture configure');
+fs.writeFileSync(path.join(out, 'cmake.json'), JSON.stringify({cmd: 'python3', args, status: p.status, signal: p.signal, error: p.error?.message}, null, 2));
+assert.equal(p.status, 0, 'normal build_target cold graph fixture');
 const plan = planRuntimeObjects(build, path.join(source, 'src'));
 fs.writeFileSync(path.join(out, 'plan.json'), JSON.stringify(plan, null, 2));
 console.log('TARGET_ASSERT linked_archive_closure reached=1');
