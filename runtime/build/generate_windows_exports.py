@@ -181,8 +181,8 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
             relative = path.relative_to(root).as_posix()
             digest.update(relative.encode() + b"\0" + contents + b"\0")
             texts.append((relative, consumer_text(contents.decode("utf-8"))))
-        definitions = re.compile(r'(?:const std::string|(?:public )?let)\s+(\w+)(?:\s*:\s*String)?\s*=\s*([^;\n]+)')
-        pending = [m.groups() for _, text in texts for m in definitions.finditer(text)]
+        constant_definitions = re.compile(r'(?:const std::string|(?:public )?let)\s+(\w+)(?:\s*:\s*String)?\s*=\s*([^;\n]+)')
+        pending = [m.groups() for _, text in texts for m in constant_definitions.finditer(text)]
         while pending:
             remaining = []
             for name, expression in pending:
