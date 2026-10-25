@@ -290,8 +290,8 @@ if [[ -n "${GC_UNIT_CONTRACT_PRODUCT_SO:-}" ]]; then
     cp "$fixture/lib/libboundscheck.so" "$library/"
     cp "$GC_UNIT_CONTRACT_PRODUCT_SO" "$library/libcangjie-runtime.so"
     if [[ "$arm" == cut ]]; then
-      symbol=$(PATH=/usr/bin:/bin nm --defined-only "$library/libcangjie-runtime.so" |
-        awk '$3 ~ /ZFailLargerCommits/ { print $3 }')
+      symbol=$(PATH=/usr/bin:/bin nm -D --defined-only "$library/libcangjie-runtime.so" |
+        awk '$3 ~ /ZFailLargerCommits/ { sub(/@.*/, "", $3); print $3 }')
       [[ -n "$symbol" && "$symbol" != *$'\n'* ]]
       node "$ROOT/runtime/tests/gc_unit/cut_testable_hook.mjs" "$library/libcangjie-runtime.so" "$symbol"
     fi
