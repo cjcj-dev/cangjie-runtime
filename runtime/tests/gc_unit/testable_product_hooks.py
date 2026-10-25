@@ -46,7 +46,7 @@ def main():
             print(f'TESTABLE_PRODUCT_HOOK_TARGET={name} source={anchor}', flush=True)
         if arguments.so is None:
             return 0
-        symbols = subprocess.run(['nm', '--defined-only', str(arguments.so)],
+        symbols = subprocess.run(['nm', '-D', '--defined-only', str(arguments.so)],
                                  check=True, text=True, capture_output=True).stdout
         symbols = subprocess.run(['c++filt'], input=symbols, check=True,
                                  text=True, capture_output=True).stdout

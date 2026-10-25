@@ -293,7 +293,7 @@ if [[ -n "${GC_UNIT_CONTRACT_PRODUCT_SO:-}" ]]; then
       symbol=$(PATH=/usr/bin:/bin nm --defined-only "$library/libcangjie-runtime.so" |
         awk '$3 ~ /ZFailLargerCommits/ { print $3 }')
       [[ -n "$symbol" && "$symbol" != *$'\n'* ]]
-      objcopy --strip-symbol="$symbol" "$library/libcangjie-runtime.so"
+      node "$ROOT/runtime/tests/gc_unit/cut_testable_hook.mjs" "$library/libcangjie-runtime.so" "$symbol"
     fi
     write_product_recipe "$output" "$library" 0 1
     set +e
