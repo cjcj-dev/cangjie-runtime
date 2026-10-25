@@ -177,9 +177,23 @@ python3 runtime/build/generate_windows_exports.py collect complete.raw.def new-r
 ```
 
 Supply the complete remaining consumer arguments and std native manifest from the
-previous sections. The capture reads **existing** `cangjie-runtime` objects from
-normal `compile_commands.json`; it neither compiles a second tree nor substitutes
-Linux `nm`. Keep its own reader rc/logs and the complete link/raw/DLL evidence.
+previous sections. Normal Windows CMake requests its file-api codemodel-v2.
+Capture follows the DLL target's actual link-library fragments/dependencies,
+including linked static archives such as Heap and Common, then matches every
+selected source to its existing object in compile_commands.json. Order-only
+build dependencies, the separate static runtime target, and DLL import libraries
+are not definitions owned by the runtime DLL. The capture covers all compiled
+members of linked runtime archives: a service omitted by archive extraction
+must still be rejected when the caller requires it. It is not inferred from
+which names survived the final DLL's exports. Missing selected source objects,
+unsupported embedded object-library graphs and mismatched source identities
+fail, rather than silently shrinking ownership. File-api replies, compilation
+database and the selected object plan accompany actual COFF reader logs.
+
+This neither compiles a second tree nor substitutes Linux nm. Keep its own
+reader rc/logs and the complete link/raw/DLL evidence. A small native CMake graph
+fixture in test_capture_graph.mjs checks graph selection only; it is not a
+Windows build or a real DLL qualification.
 The collector rejects wrong-platform/revision and changed-source captures. The
 source-only old-raw diagnostic's Unix signal names are not established Windows
 ABI requirements; they cannot be erased by a prefix exception or passed as real

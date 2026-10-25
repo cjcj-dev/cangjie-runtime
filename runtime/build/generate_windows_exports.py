@@ -181,8 +181,15 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
             raise ValueError("runtime definition capture must match the fixed Windows source revision")
         root = Path(runtime_source.split("=", 1)[1]).resolve()
         definitions = {}
-        if not capture["objects"]:
-            raise ValueError("empty Windows runtime object capture")
+        linkage = capture.get("linkage", {})
+        targets = linkage.get("targets", [])
+        root_target = next((target for target in targets if target["id"] == linkage.get("root")), None)
+        if not root_target or root_target["name"] != "cangjie-runtime" or root_target["type"] != "SHARED_LIBRARY":
+            raise ValueError("Windows runtime capture lacks the normal DLL link closure")
+        expected_sources = {(target["id"], source) for target in targets for source in target["sources"]}
+        actual_sources = [(obj.get("target"), obj["source"]) for obj in capture["objects"]]
+        if not expected_sources or set(actual_sources) != expected_sources or len(actual_sources) != len(set(actual_sources)):
+            raise ValueError("Windows runtime capture is incomplete for the selected link objects")
         for obj in capture["objects"]:
             source = (root / obj["source"]).resolve()
             if not source.is_relative_to(root) or hashlib.sha256(source.read_bytes()).hexdigest() != obj["source_sha256"]:
