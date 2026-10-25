@@ -26,6 +26,8 @@ extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include <cstring>
 #include <thread>
 #include <ucontext.h>
+#include <cerrno>
+#include <sys/mman.h>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -839,6 +841,7 @@ void* CJ_CJThreadStackBaseAddrGetByCJThrd(struct CJThread* cjthread);
 size_t CJ_CJThreadStackSizeGetByCJThrd(struct CJThread* cjthread);
 #endif
 intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip);
+void MRT_FreeOldStack(intptr_t offset);
 }
 
 struct GrowCopyObserved {
@@ -945,7 +948,7 @@ private:
     Concurrency concurrency;
 };
 
-static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false)
+static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false, bool checkReleased = false)
 {
     GrowCopyRuntime runtime(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
@@ -1004,7 +1007,7 @@ static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false)
     parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     CJThreadAttr attr{};
     CJ_CJThreadAttrInit(&attr);
-    CJ_CJThreadAttrStackSizeSet(&attr, 1024 * 1024);
+    CJ_CJThreadAttrStackSizeSet(&attr, (checkReleased ? 2 : 1) * 1024 * 1024);
     void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
 #ifdef CJThreadNew
     void* created = CJThreadNew(scheduler, &attr, GrowCopyUnused, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0);
@@ -1053,6 +1056,29 @@ static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false)
         GC_EXPECT_EQ(g_growCopy.publishedSP, g_growCopy.oldSP + g_growCopy.offset);
         GC_EXPECT_EQ(g_growCopy.publishedAnchor, uintptr_t{0});
     }
+    if (checkReleased) {
+        // Return to the test's native stack before the product releases the old
+        // CJThread mapping. No old-stack word is read after this call.
+        MRT_FreeOldStack(g_growCopy.offset);
+        unsigned char resident = 0;
+        const uintptr_t oldPage = g_growCopy.oldFA & ~(static_cast<uintptr_t>(getpagesize()) - 1);
+        errno = 0;
+        const int mapped = mincore(reinterpret_cast<void*>(oldPage), getpagesize(), &resident);
+        const int mapError = errno;
+        const uintptr_t newSlot = g_growCopy.slot + g_growCopy.offset;
+        size_t visited = 0;
+        parked->VisitMutatorRoots([&](RootSlot& slot) {
+            if (reinterpret_cast<uintptr_t>(&slot) == newSlot) {
+                ++visited;
+                GC_EXPECT_EQ(raw(slot.LoadPlain()), relocated);
+            }
+        });
+        std::fprintf(stderr, "GROW_RELEASED_ANCHOR_TARGET executed=1 mincore_rc=%d errno=%d "
+                             "new_slot=%#zx visited=%zu\n", mapped, mapError, newSlot, visited);
+        GC_EXPECT_EQ(mapped, -1);
+        GC_EXPECT_EQ(mapError, ENOMEM);
+        GC_EXPECT_EQ(visited, 1u);
+    }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
 }
@@ -1071,6 +1097,11 @@ GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, HealsFrameRootBeforeCopy)
 GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, RepublishesFrameAnchorAfterCopy)
 {
     CheckGrowCopiesHealedFrameRoot(true);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, VisitsPublishedRootsAfterOldMappingRelease)
+{
+    CheckGrowCopiesHealedFrameRoot(true, true);
 }
 #endif
 
