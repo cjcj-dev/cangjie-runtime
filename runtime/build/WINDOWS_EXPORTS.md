@@ -223,12 +223,13 @@ Direct CMake users select the host interpreter with the same standard
 `-DPython3_EXECUTABLE:FILEPATH=...` option. CMake resolves it before all runtime
 subdirectories and uses it for the configure-time historical link definition,
 layout and source checks, post-link export checking, and initial/repeat output
-publication. Cached build commands retain the selected interpreter even if
-`python3` on PATH subsequently changes.
+publication. These CMake commands retain the selected interpreter even if
+`python3` on PATH subsequently changes. The Linux publisher additionally invokes
+the existing Bash GC gate, whose tools require a working Python on its normal
+PATH; that separate shell contract is not changed by this CMake selection.
 
 `tests/windows_exports/test_python_entry.mjs` exercises the public `build.py`
 CLI with recorded child launches and controlled host observations. It checks
 PATH propagation and interpreter forwarding; it is finite entry evidence, not
 a Windows compile, link, DLL or installation test. Actual Windows qualification
 still requires the official native job and its raw/DLL/COFF artifacts.
-
