@@ -62,6 +62,7 @@ class Mutator;
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
     friend class ZMarkTask;
+    friend class ZMarkCheckpointTest;
 public:
     static void EnumAllCommonRoots(ZWorkers& workers);
     static void DiscoverFinalizableRoot(NativeSlot& slot);

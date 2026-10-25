@@ -39,6 +39,13 @@
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo*, ArrayRef);
 extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
+class ZMarkCheckpointTest {
+public:
+    static bool Rebalance(ZMark& mark, MarkContext& context)
+    {
+        return mark.RebalanceWork(context, 0);
+    }
+};
 }
 
 using namespace MapleRuntime;
@@ -61,7 +68,7 @@ bool CheckStopAtRebalance(ZMark& domain)
 {
     SuspendibleThreadSetJoiner membership;
     MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
-    return domain.RebalanceWork(context, 0);
+    return ZMarkCheckpointTest::Rebalance(domain, context);
 }
 
 size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
@@ -522,7 +529,7 @@ GC_OTHER_VM_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     // The resume below proves every remaining entry is still owned and consumed.
     GC_EXPECT_TRUE(domain.Stripes().Population() > 0);
     MarkContext checkpoint(1, 0, domain.Stripes(), domain.Stacks());
-    GC_EXPECT_TRUE(domain.RebalanceWork(checkpoint, 0));
+    GC_EXPECT_TRUE(ZMarkCheckpointTest::Rebalance(domain, checkpoint));
 }
 
 // ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected
