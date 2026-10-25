@@ -603,7 +603,17 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
     return nullptr;
 }
 
-Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot)
+bool MethodInfo::InitializerReturnsReceiver()
+{
+    // CR01 class constructors return their receiver. GenerateMethodMetadata
+    // records the actual CHIR return type (with Ref stripped); FOREIGN
+    // constructors still record Unit. Do not infer this ABI from "init" alone
+    // or change value-type/static calling conventions.
+    return !IsStaticMethod() && IsInitializer() && declaringTi != nullptr && declaringTi->IsClass() &&
+        (returnType->IsClass() || returnType->IsGeneric());
+}
+
+Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle& receiver)
 {
     Value ret;
     ret.ref = nullptr;
@@ -631,9 +641,20 @@ Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot)
     }
 #endif
     if (ExceptionManager::HasPendingException()) {
+        // ThrowPendingException redirects the managed return edge; it is not
+        // a C++ noreturn function. No return-register bits are an object on
+        // this path, even if this method's normal return type is a class.
         ExceptionManager::ThrowPendingException();
+        ret.ref = nullptr;
+        return ret;
     }
-    if (GetReturnType()->IsUnit()) {
+    if (InitializerReturnsReceiver()) {
+        // Only the normal edge has a result. Register it before any subsequent
+        // metadata resolution/cleanup, using the existing thread-private root
+        // representation (HotSpot handles.inline.hpp at ZGC 5b2d6991).
+        // Object.init may have forwarded a different receiver through super/this.
+        receiver = Handle(Mutator::GetMutator(), ret.ref);
+    } else if (GetReturnType()->IsUnit()) {
         ret.ref = nullptr;
     }
     return ret;
@@ -782,8 +803,15 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
         *sretSlot = sretHandle();
     }
-    Value ret = ApplyCJMethodImpl(&argValues, sretSlot);
+    Value ret = ApplyCJMethodImpl(&argValues, sretSlot, receiver);
 
+    if (IsInitializer() && declaringTi != nullptr && declaringTi->IsClass() &&
+        ExceptionManager::HasPendingException()) {
+        // Let native argument/receiver roots unwind normally before the
+        // redirected managed edge resumes. A throwing constructor has no
+        // instance result; never publish the pre-construction receiver.
+        return nullptr;
+    }
     if (HasSRetWithGeneric()) {
         CHECK_DETAIL(sretSlot != nullptr, "ApplyCJMethod: sret slot is null");
         void* retObj = *sretSlot;

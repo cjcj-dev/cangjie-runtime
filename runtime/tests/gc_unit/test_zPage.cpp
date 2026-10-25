@@ -1740,3 +1740,91 @@ GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, JNICriticalStall)
     std::fprintf(stderr, "GCLOG_TARGET jni_critical_stall_records=%zu expected=1\n", count);
     GC_EXPECT_EQ(count, size_t{1});
 }
+
+namespace {
+// Native ABI-consumer test: metadata models CR01's class return and the
+// unchanged Unit constructor ABI. It does not claim compiler-produced metadata
+// or a managed constructor/exception path has been exercised.
+struct ReflectedConstructorResult {
+    bool returnsReceiver = false;
+    bool called = false;
+    uintptr_t original = 0;
+    uintptr_t replacement = 0;
+    uintptr_t returned = 0;
+    U64 marker = 0;
+    size_t rootsBefore = 0;
+    size_t rootsAfter = 0;
+};
+thread_local ReflectedConstructorResult* reflectedConstructorResult;
+extern "C" MObject* ForwardReflectedReceiver(MObject* receiver, TypeInfo* type)
+{
+    auto& result = *reflectedConstructorResult;
+    result.called = true;
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    Handle original(mutator, receiver);
+    receiver->Store<U64>(TYPEINFO_PTR_SIZE, 101);
+    Handle replacement(mutator, MCC_NewObject(type, TYPEINFO_PTR_SIZE + type->GetInstanceSize()));
+    static_cast<MObject*>(replacement())->Store<U64>(TYPEINFO_PTR_SIZE, 202);
+    CollectSparsePages();
+    result.original = reinterpret_cast<uintptr_t>(original());
+    result.replacement = reinterpret_cast<uintptr_t>(replacement());
+    return static_cast<MObject*>(replacement());
+}
+void* RunReflectedConstructor(void* context)
+{
+    auto& result = *static_cast<ReflectedConstructorResult*>(context);
+    reflectedConstructorResult = &result;
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[2][sizeof(TypeInfo)]{};
+    auto* klass = reinterpret_cast<TypeInfo*>(storage[0]);
+    auto* unit = reinterpret_cast<TypeInfo*>(storage[1]);
+    for (auto& item : storage) {
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(item), sizeof(TypeInfo));
+    }
+    klass->SetType(TypeKind::TYPE_KIND_CLASS); klass->SetInstanceSize(sizeof(U64));
+    unit->SetType(TypeKind::TYPE_KIND_UNIT); unit->SetInstanceSize(0);
+    MethodInfo method{};
+    method.SetMethodName("init");
+    method.SetDeclaringTypeInfo(klass);
+    // Existing emitted MethodInfo layout: entry at16, return TI at24. The only
+    // varying metadata input is the actual return type, not a test-only flag.
+    const Uptr entry = reinterpret_cast<Uptr>(&ForwardReflectedReceiver);
+    TypeInfo* returnType = result.returnsReceiver ? klass : unit;
+    std::memcpy(reinterpret_cast<char*>(&method) + 16, &entry, sizeof(entry));
+    std::memcpy(reinterpret_cast<char*>(&method) + 24, &returnType, sizeof(returnType));
+    result.rootsBefore = mutator->NativeFrameRootCount();
+    auto* value = static_cast<MObject*>(MCC_ApplyCJStaticMethod(&method, nullptr, nullptr));
+    result.rootsAfter = mutator->NativeFrameRootCount();
+    result.returned = reinterpret_cast<uintptr_t>(value);
+    result.marker = value == nullptr ? 0 : value->Load<U64>(TYPEINFO_PTR_SIZE);
+    return nullptr;
+}
+void CheckReflectedConstructor(bool returnsReceiver)
+{
+    RuntimeParam param{}; param.heapParam.heapSize = 512 * 1024; param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ReflectedConstructorResult result; result.returnsReceiver = returnsReceiver;
+    auto task = RunCJTask(RunReflectedConstructor, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "REFLECTION_CTOR_TARGET executed=%d ref_abi=%d original=%zx replacement=%zx returned=%zx marker=%llu roots=%zu/%zu\n",
+        result.called, returnsReceiver, result.original, result.replacement, result.returned,
+        static_cast<unsigned long long>(result.marker), result.rootsBefore, result.rootsAfter);
+    GC_EXPECT_TRUE(result.called && result.original != 0 && result.replacement != 0 && result.original != result.replacement);
+    GC_EXPECT_EQ(result.returned, returnsReceiver ? result.replacement : result.original);
+    GC_EXPECT_EQ(result.marker, returnsReceiver ? U64(202) : U64(101));
+    GC_EXPECT_EQ(result.rootsBefore, result.rootsAfter);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ReflectedConstructor, ClassReturnForwardsReceiver)
+{
+    CheckReflectedConstructor(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(ReflectedConstructor, UnitAbiIgnoresRegisterResult)
+{
+    CheckReflectedConstructor(false);
+}
