@@ -125,3 +125,4 @@ signal_exception_gdb.py                  manual     Invoked by check_signal_plat
 return_abi                              manual     qualified private SDK compiles main.cj + native.c; Linux x64 N2C result/pending assertions, see return_abi/README.md
 
 reference_carrier_product.cj               manual     matching latest compiler/LLVM/runtime and rebuilt std.core/ref/sync; actual managed registration, once-only finalization, weak clearing and synchronization; native components do not qualify this consumer
+reflection_constructor_product.cj         manual     reflection_constructor_abi.md: qualified paired compiler/LLVM/runtime and fully rebuilt target std/CJO/DSO; compile at O0/O2 and run installed and unpacked std.reflect constructor/root/exception/struct consumers; NOT_RUN until those inputs qualify
