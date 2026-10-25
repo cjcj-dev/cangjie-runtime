@@ -770,7 +770,7 @@ MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
     // JavaThread construction precedes Threads::add and first execution.
     // Leave managed execution before external initialization or blocking on
     // the same management lock that STW holds across its phase publication.
-    MapleRuntime::ScopedEnterSaferegion safe;
+    MapleRuntime::ScopedEnterSaferegion safe(false);
     newCJThread->mutator = MapleRuntime::Mutator::NewMutator();
     newCJThread->mutator->SetCjthreadPtr(newCJThread);
     auto& manager = MapleRuntime::MutatorManager::Instance();
