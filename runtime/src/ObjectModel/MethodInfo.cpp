@@ -603,17 +603,24 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
     return nullptr;
 }
 
-bool MethodInfo::InitializerReturnsReceiver()
+bool MethodInfo::InitializerReturnsReceiver(TypeInfo* resolvedReturnType)
 {
     // CR01 class constructors return their receiver. GenerateMethodMetadata
     // records the actual CHIR return type (with Ref stripped); FOREIGN
     // constructors still record Unit. Do not infer this ABI from "init" alone
     // or change value-type/static calling conventions.
-    return !IsStaticMethod() && IsInitializer() && declaringTi != nullptr && declaringTi->IsClass() &&
-        (returnType->IsClass() || returnType->IsGeneric());
+    if (IsStaticMethod() || !IsInitializer() || declaringTi == nullptr || !declaringTi->IsClass()) {
+        return false;
+    }
+    // Resolve generic-custom metadata before invoking managed code. An
+    // unresolved/mismatched signature is not a legacy Unit constructor.
+    CHECK_DETAIL(resolvedReturnType->IsUnit() || resolvedReturnType == declaringTi,
+                 "class initializer return type does not match its declaring type");
+    return resolvedReturnType == declaringTi;
 }
 
-Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle& receiver)
+Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle& receiver,
+                                   bool returnsReceiver, bool returnsUnit)
 {
     Value ret;
     ret.ref = nullptr;
@@ -648,13 +655,13 @@ Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle
         ret.ref = nullptr;
         return ret;
     }
-    if (InitializerReturnsReceiver()) {
+    if (returnsReceiver) {
         // Only the normal edge has a result. Register it before any subsequent
         // metadata resolution/cleanup, using the existing thread-private root
         // representation (HotSpot handles.inline.hpp at ZGC 5b2d6991).
         // Object.init may have forwarded a different receiver through super/this.
         receiver = Handle(Mutator::GetMutator(), ret.ref);
-    } else if (GetReturnType()->IsUnit()) {
+    } else if (returnsUnit) {
         ret.ref = nullptr;
     }
     return ret;
@@ -723,6 +730,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     ArgValue argValues;
     void** sretSlot = nullptr;
     TypeInfo* retType = GetReturnType();
+    const bool returnsReceiver = InitializerReturnsReceiver(retType);
+    const bool returnsUnit = retType->IsUnit();
     U8 reflectVersion = 0;
     if (declaringTi != nullptr) {
         reflectVersion = declaringTi->GetReflectionVersion();
@@ -803,7 +812,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
         *sretSlot = sretHandle();
     }
-    Value ret = ApplyCJMethodImpl(&argValues, sretSlot, receiver);
+    Value ret = ApplyCJMethodImpl(&argValues, sretSlot, receiver, returnsReceiver, returnsUnit);
 
     if (IsInitializer() && declaringTi != nullptr && declaringTi->IsClass() &&
         ExceptionManager::HasPendingException()) {

@@ -98,8 +98,9 @@ private:
     void* GetEntryPoint();
     TypeInfo* GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs);
     TypeInfo* GetActualTypeFromGenericTypeImpl(GenericTypeInfo* genericTi, void* genericArgs);
-    Value ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle& receiver);
-    bool InitializerReturnsReceiver();
+    Value ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot, Handle& receiver,
+                            bool returnsReceiver, bool returnsUnit);
+    bool InitializerReturnsReceiver(TypeInfo* resolvedReturnType);
     void PrepareSRet(ArgValue *argValues, void**& sretSlot, TypeInfo* retType);
     void PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgsArray, void *genericArgsArray,
                                    ScopedAllocBuffer& allocBuffer);

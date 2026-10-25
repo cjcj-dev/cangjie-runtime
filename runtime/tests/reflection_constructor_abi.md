@@ -18,11 +18,18 @@ Source pairing, not production qualification:
   `ConstructorInfo.apply` in `stdlib/libs/std/reflect`, then
   `applyCJStaticMethod`, the platform `CJ_MCC_ApplyCJStaticMethod` stub,
   `CompilerCalls.cpp:MCC_ApplyCJStaticMethod`, `MethodInfo::ApplyCJMethod`,
-  and `ApplyCangjieMethodStub`. Generic class return metadata may be a
-  GenericTypeInfo; Unit FOREIGN signatures retain the old return convention.
+  and `ApplyCangjieMethodStub`. Generic class return metadata is resolved with GetReturnType before the
+  call and must match the concrete declaring TI. Unit FOREIGN signatures
+  retain the old return convention. Unresolved/mismatched class signatures
+  are errors, not a reason to select the Unit path.
 
 `ApplyCJMethodImpl` registers a normal class-constructor result in the
 existing receiver Handle before Unit normalization or later metadata work.
+Return classification is cached before the call: GetReturnType can enter
+GetOrCreateTypeInfo and must not run while the result is still an unrooted raw
+reference. The C author confirmed this at T170249Z; old managed Unit metadata
+is indistinguishable from new FOREIGN Unit, so all target std/CJO/DSO inputs
+must be rebuilt with the new qualified pair.
 The final initializer path consumes this updated Handle. Struct sret/value
 branches and static calls do not select this rule.
 
