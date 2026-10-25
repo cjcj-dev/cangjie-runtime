@@ -32,6 +32,10 @@ public:
     }
     static void synchronize();
     static void desynchronize();
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Observe a published request after dropping stsLock; never changes STS state.
+    static void SetRequestPublishedCallback(void (*callback)());
+#endif
 };
 
 class SuspendibleThreadSetJoiner {

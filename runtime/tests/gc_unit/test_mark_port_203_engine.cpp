@@ -7,6 +7,7 @@
 #include "gc_worker_fixture.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <string>
@@ -174,6 +175,111 @@ GC_OTHER_VM_TEST(MarkPort203Engine, DrainYieldsWithSameStripeWorkRemaining)
     GC_EXPECT_EQ(fx.region0()->live_objects(), count);
     GC_EXPECT_TRUE(stripes.IsEmpty());
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+struct MarkTaskPauseSchedule {
+    std::mutex mutex;
+    std::condition_variable changed;
+    ZMark* domain;
+    bool joined = false;
+    bool requested = false;
+    bool finished = false;
+    bool schedulingFailed = false;
+    uint32_t workerId = UINT32_MAX;
+    explicit MarkTaskPauseSchedule(ZMark* mark) : domain(mark) {}
+};
+MarkTaskPauseSchedule* markTaskPauseSchedule = nullptr;
+
+void ObserveMarkTaskJoin(ZMark* mark)
+{
+    auto& schedule = *markTaskPauseSchedule;
+    if (mark != schedule.domain) return;
+    std::unique_lock<std::mutex> lock(schedule.mutex);
+    schedule.workerId = WorkerThread::worker_id();
+    schedule.joined = true;
+    schedule.changed.notify_all();
+    // No product lock is held. synchronize publishes the request and drops
+    // stsLock before the second observer releases this actual pool worker.
+    if (!schedule.changed.wait_for(lock, std::chrono::seconds(10), [&] { return schedule.requested; })) {
+        schedule.schedulingFailed = true;
+    }
+}
+
+void ObserveStsRequest()
+{
+    auto& schedule = *markTaskPauseSchedule;
+    std::lock_guard<std::mutex> lock(schedule.mutex);
+    schedule.requested = true;
+    schedule.changed.notify_all();
+}
+}
+
+// ZGC 5b2d6991a1279d375f9a3c00c7bcd0bbcc7081d6 zMark.cpp:466-485.
+// Input is a real published same-stripe stack. MarkFollow dispatches the
+// product ZMarkTask to the product pool; observers only order a pending STS
+// request. Neither observer calls follow/Drain/yield or changes marking state.
+GC_TEST(MarkPort203Engine, MarkFollowWorkerPausesInsideDrain)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    Heap& heap = Heap::GetHeap();
+    InitializeGenerationWorkers(heap.old(), 1);
+    ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.BindWorkers(heap.old().Workers());
+    domain.ResizeWorkers(1);
+    auto& stripes = domain.Stripes();
+    constexpr size_t count = 65;
+    std::vector<BaseObject*> objects;
+    MarkThreadLocalStacks seed(4);
+    for (size_t i = 0; i < count; ++i) {
+        auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
+        objects.push_back(object);
+        seed.Push(stripes, stripes.StripeForWorker(1, 0), ObjectEntry(object), true);
+    }
+    fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
+    (void)seed.Flush(stripes);
+    MarkTaskPauseSchedule schedule(&domain);
+    markTaskPauseSchedule = &schedule;
+    ZMark::SetTaskJoinedCallback(ObserveMarkTaskJoin);
+    SuspendibleThreadSet::SetRequestPublishedCallback(ObserveStsRequest);
+    std::thread coordinator([&] {
+        ThreadLocal::InitializeCleaner();
+        domain.MarkFollow();
+        std::lock_guard<std::mutex> lock(schedule.mutex);
+        schedule.finished = true;
+        schedule.changed.notify_all();
+    });
+    bool joined;
+    {
+        std::unique_lock<std::mutex> lock(schedule.mutex);
+        schedule.changed.wait(lock, [&] { return schedule.joined || schedule.finished; });
+        joined = schedule.joined;
+    }
+    size_t atPause = 0;
+    if (joined) {
+        SuspendibleThreadSet::synchronize();
+        for (auto* object : objects) atPause += fx.region0()->is_object_strongly_live(from_object(object));
+        SuspendibleThreadSet::desynchronize();
+    }
+    coordinator.join();
+    ZMark::SetTaskJoinedCallback(nullptr);
+    SuspendibleThreadSet::SetRequestPublishedCallback(nullptr);
+    markTaskPauseSchedule = nullptr;
+    size_t afterResume = 0;
+    for (auto* object : objects) afterResume += fx.region0()->is_object_strongly_live(from_object(object));
+    std::fprintf(stderr, "MARKFOLLOW_STS_TARGET executed=1 joined=%d worker=%u requested=%d "
+                         "schedule_failed=%d stripes=%zu entries=%zu marked_at_pause=%zu marked_after_resume=%zu\n",
+                 joined, schedule.workerId, schedule.requested, schedule.schedulingFailed,
+                 stripes.NStripes(), count, atPause, afterResume);
+    // The baseline MarkFollow->run cut returns without entering the worker;
+    // this assertion still executes, instead of counting a wait timeout as red.
+    GC_EXPECT_TRUE(joined && schedule.requested && !schedule.schedulingFailed && schedule.workerId == 0);
+    GC_EXPECT_EQ(atPause, 1u);
+    GC_EXPECT_EQ(afterResume, count);
+    GC_EXPECT_TRUE(stripes.IsEmpty());
+}
+#endif
 
 GC_OTHER_VM_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 {

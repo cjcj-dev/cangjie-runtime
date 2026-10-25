@@ -91,6 +91,10 @@ public:
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
     void MarkFollow();
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Scheduling observation only: the real worker has joined STS, before follow.
+    static void SetTaskJoinedCallback(void (*callback)(ZMark*));
+#endif
     void FollowWorkComplete();
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);

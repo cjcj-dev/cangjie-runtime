@@ -16,6 +16,9 @@ namespace {
 std::mutex stsLock;
 std::condition_variable stsWait;
 Semaphore* synchronizeWakeup = nullptr;
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<void (*)()> requestPublishedCallback{nullptr};
+#endif
 
 void EnsureWakeup()
 {
@@ -97,8 +100,20 @@ void SuspendibleThreadSet::synchronize()
             return;
         }
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (auto callback = requestPublishedCallback.load(std::memory_order_acquire)) {
+        callback();
+    }
+#endif
     synchronizeWakeup->wait();
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void SuspendibleThreadSet::SetRequestPublishedCallback(void (*callback)())
+{
+    requestPublishedCallback.store(callback, std::memory_order_release);
+}
+#endif
 
 void SuspendibleThreadSet::desynchronize()
 {

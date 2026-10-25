@@ -224,6 +224,16 @@ void ZMark::VisitMinorRoots()
 
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<void (*)(ZMark*)> taskJoinedCallback{nullptr};
+}
+void ZMark::SetTaskJoinedCallback(void (*callback)(ZMark*))
+{
+    taskJoinedCallback.store(callback, std::memory_order_release);
+}
+#endif
+
 class ZMarkTask : public ZRestartableTask {
 public:
     explicit ZMarkTask(ZMark* mark)
@@ -238,6 +248,11 @@ public:
     void work() override
     {
         SuspendibleThreadSetJoiner stsJoiner;
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (auto callback = taskJoinedCallback.load(std::memory_order_acquire)) {
+            callback(mark);
+        }
+#endif
         mark->FollowWorkComplete();
         Heap::GetHeap().mark_flush(ThreadLocal::GetGCData());
     }
