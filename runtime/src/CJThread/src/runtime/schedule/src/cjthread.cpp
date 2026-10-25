@@ -20,6 +20,8 @@
 
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/ThreadSMR.h"
+#include "Mutator/MutatorManager.h"
+#include "Common/ScopedObjectAccess.h"
 
 #include "cjthread.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
@@ -766,10 +768,18 @@ MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
                                     CJThreadFunc func, struct CJThread *newCJThread)
 {
     // JavaThread construction precedes Threads::add and first execution.
-    // CJThread is a reusable carrier; Mutator is a fresh logical identity.
+    // Leave managed execution before external initialization or blocking on
+    // the same management lock that STW holds across its phase publication.
+    MapleRuntime::ScopedEnterSaferegion safe;
     newCJThread->mutator = MapleRuntime::Mutator::NewMutator();
     newCJThread->mutator->SetCjthreadPtr(newCJThread);
+    auto& manager = MapleRuntime::MutatorManager::Instance();
+    manager.MutatorManagementRLock();
+    // ZGC 5b2d6991a1279d375f9a3c00c7bcd0bbcc7081d6 threads.cpp:1048-1064.
+    // Keep the masks, watermark epoch, store buffer and list in one phase.
+    newCJThread->mutator->AttachToGC();
     MapleRuntime::ThreadsSMRSupport::add_thread(newCJThread->mutator);
+    manager.MutatorManagementRUnlock();
     newCJThread->func = func;
     (void)memset_s(&newCJThread->context, sizeof(struct CJThreadContext), 0, sizeof(struct CJThreadContext));
 

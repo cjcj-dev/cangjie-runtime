@@ -66,6 +66,8 @@ public:
 
     // Called when a mutator starts and finishes, respectively.
     void Init();
+    // Called with the mutator-management lock held, immediately before SMR publication.
+    void AttachToGC();
     Mutator();
 
     ~Mutator();

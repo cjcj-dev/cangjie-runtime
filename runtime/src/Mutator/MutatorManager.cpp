@@ -243,6 +243,7 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->InitTid();
     mutator->InitProtectStackAddr();
     mutator->SetManagedContext(false);
+    mutator->AttachToGC();
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadsSMRSupport::add_thread(mutator);
     ThreadLocal::SetMutator(mutator);

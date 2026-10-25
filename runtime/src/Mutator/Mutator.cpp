@@ -181,12 +181,18 @@ void Mutator::InitProtectStackAddr()
 void Mutator::Init()
 {
     allocBuffer.Init();
-    BarrierSet::barrier_set()->on_thread_attach(gcData, this, nullptr);
     observerCnt = 0;
     inManagedContext.store(true);
 #ifdef INTERPRETER_ENABLED
     InitInterpreterPart();
 #endif
+}
+
+void Mutator::AttachToGC()
+{
+    // ZGC threads.cpp:1048-1064 and zBarrierSet.cpp:256-267: masks,
+    // watermark epoch and store buffer are initialized inside Threads::add.
+    BarrierSet::barrier_set()->on_thread_attach(gcData, this, nullptr);
 }
 
 Mutator::Mutator() : cjthread(nullptr)
