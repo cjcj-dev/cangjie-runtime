@@ -207,3 +207,28 @@ The retired allocation ABI must be paired with the new C construction protocol a
 rebuilt target CJO/std. Existing C8ba3 ELF or old std is not qualified by this tool
 change. New C03f2's constructor-return consumers, including runtime reflection,
 remain a separate explicit pairing obligation; no moving compiler HEAD is adopted.
+# Host Python and path conventions
+
+The native Windows entry runs `build.py` with a native Windows Python (for the
+official MINGW64 job, the installed mingw-w64 Python). The MSYS shell converts
+its paths when launching native tools; CMake subsequently passes native paths
+directly to its child processes. A POSIX MSYS Python must not consume those
+`D:/...` script arguments. Do not rewrite generator outputs or mix path dialects
+to work around an interpreter mismatch.
+
+`build.py` passes its absolute `sys.executable` as `Python3_EXECUTABLE` to CMake
+and logs that choice. The Windows target prepends its toolchain using the
+**host** `os.pathsep`: semicolon on native Windows, colon on Linux cross hosts.
+Direct CMake users select the host interpreter with the same standard
+`-DPython3_EXECUTABLE:FILEPATH=...` option. CMake resolves it before all runtime
+subdirectories and uses it for the configure-time historical link definition,
+layout and source checks, post-link export checking, and initial/repeat output
+publication. Cached build commands retain the selected interpreter even if
+`python3` on PATH subsequently changes.
+
+`tests/windows_exports/test_python_entry.mjs` exercises the public `build.py`
+CLI with recorded child launches and controlled host observations. It checks
+PATH propagation and interpreter forwarding; it is finite entry evidence, not
+a Windows compile, link, DLL or installation test. Actual Windows qualification
+still requires the official native job and its raw/DLL/COFF artifacts.
+

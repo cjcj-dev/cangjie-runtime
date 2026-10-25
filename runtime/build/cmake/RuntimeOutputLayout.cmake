@@ -111,6 +111,6 @@ function(cj_runtime_finalize_output_layout)
     set_target_properties(cangjie-runtime PROPERTIES CJ_RUNTIME_PUBLISH_ARGS "${_args_file}")
     # Also supports a deliberate repeat publication when the link is up to date.
     add_custom_target(publish_runtime_output
-        COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py" "@${_args_file}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py" "@${_args_file}"
         DEPENDS cangjie-runtime boundscheck VERBATIM)
 endfunction()

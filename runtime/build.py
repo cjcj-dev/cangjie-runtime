@@ -269,7 +269,10 @@ def do_build(args):
         if args.sanitizer_support:
             print("Windows does not support sanitizer support")
             sys.exit(1)
-        os.environ["PATH"] = os.path.join(args.target_toolchain, "bin") + ":" + os.environ["PATH"]
+        # The host executes CMake and Python, even for a Windows cross target.
+        # Native Windows needs ';'; ':' corrupts drive-letter PATH entries and
+        # can expose the MSYS Python to CMake's native Windows script paths.
+        os.environ["PATH"] = os.path.join(args.target_toolchain, "bin") + os.pathsep + os.environ["PATH"]
         cmake_command = [
             "cmake",
             "-DCMAKE_INSTALL_PREFIX={}_{}".format(install_prefix, target_arch),
@@ -440,6 +443,11 @@ def do_build(args):
 def build_target(cmake_command, args=None):
     build_jobs = resolve_build_jobs(args.jobs if args else 0)
     env = build_environment(build_jobs)
+    # Preserve the interpreter already executing this entry. Do not rediscover
+    # a different Python after adding target tools to PATH. CMake caches this
+    # absolute host path for configure, build, and repeat publication.
+    cmake_command.append("-DPython3_EXECUTABLE:FILEPATH=" + sys.executable.replace("\\", "/"))
+    print(f"Runtime build Python: {sys.executable} (host={sys.platform}, pathsep={os.pathsep!r})", flush=True)
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:

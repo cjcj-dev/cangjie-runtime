@@ -87,6 +87,10 @@ endif()
 
 # project name: CangjieRuntime
 project(CangjieRuntime C CXX ASM)
+# Resolve the host interpreter before any subdirectory or configure-time
+# generator. build.py supplies its own interpreter; direct CMake callers may
+# select Python3_EXECUTABLE through the standard FindPython3 interface.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake)
 get_property(_runtime_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 cj_runtime_require_single_config_generator("${_runtime_multi_config}")
@@ -607,7 +611,7 @@ elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1)
     set(WINDOWS_EXPORT_LINK_DEFINITION "${CMAKE_CURRENT_BINARY_DIR}/windows_x86_64_exports.link.def")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_RETIRED}" "${WINDOWS_EXPORT_GENERATOR}")
-    execute_process(COMMAND python3 "${WINDOWS_EXPORT_GENERATOR}" link-definition
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${WINDOWS_EXPORT_GENERATOR}" link-definition
         "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_LINK_DEFINITION}"
         --retired "${WINDOWS_EXPORT_RETIRED}" RESULT_VARIABLE WINDOWS_EXPORT_LINK_RESULT)
     if (NOT WINDOWS_EXPORT_LINK_RESULT EQUAL 0)
@@ -653,9 +657,8 @@ endif()
 install(TARGETS cangjie-runtime boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 
 # Compiler copies of the generated ABI header must match these compiled assertions.
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_target(runtime-layout-check ALL
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate-runtime-layout.py
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate-runtime-layout.py"
     VERBATIM)
 add_dependencies(cangjie-runtime runtime-layout-check)
 

@@ -255,13 +255,13 @@ endif()
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
     add_custom_target(check_heal_slot_writes ALL
-        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
         COMMENT "Checking that HeapSlot compare-exchange writes stay inside HealSlot"
         VERBATIM)
     add_dependencies(runtime check_heal_slot_writes)
     add_dependencies(cangjie-runtime check_heal_slot_writes)
     add_custom_target(check_diag_not_hollow ALL
-        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_diag_not_hollow.py"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_diag_not_hollow.py"
         COMMENT "Checking that a diagnostic documenting a gate is not an all-no-op implementation"
         VERBATIM)
     add_dependencies(runtime check_diag_not_hollow)
@@ -280,7 +280,7 @@ endif()
                 "${WINDOWS_EXPORT_LINK_EVIDENCE}/$<TARGET_FILE_NAME:cangjie-runtime>"
             COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/windows_x86_64_exports.raw.def"
                 "${WINDOWS_EXPORT_LINK_EVIDENCE}/windows_x86_64_exports.raw.def"
-            COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
                 "${WINDOWS_EXPORT_LINK_EVIDENCE}/windows_x86_64_exports.raw.def"
                 "${CMAKE_CURRENT_SOURCE_DIR}/windows_x86_64_exports.def"
                 --dll "${WINDOWS_EXPORT_LINK_EVIDENCE}/$<TARGET_FILE_NAME:cangjie-runtime>"
@@ -289,7 +289,7 @@ endif()
             VERBATIM)
     endif()
     add_custom_command(TARGET cangjie-runtime POST_BUILD
-        COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
             "@$<TARGET_PROPERTY:cangjie-runtime,CJ_RUNTIME_PUBLISH_ARGS>"
         COMMENT "Publishing the configured runtime pair and checking the published products"
         VERBATIM)
