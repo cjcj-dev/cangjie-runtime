@@ -717,6 +717,25 @@ if (MACOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_
         DESTINATION lib/${TARGET_ARCH})
 endif()
 
+# Resolve the installation prefix when cmake --install executes: build.py may
+# override the configured prefix, and packaging may prepend DESTDIR. Keep tool
+# failures visible to the normal install caller instead of accepting a partial
+# archive/package.
+function(install_runtime_postprocess component program relative_path)
+    set(arguments "")
+    foreach(argument IN LISTS ARGN)
+        string(APPEND arguments " \"${argument}\"")
+    endforeach()
+    install(CODE "
+        execute_process(COMMAND \"${program}\"${arguments}
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${relative_path}\"
+            RESULT_VARIABLE postprocess_result)
+        if(NOT \"\${postprocess_result}\" STREQUAL \"0\")
+            message(FATAL_ERROR \"${program}: ${relative_path}: \${postprocess_result}\")
+        endif()"
+        COMPONENT ${component})
+endfunction()
+
 if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
     message("strip: ${CMAKE_INSTALL_PREFIX}")
     set(STRIP_PROGRAM strip)
@@ -740,49 +759,49 @@ if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
         endif()
     endif()
     if (WINDOWS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -p ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dll)"
-            COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dll" -p)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/bin/cjfilt.exe)"
-            COMPONENT cjfilt)
+        install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+            "bin/cjfilt.exe")
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -p ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-trace.dll)"
-            COMPONENT cangjie-trace)
+        install_runtime_postprocess(cangjie-trace "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libcangjie-trace.dll" -p)
         endif()
     elseif (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib)"
-                COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib" -x)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/bin/cjfilt)"
-                COMPONENT cjfilt)
+        install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+            "bin/cjfilt" -x)
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-trace.dylib)"
-            COMPONENT cangjie-trace)
+        install_runtime_postprocess(cangjie-trace "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libcangjie-trace.dylib" -x)
         endif()
         if (MACOS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libboundscheck.dylib)"
-            COMPONENT boundscheck)
+        install_runtime_postprocess(boundscheck "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libboundscheck.dylib" -x)
         endif()
     else()
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.so)"
-                COMPONENT cangjie-runtime)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -g ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}/cjstart.o)"
-                COMPONENT cjstart)
+        install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.so")
+        install_runtime_postprocess(cjstart "${STRIP_PROGRAM}"
+            "lib/${TARGET_ARCH}/cjstart.o" -g)
         if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}/libcangjie-demangle.so)"
-                COMPONENT cangjie-demangle)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -g ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}/cjpgo.o)"
-                COMPONENT cjpgo)
+        install_runtime_postprocess(cangjie-demangle "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}/libcangjie-demangle.so")
+        install_runtime_postprocess(cjpgo "${STRIP_PROGRAM}"
+            "lib/${TARGET_ARCH}/cjpgo.o" -g)
         endif()
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/bin/cjfilt)"
-                COMPONENT cjfilt)
+        install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+            "bin/cjfilt")
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} ${CMAKE_INSTALL_PREFIX}/runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-trace.so)"
-            COMPONENT cangjie-trace)
+        install_runtime_postprocess(cangjie-trace "${STRIP_PROGRAM}"
+            "runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-trace.so")
         endif()
     endif()
 endif () # CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$"
@@ -914,23 +933,19 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
     set(OBJCOPY_PROGRAM objcopy)
     set(STRIP_PROGRAM strip)
     if (WINDOWS_FLAG MATCHES 1)
-        install(CODE "execute_process(COMMAND bash ${CMAKE_SOURCE_DIR}/build/windows_rename_section.sh \
-                ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "bash"
+            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" ${CMAKE_SOURCE_DIR}/build/windows_rename_section.sh)
     elseif (NOT (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2))
-        install(CODE "execute_process(COMMAND ${OBJCOPY_PROGRAM} -D --rename-section .text=.text_runtime \
-                    ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-                COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "${OBJCOPY_PROGRAM}"
+            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" -D --rename-section .text=.text_runtime)
     endif()
     if((CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "MinSizeRel") AND NOT (WINDOWS_FLAG MATCHES 1))
         if (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x \
-                    \${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
+            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" -x)
         else()
-        install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -D --strip-unneeded \
-                    ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a)"
-            COMPONENT cangjie-runtime)
+        install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
+            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" -D --strip-unneeded)
         endif()
     endif()
 endif()
