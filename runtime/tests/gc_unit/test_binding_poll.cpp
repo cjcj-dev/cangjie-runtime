@@ -147,6 +147,7 @@ void* LoadFiniteInterpreter()
     return handle;
 }
 struct AttachObservation {
+    std::thread::id creator = std::this_thread::get_id();
     Mutator* owner = nullptr;
     bool phaseAdmitted = false;
     uintptr_t before = 0;
@@ -155,6 +156,7 @@ struct AttachObservation {
 void FlipDuringInterpreterStart(void* context, void* owner)
 {
     auto& observation = *static_cast<AttachObservation*>(context);
+    if (std::this_thread::get_id() != observation.creator) { return; }
     observation.owner = static_cast<Mutator*>(owner);
     observation.before = ThreadGCData::PublishedMasks().storeGood;
     // Nonblocking probe: never await a phase flip while the producer owns its
@@ -172,10 +174,12 @@ void FlipDuringInterpreterStart(void* context, void* owner)
 }
 void* UnstartedTask(void*, unsigned int) { return nullptr; }
 }
-GC_COMPONENT_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterConstruction)
+GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterConstruction)
 {
-    B09RuntimeFixture runtime(8);
-    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    RuntimeParam parameters{};
+    parameters.heapParam.heapSize = 512 * 1024;
+    parameters.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&parameters), E_OK);
     void* library = LoadFiniteInterpreter();
     using SetHook = void (*)(void (*)(void*, void*), void*);
     auto setHook = reinterpret_cast<SetHook>(dlsym(library, "GCInterpreterSetStartHook"));
@@ -185,10 +189,12 @@ GC_COMPONENT_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreter
     CJThreadAttr attr{};
     CJThreadAttrInit(&attr);
     CJThreadAttrStackSizeSet(&attr, 1024 * 1024);
-    void* task = CJThreadNew(runtime.GetConcurrencyModel().GetThreadScheduler(), &attr,
+    void* task = CJThreadNew(Runtime::Current().GetConcurrencyModel().GetThreadScheduler(), &attr,
                             UnstartedTask, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0);
     setHook(nullptr, nullptr);
-    GC_EXPECT_TRUE(task != nullptr && observed.owner != nullptr);
+    std::fprintf(stderr, "LOGICAL_ATTACH_SETUP task=%p owner=%p\n", task, observed.owner);
+    GC_EXPECT_TRUE(task != nullptr);
+    GC_EXPECT_TRUE(observed.owner != nullptr);
     ThreadsListHandle members;
     const auto& data = observed.owner->GetGCData();
     const auto epoch = observed.owner->GetStackWatermark().GetEpoch();
