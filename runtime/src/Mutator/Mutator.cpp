@@ -669,7 +669,22 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             RebaseDerived(newDerivedSlot, newBase, offset);
         }
 
-        uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
+        // continuationFreezeThaw.cpp:323-350 republishes the complete frame
+        // anchor when stack ownership changes. CJThread copies a native stack
+        // rather than a stackChunk, so its published FA/SP must follow the copy
+        // before StackGrowStub releases the old mapping. Preserve absent fields.
+        MachineFrame& published = uwContext.frameInfo.mFrame;
+        if (published.GetFA() != nullptr) {
+            published.SetFA(reinterpret_cast<FrameAddress*>(
+                reinterpret_cast<uintptr_t>(published.GetFA()) + stackOffset));
+        }
+        if (published.GetSP() != 0) {
+            published.SetSP(published.GetSP() + stackOffset);
+        }
+        if (uwContext.anchorFA != nullptr) {
+            uwContext.anchorFA = reinterpret_cast<uint32_t*>(
+                reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
+        }
         MutatorUnlock();
 
         return stackOffset;
