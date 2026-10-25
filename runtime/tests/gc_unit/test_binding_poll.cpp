@@ -150,9 +150,29 @@ struct AttachObservation {
     std::thread::id creator = std::this_thread::get_id();
     Mutator* owner = nullptr;
     bool phaseAdmitted = false;
+    bool flip = true;
+    bool probePublication = false;
+    size_t publicationCallbacks = 0;
+    bool publicationPhaseAdmitted = false;
     uintptr_t before = 0;
     uintptr_t after = 0;
 };
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+AttachObservation* publicationObservation = nullptr;
+void ProbePublicationLock()
+{
+    auto* observation = publicationObservation;
+    if (observation == nullptr || std::this_thread::get_id() != observation->creator ||
+        !ThreadsSMRSupport::get_java_thread_list()->includes(observation->owner)) { return; }
+    ++observation->publicationCallbacks;
+    std::thread phase([&] {
+        auto& manager = MutatorManager::Instance();
+        observation->publicationPhaseAdmitted = manager.TryAcquireMutatorManagementWLock();
+        if (observation->publicationPhaseAdmitted) { manager.MutatorManagementWUnlock(); }
+    });
+    phase.join();
+}
+#endif
 void FlipDuringInterpreterStart(void* context, void* owner)
 {
     auto& observation = *static_cast<AttachObservation*>(context);
@@ -165,16 +185,22 @@ void FlipDuringInterpreterStart(void* context, void* owner)
         auto& manager = MutatorManager::Instance();
         observation.phaseAdmitted = manager.TryAcquireMutatorManagementWLock();
         if (observation.phaseAdmitted) {
-            ZGlobalsPointers::flip_old_relocate_start();
+            if (observation.flip) { ZGlobalsPointers::flip_old_relocate_start(); }
             manager.MutatorManagementWUnlock();
         }
     });
     phase.join();
     observation.after = ThreadGCData::PublishedMasks().storeGood;
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+    if (observation.probePublication) {
+        publicationObservation = &observation;
+        ThreadsSMRSupport::SetReclaimScanBreakpoint(ProbePublicationLock);
+    }
+#endif
 }
 void* UnstartedTask(void*, unsigned int) { return nullptr; }
 }
-GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterConstruction)
+static void CheckLogicalAttach(bool flip, bool probePublication = false)
 {
     RuntimeParam parameters{};
     parameters.heapParam.heapSize = 512 * 1024;
@@ -185,6 +211,8 @@ GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterCo
     auto setHook = reinterpret_cast<SetHook>(dlsym(library, "GCInterpreterSetStartHook"));
     GC_EXPECT_TRUE(setHook != nullptr);
     AttachObservation observed;
+    observed.flip = flip;
+    observed.probePublication = probePublication;
     setHook(FlipDuringInterpreterStart, &observed);
     CJThreadAttr attr{};
     CJThreadAttrInit(&attr);
@@ -192,6 +220,10 @@ GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterCo
     void* task = CJThreadNew(Runtime::Current().GetConcurrencyModel().GetThreadScheduler(), &attr,
                             UnstartedTask, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0);
     setHook(nullptr, nullptr);
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+    ThreadsSMRSupport::SetReclaimScanBreakpoint(nullptr);
+    publicationObservation = nullptr;
+#endif
     std::fprintf(stderr, "LOGICAL_ATTACH_SETUP task=%p owner=%p\n", task, observed.owner);
     GC_EXPECT_TRUE(task != nullptr);
     GC_EXPECT_TRUE(observed.owner != nullptr);
@@ -205,12 +237,41 @@ GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterCo
                  static_cast<size_t>(epoch), static_cast<size_t>(StackWatermark::epoch_id()),
                  data.storeBarrierBuffer->lastProcessedColor, published);
     GC_EXPECT_TRUE(observed.phaseAdmitted);
-    GC_EXPECT_NE(observed.before, observed.after);
+    GC_EXPECT_EQ(observed.before != observed.after, flip);
     GC_EXPECT_TRUE(published);
     GC_EXPECT_EQ(data.storeGoodMask, observed.after);
     GC_EXPECT_EQ(epoch, StackWatermark::epoch_id());
     GC_EXPECT_EQ(data.storeBarrierBuffer->lastProcessedColor, observed.after);
+    if (probePublication) {
+        bool outside = false;
+        std::thread phase([&] {
+            auto& manager = MutatorManager::Instance();
+            outside = manager.TryAcquireMutatorManagementWLock();
+            if (outside) { manager.MutatorManagementWUnlock(); }
+        });
+        phase.join();
+        std::fprintf(stderr, "ATTACH_PUBLICATION_LOCK_TARGET executed=1 callbacks=%zu "
+                             "phase_inside=%d phase_outside=%d\n", observed.publicationCallbacks,
+                     observed.publicationPhaseAdmitted, outside);
+        GC_EXPECT_EQ(observed.publicationCallbacks, 1u);
+        GC_EXPECT_FALSE(observed.publicationPhaseAdmitted);
+        GC_EXPECT_TRUE(outside);
+    }
 }
+GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterConstruction)
+{
+    CheckLogicalAttach(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, NoPhaseChangeControl)
+{
+    CheckLogicalAttach(false);
+}
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, SmrPublicationExcludesPhaseChange)
+{
+    CheckLogicalAttach(true, true);
+}
+#endif
 
 namespace {
 size_t interpreterRoots = 0;
