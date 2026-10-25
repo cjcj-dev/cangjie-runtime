@@ -62,6 +62,22 @@ def parse_exports(path: Path) -> list[Export]:
 # The contract is captured from consumers, never from the DLL under test.
 DEFAULT_REFERENCES = Path(__file__).resolve().parents[1] / "src/windows_export_references.json"
 DEFAULT_HISTORY = DEFAULT_REFERENCES.with_name("windows_x86_64_exports.def")
+DEFAULT_RETIRED = DEFAULT_REFERENCES.with_name("windows_retired_exports.def")
+
+
+def retired_exports(path: Path | None) -> dict[str, Export]:
+    # The absence only supports older source snapshots and CLI fixtures.
+    source = path or DEFAULT_RETIRED
+    if path is None and not source.exists():
+        return {}
+    return {entry.name: entry for entry in parse_exports(source)}
+
+
+def check_retired(exports: list[Export], retired: dict[str, Export]) -> None:
+    reserved = {entry.ordinal for entry in retired.values()}
+    for entry in exports:
+        if entry.name in retired or entry.ordinal in reserved:
+            raise ValueError(f"retired export name/ordinal reused: {entry}")
 SOURCE_SUFFIXES = {".cj", ".c", ".cpp", ".cc", ".h", ".hpp", ".inc", ".def", ".td", ".S", ".s"}
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9$]*")
 COMMENT_RE = re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')|//[^\n]*|/\*.*?\*/', re.S)
@@ -150,10 +166,30 @@ def runtime_definitions(identity: str) -> tuple[dict, dict[str, list[str]]]:
 
 
 def collect_references(raw_path: Path, consumers: list[str], output: Path, native_sources: list[str],
-                       runtime_source: str, historical: Path, diagnostics: Path | None) -> None:
+                       runtime_source: str, historical: Path, diagnostics: Path | None,
+                       runtime_capture: Path | None, retired_path: Path | None) -> None:
     available = {export.name for export in parse_exports(raw_path)}
     history = parse_exports(historical)
+    retired = retired_exports(retired_path)
+    for entry in history:
+        if entry.name in retired and retired[entry.name] != entry:
+            raise ValueError(f"retired export does not match historical definition: {entry.name}")
     runtime_input, definitions = runtime_definitions(runtime_source)
+    if runtime_capture is not None:
+        capture = json.loads(runtime_capture.read_text())
+        if capture["system"] != "Windows" or capture["revision"] != runtime_input["revision"]:
+            raise ValueError("runtime definition capture must match the fixed Windows source revision")
+        root = Path(runtime_source.split("=", 1)[1]).resolve()
+        definitions = {}
+        if not capture["objects"]:
+            raise ValueError("empty Windows runtime object capture")
+        for obj in capture["objects"]:
+            source = (root / obj["source"]).resolve()
+            if not source.is_relative_to(root) or hashlib.sha256(source.read_bytes()).hexdigest() != obj["source_sha256"]:
+                raise ValueError(f"runtime object source differs from fixed source: {obj['source']}")
+            for name in obj["defined"]:
+                definitions.setdefault(name, []).append(f"{runtime_input['label']}/{obj['source']} ({obj['object']})")
+        runtime_input["windows_object_capture_sha256"] = hashlib.sha256(runtime_capture.read_bytes()).hexdigest()
     # Ownership must not depend solely on a DLL that may be missing a new export.
     owned = available | definitions.keys() | {entry.name for entry in history}
     references: dict[str, list[str]] = {}
@@ -211,12 +247,15 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
         inputs.append(identity)
     if not references:
         raise ValueError("consumer sources reference no exports")
+    if references.keys() & retired.keys():
+        raise ValueError(f"current consumers still require retired exports: {sorted(references.keys() & retired.keys())}")
     document = {"inputs": inputs, "symbols": dict(sorted(references.items())),
                 "runtime": runtime_input,
                 "definitions": {name: definitions[name] for name in sorted(references) if name in definitions},
                 "historical": {"sha256": hashlib.sha256(historical.read_bytes()).hexdigest(),
-                               "exports": [entry.__dict__ for entry in history]}}
-    required = set(references) | {entry.name for entry in history}
+                               "exports": [entry.__dict__ for entry in history]},
+                "retired": [entry.__dict__ for entry in retired.values()]}
+    required = set(references) | ({entry.name for entry in history} - retired.keys())
     missing = sorted(required - available)
     if diagnostics is not None:
         diagnostics.write_text(json.dumps({**document, "missing_from_raw": missing}, indent=2) + "\n")
@@ -263,19 +302,26 @@ def render_exports(exports: list[Export], source_ref: str) -> str:
 
 
 def write_exports(raw_path: Path, output_path: Path, source_ref: str, references_path: Path,
-                  historical: Path | None) -> None:
+                  historical: Path | None, retired_path: Path | None) -> None:
     references = read_references(references_path)
+    retired = retired_exports(retired_path)
+    if references & retired.keys():
+        raise ValueError("current consumers require a retired export")
     history = parse_exports(historical or output_path)
     historical_by_name = {entry.name: entry for entry in history}
     for name, entry in captured_history(references_path).items():
-        if historical_by_name.get(name) != entry:
+        if historical_by_name.get(name, retired.get(name)) != entry:
             raise ValueError(f"historical definition lost or changed captured export: {name}")
-    required = references | {entry.name for entry in history}
-    selected = select_exports(parse_exports(raw_path), required)
+    required = references | ({entry.name for entry in history} - retired.keys())
+    raw = parse_exports(raw_path)
+    check_retired(raw, retired)
+    selected = select_exports(raw, required)
     missing = sorted(required - selected.keys())
     if missing:
         raise ValueError(f"missing consumer exports: {', '.join(missing)}")
     for entry in history:
+        if entry.name in retired:
+            continue
         if selected[entry.name] != entry:
             raise ValueError(f"historical export changed: expected={entry} actual={selected[entry.name]}")
     contents = render_exports(list(selected.values()), source_ref)
@@ -295,8 +341,10 @@ def write_exports(raw_path: Path, output_path: Path, source_ref: str, references
 
 
 def check_exports(raw_path: Path, expected_path: Path, references_path: Path,
-                  dll: Path | None = None, readobj: str = "llvm-readobj") -> int:
+                  dll: Path | None = None, readobj: str = "llvm-readobj",
+                  retired_path: Path | None = None) -> int:
     references = read_references(references_path)
+    retired = retired_exports(retired_path)
     raw = parse_exports(raw_path)
     if dll is not None:
         # Inspect the complete linked table, including exports outside the
@@ -316,9 +364,13 @@ def check_exports(raw_path: Path, expected_path: Path, references_path: Path,
         if actual_dll != {entry.name: entry.ordinal for entry in raw}:
             raise ValueError("complete DLL export names/ordinals differ from linker raw")
     registered = parse_exports(expected_path)
+    check_retired(raw, retired)
+    check_retired(registered, retired)
+    if references & retired.keys():
+        raise ValueError("current consumers require a retired export")
     expected = {entry.name: entry for entry in registered}
     for name, entry in captured_history(references_path).items():
-        if expected.get(name) != entry:
+        if expected.get(name, retired.get(name)) != entry:
             raise ValueError(f"registered definition lost or changed captured historical export: {name}")
     if not references <= expected.keys():
         raise ValueError("registered definition does not match the consumer reference set; regenerate it")
@@ -337,6 +389,24 @@ def check_exports(raw_path: Path, expected_path: Path, references_path: Path,
     for name in changed:
         print(f"FATAL: changed export: expected={expected[name]} actual={actual[name]}", file=sys.stderr)
     return 1 if missing or changed else 0
+
+
+def write_link_definition(historical: Path, output: Path, retired_path: Path | None) -> None:
+    retired = retired_exports(retired_path)
+    history = parse_exports(historical)
+    for entry in history:
+        if entry.name in retired and entry != retired[entry.name]:
+            raise ValueError(f"retired historical identity mismatch: {entry.name}")
+    active = [entry for entry in history if entry.name not in retired]
+    # LLD assigns unnumbered exports above the maximum explicit ordinal. Keep
+    # retired holes below that maximum; do not create placeholder exports.
+    if retired and max(entry.ordinal for entry in active) <= max(entry.ordinal for entry in retired.values()):
+        raise ValueError("link definition cannot reserve a retired highest ordinal")
+    check_retired(active, retired)
+    contents = render_exports(active, hashlib.sha256(historical.read_bytes()).hexdigest())
+    output.write_text(contents.replace("; source-ref:", "; historical-sha256:") +
+                      "; Link input only: new consumer contract still requires actual Windows raw.\n")
+    print(f"WINDOWS_LINK_DEFINITION active={len(active)} retired={len(retired)}")
 
 
 def main() -> int:
@@ -361,12 +431,19 @@ def main() -> int:
     collect_parser.add_argument("--consumer", action="append", required=True)
     collect_parser.add_argument("--native-sources", action="append", default=[], metavar="LABEL=MANIFEST")
     collect_parser.add_argument("--runtime-source", required=True, metavar="LABEL@REVISION=DIRECTORY")
+    collect_parser.add_argument("--runtime-definitions", type=Path,
+                                help="normal Windows runtime COFF object capture; resolves conditional definitions")
     collect_parser.add_argument("--historical", type=Path, default=DEFAULT_HISTORY)
     collect_parser.add_argument("--diagnostics", type=Path, help="retain provenance and missing symbols, even on failure")
     capture_parser = subparsers.add_parser("capture-native", help="capture all configured std native translation units")
     capture_parser.add_argument("build", type=Path)
     capture_parser.add_argument("root", type=Path, help="stdlib/libs source root")
     capture_parser.add_argument("output", type=Path)
+    link_parser = subparsers.add_parser("link-definition", help="preserve active historical ordinals at the actual link")
+    link_parser.add_argument("historical", type=Path)
+    link_parser.add_argument("output", type=Path)
+    for subparser in (write_parser, check_parser, collect_parser, link_parser):
+        subparser.add_argument("--retired", type=Path, help="explicit reviewed ABI retirements; never inferred from callers")
     for subparser in (write_parser, check_parser):
         subparser.add_argument("--references", type=Path, default=DEFAULT_REFERENCES)
 
@@ -375,14 +452,20 @@ def main() -> int:
         if arguments.command == "capture-native":
             capture_native_sources(arguments.build, arguments.root, arguments.output)
             return 0
+        if arguments.command == "link-definition":
+            write_link_definition(arguments.historical, arguments.output, arguments.retired)
+            return 0
         if arguments.command == "collect":
             collect_references(arguments.raw, arguments.consumer, arguments.output, arguments.native_sources,
-                               arguments.runtime_source, arguments.historical, arguments.diagnostics)
+                               arguments.runtime_source, arguments.historical, arguments.diagnostics,
+                               arguments.runtime_definitions, arguments.retired)
             return 0
         if arguments.command == "write":
-            write_exports(arguments.raw, arguments.output, arguments.source_ref, arguments.references, arguments.historical)
+            write_exports(arguments.raw, arguments.output, arguments.source_ref, arguments.references,
+                          arguments.historical, arguments.retired)
             return 0
-        return check_exports(arguments.raw, arguments.expected, arguments.references, arguments.dll, arguments.readobj)
+        return check_exports(arguments.raw, arguments.expected, arguments.references, arguments.dll,
+                             arguments.readobj, arguments.retired)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"FATAL: {error}", file=sys.stderr)
         return 2

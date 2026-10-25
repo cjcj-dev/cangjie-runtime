@@ -141,3 +141,52 @@ exercises incomplete raw rejection, five runtime-defined services, independent
 controls, historical retention, DATA/ordinal changes and the DLL-table adapter.
 Its synthetic tables prove only the generator behavior; normal Windows production,
 actual DLL checking, installation and package/unpack remain separate gates.
+
+### Adopted Reference ABI retirement (2026-10-26)
+
+The controller explicitly permits retiring `CJ_MCC_NewFinalizer @277` in the new
+Reference ABI, without old CJ ABI compatibility. The exact old entry is preserved
+in `windows_retired_exports.def`, extracted from fixed R65ab's registered def;
+the original registered definition remains unchanged until normal raw generation.
+The retired name and ordinal are forbidden in new raw/registered tables. `collect`
+rejects callers that still use a retired symbol. This is a reviewed ABI change,
+not automatic pruning because a source scan no longer finds a caller.
+
+Normal Windows CMake now runs `link-definition` and supplies its generated `.def`
+to the actual linker. It retains every active historical ordinal and DATA flag,
+leaving 277 unused. LLD's `assignExportOrdinals` assigns unnumbered exports above
+the highest explicit ordinal (fixed Nde7f `lld/COFF/DriverUtils.cpp:703`); no new
+ordinal is invented in source. The real raw records the five services' actual
+assigned ordinals. `write/check` reject any reuse of 277, including implementation
+exports outside the selected consumer subset. Old registered JSON/def still
+produce an explicit postgate rejection until regenerated from the real raw.
+
+A source-only definition scan is deliberately conservative: it also sees Unix
+conditional definitions. For the final Windows collection, capture the actual
+normal CMake runtime COFF objects (including their source identity and external
+definitions), then use that capture to resolve platform ownership:
+
+```sh
+node runtime/build/capture_windows_runtime_definitions.mjs \
+  runtime/CMakebuild runtime/src RUNTIME_COMMIT runtime-definitions.json llvm-readobj
+python3 runtime/build/generate_windows_exports.py collect complete.raw.def new-references.json \
+  --runtime-source runtime@RUNTIME_COMMIT=runtime/src \
+  --runtime-definitions runtime-definitions.json \
+  --historical previous-registered.def --retired runtime/src/windows_retired_exports.def \
+  --consumer emitter:compiler-codegen@COMPILER_COMMIT=COMPILER/packages/codegen/src
+```
+
+Supply the complete remaining consumer arguments and std native manifest from the
+previous sections. The capture reads **existing** `cangjie-runtime` objects from
+normal `compile_commands.json`; it neither compiles a second tree nor substitutes
+Linux `nm`. Keep its own reader rc/logs and the complete link/raw/DLL evidence.
+The collector rejects wrong-platform/revision and changed-source captures. The
+source-only old-raw diagnostic's Unix signal names are not established Windows
+ABI requirements; they cannot be erased by a prefix exception or passed as real
+Windows failures. Native Windows capture/collect/write/check and package acceptance
+remain pending until that actual build executes.
+
+The retired allocation ABI must be paired with the new C construction protocol and
+rebuilt target CJO/std. Existing C8ba3 ELF or old std is not qualified by this tool
+change. New C03f2's constructor-return consumers, including runtime reflection,
+remain a separate explicit pairing obligation; no moving compiler HEAD is adopted.

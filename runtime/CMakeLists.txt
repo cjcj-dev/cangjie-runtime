@@ -598,11 +598,23 @@ elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1)
     set(WINDOWS_EXPORT_DEFINITION "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_x86_64_exports.def")
     set(WINDOWS_EXPORT_DEFINITION_RAW "${CMAKE_CURRENT_BINARY_DIR}/windows_x86_64_exports.raw.def")
     set(WINDOWS_EXPORT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/build/generate_windows_exports.py")
+    set(WINDOWS_EXPORT_RETIRED "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_retired_exports.def")
+    set(WINDOWS_EXPORT_LINK_DEFINITION "${CMAKE_CURRENT_BINARY_DIR}/windows_x86_64_exports.link.def")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_RETIRED}" "${WINDOWS_EXPORT_GENERATOR}")
+    execute_process(COMMAND python3 "${WINDOWS_EXPORT_GENERATOR}" link-definition
+        "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_LINK_DEFINITION}"
+        --retired "${WINDOWS_EXPORT_RETIRED}" RESULT_VARIABLE WINDOWS_EXPORT_LINK_RESULT)
+    if (NOT WINDOWS_EXPORT_LINK_RESULT EQUAL 0)
+        message(FATAL_ERROR "Windows historical export link definition failed: ${WINDOWS_EXPORT_LINK_RESULT}")
+    endif()
+    target_sources(cangjie-runtime PRIVATE "${WINDOWS_EXPORT_LINK_DEFINITION}")
     target_link_libraries(cangjie-runtime PRIVATE "-Wl,--start-group"
         "-Wl,--export-all-symbols,--output-def=${WINDOWS_EXPORT_DEFINITION_RAW}"
         "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
     set_property(TARGET cangjie-runtime APPEND PROPERTY LINK_DEPENDS
-        "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_GENERATOR}"
+        "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_GENERATOR}" "${WINDOWS_EXPORT_RETIRED}"
+        "${WINDOWS_EXPORT_LINK_DEFINITION}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_export_references.json")
 elseif (DOPRA_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0) # thread module
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"

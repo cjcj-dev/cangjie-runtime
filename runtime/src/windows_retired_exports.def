@@ -1,0 +1,5 @@
+; Explicit Reference ABI retirement: controller 2026-10-26 decision T162404Z.
+; Historical source: 65ab0659d0e657c92a9ddabe8a10f8bc22dd2eef:runtime/src/windows_x86_64_exports.def
+; Preserve this ordinal as an unused hole; no shim or allocation fallback.
+EXPORTS
+    CJ_MCC_NewFinalizer @277
