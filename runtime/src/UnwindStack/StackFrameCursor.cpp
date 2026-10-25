@@ -8,6 +8,7 @@
 
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Interpreter/InterpreterSpecific.h"
 #include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
@@ -18,7 +19,8 @@ StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame) : stream(&topF
 }
 
 void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
-                                    Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor, bool young)
+                                    Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor, bool young,
+                                    void* const* interpreterState)
 {
 #ifdef __arm__
     switch (frame.GetFrameType()) {
@@ -59,6 +61,31 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& r
         case FrameType::EXSLUSIVE:
 #ifdef INTERPRETER_ENABLED
         case FrameType::INTERPRETER_C2I:
+        case FrameType::INTERPRETER_I2I:
+        case FrameType::INTERPRETER_I2N:
+            break;
+        case FrameType::INTERPRETER: {
+            // ZGC frame.cpp:1166-1167 dispatches interpreted oop maps from the
+            // same per-frame root walk used by ZStackWatermark::process.
+            // The current interpreter ABI owns state only during this callback;
+            // no visiting state is retained across a lazy watermark return.
+            auto visit = [&](DYN_VisitingState state) {
+                if (derivedPtrVisitor == nullptr) {
+                    VisitInterpreterFrameRootsMarking(state, frame, &visitor);
+                } else {
+                    VisitInterpreterFrameRootsAdjusting(state, frame, &visitor, derivedPtrVisitor);
+                }
+            };
+            if (interpreterState != nullptr) {
+                visit(*interpreterState);
+            } else {
+                IterateFramesWithState(mutator.interpreterCJThreadData,
+                    [](DYN_VisitingState state, void* context) {
+                        (*static_cast<decltype(visit)*>(context))(state);
+                    }, &visit);
+            }
+            break;
+        }
 #endif
         default:
             break;
@@ -114,7 +141,8 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
 }
 
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young,
+                                  void* const* interpreterState)
 {
     if (Done()) {
         return false;
@@ -123,15 +151,37 @@ bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
     const FrameInfo frame = *CurrentFrame();
     const bool returning = frame.GetFrameType() == FrameType::RETURN_SAFEPOINT;
     if (returning) { Advance(); }
-    ProcessFrame(frame, RegMap(), visitor, mutator, derivedPtrVisitor, young);
+    ProcessFrame(frame, RegMap(), visitor, mutator, derivedPtrVisitor, young, interpreterState);
     if (!returning) { Advance(); }
     return true;
 }
 
 void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young,
+                                  const RootVisitor* interpreterVisitor)
 {
-    while (ProcessOne(visitor, mutator, derivedPtrVisitor, young)) {
+    while (!Done()) {
+#ifdef INTERPRETER_ENABLED
+        if (CurrentFrame()->GetFrameType() == FrameType::INTERPRETER) {
+            // Preserve the existing eager API's one state for all subsequent
+            // interpreted frames, including mixed compiled/interpreted chains.
+            auto remaining = [&](DYN_VisitingState state) {
+                while (!Done()) {
+                    const RootVisitor& roots = CurrentFrame()->GetFrameType() == FrameType::INTERPRETER &&
+                        interpreterVisitor != nullptr ? *interpreterVisitor : visitor;
+                    ProcessOne(roots, mutator, derivedPtrVisitor, young, &state);
+                }
+            };
+            IterateFramesWithState(mutator.interpreterCJThreadData,
+                [](DYN_VisitingState state, void* context) {
+                    (*static_cast<decltype(remaining)*>(context))(state);
+                }, &remaining);
+            return;
+        }
+#else
+        (void)interpreterVisitor;
+#endif
+        ProcessOne(visitor, mutator, derivedPtrVisitor, young);
     }
 }
 

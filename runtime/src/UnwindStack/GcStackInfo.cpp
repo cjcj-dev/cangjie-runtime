@@ -36,7 +36,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
     (void)slotRootVisitor;
     (void)young;
     StackFrameCursor cursor(stack);
-    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young, &slotRootVisitor);
 }
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
@@ -55,32 +55,7 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
     StackFrameCursor cursor(stack);
     cursor.ProcessAll(func, mutator);
 
-#ifdef INTERPRETER_ENABLED
-    auto markingStackVisitor = [this, &func](DYN_VisitingState state) {
-        for (const auto& frame : stack) {
-            switch (frame.GetFrameType()) {
-                case FrameType::INTERPRETER_I2N:
-                    // all roots are saved in interpreted frame producing I2N call, I2N adapter does not save any
-                    // references
-                    break;
-                case FrameType::INTERPRETER:
-                    VisitInterpreterFrameRootsMarking(state, frame, &func);
-                    break;
-                default: {
-                    break;
-                }
-            }
-        }
-    };
 
-    IterateFramesWithState(
-        mutator.interpreterCJThreadData,
-        [](DYN_VisitingState state, void* ctx) {
-            auto closure = reinterpret_cast<decltype(markingStackVisitor)*>(ctx);
-            (*closure)(state);
-        },
-        &markingStackVisitor);
-#endif
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
@@ -96,30 +71,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 {
     (void)young;
     StackFrameCursor cursor(stack);
-    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young, &slotRootVisitor);
 
-#ifdef INTERPRETER_ENABLED
-    auto adjustingStackVisitor = [this, &slotRootVisitor, &derivedPtrVisitor](DYN_VisitingState state) {
-        for (const auto& frame : stack) {
-            switch (frame.GetFrameType()) {
-                case FrameType::INTERPRETER:
-                    VisitInterpreterFrameRootsAdjusting(state, frame, &slotRootVisitor, &derivedPtrVisitor);
-                    break;
-                default: {
-                    break;
-                }
-            }
-        }
-    };
 
-    IterateFramesWithState(
-        mutator.interpreterCJThreadData,
-        [](DYN_VisitingState state, void* ctx) {
-            auto closure = reinterpret_cast<decltype(adjustingStackVisitor)*>(ctx);
-            (*closure)(state);
-        },
-        &adjustingStackVisitor);
-#endif
 }
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)

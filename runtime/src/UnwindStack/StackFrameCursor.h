@@ -52,11 +52,13 @@ public:
     // an array whose only root was RawArray+8 went unmarked and its region was
     // reclaimed under it.
     bool ProcessOne(const RootVisitor& visitor, Mutator& mutator,
-                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false);
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false,
+                    void* const* interpreterState = nullptr);
 
     // Drain remaining frames.
     void ProcessAll(const RootVisitor& visitor, Mutator& mutator,
-                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false);
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false,
+                    const RootVisitor* interpreterVisitor = nullptr);
 
     // Resume from a watermark-published frame index (stackwm #1).
     // Replays stub bookkeeping for frames [0, resumeIndex) so RegSlotsMap matches a
@@ -73,7 +75,7 @@ public:
                                     const RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static void ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                              Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,
-                             bool young = false);
+                             bool young = false, void* const* interpreterState = nullptr);
 
 private:
     StackFrameStream stream;
