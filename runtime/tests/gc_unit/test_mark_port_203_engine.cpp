@@ -106,6 +106,60 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
     }
 }
 
+// ZGC 5b2d6991a1279d375f9a3c00c7bcd0bbcc7081d6 zMark.cpp:466-485.
+// A pending STS request must be serviced by Drain's first checkpoint, while
+// there is still work in the same stripe. Leaving STS at termination is too late.
+GC_OTHER_VM_TEST(MarkPort203Engine, DrainYieldsWithSameStripeWorkRemaining)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    WorkerFixture worker;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.ResizeWorkers(1);
+    auto& stripes = domain.Stripes();
+    GC_EXPECT_EQ(stripes.NStripes(), 4u);
+    constexpr size_t count = 65;
+    std::vector<BaseObject*> objects;
+    MarkThreadLocalStacks seed(4);
+    for (size_t i = 0; i < count; ++i) {
+        auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
+        objects.push_back(object);
+        seed.Push(stripes, stripes.StripeForWorker(1, 0), ObjectEntry(object), true);
+    }
+    fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
+    (void)seed.Flush(stripes);
+    std::atomic<bool> joined{false};
+    bool drained = false;
+    std::thread participant([&] {
+        ThreadLocal::InitializeCleaner();
+        WorkerFixture participantWorker(0);
+        SuspendibleThreadSetJoiner membership;
+        joined.store(true, std::memory_order_release);
+        while (!SuspendibleThreadSet::should_yield()) std::this_thread::yield();
+        drained = domain.FollowWork(false);
+    });
+    while (!joined.load(std::memory_order_acquire)) std::this_thread::yield();
+    SuspendibleThreadSet::synchronize();
+    size_t atPause = 0;
+    for (auto* object : objects) {
+        atPause += fx.region0()->is_object_strongly_live(from_object(object));
+    }
+    SuspendibleThreadSet::desynchronize();
+    participant.join();
+    size_t afterResume = 0;
+    for (auto* object : objects) {
+        afterResume += fx.region0()->is_object_strongly_live(from_object(object));
+    }
+    std::fprintf(stderr, "DRAIN_STS_TARGET executed=1 stripes=%zu worker=0 entries=%zu "
+                         "marked_at_pause=%zu marked_after_resume=%zu drained=%d\n",
+                 stripes.NStripes(), count, atPause, afterResume, drained);
+    GC_EXPECT_EQ(atPause, 1u);
+    GC_EXPECT_TRUE(drained);
+    GC_EXPECT_EQ(afterResume, count);
+    GC_EXPECT_EQ(fx.region0()->live_objects(), count);
+    GC_EXPECT_TRUE(stripes.IsEmpty());
+}
+
 GC_OTHER_VM_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 {
     B09RuntimeFixture runtime;

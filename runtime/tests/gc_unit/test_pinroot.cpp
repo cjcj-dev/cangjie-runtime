@@ -850,6 +850,11 @@ struct GrowCopyObserved {
     uintptr_t sp;
     uintptr_t base;
     uintptr_t watermark;
+    uintptr_t publishedFA;
+    uintptr_t publishedSP;
+    uintptr_t publishedAnchor;
+    uintptr_t oldFA;
+    uintptr_t oldSP;
     bool done;
 };
 
@@ -899,8 +904,13 @@ static void GrowCopyBody()
     g_growCopy.base = g_growMutator->GetStackBaseAddr();
     g_growCopy.slot = reinterpret_cast<uintptr_t>(&younger[2]);
     g_growCopy.before = younger[2];
+    g_growCopy.oldFA = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
+    g_growCopy.oldSP = context.frameInfo.mFrame.GetSP();
     const intptr_t offset = MRT_StackGrow(0, 0, nullptr);
     g_growCopy.offset = offset;
+    g_growCopy.publishedFA = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
+    g_growCopy.publishedSP = context.frameInfo.mFrame.GetSP();
+    g_growCopy.publishedAnchor = reinterpret_cast<uintptr_t>(context.anchorFA);
     g_growCopy.oldAfter = younger[2];
     if (offset != 0) {
         g_growCopy.copied = *reinterpret_cast<uintptr_t*>(
@@ -935,7 +945,7 @@ private:
     Concurrency concurrency;
 };
 
-static void CheckGrowCopiesHealedFrameRoot()
+static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false)
 {
     GrowCopyRuntime runtime(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
@@ -1034,6 +1044,15 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_EQ(g_growCopy.copied, static_cast<uintptr_t>(relocated));
     GC_EXPECT_EQ(g_growCopy.oldAfter, static_cast<uintptr_t>(relocated));
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
+    if (checkPublishedAnchor) {
+        std::fprintf(stderr, "GROW_PUBLISHED_ANCHOR_TARGET executed=1 offset=%ld "
+                             "old_fa=%#zx new_fa=%#zx old_sp=%#zx new_sp=%#zx anchor=%#zx\n",
+                     static_cast<long>(g_growCopy.offset), g_growCopy.oldFA, g_growCopy.publishedFA,
+                     g_growCopy.oldSP, g_growCopy.publishedSP, g_growCopy.publishedAnchor);
+        GC_EXPECT_EQ(g_growCopy.publishedFA, g_growCopy.oldFA + g_growCopy.offset);
+        GC_EXPECT_EQ(g_growCopy.publishedSP, g_growCopy.oldSP + g_growCopy.offset);
+        GC_EXPECT_EQ(g_growCopy.publishedAnchor, uintptr_t{0});
+    }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
 }
@@ -1045,6 +1064,15 @@ GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, HealsFrameRootBeforeCopy)
 {
     CheckGrowCopiesHealedFrameRoot();
 }
+
+#if defined(__x86_64__) && defined(__linux__)
+// Uses the existing CJThread allocation/copy and MRT_StackGrow chain. This
+// checks its published context, not a fabricated unmapped-stack crash.
+GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, RepublishesFrameAnchorAfterCopy)
+{
+    CheckGrowCopiesHealedFrameRoot(true);
+}
+#endif
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 #include <csignal>
