@@ -48,10 +48,48 @@ function execute(s, [op, args]) {
 let checks = 0;
 for (const block of blocks) {
   const name = block.match(/StartAddress: (\w+)/)?.[1];
-  const selected = ['closure', 'callee', 'exclusive'].includes(mode) || (mode === 'c2n' ? name === 'CJ_MCC_C2NStub' : mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name));
+  const selected = ['closure', 'callee', 'exclusive'].includes(mode) || (mode === 'eh-transfer' ? name === 'RestoreContextForEH' : mode === 'c2n' ? name === 'CJ_MCC_C2NStub' : mode === 'control' ? name?.startsWith('__CJ_') : ['CJ_MCC_N2CStub', 'ExecuteCangjieStub', 'ApplyCangjieMethodStub'].includes(name));
   if (!selected) continue;
   const start = symbols.get(name), prolog = Number(block.match(/PrologSize: (\d+)/)[1]);
   assert.ok(start !== undefined, name + ' real production symbol missing');
+  if (name === 'RestoreContextForEH' && mode === 'eh-transfer') {
+    // ExceptionHandling::ChangeEHStackInfoLR replaces the native return PC.
+    // Model that RET, not a CALL to this entry: the managed SP has no fresh RA.
+    const managedSp = stack + 8n;
+    const state = {r: {...initial, rsp: managedSp - 8n}, mem: new Map()};
+    write(state.mem, state.r.rsp, BigInt(start), 8);
+    execute(state, ['retq', '']);
+    assert.equal(state.r.rip, BigInt(start));
+    assert.equal(state.r.rsp, managedSp);
+    assert.ok(!state.mem.has(managedSp), 'transfer must not fabricate a native return slot');
+    let reachedHelper = false;
+    for (const [, insn] of [...instructions].filter(([pc]) => pc >= start).sort((a, b) => a[0] - b[0])) {
+      if (insn[0] !== 'callq') { execute(state, insn); continue; }
+      reachedHelper = true;
+      assert.equal(state.r.rsp % 16n, 0n, 'EH helper call stack alignment');
+      const context = state.r.rcx;
+      // Windows CalleeSavedRegisterContext: seven GPRs, padding, ten XMMs,
+      // RBP, RSP. Test the actual stores before exercising native home space.
+      const fields = [['rbx', 0, 8], ['rsi', 8, 8], ['rdi', 16, 8], ['r12', 24, 8],
+        ['r13', 32, 8], ['r14', 40, 8], ['r15', 48, 8],
+        ...Array.from({length: 10}, (_, i) => ['xmm' + (i + 6), 64 + i * 16, 16]),
+        ['rbp', 224, 8], ['rsp', 232, 8]];
+      for (const [reg, offset, width] of fields) {
+        assert.equal(read(state.mem, context + BigInt(offset), width), reg === 'rsp' ? managedSp : initial[reg], 'EH context producer: ' + reg);
+      }
+      // A real Windows native callee may use all four home slots. No helper
+      // implementation or OS unwind behavior is inferred from this model.
+      for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
+      for (const [reg, offset, width] of fields) {
+        assert.equal(read(state.mem, context + BigInt(offset), width), reg === 'rsp' ? managedSp : initial[reg], 'EH helper home overwrote saved ' + reg);
+      }
+      checks++;
+      break;
+    }
+    assert.ok(reachedHelper, 'actual EH helper call must be reached');
+    console.log('RestoreContextForEH: redirected RET/context/home checked; landing-pad and SEH/OS NOT_RUN');
+    continue;
+  }
   if (name === 'RestoreContextForEH') {
     // Entered by a redirected managed return, without a native call/return slot.
     // Do not feed this transfer trampoline to the normal-call stack model.
