@@ -681,6 +681,12 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         if (published.GetSP() != 0) {
             published.SetSP(published.GetSP() + stackOffset);
         }
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+        if (published.GetPtrAuthRAMod() != nullptr) {
+            published.SetPtrAuthRAMod(reinterpret_cast<const uint64_t*>(
+                reinterpret_cast<uintptr_t>(published.GetPtrAuthRAMod()) + stackOffset));
+        }
+#endif
         if (uwContext.anchorFA != nullptr) {
             uwContext.anchorFA = reinterpret_cast<uint32_t*>(
                 reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
