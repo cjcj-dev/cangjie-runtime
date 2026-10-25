@@ -125,6 +125,7 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ResumedEntryAfterCollection)
 #include <limits.h>
 #include <unistd.h>
 #include "Interpreter/RuntimeAPI.h"
+#include "StackManager.h"
 #include "Mutator/ThreadSMR.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -337,5 +338,18 @@ GC_COMPONENT_OTHER_VM_TEST(InterpreterWatermark, VisitsLoadedInterpreterFrames)
 GC_COMPONENT_OTHER_VM_TEST(InterpreterWatermark, NativeFrameControl)
 {
     CheckInterpreterWatermark(false);
+}
+GC_COMPONENT_OTHER_VM_TEST(InterpreterWatermark, RegistersLoadedInterpreterCode)
+{
+    B09RuntimeFixture runtime(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    void* library = LoadFiniteInterpreter();
+    void* pc = dlsym(library, "GCInterpreterFramePC");
+    GC_EXPECT_TRUE(pc != nullptr);
+    const bool interpreted = StackManager::IsInterpreterCodeAddr(reinterpret_cast<uintptr_t>(pc));
+    const bool native = StackManager::IsInterpreterCodeAddr(reinterpret_cast<uintptr_t>(&UnstartedTask));
+    std::fprintf(stderr, "INTERPRETER_IMAGE_TARGET executed=1 loaded=%d native=%d\n", interpreted, native);
+    GC_EXPECT_TRUE(interpreted);
+    GC_EXPECT_FALSE(native);
 }
 #endif
