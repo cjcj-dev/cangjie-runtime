@@ -42,6 +42,11 @@ int main(int argc, char** argv)
         const DWORD64 saved[] = {original.R15, original.R14, original.R13, original.R12,
                                  original.Rdi, original.Rsi, original.Rbx};
         for (int i = 0; i < 7; ++i) put(frame - 72 - 8 * i, &saved[i], 8);
+        put(frame - 32, &original.Rsi, 8); // actual PUSH_NONVOL frame-register save
+        for (int i = 1; i <= 3; ++i) {
+            const DWORD64 contextWord = 0xBAD000 + i;
+            put(frame - 8 * i, &contextWord, 8);
+        }
         put(frame, &original.Rbp, 8); put(entrySp, &callerPc, 8);
         CONTEXT context{};
         context.ContextFlags = CONTEXT_FULL;

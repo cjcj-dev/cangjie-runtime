@@ -57,6 +57,16 @@ for (const block of blocks) {
   let previous = 256;
   for (const c of codes) { assert.ok(c.pc <= prolog && c.pc <= previous, name + ': unwind offset outside prologue or not descending'); previous = c.pc; }
   const setFrame = codes.find(c => c.op === 'SET_FPREG');
+  // These are encoding requirements, not inferred from whether the simulated
+  // unwinder happens to recover the register values for one implementation.
+  let allocated = false;
+  for (const c of [...codes].reverse()) {
+    if (c.op === 'PUSH_NONVOL') assert.ok(!allocated, name + ': PUSH_NONVOL must precede other unwind operations');
+    else allocated = true;
+    if (setFrame && c.op.startsWith('SAVE_')) {
+      assert.ok(c.pc > setFrame.pc, name + ': ' + c.op + ' before SET_FPREG');
+    }
+  }
   function unwind(s, pc) {
     const r = {...s.r}, base = setFrame && pc >= setFrame.pc ? r[frame] - BigInt(bias) : r.rsp;
     for (const c of codes.filter(c => c.pc <= pc)) {
@@ -78,6 +88,13 @@ for (const block of blocks) {
   unwind(s, 0);
   const ins = [...instructions].filter(([pc]) => pc >= start && pc < start + prolog).sort((a,b) => a[0]-b[0]);
   for (let i = 0; i < ins.length; i++) { execute(s, ins[i][1]); unwind(s, (ins[i+1]?.[0] ?? start + prolog) - start); }
+  if (mode === 'n2c' && name !== 'ExecuteCangjieStub') {
+    // MRT_SaveTopManagedContextToN2CStub overwrites these three reserved
+    // words. Redundant RBP push records must still restore the actual caller
+    // RBP from the original anchor, not any of these context values.
+    for (let i = 1; i <= 3; i++) write(s.mem, s.r.rbp - BigInt(8 * i), 0xBAD000n + BigInt(i), 8);
+    assert.equal(read(s.mem, s.r.rbp - 112n, 8), initial.rsi, 'managed RSI slot changed');
+  }
   for (const delta of mode === 'control' ? [0] : [0, 32, 80, 4096]) {
     const body = {r: {...s.r}, mem: new Map(s.mem)};
     if (!setFrame && delta) continue;
@@ -115,7 +132,10 @@ for (const block of blocks) {
     const tail = bodyIns.slice(restoreStart);
     const retIndex = tail.findIndex(([,i]) => i[0] === 'retq');
     assert.ok(retIndex >= 0); tail.length = retIndex + 1;
-    const officialTail = name === 'ExecuteCangjieStub' ? 0 : tail.findIndex(([,i]) => i[0] === 'popq');
+    const officialTail = tail.findIndex(([,i]) => i[0] === 'leaq' && i[1].endsWith(', %rsp'));
+    assert.ok(officialTail >= 0, name + ': frame-relative epilogue missing');
+    assert.ok(tail[officialTail][1][1].includes('(%' + frame + ')'), name + ': epilogue must use its actual frame register');
+    for (const [,i] of tail.slice(officialTail + 1, -1)) assert.equal(i[0], 'popq', name + ': non-POP instruction inside epilogue');
     for (const delta of [32, 80, 4096]) {
       const state = {r: {...s.r}, mem: new Map(s.mem)};
       state.r.rsp -= BigInt(delta);

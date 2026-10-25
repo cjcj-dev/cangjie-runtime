@@ -107,20 +107,31 @@
     .p2align    4, 0x90
 CJ_MCC_N2CStub:
     .seh_proc CJ_MCC_N2CStub
+    // Keep the managed anchor at entry RSP - 8. Three redundant RBP
+    // pushes reserve the existing N2C context slots; their intermediate values
+    // are immaterial because the first push restores the caller's RBP last.
+    // All PUSH_NONVOL operations precede allocation/SET_FPREG. RSI therefore
+    // has a real push save before it becomes the Windows frame register.
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    subq    $N2CStubFrameSize, %rsp
-    .seh_stackalloc N2CStubFrameSize
-
-    // RBP remains the managed frame anchor. RSI is a stable Windows frame
-    // base below every save slot (the SEH frame bias is limited to 240 bytes).
-    // Save RSI before changing it; the unwind order resets RSP before restoring
-    // RSI. Before SET_FPREG executes, unwinding uses the current fixed RSP.
-    movq    %rsi, -112(%rbp)
-    .seh_savereg %rsi, N2CStubFrameSize - 112
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rsi
+    .seh_pushreg %rsi
+    leaq    32(%rsp), %rbp
+    subq    $(N2CStubFrameSize - 32), %rsp
+    .seh_stackalloc N2CStubFrameSize - 32
     movq    %rsp, %rsi
     .seh_setframe %rsi, 0
+
+    // Preserve the existing managed RSI slot as well as its SEH push slot.
+    // No offset-based unwind save appears before SET_FPREG.
+    movq    -32(%rbp), %r11
+    movq    %r11, -112(%rbp)
 
     movq    %r15,  -72(%rbp)
     .seh_savereg %r15, N2CStubFrameSize - 72
@@ -281,11 +292,14 @@ unwindPCForN2CStub:
     movapd  -368(%rbp), %xmm14
     movapd  -384(%rbp), %xmm15
 
-    // Keep the Windows frame register live until RSP is recovered. Once
-    // RSI is restored, the remaining POP/RET is an independently recognizable
-    // Windows epilogue, so no subsequent unwind needs the old frame register.
-    leaq    N2CStubFrameSize(%rsi), %rsp
-    movq    -112(%rbp), %rsi
+    // A single frame-relative LEA followed only by POPs and RET is the
+    // Windows epilogue. Discard the three context slots into volatile RCX;
+    // RBP remains the managed anchor until the final caller-RBP pop.
+    leaq    (N2CStubFrameSize - 32)(%rsi), %rsp
+    popq    %rsi
+    popq    %rcx
+    popq    %rcx
+    popq    %rcx
     popq    %rbp
     retq    $16
     .seh_endproc
@@ -340,20 +354,31 @@ ApplyCangjieMethodStub:
 ApplyCangjieMethodStubFloat32:
 ApplyCangjieMethodStubFloat64:
 .seh_proc ApplyCangjieMethodStub
+    // Keep the managed anchor at entry RSP - 8. Three redundant RBP
+    // pushes reserve the existing N2C context slots; their intermediate values
+    // are immaterial because the first push restores the caller's RBP last.
+    // All PUSH_NONVOL operations precede allocation/SET_FPREG. RSI therefore
+    // has a real push save before it becomes the Windows frame register.
     pushq   %rbp
     .seh_pushreg %rbp
-    movq    %rsp, %rbp
-    subq    $N2CStubFrameSize, %rsp
-    .seh_stackalloc N2CStubFrameSize
-
-    // RBP remains the managed frame anchor. RSI is a stable Windows frame
-    // base below every save slot (the SEH frame bias is limited to 240 bytes).
-    // Save RSI before changing it; the unwind order resets RSP before restoring
-    // RSI. Before SET_FPREG executes, unwinding uses the current fixed RSP.
-    movq    %rsi, -112(%rbp)
-    .seh_savereg %rsi, N2CStubFrameSize - 112
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rbp
+    .seh_pushreg %rbp
+    pushq   %rsi
+    .seh_pushreg %rsi
+    leaq    32(%rsp), %rbp
+    subq    $(N2CStubFrameSize - 32), %rsp
+    .seh_stackalloc N2CStubFrameSize - 32
     movq    %rsp, %rsi
     .seh_setframe %rsi, 0
+
+    // Preserve the existing managed RSI slot as well as its SEH push slot.
+    // No offset-based unwind save appears before SET_FPREG.
+    movq    -32(%rbp), %r11
+    movq    %r11, -112(%rbp)
 
     movq    %r15,  -72(%rbp)
     .seh_savereg %r15, N2CStubFrameSize - 72
@@ -480,11 +505,14 @@ ApplyCangjieMethodStubFloat64:
     movapd  -368(%rbp), %xmm14
     movapd  -384(%rbp), %xmm15
 
-    // Keep the Windows frame register live until RSP is recovered. Once
-    // RSI is restored, the remaining POP/RET is an independently recognizable
-    // Windows epilogue, so no subsequent unwind needs the old frame register.
-    leaq    N2CStubFrameSize(%rsi), %rsp
-    movq    -112(%rbp), %rsi
+    // A single frame-relative LEA followed only by POPs and RET is the
+    // Windows epilogue. Discard the three context slots into volatile RCX;
+    // RBP remains the managed anchor until the final caller-RBP pop.
+    leaq    (N2CStubFrameSize - 32)(%rsi), %rsp
+    popq    %rsi
+    popq    %rcx
+    popq    %rcx
+    popq    %rcx
     popq    %rbp
     retq
 .seh_endproc
