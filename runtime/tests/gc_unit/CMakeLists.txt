@@ -333,3 +333,8 @@ target_compile_options(cj_gc_other_vm_exit_unit PRIVATE -fexceptions)
 # Do not inherit the runtime tracing archive from the parent directory.
 set_property(TARGET cj_gc_other_vm_exit_unit PROPERTY LINK_LIBRARIES pthread)
 add_test(NAME cj_gc_other_vm_exit_unit COMMAND cj_gc_other_vm_exit_unit)
+
+# Finite consumer of the unchanged interpreter callback ABI.
+add_library(cj_interpreter_root_fixture SHARED interpreter_root_fixture.cpp)
+target_include_directories(cj_interpreter_root_fixture PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+add_dependencies(cj_gc_unit cj_interpreter_root_fixture)

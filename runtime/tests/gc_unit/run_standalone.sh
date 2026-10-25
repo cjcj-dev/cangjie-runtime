@@ -311,6 +311,7 @@ MAIN_COMPILE_FLAGS=(
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
   -o "$OUT/libcj_package_init_fixture.so" > "$OUT/package-init-image-build.log" 2>&1 &
 PACKAGE_INIT_IMAGE_PID=$!
+"$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/interpreter_root_fixture.cpp" -o "$OUT/libcj_interpreter_root_fixture.so" > "$OUT/interpreter-root-fixture-build.log" 2>&1
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
   -o "$OUT/libcj_package_init_unrelated.so" > "$OUT/package-init-unrelated-build.log" 2>&1 &
 PACKAGE_INIT_UNRELATED_PID=$!

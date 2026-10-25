@@ -119,3 +119,140 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ResumedEntryAfterCollection)
 {
     CheckBindingAfterCollection(false, false, true, true);
 }
+
+#if defined(__linux__) && defined(__x86_64__)
+#include <limits.h>
+#include <unistd.h>
+#include "Interpreter/RuntimeAPI.h"
+#include "Mutator/ThreadSMR.h"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "b09_runtime_fixture.hpp"
+extern "C" void* CJ_CJThreadNew(void*, const void*, void* (*)(void*, unsigned int), const void*,
+                                 unsigned int, int, uintptr_t);
+namespace {
+void* LoadFiniteInterpreter()
+{
+    char path[PATH_MAX];
+    const ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    GC_EXPECT_TRUE(n > 0);
+    path[n] = 0;
+    const std::string library = std::string(path).substr(0, std::string(path).find_last_of('/') + 1) +
+                                "libcj_interpreter_root_fixture.so";
+    InterpreterParam param{};
+    param.interpreterLibName = library.c_str();
+    GC_EXPECT_EQ(InitCJInterpreter(&param), E_OK);
+    void* handle = dlopen(library.c_str(), RTLD_NOW | RTLD_NOLOAD);
+    GC_EXPECT_TRUE(handle != nullptr);
+    return handle;
+}
+struct AttachObservation {
+    Mutator* owner = nullptr;
+    bool phaseAdmitted = false;
+    uintptr_t before = 0;
+    uintptr_t after = 0;
+};
+void FlipDuringInterpreterStart(void* context, void* owner)
+{
+    auto& observation = *static_cast<AttachObservation*>(context);
+    observation.owner = static_cast<Mutator*>(owner);
+    observation.before = ThreadGCData::PublishedMasks().storeGood;
+    // Nonblocking probe: never await a phase flip while the producer owns its
+    // correct lock. An illegal lock across the external callback fails directly.
+    std::thread phase([&] {
+        auto& manager = MutatorManager::Instance();
+        observation.phaseAdmitted = manager.TryAcquireMutatorManagementWLock();
+        if (observation.phaseAdmitted) {
+            ZGlobalsPointers::flip_old_relocate_start();
+            manager.MutatorManagementWUnlock();
+        }
+    });
+    phase.join();
+    observation.after = ThreadGCData::PublishedMasks().storeGood;
+}
+void* UnstartedTask(void*, unsigned int) { return nullptr; }
+}
+GC_COMPONENT_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterConstruction)
+{
+    B09RuntimeFixture runtime(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    void* library = LoadFiniteInterpreter();
+    using SetHook = void (*)(void (*)(void*, void*), void*);
+    auto setHook = reinterpret_cast<SetHook>(dlsym(library, "GCInterpreterSetStartHook"));
+    GC_EXPECT_TRUE(setHook != nullptr);
+    AttachObservation observed;
+    setHook(FlipDuringInterpreterStart, &observed);
+    void* task = CJ_CJThreadNew(runtime.GetConcurrencyModel().GetThreadScheduler(), nullptr,
+                               UnstartedTask, nullptr, 0, 0, 0);
+    setHook(nullptr, nullptr);
+    GC_EXPECT_TRUE(task != nullptr && observed.owner != nullptr);
+    ThreadsListHandle members;
+    const auto& data = observed.owner->GetGCData();
+    const auto epoch = observed.owner->GetStackWatermark().GetEpoch();
+    const bool published = members.includes(observed.owner);
+    std::fprintf(stderr, "LOGICAL_ATTACH_TARGET executed=1 phase_admitted=%d before=%#zx after=%#zx "
+                         "attached=%#zx epoch=%#zx current_epoch=%#zx buffer=%#zx published=%d\n",
+                 observed.phaseAdmitted, observed.before, observed.after, data.storeGoodMask,
+                 static_cast<size_t>(epoch), static_cast<size_t>(StackWatermark::epoch_id()),
+                 data.storeBarrierBuffer->lastProcessedColor, published);
+    GC_EXPECT_TRUE(observed.phaseAdmitted);
+    GC_EXPECT_NE(observed.before, observed.after);
+    GC_EXPECT_TRUE(published);
+    GC_EXPECT_EQ(data.storeGoodMask, observed.after);
+    GC_EXPECT_EQ(epoch, StackWatermark::epoch_id());
+    GC_EXPECT_EQ(data.storeBarrierBuffer->lastProcessedColor, observed.after);
+}
+
+namespace {
+size_t interpreterRoots = 0;
+uintptr_t interpreterOldColor = 0;
+void ObserveInterpreterRoot(zaddress_unsafe* slot, uintptr_t color)
+{
+    ++interpreterRoots;
+    GC_EXPECT_EQ(color, interpreterOldColor);
+    *reinterpret_cast<uintptr_t*>(slot) += 0x40;
+}
+void CheckInterpreterWatermark(bool interpreted)
+{
+    B09RuntimeFixture runtime(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    void* library = LoadFiniteInterpreter();
+    void* pc = interpreted ? dlsym(library, "GCInterpreterFramePC") :
+                             reinterpret_cast<void*>(&UnstartedTask);
+    GC_EXPECT_TRUE(pc != nullptr);
+    // Input frame chain is classified by the product from the loaded interpreter
+    // image. Its finite ABI consumer reads roots from each received frame.fp.
+    alignas(16) uintptr_t frames[2][4]{};
+    frames[0][0] = reinterpret_cast<uintptr_t>(&frames[1][0]);
+    frames[0][1] = reinterpret_cast<uintptr_t>(pc);
+    frames[0][2] = 0x1000;
+    frames[1][2] = 0x2000;
+    Mutator owner;
+    owner.SetManagedContext(true);
+    owner.GetUnwindContext().frameInfo = FrameInfo {
+        MachineFrame(reinterpret_cast<uint32_t*>(pc), reinterpret_cast<FrameAddress*>(&frames[0][0])),
+        FrameType::RUNTIME };
+    owner.GetUnwindContext().frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[0][0]));
+    owner.GetStackWatermark().Reset();
+    interpreterOldColor = owner.GetStackWatermark().GetEpoch();
+    ZGlobalsPointers::flip_old_relocate_start();
+    interpreterRoots = 0;
+    StackWatermarkSet::finish_processing(owner, reinterpret_cast<void*>(&ObserveInterpreterRoot));
+    std::fprintf(stderr, "INTERPRETER_WATERMARK_TARGET executed=1 interpreted=%d roots=%zu "
+                         "first=%#zx second=%#zx done=%d\n", interpreted, interpreterRoots,
+                 frames[0][2], frames[1][2], owner.GetStackWatermark().IsDone());
+    GC_EXPECT_EQ(interpreterRoots, interpreted ? 2u : 0u);
+    GC_EXPECT_EQ(frames[0][2], interpreted ? 0x1040u : 0x1000u);
+    GC_EXPECT_EQ(frames[1][2], interpreted ? 0x2040u : 0x2000u);
+    GC_EXPECT_TRUE(owner.GetStackWatermark().IsDone());
+}
+}
+GC_COMPONENT_OTHER_VM_TEST(InterpreterWatermark, VisitsLoadedInterpreterFrames)
+{
+    CheckInterpreterWatermark(true);
+}
+GC_COMPONENT_OTHER_VM_TEST(InterpreterWatermark, NativeFrameControl)
+{
+    CheckInterpreterWatermark(false);
+}
+#endif
