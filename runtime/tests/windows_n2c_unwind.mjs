@@ -248,7 +248,7 @@ for (const block of blocks) {
     write(state.mem, stack + 40n, tls, 8);
     write(state.mem, initial.r9 + 8n, functionPc, 8);
     let calls = 0, returned = false;
-    for (const [pc, insn] of functionBody) {
+    for (const [, insn] of functionBody) {
       if (insn[0] === 'callq') {
         calls++;
         if (calls === 1) {
@@ -259,13 +259,8 @@ for (const block of blocks) {
           assert.equal(insn[1], '*%r11'); assert.equal(state.r.r11, functionPc);
           assert.equal(state.r.rcx, initial.rcx, 'exclusive sret argument');
           assert.equal(state.r.rdx, initial.r8, 'exclusive closure argument');
-        } else if (calls === 3) {
-          assert.equal(calls, 3); assert.equal(state.r.rcx, s.r.rbp);
         } else {
-          assert.equal(calls, 4);
-          assert.equal(callTargets.get(pc), 'MRT_CompleteWindowsExceptionReturn');
-          assert.equal(state.r.rcx, s.r.rbp, 'exclusive exception boundary');
-          assert.equal(state.r.rdx, 0n, 'exclusive private cleanup');
+          assert.equal(calls, 3); assert.equal(state.r.rcx, s.r.rbp);
         }
         for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
         for (const reg of ['rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', 'xmm0', 'xmm1']) state.r[reg] = 0xBADn;
@@ -276,8 +271,32 @@ for (const block of blocks) {
         if (insn[0] === 'retq') { returned = true; break; }
       }
     }
-    assert.equal(calls, 4); assert.ok(returned, 'exclusive managed return not reached');
+    assert.equal(calls, 3); assert.ok(returned, 'exclusive managed return not reached');
     for (const reg of nonvolatile) assert.equal(state.r[reg], initial[reg], 'exclusive return lost ' + reg);
+    assert.equal(state.r.rax, result); assert.equal(state.r.xmm0, float0); assert.equal(state.r.xmm1, float1);
+    assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
+  }
+  if (mode === 'exclusive' && name === 'CJ_MCC_ExclusiveScope') {
+    // The outer boundary transfers after ExclusiveExecutor/ExclusiveRestore;
+    // the inner ExecuteExclusiveCangjieStub remains the three-call N2C entry.
+    const bridge = functionBody.findIndex(([pc, i]) => i[0] === 'callq' &&
+      callTargets.get(pc) === 'MRT_CompleteWindowsExceptionReturn');
+    assert.ok(bridge >= 5, 'outer exclusive return bridge must be reached');
+    const state = {r: {...s.r}, mem: new Map(s.mem)};
+    const result = 0x123456789n, float0 = 0xABCDEF123n, float1 = 0x123ABCDEFn;
+    state.r.rax = result; state.r.xmm0 = float0; state.r.xmm1 = float1;
+    for (const [, i] of functionBody.slice(bridge - 5, bridge)) execute(state, i);
+    assert.equal(state.r.rcx, s.r.rbp, 'exclusive exception boundary');
+    assert.equal(state.r.rdx, 0n, 'exclusive private cleanup');
+    for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
+    for (const r of ['rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', 'xmm0', 'xmm1']) state.r[r] = 0xBADn;
+    unwind(state, prolog + 1);
+    let returned = false;
+    for (const [, i] of functionBody.slice(bridge + 1)) {
+      execute(state, i); if (i[0] === 'retq') { returned = true; break; }
+    }
+    assert.ok(returned, 'outer exclusive boundary return not reached');
+    for (const r of nonvolatile) assert.equal(state.r[r], initial[r], 'outer exclusive lost ' + r);
     assert.equal(state.r.rax, result); assert.equal(state.r.xmm0, float0); assert.equal(state.r.xmm1, float1);
     assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
   }

@@ -127,6 +127,7 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size)
     if (obj == nullptr) {
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
+        return {};
     }
     BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
@@ -139,6 +140,7 @@ extern "C" ObjRef MCC_NewWeakRefObject(const TypeInfo* klass, MSize size)
     if (obj == nullptr) {
         VLOG(REPORT, "Allocating weak reference %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewWeakRefObject return nullptr");
+        return {};
     }
     return obj;
 }
@@ -168,6 +170,7 @@ extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewArray return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -182,6 +185,7 @@ extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObjArray return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -196,6 +200,7 @@ extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -210,6 +215,7 @@ extern "C" ArrayRef MCC_NewArray16(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray(16B) return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -224,6 +230,7 @@ extern "C" ArrayRef MCC_NewArray32(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray(32B) return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -238,6 +245,7 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray(64B) return nullptr");
+        return {};
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
@@ -683,6 +691,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         VLOG(REPORT, "Decoding stack trace class name %s length %zu failed and throw OutOfMemoryError",
             charArray->GetName(), stackTrace.className.Length());
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
+        return {};
     }
 
     Handle classHandle(Mutator::GetMutator(), std.className);
@@ -696,6 +705,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         VLOG(REPORT, "Decoding stack trace file name %s length %zu failed and throw OutOfMemoryError",
             charArray->GetName(), stackTrace.fileName.Length());
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
+        return {};
     }
 
     Handle fileHandle(Mutator::GetMutator(), std.fileName);
@@ -710,6 +720,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         VLOG(REPORT, "Decoding stack trace method name %s length %zu failed and throw OutOfMemoryError",
             charArray->GetName(), stackTrace.methodName.Length());
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
+        return {};
     }
 
     std.lineNumber = stackTrace.lineNumber;
@@ -724,6 +735,7 @@ static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString na
         name.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::MOVEABLE_OBJECT);
     if (array == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateCharArrayFromCString: nullptr array");
+        return {};
     }
     for (MIndex i = 0; i < name.Length(); ++i) {
         array->SetPrimitiveElement(i, static_cast<int8_t>(name[i]));
@@ -749,6 +761,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
     ArrayRef trace = ObjectManager::NewArray(size, arrayStackTrace, AllocType::MOVEABLE_OBJECT);
     if (trace == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateStackTrace: nullptr array");
+        return {};
     }
     Handle traceHandle(mutator, trace);
     int stackIndex = 0;
@@ -767,8 +780,11 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         StackTraceData frameData;
         // fill frame
         Handle classHandle(mutator, CreateCharArrayFromCString(charArray, className));
+        if (ExceptionManager::HasPendingException()) { return nullptr; }
         Handle fileHandle(mutator, CreateCharArrayFromCString(charArray, fileName));
+        if (ExceptionManager::HasPendingException()) { return nullptr; }
         frameData.methodName = CreateCharArrayFromCString(charArray, methodName);
+        if (ExceptionManager::HasPendingException()) { return nullptr; }
         frameData.className = static_cast<MArray*>(classHandle());
         frameData.fileName = static_cast<MArray*>(fileHandle());
         frameData.lineNumber = lineNumber;
@@ -820,6 +836,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
     ArrayRef allRecords = ObjectManager::NewArray(records.size(), arraySnapshot, AllocType::MOVEABLE_OBJECT);
     if (allRecords == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("GetAllThreadSnapshot: nullptr array");
+        return {};
     }
     Handle recordsHandle(mutator, allRecords);
     int recordIndex = 0;
@@ -828,8 +845,10 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         ThreadSnapshot snapshot;
         // fill thread snapshot
         Handle nameHandle(mutator, CreateCharArrayFromCString(charArray, record->GetThreadName()));
+        if (ExceptionManager::HasPendingException()) { return nullptr; }
         snapshot.id = record->GetStackTid();
         snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record->stacks);
+        if (ExceptionManager::HasPendingException()) { return nullptr; }
         snapshot.name = static_cast<MArray*>(nameHandle());
         snapshot.state = record->GetThreadState();
 
@@ -1624,6 +1643,7 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
         if (obj == nullptr) {
             VLOG(REPORT, "MCC_NewAndInitEnumTupleObject new tuple object failed and throw OutOfMemoryError");
             ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
+            return {};
         }
     } else {
         LOG(RTLOG_FATAL, "MCC_NewAndInitEnumTupleObject: unsupported type %s", ti->GetName());
@@ -1677,6 +1697,7 @@ extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
     if (array == nullptr) {
         VLOG(REPORT, "MCC_GetAssociatedValues new array failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewArray return nullptr");
+        return {};
     }
     // Extract fields from obj and put them into array.
     Handle arrayHandle(Mutator::GetMutator(), array);
@@ -1688,6 +1709,7 @@ extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
     if (arrayObj == nullptr) {
         VLOG(REPORT, "MCC_GetAssociatedValues new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
+        return {};
     }
     HeapAccess<>::oop_store(&(arrayObj->GetRefField(TYPEINFO_PTR_SIZE)), arrayHandle());
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(arrayObj) + TYPEINFO_PTR_SIZE);
@@ -2138,6 +2160,7 @@ extern "C" ObjRef MCC_NewGenericObject(const TypeInfo* klass, MSize size)
     if (obj == nullptr) {
         VLOG(REPORT, "Allocation generic object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
+        return {};
     }
     return obj;
 }
@@ -2209,6 +2232,7 @@ extern "C" ArrayRef MCC_NewArrayGeneric(const TypeInfo* arrayInfo, MIndex nElems
         VLOG(REPORT, "Allocation generic array %s length %zu failed and throw OutOfMemoryError",
              arrayInfo->GetName(), nElems);
         ExceptionManager::CheckAndThrowPendingException("NewArrayGeneric return nullptr");
+        return {};
     }
     return array;
 }

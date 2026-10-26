@@ -467,6 +467,7 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                 ObjRef structArgObj = ObjectManager::NewObject(argType, objSize, AllocType::MOVEABLE_OBJECT);
                 if (structArgObj == nullptr) {
                     ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected struct argument");
+                    return;
                 }
                 argObj = static_cast<MObject*>(argumentHandle());
                 Handle structHandle(Mutator::GetMutator(), structArgObj);
@@ -518,6 +519,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
             LOG(RTLOG_FATAL, "not support varray now!!!!\n");
         }
         AddCJArg(argValues, argType, argObj, allocBuffer);
+        if (ExceptionManager::HasPendingException()) { return; }
     }
 }
 
@@ -686,7 +688,10 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
     } else if (HasSRetWithGeneric()) {
         U32 objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::MOVEABLE_OBJECT);
-        CHECK_DETAIL(*sretSlot != nullptr, "PrepareSRet: allocate sret object failed");
+        if (*sretSlot == nullptr) {
+            ExceptionManager::CheckAndThrowPendingException("PrepareSRet: allocate sret object failed");
+            return;
+        }
 #if defined(__aarch64__)
 #else
         argValues->AddInt64(reinterpret_cast<Uptr>(sretSlot));
@@ -695,7 +700,10 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
     } else if (HasSRetWithUnknowGenericStruct()) {
         U32 objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::MOVEABLE_OBJECT);
-        CHECK_DETAIL(*sretSlot != nullptr, "PrepareSRet: allocate sret object failed");
+        if (*sretSlot == nullptr) {
+            ExceptionManager::CheckAndThrowPendingException("PrepareSRet: allocate sret object failed");
+            return;
+        }
 #if defined(__aarch64__)
 #else
         argValues->AddHandle(Handle(Mutator::GetMutator(), static_cast<BaseObject*>(*sretSlot)));
@@ -729,6 +737,18 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     std::vector<void*>& argBuffers = scopedAllocBuffer.GetArgBuffers();
     ArgValue argValues;
     void** sretSlot = nullptr;
+    bool ownsNativeReceiver = false;
+    const auto returnPending = [&]() -> void* {
+        // ThrowPendingException schedules a managed transfer, but returns in
+        // C++. Release native storage before the outer boundary transfers;
+        // generic sret objects and class receivers belong to the managed heap.
+        if (sretSlot != nullptr) {
+            if (HasSRetNotGeneric() || HasSRetWithKnowGenericStruct()) { MemoryFree(*sretSlot); }
+            MemoryFree(sretSlot);
+        }
+        if (ownsNativeReceiver) { MemoryFree(instanceObj); }
+        return nullptr;
+    };
     TypeInfo* retType = GetReturnType();
     const bool returnsReceiver = InitializerReturnsReceiver(retType);
     const bool returnsUnit = retType->IsUnit();
@@ -741,6 +761,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             retType = GetActualTypeFromGenericType(reinterpret_cast<GenericTypeInfo*>(retType), genericArgs);
         }
         PrepareSRet(&argValues, sretSlot, retType);
+        if (ExceptionManager::HasPendingException()) { return returnPending(); }
     }
     Handle sretHandle;
     if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
@@ -778,11 +799,13 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             instanceObj = ObjectManager::NewObject(declaringTi, objSize, AllocType::MOVEABLE_OBJECT);
             if (instanceObj == nullptr) {
                 ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected receiver");
+                return returnPending();
             }
             receiver = Handle(Mutator::GetMutator(), instanceObj);
             argValues.AddHandle(receiver);
         } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
             instanceObj = reinterpret_cast<ObjRef>(MemoryAlloc(1, declaringTi->GetInstanceSize()));
+            ownsNativeReceiver = true;
             argValues.AddInt64(reinterpret_cast<Uptr>(instanceObj));
             argValues.AddReference(nullptr); // add bp
         }
@@ -791,6 +814,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (actualArgs != nullptr) {
         StorePlain(RootSlotAt(&actualSnapshot.rawPtr), from_object(actualArray()));
         PrepareCJMethodActualArgs(&argValues, actualArgs, genericArgs, scopedAllocBuffer);
+        if (ExceptionManager::HasPendingException()) { return returnPending(); }
     }
     if (genericArgs != nullptr) {
         StorePlain(RootSlotAt(&genericSnapshot.rawPtr), from_object(genericArray()));
@@ -814,12 +838,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     }
     Value ret = ApplyCJMethodImpl(&argValues, sretSlot, receiver, returnsReceiver, returnsUnit);
 
-    if (IsInitializer() && declaringTi != nullptr && declaringTi->IsClass() &&
-        ExceptionManager::HasPendingException()) {
+    if (ExceptionManager::HasPendingException()) {
         // Let native argument/receiver roots unwind normally before the
         // redirected managed edge resumes. A throwing constructor has no
         // instance result; never publish the pre-construction receiver.
-        return nullptr;
+        return returnPending();
     }
     if (HasSRetWithGeneric()) {
         CHECK_DETAIL(sretSlot != nullptr, "ApplyCJMethod: sret slot is null");
@@ -897,6 +920,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     if (retObj == nullptr) {
         VLOG(REPORT, "ApplyCangjieMethod: new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
+        return nullptr;
     }
     Handle retHandle(Mutator::GetMutator(), retObj);
 #if defined(__aarch64__)
