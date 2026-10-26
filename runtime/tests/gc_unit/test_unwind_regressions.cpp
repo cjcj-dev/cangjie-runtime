@@ -188,7 +188,6 @@ GC_TEST(UnwindRegress, FallbackZeroesPcAndLine)
 }
 
 #ifdef _WIN64
-#include "Common/Runtime.h"
 #include "UnwindWin.h"
 extern uintptr_t windowsC2NLeaveReturn, windowsC2NOverflowReturn;
 extern uintptr_t windowsC2NBodyStart, windowsC2NBodyEnd, windowsC2NFailureEnd;
@@ -196,6 +195,13 @@ extern uintptr_t windowsStackGrowBodyEnd, windowsSafepointBodyEnd, windowsReturn
 extern uintptr_t windowsExclusiveBodyEnd, windowsStackOverflowBodyEnd;
 namespace MapleRuntime { bool IsWindowsExceptionReturnBoundary(const MachineFrame&); }
 namespace {
+// These native frame consumers do not require an initialized managed Runtime.
+// Read the loaded product's real PE tables through its normal module manager.
+struct WindowsModules {
+    WinModuleManager value;
+    WindowsModules() { value.Init(); }
+    ~WindowsModules() { value.Fini(); }
+};
 struct WindowsReturnCase { const uintptr_t* pc; FrameType type; bool full; };
 const WindowsReturnCase windowsReturns[] = {
     {&windowsC2NLeaveReturn, FrameType::C2N_STUB, false},
@@ -216,7 +222,7 @@ GC_TEST(UnwindRegress, WindowsExceptionBoundaryRealReturns)
     FrameAddress anchor{};
     FrameAddress nativeCallee{};
     nativeCallee.callerFrameAddress = &anchor;
-    auto& modules = Runtime::Current().GetWinModuleManager();
+    WindowsModules modules;
     for (const auto& test : windowsReturns) {
         UnwindContext context;
         context.frameInfo.mFrame.SetFA(&anchor);
@@ -230,7 +236,7 @@ GC_TEST(UnwindRegress, WindowsExceptionBoundaryRealReturns)
         nativeCallee.returnAddress = reinterpret_cast<const uint32_t*>(test.pc);
         MachineFrame native(&nativeCallee, nullptr);
         UnwindContextStatus status = UnwindContextStatus::RELIABLE;
-        const auto caller = GetCallerFrameInfo(modules, native, status);
+        const auto caller = GetCallerFrameInfo(modules.value, native, status);
         GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(caller.mFrame.GetFA()), reinterpret_cast<uintptr_t>(&anchor));
         GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(caller.mFrame.GetIP()),
                      reinterpret_cast<uintptr_t>(nativeCallee.returnAddress));
@@ -275,10 +281,10 @@ GC_TEST(UnwindRegress, WindowsExceptionSaveSlots)
 GC_TEST(UnwindRegress, WindowsC2NPrivateCallerSP)
 {
     FrameAddress anchor{};
-    auto& modules = Runtime::Current().GetWinModuleManager();
+    WindowsModules modules;
     for (const auto& test : windowsReturns) {
         MachineFrame frame(&anchor, reinterpret_cast<const uint32_t*>(test.pc));
-        GC_EXPECT_EQ(GetCallerRsp(modules, frame), reinterpret_cast<uintptr_t>(&anchor) +
+        GC_EXPECT_EQ(GetCallerRsp(modules.value, frame), reinterpret_cast<uintptr_t>(&anchor) +
                      sizeof(FrameAddress) + (test.type == FrameType::C2N_STUB ? 16 : 0));
     }
 }
