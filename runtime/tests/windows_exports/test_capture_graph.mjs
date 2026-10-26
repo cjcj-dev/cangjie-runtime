@@ -61,6 +61,20 @@ assert.deepEqual(plan.objects.map(o => o.source).sort(), ['common.c', 'reference
 assert.equal(plan.objects.filter(o => o.generated).length, 1);
 assert.deepEqual(plan.linkage.targets.find(t => t.name === 'runtime-provenance').generated_sources, ['generated/provenance.c']);
 const db = path.join(build, 'compile_commands.json'), original = fs.readFileSync(db);
+// CMake 4.4's real Windows database supplies build-relative output metadata,
+// while -o remains relative to each command's directory. Exercise both forms.
+try {
+    const commands = JSON.parse(original);
+    for (const c of commands) {
+        const object = c.command.match(/(?:^|\s)-o\s+(\S+)/)[1];
+        c.output = path.relative(build, path.resolve(c.directory, object));
+    }
+    fs.writeFileSync(db, JSON.stringify(commands));
+    assert.deepEqual(planRuntimeObjects(build, path.join(source, 'src')).objects, plan.objects);
+    commands.find(c => c.file.endsWith('/provenance.c')).output = 'wrong-object.o';
+    fs.writeFileSync(db, JSON.stringify(commands));
+    assert.throws(() => planRuntimeObjects(build, path.join(source, 'src')), /compile output metadata disagrees/);
+} finally { fs.writeFileSync(db, original); }
 try {
     const commands = JSON.parse(original).filter(c => !c.file.endsWith('/reference.c'));
     fs.writeFileSync(db, JSON.stringify(commands));

@@ -14,11 +14,17 @@ const within = (root, file) => {
 };
 const portable = file => file.replaceAll('\\', '/');
 
-function outputObject(entry) {
+function outputObject(entry, build) {
     const index = entry.arguments?.indexOf('-o') ?? -1;
     const match = entry.command?.match(/(?:^|\s)-o\s+(?:"([^"]+)"|'([^']+)'|(\S+))/);
-    const name = entry.output || (index >= 0 ? entry.arguments[index + 1] : match?.[1] || match?.[2] || match?.[3]);
-    return name ? path.resolve(entry.directory, name) : null;
+    // The actual compile command owns -o. CMake 4.4's optional output metadata
+    // is build-root-relative even when directory is a target subdirectory.
+    const name = index >= 0 ? entry.arguments[index + 1] : match?.[1] || match?.[2] || match?.[3];
+    if (!name) return null;
+    const object = path.resolve(entry.directory, name);
+    if (entry.output && ![build, entry.directory].some(base => key(path.resolve(base, entry.output)) === key(object)))
+        throw Error(`compile output metadata disagrees with command: ${entry.file}`);
+    return object;
 }
 
 // Exported for graph-parser fixtures. This does not run the native capture or
@@ -118,7 +124,7 @@ export function planRuntimeObjects(build, source) {
                 outsideRuntime.push(file); continue;
             }
             const matches = commands.filter(command => key(path.resolve(command.directory, command.file)) === key(file))
-                .map(command => outputObject(command)).filter(object => object && within(objectRoot, object));
+                .map(command => outputObject(command, build)).filter(object => object && within(objectRoot, object));
             if (matches.length !== 1) throw Error(`selected runtime source must have one object: ${target.name}:${src.path} (${matches.length})`);
             if (embedded.has(target.id) && !embedded.get(target.id).has(key(matches[0])))
                 throw Error(`compiled object absent from embedded artifacts: ${target.name}:${src.path}`);
