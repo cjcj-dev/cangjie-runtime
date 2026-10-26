@@ -62,9 +62,28 @@ for (const block of blocks) {
     assert.equal(state.r.rip, BigInt(start));
     assert.equal(state.r.rsp, managedSp);
     assert.ok(!state.mem.has(managedSp), 'transfer must not fabricate a native return slot');
-    let reachedHelper = false;
+    let reachedHelper = false, reachedTransfer = false;
+    const landingPad = 0x34567890n;
+    const restored = Object.fromEntries(nonvolatile.map((reg, i) => [reg,
+      reg.startsWith('xmm') ? (BigInt(i + 51) << 96n) + 0xABCDEFn : BigInt(i + 51) * 0x20202n]));
+    restored.rbp = 0x200000n; restored.rsp = 0x1FFF00n;
     for (const [, insn] of [...instructions].filter(([pc]) => pc >= start).sort((a, b) => a[0] - b[0])) {
+      if (reachedHelper && ['xorq', 'xorps'].includes(insn[0])) {
+        const operands = insn[1].split(/,\s*/);
+        assert.equal(operands[0], operands[1], 'EH return clearing must be a self XOR');
+        state.r[operands[1].slice(1)] = 0n;
+        continue;
+      }
+      if (reachedHelper && insn[0] === 'jmpq') {
+        assert.equal(insn[1], '*%r11', 'actual EH landing-pad branch changed');
+        assert.equal(state.r.r11, landingPad);
+        for (const reg of [...nonvolatile, 'rsp']) assert.equal(state.r[reg], restored[reg], 'EH updated context restore: ' + reg);
+        for (const reg of ['rax', 'rdx', 'xmm0', 'xmm1']) assert.equal(state.r[reg], 0n, 'EH native return register: ' + reg);
+        reachedTransfer = true;
+        break;
+      }
       if (insn[0] !== 'callq') { execute(state, insn); continue; }
+      assert.ok(!reachedHelper, 'unexpected additional EH helper call');
       reachedHelper = true;
       assert.equal(state.r.rsp % 16n, 0n, 'EH helper call stack alignment');
       const context = state.r.rcx;
@@ -83,11 +102,16 @@ for (const block of blocks) {
       for (const [reg, offset, width] of fields) {
         assert.equal(read(state.mem, context + BigInt(offset), width), reg === 'rsp' ? managedSp : initial[reg], 'EH helper home overwrote saved ' + reg);
       }
+      // Exercise the assembly consumer of an updated context. This supplies
+      // the helper's output contract; it does not execute managed stackmaps.
+      for (const [reg, offset, width] of fields) write(state.mem, context + BigInt(offset), restored[reg], width);
+      for (const reg of ['rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', 'xmm0', 'xmm1']) state.r[reg] = 0xBADn;
+      state.r.rax = landingPad;
       checks++;
-      break;
     }
     assert.ok(reachedHelper, 'actual EH helper call must be reached');
-    console.log('RestoreContextForEH: redirected RET/context/home checked; landing-pad and SEH/OS NOT_RUN');
+    assert.ok(reachedTransfer, 'actual EH context restore and landing-pad branch must be reached');
+    console.log('RestoreContextForEH: redirected RET/context/home/register transfer checked; managed stackmaps and SEH/OS NOT_RUN');
     continue;
   }
   if (name === 'RestoreContextForEH') {
