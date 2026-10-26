@@ -21,8 +21,8 @@ function run(tool, args, capture = false) {
 
 function sections(objdump, file) {
     const output = run(objdump, ['-h', file], true);
-    const found = [...output.matchAll(/^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s/gm)]
-        .map(match => ({name: match[1], size: match[2].toLowerCase().replace(/^0+/, '') || '0'}));
+    const found = [...output.matchAll(/^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+2\*\*(\d+)/gm)]
+        .map(match => ({name: match[1], size: Number.parseInt(match[2], 16), alignment: 2 ** Number(match[3])}));
     if (!found.length) throw new Error(`no archive sections decoded: ${file}`);
     return found;
 }
@@ -30,7 +30,10 @@ function sections(objdump, file) {
 const isRuntimeText = name => name.startsWith('.text_rt');
 const needsRename = name => name.startsWith('.text') && !isRuntimeText(name);
 const renamed = name => needsRename(name) ? '.text_rt' + name.slice(5) : name;
-const signature = list => list.map(({name, size}) => `${name}\t${size}`).sort();
+// BFD aligns COFF raw section sizes when writing an object. Compare the
+// declared aligned extent and alignment, not the compiler's unpadded size.
+const signature = list => list.map(({name, size, alignment}) =>
+    `${name}\t${Math.ceil(size / alignment) * alignment}\t${alignment}`).sort();
 // GNU response-file quoting: no shell expansion, including '$' in COFF names.
 const quote = arg => '"' + arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"';
 
