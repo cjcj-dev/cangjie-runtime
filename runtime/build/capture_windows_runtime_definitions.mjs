@@ -58,15 +58,33 @@ export function planRuntimeObjects(build, source) {
             libraries.add(key(path.resolve(build, root.paths.build, token[1] || token[2] || token[3])));
     }
     const selected = [root], visited = new Set([root.id]);
+    const embedded = new Map();
     function visit(target) {
+        // TARGET_OBJECTS inputs appear as generated, non-compiled sources in
+        // their consuming target. Dependencies alone also contain order-only
+        // object libraries, so they are not sufficient selection evidence.
+        const inputs = new Set((target.sources || [])
+            .filter(src => src.compileGroupIndex === undefined && src.isGenerated)
+            .map(src => key(path.resolve(model.paths.source, src.path))));
         for (const dep of target.dependencies || []) {
             if (visited.has(dep.id)) continue;
-            visited.add(dep.id);
             const next = targets.get(dep.id);
             if (!next) throw Error(`missing target dependency: ${dep.id}`);
-            if (next.type === 'OBJECT_LIBRARY') throw Error(`unsupported embedded object-library link input: ${next.name}`);
+            if (next.type === 'OBJECT_LIBRARY') {
+                const artifacts = (next.artifacts || []).map(a => key(path.resolve(build, a.path)));
+                const linked = artifacts.filter(object => inputs.has(object));
+                if (!linked.length) continue;
+                if (linked.length !== artifacts.length)
+                    throw Error(`partial embedded object-library input: ${next.name}`);
+                visited.add(next.id);
+                embedded.set(next.id, new Set(linked));
+                selected.push(next);
+                visit(next);
+                continue;
+            }
             if (next.type !== 'STATIC_LIBRARY') continue;
             if (next.artifacts?.some(a => libraries.has(key(path.resolve(build, a.path))))) {
+                visited.add(next.id);
                 selected.push(next);
                 visit(next);
             } else {
@@ -77,25 +95,42 @@ export function planRuntimeObjects(build, source) {
         }
     }
     visit(root);
+    const selectedArtifacts = new Set([...embedded.values()].flatMap(objects => [...objects]));
+    for (const target of selected) {
+        for (const src of target.sources || []) {
+            if (src.compileGroupIndex !== undefined || !/\.(?:o|obj)$/i.test(src.path)) continue;
+            if (!selectedArtifacts.has(key(path.resolve(model.paths.source, src.path))))
+                throw Error(`embedded object lacks selected producer: ${target.name}:${src.path}`);
+        }
+    }
     const commandsFile = path.join(build, 'compile_commands.json');
     const commands = JSON.parse(fs.readFileSync(commandsFile));
     const objects = [], closure = [];
     for (const target of selected) {
-        const sources = [], outsideRuntime = [];
+        const sources = [], generatedSources = [], outsideRuntime = [], matchedObjects = new Set();
         const objectRoot = path.resolve(build, target.paths.build, 'CMakeFiles', target.name + '.dir');
         for (const src of target.sources || []) {
             if (src.compileGroupIndex === undefined) continue;
             const file = path.resolve(model.paths.source, src.path);
-            if (!within(source, file)) { outsideRuntime.push(file); continue; }
+            const generated = !within(source, file) && src.isGenerated === true && within(build, file);
+            if (!within(source, file) && !generated) {
+                if (embedded.has(target.id)) throw Error(`embedded source outside runtime/build: ${file}`);
+                outsideRuntime.push(file); continue;
+            }
             const matches = commands.filter(command => key(path.resolve(command.directory, command.file)) === key(file))
                 .map(command => outputObject(command)).filter(object => object && within(objectRoot, object));
             if (matches.length !== 1) throw Error(`selected runtime source must have one object: ${target.name}:${src.path} (${matches.length})`);
-            const relative = portable(path.relative(source, file));
-            sources.push(relative);
-            objects.push({target: target.id, source: relative, file, object: matches[0]});
+            if (embedded.has(target.id) && !embedded.get(target.id).has(key(matches[0])))
+                throw Error(`compiled object absent from embedded artifacts: ${target.name}:${src.path}`);
+            matchedObjects.add(key(matches[0]));
+            const relative = portable(path.relative(generated ? build : source, file));
+            (generated ? generatedSources : sources).push(relative);
+            objects.push({target: target.id, source: relative, generated, file, object: matches[0]});
         }
+        if (embedded.has(target.id) && matchedObjects.size !== embedded.get(target.id).size)
+            throw Error(`embedded artifacts missing compiled sources: ${target.name}`);
         closure.push({id: target.id, name: target.name, type: target.type,
-            artifacts: target.artifacts || [], sources, outside_runtime: outsideRuntime});
+            artifacts: target.artifacts || [], sources, generated_sources: generatedSources, outside_runtime: outsideRuntime});
     }
     if (!objects.length) throw Error('normal link graph contains no runtime source objects');
     return {objects, linkage: {root: root.id, targets: closure,
@@ -147,7 +182,11 @@ function main() {
             const name = block.match(/^\s*Name:\s*(\S+)\s*$/m)?.[1];
             if (name) defined.push(name);
         }
-        objects.push({target: object.target, source: object.source, source_sha256: sha(object.file),
+        // Generated inputs belong to this build, not the fixed Git source tree.
+        // Retain their exact bytes with the capture for the collector to check.
+        objects.push({target: object.target, source: object.source, generated: object.generated,
+            ...(object.generated ? {source_base64: fs.readFileSync(object.file).toString('base64')} : {}),
+            source_sha256: sha(object.file),
             object: portable(path.relative(build, object.object)), object_sha256: sha(object.object),
             defined: [...new Set(defined)].sort()});
     }

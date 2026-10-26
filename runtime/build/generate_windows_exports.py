@@ -7,6 +7,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 import argparse
+import base64
 import os
 import hashlib
 import json
@@ -186,16 +187,30 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path, nativ
         root_target = next((target for target in targets if target["id"] == linkage.get("root")), None)
         if not root_target or root_target["name"] != "cangjie-runtime" or root_target["type"] != "SHARED_LIBRARY":
             raise ValueError("Windows runtime capture lacks the normal DLL link closure")
-        expected_sources = {(target["id"], source) for target in targets for source in target["sources"]}
-        actual_sources = [(obj.get("target"), obj["source"]) for obj in capture["objects"]]
+        expected_sources = {(target["id"], source, generated) for target in targets
+                            for generated, field in ((False, "sources"), (True, "generated_sources"))
+                            for source in target.get(field, [])}
+        actual_sources = [(obj.get("target"), obj["source"], obj.get("generated", False))
+                          for obj in capture["objects"]]
         if not expected_sources or set(actual_sources) != expected_sources or len(actual_sources) != len(set(actual_sources)):
             raise ValueError("Windows runtime capture is incomplete for the selected link objects")
         for obj in capture["objects"]:
-            source = (root / obj["source"]).resolve()
-            if not source.is_relative_to(root) or hashlib.sha256(source.read_bytes()).hexdigest() != obj["source_sha256"]:
+            if obj.get("generated", False):
+                relative = Path(obj["source"])
+                if relative.is_absolute() or ".." in relative.parts or "\\" in obj["source"]:
+                    raise ValueError(f"invalid generated runtime source path: {obj['source']}")
+                contents = base64.b64decode(obj["source_base64"], validate=True)
+                location = f"build-generated/{obj['source']}"
+            else:
+                source = (root / obj["source"]).resolve()
+                if not source.is_relative_to(root):
+                    raise ValueError(f"runtime object source outside fixed source: {obj['source']}")
+                contents = source.read_bytes()
+                location = obj["source"]
+            if hashlib.sha256(contents).hexdigest() != obj["source_sha256"]:
                 raise ValueError(f"runtime object source differs from fixed source: {obj['source']}")
             for name in obj["defined"]:
-                definitions.setdefault(name, []).append(f"{runtime_input['label']}/{obj['source']} ({obj['object']})")
+                definitions.setdefault(name, []).append(f"{runtime_input['label']}/{location} ({obj['object']})")
         runtime_input["windows_object_capture_sha256"] = hashlib.sha256(runtime_capture.read_bytes()).hexdigest()
     # Ownership must not depend solely on a DLL that may be missing a new export.
     owned = available | definitions.keys() | {entry.name for entry in history}

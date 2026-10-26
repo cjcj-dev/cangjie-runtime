@@ -80,6 +80,21 @@ const capture=path.join(out,'COFF-CAPTURE-FIXTURE.json');
 const captured={system:'Windows',revision:'a'.repeat(40),linkage:{root:'dll',targets:[{id:'dll',name:'cangjie-runtime',type:'SHARED_LIBRARY',sources:[]},{id:'heap',name:'Heap',type:'STATIC_LIBRARY',sources:['reference.cpp']}]},objects:[{target:'heap',source:'reference.cpp',source_sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(runtime,'reference.cpp'))).digest('hex'),object:'reference.cpp.obj',defined:services}]};
 fs.writeFileSync(capture,JSON.stringify(captured));
 cli('platform-definition-capture', [...collect,'--runtime-definitions',capture],0);
+// A build-generated source is retained by the real capture as exact bytes;
+// its object is mandatory independently of the fixed Git sources.
+const generatedBytes=Buffer.from('extern "C" int generated_fixture = 0;\n');
+captured.linkage.targets.push({id:'provenance',name:'runtime-provenance',type:'OBJECT_LIBRARY',sources:[],generated_sources:['generated/provenance.cpp']});
+captured.objects.push({target:'provenance',source:'generated/provenance.cpp',generated:true,
+ source_base64:generatedBytes.toString('base64'),source_sha256:crypto.createHash('sha256').update(generatedBytes).digest('hex'),
+ object:'CMakeFiles/runtime-provenance.dir/generated/provenance.cpp.obj',defined:['generated_fixture']});
+fs.writeFileSync(capture,JSON.stringify(captured));
+cli('generated-object-capture',[...collect,'--runtime-definitions',capture],0);
+const generatedObject=captured.objects.pop();fs.writeFileSync(capture,JSON.stringify(captured));
+cli('missing-generated-object-rejected',[...collect,'--runtime-definitions',capture],2);
+captured.objects.push({...generatedObject,source_base64:Buffer.from('changed').toString('base64')});fs.writeFileSync(capture,JSON.stringify(captured));
+cli('changed-generated-source-rejected',[...collect,'--runtime-definitions',capture],2);
+captured.objects[captured.objects.length-1]=generatedObject;fs.writeFileSync(capture,JSON.stringify(captured));
+cli('generated-object-restored',[...collect,'--runtime-definitions',capture],0);
 fs.writeFileSync(raw,fs.readFileSync(history,'utf8'));
 cli('linked-archive-definitions-remain-required',[...collect,'--runtime-definitions',capture],2);
 assert.deepEqual(JSON.parse(fs.readFileSync(diag)).missing_from_raw,services.toSorted());

@@ -183,15 +183,28 @@ configures with CMake versions before3.27. Direct CMake users must likewise
 place the query in the build directory before configuring.
 Capture follows the DLL target's actual link-library fragments/dependencies,
 including linked static archives such as Heap and Common, then matches every
-selected source to its existing object in compile_commands.json. Order-only
+selected source to its existing object in compile_commands.json. Embedded object
+libraries are selected by matching their artifact paths to the actual consuming
+target's object inputs, including objects embedded in linked archives. An
+order-only dependency does not select an object library. Every selected artifact
+must match a compiled source; unknown or partial object-library inputs fail.
+Order-only
 build dependencies, the separate static runtime target, and DLL import libraries
 are not definitions owned by the runtime DLL. The capture covers all compiled
 members of linked runtime archives: a service omitted by archive extraction
 must still be rejected when the caller requires it. It is not inferred from
 which names survived the final DLL's exports. Missing selected source objects,
-unsupported embedded object-library graphs and mismatched source identities
+unresolved embedded object-library graphs and mismatched source identities
 fail, rather than silently shrinking ownership. File-api replies, compilation
 database and the selected object plan accompany actual COFF reader logs.
+Build-generated compiled sources (including RuntimeProvenance.cpp) are separate
+from Git-owned runtime sources: the capture records their build-relative paths,
+exact source bytes and digest alongside the actual COFF object digest/symbols.
+The collector requires these generated objects too, verifies the retained bytes,
+and labels their definition locations as build-generated. It does not reinterpret
+generated inputs as files in the fixed runtime/src tree. Retain the selected
+objects and original generated inputs with the normal build evidence; a failed
+capture followed by absent plan files is not a completed definition capture.
 
 This neither compiles a second tree nor substitutes Linux nm. Keep its own
 reader rc/logs and the complete link/raw/DLL evidence. A small native CMake graph

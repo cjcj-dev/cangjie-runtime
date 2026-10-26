@@ -15,19 +15,27 @@ const write = (name, text) => { const file = path.join(source, name); fs.mkdirSy
 write('CMakeLists.txt', `cmake_minimum_required(VERSION 3.19)
 project(RuntimeLinkGraphFixture C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+file(WRITE "\${CMAKE_BINARY_DIR}/generated/provenance.c" "int generated_fixture(void) { return 0; }\\n")
+set_source_files_properties("\${CMAKE_BINARY_DIR}/generated/provenance.c" PROPERTIES GENERATED TRUE)
+add_library(runtime-provenance OBJECT "\${CMAKE_BINARY_DIR}/generated/provenance.c")
 add_subdirectory(src)
 `);
 write('src/CMakeLists.txt', `add_library(Common STATIC common.c)
 add_library(Heap STATIC reference.c)
 target_link_libraries(Heap PUBLIC Common)
 add_library(Unrelated STATIC unused.c)
+add_library(UnlinkedObjects OBJECT unused.c)
+add_library(ThreadObjects OBJECT thread.c)
+add_library(ArchiveObjects OBJECT embedded.c)
+target_sources(Heap PRIVATE $<TARGET_OBJECTS:ArchiveObjects>)
 add_library(boundscheck SHARED bounds.c)
 add_library(runtime STATIC runtime.c)
 add_library(cangjie-runtime SHARED runtime.c)
 target_link_libraries(cangjie-runtime PRIVATE Heap boundscheck)
-add_dependencies(cangjie-runtime Unrelated)
+target_sources(cangjie-runtime PRIVATE $<TARGET_OBJECTS:runtime-provenance> $<TARGET_OBJECTS:ThreadObjects>)
+add_dependencies(cangjie-runtime Unrelated UnlinkedObjects)
 `);
-for (const name of ['common', 'reference', 'unused', 'bounds', 'runtime']) write('src/' + name + '.c', `int ${name}_fixture(void) { return 0; }\n`);
+for (const name of ['common', 'reference', 'unused', 'bounds', 'runtime', 'thread', 'embedded']) write('src/' + name + '.c', `int ${name}_fixture(void) { return 0; }\n`);
 // The real build_target producer must create the query before the first
 // configure. Only its source root is this declared Linux graph fixture; no
 // Windows toolchain/DLL or runtime product is produced by this test.
@@ -48,15 +56,22 @@ assert.equal(p.status, 0, 'normal build_target cold graph fixture');
 const plan = planRuntimeObjects(build, path.join(source, 'src'));
 fs.writeFileSync(path.join(out, 'plan.json'), JSON.stringify(plan, null, 2));
 console.log('TARGET_ASSERT linked_archive_closure reached=1');
-assert.deepEqual(plan.linkage.targets.map(t => t.name).sort(), ['Common', 'Heap', 'cangjie-runtime'].sort());
-assert.deepEqual(plan.objects.map(o => o.source).sort(), ['common.c', 'reference.c', 'runtime.c']);
+assert.deepEqual(plan.linkage.targets.map(t => t.name).sort(), ['Common', 'Heap', 'cangjie-runtime', 'runtime-provenance', 'ThreadObjects', 'ArchiveObjects'].sort());
+assert.deepEqual(plan.objects.map(o => o.source).sort(), ['common.c', 'reference.c', 'runtime.c', 'thread.c', 'embedded.c', 'generated/provenance.c'].sort());
+assert.equal(plan.objects.filter(o => o.generated).length, 1);
+assert.deepEqual(plan.linkage.targets.find(t => t.name === 'runtime-provenance').generated_sources, ['generated/provenance.c']);
 const db = path.join(build, 'compile_commands.json'), original = fs.readFileSync(db);
 try {
     const commands = JSON.parse(original).filter(c => !c.file.endsWith('/reference.c'));
     fs.writeFileSync(db, JSON.stringify(commands));
     assert.throws(() => planRuntimeObjects(build, path.join(source, 'src')), /selected runtime source must have one object: Heap/);
 } finally { fs.writeFileSync(db, original); }
-assert.equal(planRuntimeObjects(build, path.join(source, 'src')).objects.length, 3);
+// A missing embedded object must reject instead of producing a smaller capture.
+try {
+    fs.writeFileSync(db, JSON.stringify(JSON.parse(original).filter(c => !c.file.endsWith('/provenance.c'))));
+    assert.throws(() => planRuntimeObjects(build, path.join(source, 'src')), /selected runtime source must have one object: runtime-provenance/);
+} finally { fs.writeFileSync(db, original); }
+assert.equal(planRuntimeObjects(build, path.join(source, 'src')).objects.length, 6);
 assert.equal(symbolBlocks('Symbol {\n Name: defined\n AuxFunctionDef {\n x: 0\n }\n}\n').length, 1);
 assert.throws(() => symbolBlocks('Symbol {\n Name: unfinished\n'), /truncated/);
 console.log('ASSERT capture_graph PASS actual_cmake_graph=1 windows_product=0');
