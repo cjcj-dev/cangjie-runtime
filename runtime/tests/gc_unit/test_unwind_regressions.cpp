@@ -136,7 +136,8 @@ GC_TEST(UnwindRegress, SignalFrameAppendDoesNotOverlap)
     signalFrameSprintfCallCount = 0;
 #endif
     SigHandlerFrameinfo frame;
-    frame.mFrame.SetIP(reinterpret_cast<const uint32_t*>(&sprintf_s));
+    frame.mFrame.SetIP(reinterpret_cast<const uint32_t*>(
+        static_cast<int (*)(char*, size_t, const char*, ...)>(&sprintf_s)));
     frame.SetFrameType(FrameType::NATIVE);
     frame.PrintFrameInfo(0);
 #if defined(__linux__)
@@ -151,7 +152,8 @@ GC_TEST(UnwindRegress, SignalFrameAppendDoesNotOverlap)
 GC_TEST(UnwindRegress, SignalFramePrintDoesNotAbort)
 {
     SigHandlerFrameinfo frame;
-    frame.mFrame.SetIP(reinterpret_cast<const uint32_t*>(&sprintf_s));
+    frame.mFrame.SetIP(reinterpret_cast<const uint32_t*>(
+        static_cast<int (*)(char*, size_t, const char*, ...)>(&sprintf_s)));
     frame.SetFrameType(FrameType::NATIVE);
     frame.PrintFrameInfo(0);
 }
@@ -229,8 +231,9 @@ GC_TEST(UnwindRegress, WindowsExceptionBoundaryRealReturns)
         MachineFrame native(&nativeCallee, nullptr);
         UnwindContextStatus status = UnwindContextStatus::RELIABLE;
         const auto caller = GetCallerFrameInfo(modules, native, status);
-        GC_EXPECT_EQ(caller.mFrame.GetFA(), &anchor);
-        GC_EXPECT_EQ(caller.mFrame.GetIP(), nativeCallee.returnAddress);
+        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(caller.mFrame.GetFA()), reinterpret_cast<uintptr_t>(&anchor));
+        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(caller.mFrame.GetIP()),
+                     reinterpret_cast<uintptr_t>(nativeCallee.returnAddress));
     }
     MachineFrame outside(&anchor, reinterpret_cast<const uint32_t*>(&windowsC2NBodyStart));
     GC_EXPECT_FALSE(outside.IsC2NStubFrame());
