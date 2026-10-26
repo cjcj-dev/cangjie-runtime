@@ -1199,9 +1199,16 @@ GC_RUNTIME_OTHER_VM_TEST(NativeArgumentHandle, CallbackRetainsReceiverAndArgumen
 }
 
 namespace {
-struct ReturnResult { uintptr_t before = 0; uintptr_t after = 0; uintptr_t encoded = 0; U64 marker = 0; };
+struct ReturnResult {
+    uintptr_t before = 0; uintptr_t after = 0; uintptr_t encoded = 0; U64 marker = 0; U64 tail = 0;
+};
+// Use a real indirect aggregate return on each native ABI. In particular,
+// AAPCS64 passes the result address in x8, not the ordinary first argument x0.
+// Three words also prevent the native compiler from returning this in x0/x1.
+struct ReflectedStructResult { uintptr_t reference; U64 marker; U64 tail; };
+static_assert(sizeof(ReflectedStructResult) == 3 * sizeof(Uptr));
 thread_local ReturnResult* returnResult;
-extern "C" void ReturnReflectedStruct(uintptr_t* output, TypeInfo*)
+extern "C" ReflectedStructResult ReturnReflectedStruct(TypeInfo*)
 {
     auto& r = *returnResult;
     auto* mutator = Mutator::GetMutator();
@@ -1214,8 +1221,9 @@ extern "C" void ReturnReflectedStruct(uintptr_t* output, TypeInfo*)
     r.before = reinterpret_cast<uintptr_t>(value());
     CollectSparsePages();
     r.after = reinterpret_cast<uintptr_t>(value());
-    // This is the callee's actual plain sret value, handed to the product boxer.
-    output[0] = r.after; output[1] = 584;
+    // The native compiler writes the actual plain sret value to the buffer
+    // supplied by ApplyCangjieMethodStub; the product boxer consumes it.
+    return {r.after, 584, 585};
 }
 void* RunReturn(void* context)
 {
@@ -1224,7 +1232,8 @@ void* RunReturn(void* context)
     Mutator::GetMutator()->SetManagedContext(false);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_STRUCT); type->SetInstanceSize(16); type->SetFlagHasRefField();
+    type->SetType(TypeKind::TYPE_KIND_STRUCT);
+    type->SetInstanceSize(sizeof(ReflectedStructResult)); type->SetFlagHasRefField();
     GCTib bitmap{}; bitmap.tag = SIGN_BIT | 1; type->SetGCTib(bitmap);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     MethodInfo method{}; method.SetMethodName("return_value");
@@ -1236,6 +1245,7 @@ void* RunReturn(void* context)
     auto* result = static_cast<MObject*>(MCC_ApplyCJStaticMethod(&method, nullptr, nullptr));
     r.encoded = raw(result->GetRefField(TYPEINFO_PTR_SIZE).GetFieldValue());
     r.marker = result->Load<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr));
+    r.tail = result->Load<U64>(TYPEINFO_PTR_SIZE + 2 * sizeof(Uptr));
     return nullptr;
 }
 }
@@ -1247,9 +1257,11 @@ GC_RUNTIME_OTHER_VM_TEST(NativeReturnHandle, HeaderlessResultAfterCollection)
     auto task = RunCJTask(RunReturn, &result);
     void* value = nullptr; GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK); ReleaseHandle(task);
     const uintptr_t expected = raw(ZAddress::store_good(to_zaddress(result.after)));
-    std::fprintf(stderr, "RETURN_HANDLE_TARGET before=%zx after=%zx encoded=%zx expected=%zx marker=%llu\n",
-        result.before, result.after, result.encoded, expected, (unsigned long long)result.marker);
-    GC_EXPECT_TRUE(result.before != 0 && result.before != result.after && result.encoded == expected && result.marker == 584);
+    std::fprintf(stderr, "RETURN_HANDLE_TARGET before=%zx after=%zx encoded=%zx expected=%zx marker=%llu tail=%llu\n",
+        result.before, result.after, result.encoded, expected,
+        (unsigned long long)result.marker, (unsigned long long)result.tail);
+    GC_EXPECT_TRUE(result.before != 0 && result.before != result.after && result.encoded == expected &&
+        result.marker == 584 && result.tail == 585);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
