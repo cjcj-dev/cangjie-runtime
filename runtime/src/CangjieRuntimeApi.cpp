@@ -442,6 +442,9 @@ struct FutureImpl {
     const CJTaskFunc fn;
     MapleRuntime::ElfUnloadQuiescence::PendingTask pendingTask;
     void* arg;
+    // After publication, res and flag are protected by g_mtx. futureSet's
+    // mutex only protects membership; it is not a pin for concurrent use of
+    // a handle that its owner is releasing.
     void* res{ nullptr };
     FutureFlag flag{ FLAG_WAITING };
     std::mutex g_mtx;
@@ -698,10 +701,10 @@ int GetTaskRetWithTimeout(const CJThreadHandle handle, void** ret, int64_t timeo
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     MapleRuntime::Sanitizer::AsanRead(fi, sizeof(FutureImpl));
 #endif
+    std::unique_lock<std::mutex> lck(fi->g_mtx);
     if (fi->flag != FLAG_DONE && fi->flag != FLAG_WAITING) {
         return E_ARGS;
     }
-    std::unique_lock<std::mutex> lck(fi->g_mtx);
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     MapleRuntime::Sanitizer::AsanWrite(ret, sizeof(fi->res));
 #endif
@@ -738,15 +741,18 @@ void ReleaseHandle(const CJThreadHandle handle)
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     MapleRuntime::Sanitizer::AsanRead(fi, sizeof(FutureImpl));
 #endif
-    if (fi->flag != FLAG_DONE && fi->flag != FLAG_WAITING) {
-        return;
-    }
     bool needDelete = false;
     {
         std::lock_guard<std::mutex> lck(fi->g_mtx);
+        if (fi->flag != FLAG_DONE && fi->flag != FLAG_WAITING) {
+            return;
+        }
         needDelete = (fi->flag != FLAG_WAITING);
         fi->flag = FLAG_RELEASED;
     }
+    // WAITING transfers deletion to the executor; DONE leaves it here. Drop
+    // the future lock before taking the membership lock, just as the executor
+    // does. The owner must not release concurrently with another handle user.
     if (needDelete) {
         std::lock_guard<std::mutex> lock(g_mtx);
         futureSet.erase(reinterpret_cast<uintptr_t>(fi));
