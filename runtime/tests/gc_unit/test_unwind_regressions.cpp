@@ -184,3 +184,99 @@ GC_TEST(UnwindRegress, FallbackZeroesPcAndLine)
     std::free(funcs[0]);
     std::free(files[0]);
 }
+
+#ifdef _WIN64
+#include "Common/Runtime.h"
+#include "UnwindWin.h"
+extern uintptr_t windowsC2NLeaveReturn, windowsC2NOverflowReturn;
+extern uintptr_t windowsC2NBodyStart, windowsC2NBodyEnd, windowsC2NFailureEnd;
+extern uintptr_t windowsStackGrowBodyEnd, windowsSafepointBodyEnd, windowsReturnSafepointBodyEnd;
+extern uintptr_t windowsExclusiveBodyEnd, windowsStackOverflowBodyEnd;
+namespace MapleRuntime { bool IsWindowsExceptionReturnBoundary(const MachineFrame&); }
+namespace {
+struct WindowsReturnCase { const uintptr_t* pc; FrameType type; bool full; };
+const WindowsReturnCase windowsReturns[] = {
+    {&windowsC2NLeaveReturn, FrameType::C2N_STUB, false},
+    {&windowsC2NOverflowReturn, FrameType::C2N_STUB, false},
+    {&windowsC2NBodyEnd, FrameType::C2N_STUB, false},
+    {&windowsC2NFailureEnd, FrameType::C2N_STUB, false},
+    {&windowsStackGrowBodyEnd, FrameType::STACKGROW, true},
+    {&windowsSafepointBodyEnd, FrameType::SAFEPOINT, true},
+    {&windowsReturnSafepointBodyEnd, FrameType::RETURN_SAFEPOINT, true},
+    {&windowsExclusiveBodyEnd, FrameType::EXSLUSIVE, false},
+    {&windowsStackOverflowBodyEnd, FrameType::C2R_STUB, false},
+};
+}
+GC_TEST(UnwindRegress, WindowsExceptionBoundaryRealReturns)
+{
+    // Symbol addresses come from the linked product CALL sites. No replacement
+    // PC is supplied to the classifier or to Windows' frame metadata lookup.
+    FrameAddress anchor{};
+    FrameAddress nativeCallee{};
+    nativeCallee.callerFrameAddress = &anchor;
+    auto& modules = Runtime::Current().GetWinModuleManager();
+    for (const auto& test : windowsReturns) {
+        UnwindContext context;
+        context.frameInfo.mFrame.SetFA(&anchor);
+        context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(test.pc));
+        StackFrameStream stream(&context);
+        stream.AnalyseAndSetFrameType(context);
+        GC_EXPECT_EQ(context.frameInfo.GetFrameType(), test.type);
+        GC_EXPECT_TRUE(IsWindowsExceptionReturnBoundary(context.frameInfo.mFrame));
+        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetIP()),
+                     reinterpret_cast<uintptr_t>(test.pc));
+        nativeCallee.returnAddress = reinterpret_cast<const uint32_t*>(test.pc);
+        MachineFrame native(&nativeCallee, nullptr);
+        UnwindContextStatus status = UnwindContextStatus::RELIABLE;
+        const auto caller = GetCallerFrameInfo(modules, native, status);
+        GC_EXPECT_EQ(caller.mFrame.GetFA(), &anchor);
+        GC_EXPECT_EQ(caller.mFrame.GetIP(), nativeCallee.returnAddress);
+    }
+    MachineFrame outside(&anchor, reinterpret_cast<const uint32_t*>(&windowsC2NBodyStart));
+    GC_EXPECT_FALSE(outside.IsC2NStubFrame());
+}
+GC_TEST(UnwindRegress, WindowsExceptionSaveSlots)
+{
+    alignas(16) uintptr_t storage[64]{};
+    auto* anchor = reinterpret_cast<FrameAddress*>(storage + 60);
+    const Register::RegisterId nv[] = {Register::R15, Register::R14, Register::R13, Register::R12,
+        Register::RDI, Register::RSI, Register::RBX};
+    const Register::RegisterId all[] = {Register::RAX, Register::RBX, Register::RCX, Register::RDX,
+        Register::RDI, Register::RSI, Register::R8, Register::R9, Register::R10, Register::R11,
+        Register::R12, Register::R13, Register::R14, Register::R15};
+    for (const auto& test : windowsReturns) {
+        UnwindContext context;
+        context.frameInfo.mFrame.SetFA(anchor);
+        context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(test.pc));
+        StackFrameStream classifier(&context);
+        classifier.AnalyseAndSetFrameType(context);
+        std::vector<FrameInfo> frames{context.frameInfo};
+        StackFrameStream stream(frames);
+        stream.Start(); stream.Next();
+        const auto& map = stream.RegisterMap();
+        const auto* registers = test.full ? all : nv;
+        const unsigned count = test.full ? 14 : 7;
+        for (unsigned i = 0; i < count; ++i) {
+            GC_EXPECT_TRUE(map.isRecorded[registers[i]]);
+            GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(map.addrMap[registers[i]]),
+                         reinterpret_cast<uintptr_t>(anchor) - 8 * (i + 1));
+        }
+        GC_EXPECT_EQ(map.allRegistersSaved, test.full && test.type != FrameType::RETURN_SAFEPOINT);
+        if (test.full) for (unsigned i = 0; i < 16; ++i) {
+            GC_EXPECT_TRUE(map.isRecorded[Register::XMM0 + i]);
+            GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(map.addrMap[Register::XMM0 + i]),
+                         reinterpret_cast<uintptr_t>(anchor) - 128 - 16 * i);
+        }
+    }
+}
+GC_TEST(UnwindRegress, WindowsC2NPrivateCallerSP)
+{
+    FrameAddress anchor{};
+    auto& modules = Runtime::Current().GetWinModuleManager();
+    for (const auto& test : windowsReturns) {
+        MachineFrame frame(&anchor, reinterpret_cast<const uint32_t*>(test.pc));
+        GC_EXPECT_EQ(GetCallerRsp(modules, frame), reinterpret_cast<uintptr_t>(&anchor) +
+                     sizeof(FrameAddress) + (test.type == FrameType::C2N_STUB ? 16 : 0));
+    }
+}
+#endif

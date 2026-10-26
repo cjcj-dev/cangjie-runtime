@@ -74,6 +74,8 @@ CJ_MCC_StackGrowStub:
     movapd  %xmm15, -368(%rbp)
     .seh_savexmm %xmm15, StackGrowStubFrame - 368
     .seh_endprologue
+    .global windowsStackGrowBodyStart
+windowsStackGrowBodyStart:
 
     movq   $1, %r8
     movq   %rbp, %rdx
@@ -105,6 +107,8 @@ unwindPCForStackGrowStub:
     callq  MRT_CompleteWindowsExceptionReturn
 
 
+    .global windowsStackGrowBodyEnd
+windowsStackGrowBodyEnd:
     movq    -8(%rbp), %rax
     movq    -16(%rbp), %rbx
     movq    -24(%rbp), %rcx

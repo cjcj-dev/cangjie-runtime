@@ -61,7 +61,9 @@ int main(int argc, char** argv)
         {"CJ_MCC_ThrowException", 96, 0, false},
         {"CJ_MCC_OnFinalizerCreated", 96, 0, false},
         {"CJ_MCC_ReferenceInvokeFinalize", 96, 0, false},
-        {"CJ_MCC_NewObject", 96, 0, false}
+        {"CJ_MCC_NewObject", 96, 0, false},
+        {"CJ_MCC_ThrowStackOverflowError", 96, 0, false},
+        {"CJ_MCC_ExclusiveScope", 208, 0, false}
     };
     for (const auto& layout : frames) {
         const auto entry = reinterpret_cast<DWORD64>(GetProcAddress(module, layout.name));

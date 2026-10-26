@@ -14,12 +14,8 @@
 
 extern uintptr_t CJ_MCC_C2NStub;
 extern uintptr_t CJ_MCC_N2CStub;
-extern uintptr_t CJ_MCC_ThrowStackOverflowError;
 
 extern uintptr_t unwindPCForN2CStub;
-extern uintptr_t unwindPCForC2NStub;
-extern uintptr_t unwindPCForTPE;
-extern uintptr_t unwindPCForStackGrowStub;
 
 namespace MapleRuntime {
 static uint32_t GetSlotsNum(const UnwindCode& unwindCode)
@@ -119,7 +115,6 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
                              UnwindContextStatus& status)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    static bool isCalleeThrowStackOverFlowError = false;
     Uptr callerPC = reinterpret_cast<Uptr>(curFrame.GetFA()->returnAddress);
 
     WinModule* module = winModuleManager.GetWinModuleByPc(callerPC);
@@ -135,10 +130,12 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
     FrameInfo frameInfo(reinterpret_cast<uint32_t*>(startProc));
     frameInfo.mFrame.SetIP(reinterpret_cast<uint32_t*>(callerPC));
 
-    // if startProc is XXXStub, caller fa can load from callee fa address
-    // elseif callee is ThrowStackOverFlowError, caller fa is callee fa + 16 (return addr + pushed rbp)
-    // otherwise caller fa only can be calculated by callerSP + stackOffset - 8
-    if (startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_C2NStub) ||
+    // Every classified native boundary keeps its real managed-frame anchor
+    // in RBP. Use the saved RBP, including fixed-save and dynamic-stack stubs;
+    // the caller SP alone cannot reconstruct a dynamic native frame.
+    if (frameInfo.mFrame.IsC2NStubFrame() || frameInfo.mFrame.IsC2RStubFrame() ||
+        frameInfo.mFrame.IsStackGrowStubFrame() || frameInfo.mFrame.IsSafepointHandlerStubFrame() ||
+        frameInfo.mFrame.IsReturnSafepointHandlerStubFrame() || frameInfo.mFrame.IsExclusiveStubFrame() ||
         startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_N2CStub) ||
         startProc == reinterpret_cast<uintptr_t>(&ExecuteCangjieStub) ||
         startProc == reinterpret_cast<uintptr_t>(&ApplyCangjieMethodStub)) {
@@ -149,12 +146,7 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
             status = UnwindContextStatus::RISKY;
         }
         frameInfo.mFrame.SetFA(curFrame.GetFA()->callerFrameAddress);
-    } else if (isCalleeThrowStackOverFlowError) {
-        frameInfo.mFrame.SetFA(
-            reinterpret_cast<FrameAddress*>(reinterpret_cast<Uptr>(curFrame.GetFA()) + 16)); // 16: return addr + rbp
-        isCalleeThrowStackOverFlowError = false;
-    } else if (reinterpret_cast<uintptr_t>(curFrame.GetIP()) ==
-               reinterpret_cast<uintptr_t>(&unwindPCForStackGrowStub)) {
+    } else if (curFrame.IsStackGrowStubFrame()) {
         Mutator* mutator = Mutator::GetMutator();
         if (mutator == nullptr) {
             LOG(RTLOG_FATAL, "Mutator is invalid");
@@ -183,8 +175,7 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
             // |  pushed rbp       |
             uint32_t spOffset = 16; // 16: 8 for pushed rbp, 8 for pushed pc
             if (reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForN2CStub) ||
-                reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForC2NStub) ||
-                reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForTPE)) {
+                curFrame.IsC2NStubFrame()) {
                 spOffset += 16; // 16: 8 for param-stack-size, 8 for callee-addrnb
             }
             Uptr callerSP = reinterpret_cast<Uptr>(curFrame.GetFA()) + spOffset;
@@ -193,56 +184,19 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
     }
     frameInfo.mFrame.SetIP(reinterpret_cast<uint32_t*>(callerPC));
 
-    if (startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_ThrowStackOverflowError)) {
-        isCalleeThrowStackOverFlowError = true;
-    }
     return frameInfo;
 }
 
-uintptr_t GetCallerRsp(WinModuleManager& winModuleManager, const MachineFrame& curFrame)
+uintptr_t GetCallerRsp(WinModuleManager&, const MachineFrame& curFrame)
 {
-    static bool isCalleeThrowStackOverFlowError = false;
-    constexpr uint8_t sizeOfStackHead = 8 * 2; // callee rbp + return addr
-    Uptr callerPC = reinterpret_cast<Uptr>(curFrame.GetFA()->returnAddress);
-
-    WinModule* module = winModuleManager.GetWinModuleByPc(callerPC);
-    if (module == nullptr) {
-        winModuleManager.ReadWinModuleAtRunning();
-        module = winModuleManager.GetWinModuleByPc(callerPC);
+    // This describes the current native frame's return convention, not the
+    // identity of its caller. C2N's private arguments are consumed by RET 16
+    // on both normal and exceptional exits. Keep the real PC unchanged.
+    uintptr_t sp = reinterpret_cast<uintptr_t>(curFrame.GetFA()) + sizeof(FrameAddress);
+    if (curFrame.IsC2NStubFrame() ||
+        reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForN2CStub)) {
+        sp += 16;
     }
-    CHECK(module != nullptr);
-    RuntimeFunction* runtimeFunc = module->GetRuntimeFunction(callerPC);
-    CHECK(runtimeFunc != nullptr);
-
-    Uptr startProc = module->GetImageBaseStart() + runtimeFunc->startAddress;
-    uintptr_t callerRsp;
-
-    // if startProc is XXXStub, caller fa can load from callee fa address
-    // elseif callee is ThrowStackOverFlowError, caller fa is callee fa + 16 (return addr + pushed rbp)
-    // otherwise caller fa only can be calculated by callerSP + stackOffset - 8
-    if (startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_C2NStub) ||
-        startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_N2CStub) ||
-        startProc == reinterpret_cast<uintptr_t>(&ExecuteCangjieStub) ||
-        startProc == reinterpret_cast<uintptr_t>(&ApplyCangjieMethodStub) ||
-        reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForStackGrowStub)) {
-        callerRsp = reinterpret_cast<uintptr_t>(curFrame.GetFA()) + sizeOfStackHead;
-    } else if (isCalleeThrowStackOverFlowError) {
-        callerRsp = reinterpret_cast<uintptr_t>(curFrame.GetFA()) + sizeOfStackHead;
-        isCalleeThrowStackOverFlowError = false;
-    } else {
-        uint32_t spOffset = sizeOfStackHead;
-        if (reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForN2CStub) ||
-            reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForC2NStub) ||
-            reinterpret_cast<uintptr_t>(curFrame.GetIP()) == reinterpret_cast<uintptr_t>(&unwindPCForTPE)) {
-            spOffset += sizeOfStackHead;
-        }
-        Uptr callerSP = reinterpret_cast<Uptr>(curFrame.GetFA()) + spOffset;
-        callerRsp = callerSP;
-    }
-
-    if (startProc == reinterpret_cast<uintptr_t>(&CJ_MCC_ThrowStackOverflowError)) {
-        isCalleeThrowStackOverFlowError = true;
-    }
-    return callerRsp;
+    return sp;
 }
 } // namespace MapleRuntime

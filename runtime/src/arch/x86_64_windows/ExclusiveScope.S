@@ -128,13 +128,19 @@ CJ_MCC_ExclusiveScope:
     .seh_savereg %r13, ExclusiveScopeFrameSize - 24
     movq    %r12, -32(%rbp)
     .seh_savereg %r12, ExclusiveScopeFrameSize - 32
-    movq    %rbx, -40(%rbp)
-    .seh_savereg %rbx, ExclusiveScopeFrameSize - 40
+    movq    %rdi, -40(%rbp)
+    .seh_savereg %rdi, ExclusiveScopeFrameSize - 40
+    movq    %rsi, -48(%rbp)
+    .seh_savereg %rsi, ExclusiveScopeFrameSize - 48
+    movq    %rbx, -56(%rbp)
+    .seh_savereg %rbx, ExclusiveScopeFrameSize - 56
     .seh_endprologue
+    .global windowsExclusiveBodyStart
+windowsExclusiveBodyStart:
     
     // Save arguments
-    movq    %rcx, -48(%rbp)     // executeClosure
-    movq    %rdx, -56(%rbp)     // closurePtr
+    movq    %rcx, -72(%rbp)     // executeClosure
+    movq    %rdx, -152(%rbp)     // closurePtr
     movq    %r15, -64(%rbp)     // original ThreadLocalData*
     
     // Get oldCJThread and thread
@@ -155,8 +161,8 @@ CJ_MCC_ExclusiveScope:
     
     // MCC_NewExclusiveCJThread(executeClosure, closurePtr, futureTi)
     //                              rcx           rdx        r8
-    movq    -48(%rbp), %rcx     // executeClosure
-    movq    -56(%rbp), %rdx     // closurePtr
+    movq    -72(%rbp), %rcx     // executeClosure
+    movq    -152(%rbp), %rdx     // closurePtr
     movq    $0, %r8             // futureTi = 0
     callq   MCC_NewExclusiveCJThread
     testq   %rax, %rax
@@ -317,6 +323,8 @@ unwindPCForExclusiveStub:
     movq    %rbp, %rcx
     xorl    %edx, %edx
     callq   MRT_CompleteWindowsExceptionReturn
+    .global windowsExclusiveBodyEnd
+windowsExclusiveBodyEnd:
     movq    -112(%rbp), %rax
     movapd  -128(%rbp), %xmm0
     movapd  -144(%rbp), %xmm1
@@ -325,7 +333,9 @@ unwindPCForExclusiveStub:
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
     movq    -32(%rbp), %r12
-    movq    -40(%rbp), %rbx
+    movq    -40(%rbp), %rdi
+    movq    -48(%rbp), %rsi
+    movq    -56(%rbp), %rbx
     
     // Restore stack and return
     leaq    0(%rbp), %rsp

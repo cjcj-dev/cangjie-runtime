@@ -156,6 +156,8 @@ CJ_MCC_C2NStub:
     movapd  %xmm15, -320(%rbp)
     .seh_savexmm %xmm15, C2NStubFrameSize - 320
     .seh_endprologue
+    .global windowsC2NBodyStart
+windowsC2NBodyStart:
 
     // The lowest 32 bytes of the fixed frame are native helper home space.
 
@@ -228,6 +230,8 @@ unwindPCForC2NStub:
     // Call merged leave function: LeaveSaferegion + DeleteC2NContext + ThrowPendingException
     movq    -328(%rbp), %rcx
     callq   MRT_C2N_Leave      // return: thread local data
+    .global windowsC2NLeaveReturn
+windowsC2NLeaveReturn:
     movq    %rax, -8(%rbp)
     .global unwindPCForTPE
 unwindPCForTPE:
@@ -235,6 +239,8 @@ unwindPCForTPE:
     movl    $16, %edx
     callq   MRT_CompleteWindowsExceptionReturn
 
+    .global windowsC2NBodyEnd
+windowsC2NBodyEnd:
     // set potential return value
     movq    -64(%rbp), %rax
     movapd  -80(%rbp), %xmm0
@@ -265,7 +271,11 @@ unwindPCForTPE:
     popq    %rbp
     retq    $16
 .L_stack_check_fail:
+    .global windowsC2NFailureStart
+windowsC2NFailureStart:
     call    MCC_ThrowStackOverflowError
+    .global windowsC2NOverflowReturn
+windowsC2NOverflowReturn:
     callq   MRT_GetThreadLocalData
     movq    %rax, -8(%rbp)
     movq    %rax, -64(%rbp)
@@ -273,6 +283,8 @@ unwindPCForTPE:
     movq    %rbp, %rcx
     movl    $16, %edx
     callq   MRT_CompleteWindowsExceptionReturn
+    .global windowsC2NFailureEnd
+windowsC2NFailureEnd:
     movq    -64(%rbp), %rax
     movapd  -80(%rbp), %xmm0
     jmp     .L_stack_check

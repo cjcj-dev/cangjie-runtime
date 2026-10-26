@@ -27,6 +27,23 @@ extern uintptr_t unwindPCForC2RStubEnd;
 extern uintptr_t unwindPCForStackGrowStub;
 extern uintptr_t unwindPCForExclusiveStubFull;
 extern uintptr_t unwindPCForExclusiveStub;
+#ifdef _WIN64
+// Bounds describe the fully established save area, not the whole function.
+// A CALL at the end returns to BodyEnd before the first restore instruction.
+// Keep that real return PC for SEH; classification must never rewrite it.
+#define WINDOWS_STUB_BODY(name) \
+    extern uintptr_t windows##name##BodyStart; \
+    extern uintptr_t windows##name##BodyEnd;
+WINDOWS_STUB_BODY(C2N)
+WINDOWS_STUB_BODY(StackGrow)
+WINDOWS_STUB_BODY(Safepoint)
+WINDOWS_STUB_BODY(ReturnSafepoint)
+WINDOWS_STUB_BODY(Exclusive)
+WINDOWS_STUB_BODY(StackOverflow)
+#undef WINDOWS_STUB_BODY
+extern uintptr_t windowsC2NFailureStart;
+extern uintptr_t windowsC2NFailureEnd;
+#endif
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
 extern uintptr_t unwindPCForRuntimeStubStart;
 extern uintptr_t unwindPCForRuntimeStubEnd;
@@ -35,6 +52,13 @@ extern uintptr_t CalleeSavedStubFrameSize;
 extern uintptr_t C2NStubFrameSize;
 #endif
 namespace MapleRuntime {
+#ifdef _WIN64
+static bool IsWindowsStubBody(const uint32_t* pc, const uintptr_t* begin, const uintptr_t* end)
+{
+    const auto address = reinterpret_cast<uintptr_t>(pc);
+    return address > reinterpret_cast<uintptr_t>(begin) && address <= reinterpret_cast<uintptr_t>(end);
+}
+#endif
 bool MachineFrame::IsN2CStubFrame() const
 {
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
@@ -50,7 +74,9 @@ bool MachineFrame::IsN2CStubFrame() const
 
 bool MachineFrame::IsExclusiveStubFrame() const
 {
-#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+#ifdef _WIN64
+    return IsWindowsStubBody(ip, &windowsExclusiveBodyStart, &windowsExclusiveBodyEnd);
+#elif defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     return PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip)) ==
         reinterpret_cast<uintptr_t>(&unwindPCForExclusiveStub);
 #else
@@ -87,7 +113,10 @@ bool MachineFrame::IsI2NFrame() const
 
 bool MachineFrame::IsC2NStubFrame() const
 {
-#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+#ifdef _WIN64
+    return IsWindowsStubBody(ip, &windowsC2NBodyStart, &windowsC2NBodyEnd) ||
+        IsWindowsStubBody(ip, &windowsC2NFailureStart, &windowsC2NFailureEnd);
+#elif defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     return PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip)) == reinterpret_cast<uintptr_t>(&unwindPCForC2NStub);
 #else
     return reinterpret_cast<uintptr_t>(ip) == reinterpret_cast<uintptr_t>(&unwindPCForC2NStub);
@@ -96,7 +125,9 @@ bool MachineFrame::IsC2NStubFrame() const
 
 bool MachineFrame::IsStackGrowStubFrame() const
 {
-#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+#ifdef _WIN64
+    return IsWindowsStubBody(ip, &windowsStackGrowBodyStart, &windowsStackGrowBodyEnd);
+#elif defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     return PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip)) ==
         reinterpret_cast<uintptr_t>(&unwindPCForStackGrowStub);
 #else
@@ -106,6 +137,11 @@ bool MachineFrame::IsStackGrowStubFrame() const
 
 bool MachineFrame::IsC2RStubFrame() const
 {
+#ifdef _WIN64
+    // The stack-overflow entry has the same seven-register save layout as
+    // CalleeSavedRegistersStub; it also returns through the native bridge.
+    if (IsWindowsStubBody(ip, &windowsStackOverflowBodyStart, &windowsStackOverflowBodyEnd)) { return true; }
+#endif
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     return PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip)) >
         reinterpret_cast<uintptr_t>(&unwindPCForC2RStubStart) &&
@@ -126,7 +162,9 @@ bool MachineFrame::IsC2NExceptionStubFrame() const
 
 bool MachineFrame::IsSafepointHandlerStubFrame() const
 {
-#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+#ifdef _WIN64
+    return IsWindowsStubBody(ip, &windowsSafepointBodyStart, &windowsSafepointBodyEnd);
+#elif defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     return PtrauthStripInstPointer(reinterpret_cast<Uptr>(ip)) ==
         reinterpret_cast<uintptr_t>(&unwindPCForSafepointHandlerStub);
 #else
@@ -136,7 +174,9 @@ bool MachineFrame::IsSafepointHandlerStubFrame() const
 
 bool MachineFrame::IsReturnSafepointHandlerStubFrame() const
 {
-#if defined(__x86_64__) || defined(__aarch64__)
+#ifdef _WIN64
+    return IsWindowsStubBody(ip, &windowsReturnSafepointBodyStart, &windowsReturnSafepointBodyEnd);
+#elif defined(__x86_64__) || defined(__aarch64__)
     return reinterpret_cast<uintptr_t>(ip) == reinterpret_cast<uintptr_t>(&unwindPCForReturnSafepointHandlerStub);
 #else
     return false;

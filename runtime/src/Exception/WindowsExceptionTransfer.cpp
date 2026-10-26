@@ -10,7 +10,6 @@
 #include "Exception.h"
 #include "Mutator/Mutator.h"
 
-extern "C" void CJ_MCC_ThrowStackOverflowError();
 extern "C" void CJ_MCC_C2NStub();
 
 namespace MapleRuntime {
@@ -24,15 +23,9 @@ static_assert(offsetof(CONTEXT, Xmm15) - offsetof(CONTEXT, Xmm6) == 9 * sizeof(M
               "native XMM context array");
 bool IsWindowsExceptionReturnBoundary(const MachineFrame& frame)
 {
-    if (frame.IsC2RStubFrame() || frame.IsC2NStubFrame() || frame.IsStackGrowStubFrame() ||
+    return frame.IsC2RStubFrame() || frame.IsC2NStubFrame() || frame.IsStackGrowStubFrame() ||
         frame.IsExclusiveStubFrame() || frame.IsSafepointHandlerStubFrame() ||
-        frame.IsReturnSafepointHandlerStubFrame()) {
-        return true;
-    }
-    DWORD64 image = 0;
-    auto* function = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(frame.GetIP()), &image, nullptr);
-    return function != nullptr && image + function->BeginAddress ==
-        reinterpret_cast<DWORD64>(&CJ_MCC_ThrowStackOverflowError);
+        frame.IsReturnSafepointHandlerStubFrame();
 }
 
 // Compute the caller context from real native unwind records. This is shared

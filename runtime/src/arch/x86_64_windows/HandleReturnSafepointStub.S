@@ -76,6 +76,8 @@ CJ_MCC_HandleReturnSafepoint:
     .seh_savexmm %xmm15, 32
 
     .seh_endprologue
+    .global windowsReturnSafepointBodyStart
+windowsReturnSafepointBodyStart:
 
     movq   $3, %r8
     movq   %rbp, %rdx
@@ -96,6 +98,8 @@ unwindPCForReturnSafepointHandlerStub:
     xorl   %edx, %edx
     callq  MRT_CompleteWindowsExceptionReturn
 
+    .global windowsReturnSafepointBodyEnd
+windowsReturnSafepointBodyEnd:
     movq    -8(%rbp), %rax
     movq    -16(%rbp), %rbx
     movq    -24(%rbp), %rcx

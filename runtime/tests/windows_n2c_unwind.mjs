@@ -184,6 +184,31 @@ for (const block of blocks) {
   if (setFrame) assert.equal(s.r[frame] - BigInt(bias), s.r.rsp, name + ': frame register does not describe the completed fixed allocation');
   const nextStart = Math.min(...blocks.map(b => symbols.get(b.match(/StartAddress: (\w+)/)?.[1])).filter(x => x > start), Infinity);
   const functionBody = [...instructions].filter(([pc]) => pc >= start + prolog && pc < nextStart).sort((a,b)=>a[0]-b[0]);
+  // Actual COFF return PCs must lie in the same fully established save area
+  // consumed by MachineFrame/StackFrameStream. This is bounded object evidence;
+  // the Windows product test separately executes those C++ consumers.
+  const bodyKind = {CJ_MCC_C2NStub: 'C2N', CJ_MCC_StackGrowStub: 'StackGrow',
+    CJ_MCC_HandleSafepoint: 'Safepoint', CJ_MCC_HandleReturnSafepoint: 'ReturnSafepoint',
+    CJ_MCC_ExclusiveScope: 'Exclusive', CJ_MCC_ThrowStackOverflowError: 'StackOverflow'}[name];
+  if (bodyKind) {
+    const ranges = [[symbols.get('windows' + bodyKind + 'BodyStart'), symbols.get('windows' + bodyKind + 'BodyEnd')]];
+    if (bodyKind === 'C2N') ranges.push([symbols.get('windowsC2NFailureStart'), symbols.get('windowsC2NFailureEnd')]);
+    for (const [lo, hi] of ranges) assert.ok(lo >= start + prolog && hi > lo, name + ': complete save-area bounds');
+    for (let j = 0; j < functionBody.length; ++j) {
+      if (functionBody[j][1][0] !== 'callq') continue;
+      const returnPc = functionBody[j + 1]?.[0];
+      assert.ok(ranges.some(([lo, hi]) => returnPc > lo && returnPc <= hi),
+        name + ': actual runtime return PC must retain its save-area classification');
+    }
+    const all = ['StackGrow', 'Safepoint', 'ReturnSafepoint'].includes(bodyKind);
+    const gprs = all ? ['rax','rbx','rcx','rdx','rdi','rsi','r8','r9','r10','r11','r12','r13','r14','r15'] :
+      ['r15','r14','r13','r12','rdi','rsi','rbx'];
+    for (const [i, r] of gprs.entries()) assert.equal(read(s.mem, s.r.rbp - BigInt(8 * (i + 1)), 8), initial[r],
+      name + ': GC save-area slot for ' + r);
+    if (all) for (let i = 0; i < 16; ++i) assert.equal(read(s.mem, s.r.rbp - BigInt(128 + 16 * i), 16),
+      initial['xmm' + i], name + ': GC full-save XMM slot');
+    checks++;
+  }
   const hasCall = functionBody.some(([,i])=>i[0] === 'callq');
   const firstCall = functionBody.find(([pc,i])=>i[0] === 'callq')?.[0] ?? nextStart;
   const beforeCall = [...instructions].filter(([pc])=>pc>=start && pc<firstCall);

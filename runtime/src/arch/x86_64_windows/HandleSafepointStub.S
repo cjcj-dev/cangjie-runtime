@@ -74,6 +74,8 @@ CJ_MCC_HandleSafepoint:
     movapd  %xmm15, -368(%rbp)
     .seh_savexmm %xmm15, SafepointStubFrameSize - 368
     .seh_endprologue
+    .global windowsSafepointBodyStart
+windowsSafepointBodyStart:
 
     // Fixed allocation includes the native 32-byte home area.
 
@@ -97,6 +99,8 @@ unwindPCForSafepointHandlerStub:
     callq  MRT_CompleteWindowsExceptionReturn
 
 
+    .global windowsSafepointBodyEnd
+windowsSafepointBodyEnd:
     movq    -8(%rbp), %rax
     movq    -16(%rbp), %rbx
     movq    -24(%rbp), %rcx
