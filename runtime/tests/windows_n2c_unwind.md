@@ -35,22 +35,30 @@ The original 517a evidence covers N2C only. The successor closure below extends 
 
 ## Selected Windows assembly closure
 
-The normal CMake compilation database selects nine runtime assembly sources,
-Cjstart, and the Exception archive's RestoreContextForEH (11 source files;
-20 dynamic/static compile commands in run 40242564639). Derive this set from
-that database and CMake target sources, including the CalleeSavedStub macro
-expansions; do not replace it with a hand-picked list of transition names.
+The historical compilation database from run 40242564639 selected nine runtime
+assembly sources, Cjstart, and the Exception archive's RestoreContextForEH
+(11 source files; 20 dynamic/static compile commands). That is the old run's
+closure, not the current source selection. The Windows Exception target now
+selects `WindowsExceptionTransfer.cpp`; its `RestoreContextForEH.S` was retired.
+Derive the current closure from CMake target sources and the next actual
+compilation database, including the CalleeSavedStub macro expansions. Do not
+replace it with a hand-picked list of transition names or claim that the new
+official compilation database has already been produced.
 The `closure` mode consumes each resulting actual COFF object and checks
 encoding order, completed fixed-frame bias, every prologue boundary, and
 nonvolatile saves under native home-space writes. `c2n` additionally checks
 normal/guard shared restore, RSI frame recovery, refreshed managed r15,
 return registers, and the private 16-byte cleanup. This remains a model.
 The `callee` mode also executes every emitted CalleeSaved macro body's decoded
-instructions around two modeled native calls, including the five-argument
-variant, native home writes, preserved result and refreshed TLS register.
+instructions around three modeled native calls (the wrapped function, TLS
+refresh and Complete bridge), including the five-argument variant, native home
+writes, preserved result and refreshed TLS register.
 The `exclusive` mode follows ExecuteExclusiveCangjieStub's actual argument,
-N2CSlotData and result slots through its three call sites. The modeled calls
-exercise their ABI effects; they do not execute the helpers or managed closure.
+N2CSlotData and result slots through its three call sites. It separately checks
+the Complete bridge and register restoration in the outer
+`CJ_MCC_ExclusiveScope`; the inner Execute helper has no such bridge obligation.
+The modeled calls exercise their ABI effects; they do not execute the helpers
+or managed closure.
 
 C2N now uses real GPR pushes before allocation, RSI as its fixed Windows FP,
 and offset-based XMM records after FP establishment. The original RBP anchor,
@@ -66,15 +74,54 @@ no longer overwrite the saved r15 slot; five-argument wrappers retain RSP+32
 argument placement. Exclusive N2C helpers reserve the actual 24-byte N2CSlotData
 before saved registers, and keep result slots outside native home space.
 
-RestoreContextForEH is entered by a rewritten managed return, without an
-ordinary native caller PC on entry RSP (Exception.cpp redirects the last
-runtime frame). Its empty existing SEH encoding is enumerated separately.
-The normal-call model explicitly does not qualify that transfer trampoline;
-its landing-pad/OS semantics are NOT_RUN and must not be counted as a
-normal-frame pass. No native exception handler or synthetic return convention
-is invented by this consumer.
+## Windows exception return and transfer consumers
 
-The OS C++ consumer now enumerates both public N2C and C2N exports in the
+The retired Windows RestoreContextForEH carrier and its empty SEH record do
+not describe the current production mechanism. The Windows branch of
+`ExceptionHandling::ChangeEHStackInfoLR` records the actual boundary frame
+without rewriting its return address. Native callees return normally, allowing
+C++ RAII cleanup to finish. Before the boundary epilogue, the production stub
+calls `MRT_CompleteWindowsExceptionReturn` with that frame and its private
+cleanup size (16 for C2N, zero for the other boundaries).
+
+`WindowsExceptionTransfer.cpp` publishes the live unwind context, starts stack
+watermark processing and captures the native context. The return helper uses
+the real Windows ControlPc and unwind records, accounting separately for C2N
+RET16. Boundary classification uses actual CALL-return PCs within established
+save-area intervals; GC root traversal consumes the corresponding real saved
+register slots. The existing `MRT_RestoreContext` applies managed stackmap and
+watermark processing before `MRT_TransferWindowsException` transfers to the
+landing pad through `RtlRestoreContext`. Finite COFF decoding does not execute
+this complete production chain or qualify managed cleanup.
+
+`windows_n2c_os_unwind.cpp` enumerates both public N2C and C2N exports in the
 actual installed DLL for four body depths each. It still requires the real
 Windows producer and does not qualify partial prologues, epilogues, managed
 exceptions, stack migration, or exclusive stack switching.
+
+Two further native consumer groups cover distinct parts of the new mechanism:
+
+- `windows_exception_return_os.cpp` consumes the actual runtime return/transfer
+  exports for C2N RET16, C2R, overflow and exclusive boundaries, using the product
+  `CalleeSavedRegisterContext.h` include closure.
+- `windows_exception_frames.cpp` with `gc_unit/test_unwind_regressions.cpp`
+  runs `WindowsExceptionBoundaryRealReturns`, `WindowsExceptionSaveSlots` and
+  `WindowsC2NPrivateCallerSP`. Build with the actual runtime/bounds import
+  libraries and headers, `-std=gnu++17 -fexceptions -fno-rtti`. Its imported
+  `windowsC2NBodyEnd` must match GetProcAddress on the explicitly selected DLL.
+
+Run all three native groups against the normal independent install and again
+against the same-install package unpack, with dependencies from the matching
+location. Preserve each compile, link and consumer exit status. These installed
+and unpacked executions remain NOT_RUN; existing finite compilation/model
+evidence does not qualify them. First legal DLL production is required before
+these executions; an export postgate rejection must preserve the link products
+without claiming successful install or packaging.
+
+Managed cleanup and reflection remain separate NOT_RUN obligations:
+`windows_exception_native.cpp`, `windows_exception_transfer.cj` and
+`reflection_constructor_product.cj` require qualified fixed Windows C/N/std
+and the actual runtime DLL. Neither the native consumers nor an available
+Linux compiler/old std substitutes for that tuple. Full raw/caller export
+collection, five Reference services, ordinal/DATA compatibility and retired
+ordinal 277 remaining unused also remain required production gates.
