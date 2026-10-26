@@ -13,6 +13,7 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "gc_unittest.hpp"
+#include "cj_sret16_fixture.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 
@@ -1262,6 +1263,63 @@ GC_RUNTIME_OTHER_VM_TEST(NativeReturnHandle, HeaderlessResultAfterCollection)
         (unsigned long long)result.marker, (unsigned long long)result.tail);
     GC_EXPECT_TRUE(result.before != 0 && result.before != result.after && result.encoded == expected &&
         result.marker == 584 && result.tail == 585);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+extern "C" void GcUnitCJSRet16Body(void* output)
+{
+    auto& r = *returnResult;
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS); type->SetInstanceSize(8);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    Handle value(mutator, MCC_NewObject(type, 16));
+    r.before = reinterpret_cast<uintptr_t>(value());
+    CollectSparsePages();
+    r.after = reinterpret_cast<uintptr_t>(value());
+    auto* words = static_cast<uintptr_t*>(output);
+    words[0] = r.after;
+    words[1] = 584;
+}
+
+void* RunCJReturn16(void* context)
+{
+    auto& r = *static_cast<ReturnResult*>(context);
+    returnResult = &r;
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_STRUCT); type->SetInstanceSize(16); type->SetFlagHasRefField();
+    GCTib bitmap{}; bitmap.tag = SIGN_BIT | 1; type->SetGCTib(bitmap);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    MethodInfo method{}; method.SetMethodName("return_cj_16byte_value");
+    auto set = [&](size_t offset, auto value) {
+        std::memcpy(reinterpret_cast<char*>(&method) + offset, &value, sizeof(value));
+    };
+    set(8, U32(MODIFIER_STATIC | MODIFIER_HAS_SRET0));
+    set(16, reinterpret_cast<Uptr>(&GcUnitCJSRet16Entry)); set(24, type);
+    auto* result = static_cast<MObject*>(MCC_ApplyCJStaticMethod(&method, nullptr, nullptr));
+    r.encoded = raw(result->GetRefField(TYPEINFO_PTR_SIZE).GetFieldValue());
+    r.marker = result->Load<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr));
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(NativeReturnHandle, Cangjie16ByteResultAfterCollection)
+{
+    RuntimeParam param{}; param.heapParam.heapSize = 512 * 1024; param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ReturnResult result;
+    auto task = RunCJTask(RunCJReturn16, &result);
+    void* value = nullptr; GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK); ReleaseHandle(task);
+    const uintptr_t expected = raw(ZAddress::store_good(to_zaddress(result.after)));
+    std::fprintf(stderr, "RETURN_CJ16_TARGET before=%zx after=%zx encoded=%zx expected=%zx marker=%llu\n",
+        result.before, result.after, result.encoded, expected, (unsigned long long)result.marker);
+    GC_EXPECT_TRUE(result.before != 0 && result.before != result.after &&
+        result.encoded == expected && result.marker == 584);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
