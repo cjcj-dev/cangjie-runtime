@@ -1,5 +1,6 @@
 #define MRT_USE_CJTHREAD_RENAME 1
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <dlfcn.h>
 #include <thread>
@@ -153,11 +154,33 @@ struct AttachObservation {
     bool phaseAdmitted = false;
     bool flip = true;
     bool probePublication = false;
+    bool contendAdmission = false;
+    bool firstAdmissionDenied = false;
     size_t publicationCallbacks = 0;
     bool publicationPhaseAdmitted = false;
     uintptr_t before = 0;
     uintptr_t after = 0;
 };
+// A failed try is not evidence that the callback's caller owns the lock:
+// normal background mutator registration can hold a read lock, and the
+// underlying weak CAS can fail spuriously. Follow the manager's pending-writer
+// protocol, with a bounded wait so an illegal lock across the callback still
+// reaches the phase-admission assertion instead of deadlocking the test.
+bool AcquirePhaseLock(bool& firstDenied, std::atomic<bool>* firstAttempt = nullptr)
+{
+    auto& manager = MutatorManager::Instance();
+    manager.AnnounceMgmtWriterPending();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool acquired = manager.TryAcquireMutatorManagementWLock();
+    firstDenied = !acquired;
+    if (firstAttempt != nullptr) { firstAttempt->store(true, std::memory_order_release); }
+    while (!acquired && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+        acquired = manager.TryAcquireMutatorManagementWLock();
+    }
+    manager.WithdrawMgmtWriterPending();
+    return acquired;
+}
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 AttachObservation* publicationObservation = nullptr;
 void ProbePublicationLock()
@@ -180,17 +203,32 @@ void FlipDuringInterpreterStart(void* context, void* owner)
     if (std::this_thread::get_id() != observation.creator) { return; }
     observation.owner = static_cast<Mutator*>(owner);
     observation.before = ThreadGCData::PublishedMasks().storeGood;
-    // Nonblocking probe: never await a phase flip while the producer owns its
-    // correct lock. An illegal lock across the external callback fails directly.
+    std::atomic<bool> readerReady{false};
+    std::atomic<bool> firstAttempt{false};
+    std::thread reader;
+    if (observation.contendAdmission) {
+        reader = std::thread([&] {
+            auto& manager = MutatorManager::Instance();
+            manager.MutatorManagementRLock();
+            readerReady.store(true, std::memory_order_release);
+            // Release on the first *attempt*, not phase admission or a flip.
+            // Waiting for either of those under this read lock would self-lock.
+            while (!firstAttempt.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+            manager.MutatorManagementRUnlock();
+        });
+        while (!readerReady.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    }
     std::thread phase([&] {
         auto& manager = MutatorManager::Instance();
-        observation.phaseAdmitted = manager.TryAcquireMutatorManagementWLock();
+        observation.phaseAdmitted = AcquirePhaseLock(observation.firstAdmissionDenied,
+            observation.contendAdmission ? &firstAttempt : nullptr);
         if (observation.phaseAdmitted) {
             if (observation.flip) { ZGlobalsPointers::flip_old_relocate_start(); }
             manager.MutatorManagementWUnlock();
         }
     });
     phase.join();
+    if (reader.joinable()) { reader.join(); }
     observation.after = ThreadGCData::PublishedMasks().storeGood;
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     if (observation.probePublication) {
@@ -201,7 +239,7 @@ void FlipDuringInterpreterStart(void* context, void* owner)
 }
 void* UnstartedTask(void*, unsigned int) { return nullptr; }
 }
-static void CheckLogicalAttach(bool flip, bool probePublication = false)
+static void CheckLogicalAttach(bool flip, bool probePublication = false, bool contendAdmission = false)
 {
     RuntimeParam parameters{};
     parameters.heapParam.heapSize = 512 * 1024;
@@ -214,6 +252,7 @@ static void CheckLogicalAttach(bool flip, bool probePublication = false)
     AttachObservation observed;
     observed.flip = flip;
     observed.probePublication = probePublication;
+    observed.contendAdmission = contendAdmission;
     setHook(FlipDuringInterpreterStart, &observed);
     CJThreadAttr attr{};
     CJThreadAttrInit(&attr);
@@ -238,6 +277,11 @@ static void CheckLogicalAttach(bool flip, bool probePublication = false)
                  static_cast<size_t>(epoch), static_cast<size_t>(StackWatermark::epoch_id()),
                  data.storeBarrierBuffer->lastProcessedColor, published);
     GC_EXPECT_TRUE(observed.phaseAdmitted);
+    if (contendAdmission) {
+        std::fprintf(stderr, "ATTACH_ADMISSION_CONTENTION_TARGET first_denied=%d admitted=%d\n",
+                     observed.firstAdmissionDenied, observed.phaseAdmitted);
+        GC_EXPECT_TRUE(observed.firstAdmissionDenied);
+    }
     GC_EXPECT_EQ(observed.before != observed.after, flip);
     GC_EXPECT_TRUE(published);
     GC_EXPECT_EQ(data.storeGoodMask, observed.after);
@@ -247,7 +291,8 @@ static void CheckLogicalAttach(bool flip, bool probePublication = false)
         bool outside = false;
         std::thread phase([&] {
             auto& manager = MutatorManager::Instance();
-            outside = manager.TryAcquireMutatorManagementWLock();
+            bool firstDenied = false;
+            outside = AcquirePhaseLock(firstDenied);
             if (outside) { manager.MutatorManagementWUnlock(); }
         });
         phase.join();
@@ -266,6 +311,10 @@ GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, PublishesMasksAndEpochAfterInterpreterCo
 GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, NoPhaseChangeControl)
 {
     CheckLogicalAttach(false);
+}
+GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, AdmissionAfterCompetingReader)
+{
+    CheckLogicalAttach(true, false, true);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 GC_RUNTIME_OTHER_VM_TEST(LogicalAttach, SmrPublicationExcludesPhaseChange)
