@@ -13,24 +13,32 @@ runtime definitions jointly establish ownership. References owned by this DLL
 must be present in the raw before collection can succeed; see the completeness
 section below.
 
-Collect from pinned compiler CodeGen/CHIR, LLVM lib/include, cjcj CodeGen and
-stdlib/libs trees, using one `--consumer` per subtree:
+Collect from pinned compiler CodeGen/CHIR/mangle, its macro runtime loader and
+option sources, LLVM lib/include and stdlib/libs, with one label per subtree.
+The official host compiler is not a target emitter in this contract:
 
 ```sh
 python3 runtime/build/generate_windows_exports.py collect complete.raw.def \
   runtime/src/windows_export_references.json \
-  --consumer emitter:compiler-codegen@COMMIT=COMPILER/src/CodeGen \
-  --consumer emitter:compiler-reflection@COMMIT=COMPILER/include/cangjie/CHIR \
+  --consumer emitter:compiler-codegen@COMPILER_COMMIT=COMPILER/packages/codegen/src \
+  --consumer emitter:compiler-chir@COMPILER_COMMIT=COMPILER/packages/chir/src \
+  --consumer emitter:compiler-mangle@COMPILER_COMMIT=COMPILER/packages/mangle/src \
+  --consumer emitter:compiler-macro-runtime-loader@COMPILER_COMMIT=COMPILER/packages/macro/src \
+  --consumer emitter:compiler-option@COMPILER_COMMIT=COMPILER/packages/option/src \
   --consumer emitter:llvm-lib@COMMIT=LLVM/llvm/lib \
   --consumer emitter:llvm-include@COMMIT=LLVM/llvm/include \
-  --consumer emitter:cjcj-codegen@COMMIT=CJCJ/packages/codegen/src \
-  --consumer source:stdlib@COMMIT=stdlib/libs \
+  --consumer source:stdlib@RUNTIME_COMMIT=stdlib/libs \
   --runtime-source runtime@RUNTIME_COMMIT=runtime/src \
+  --runtime-definitions runtime-definitions.json \
   --historical previous-registered.def \
+  --retired runtime/src/windows_retired_exports.def \
+  --diagnostics collect-diagnostics.json \
   --native-sources stdlib=runtime/src/windows_stdlib_sources.json
 python3 runtime/build/generate_windows_exports.py write complete.raw.def \
   runtime/src/windows_x86_64_exports.def --source-ref RUNTIME_COMMIT \
-  --historical previous-registered.def
+  --references runtime/src/windows_export_references.json \
+  --historical previous-registered.def \
+  --retired runtime/src/windows_retired_exports.def
 ```
 
 Replace each `COMMIT` with the source tree's 40-digit revision. The initial
@@ -120,7 +128,7 @@ is a failure, not a reason to shrink the contract. CI must save the normal link
 log, check result, these preserved artifacts, toolchain identity and any install
 results separately. A saved DLL from a rejected gate is not a qualified install.
 
-Stage inputs: R65ab0659d0e657c92a9ddabe8a10f8bc22dd2eef;
+Registered source inputs: R04bee26ca9c81f556addb212792946fb081c3606;
 C8ba3eb11c18527d5641794225b901202071d726f consumer **source only**;
 Nde7f37458b456c4a7ef1ebe2726d81fcfd9904c2 consumer **source only**.
 Collect CodeGen/CHIR/mangle and LLVM lib/include plus the compiler macro runtime
@@ -128,13 +136,12 @@ loader separately labelled; std native sources must use the actual Windows TU
 selection. Recheck changed callers when a later C fix freezes; never label an
 existing ELF with a newer parser/source commit.
 
-`CJ_MCC_NewFinalizer` is still a historical registered export, while the current
-Reference mechanism registers at successful root construction instead of object
-allocation. The new generator preserves and reports this conflict. It neither
-removes that historical obligation nor reinstates a retired allocation fallback.
-The runtime/CI owners must carry the concrete raw result to the controller for
-an explicit compatibility decision. Linux `nm` and collector fixtures do not
-satisfy Windows DLL acceptance.
+`CJ_MCC_NewFinalizer @277` remains in the preserved historical input. Its explicit
+retirement is recorded below; the new Reference mechanism registers at successful
+root construction. Only normal collection from the real complete raw and COFF
+capture may produce the replacement registered contract. The retirement does not
+permit reuse of 277 or removal of any other historical ordinal/DATA obligation.
+Linux `nm` and collector fixtures do not satisfy Windows DLL acceptance.
 
 The added `node runtime/tests/windows_exports/test_completeness.mjs EVIDENCE`
 exercises incomplete raw rejection, five runtime-defined services, independent
@@ -164,7 +171,15 @@ produce an explicit postgate rejection until regenerated from the real raw.
 A source-only definition scan is deliberately conservative: it also sees Unix
 conditional definitions. For the final Windows collection, capture the actual
 normal CMake runtime COFF objects (including their source identity and external
-definitions), then use that capture to resolve platform ownership:
+definitions), then use that capture to resolve platform ownership.
+
+The source input must have the captured checkout's exact bytes. A Git archive
+with LF endings differs from a normal Windows CRLF checkout even at the same
+commit. Materialize the fixed source with the corresponding normal Git checkout
+settings and retain the source digest checks; do not normalize or replace the
+capture's hashes. Build-generated bytes are carried separately in the capture.
+Any recorded `-dirty` provenance remains recorded, not relabelled as a pristine
+checkout by successful source comparison.
 
 ```sh
 node runtime/build/capture_windows_runtime_definitions.mjs \
