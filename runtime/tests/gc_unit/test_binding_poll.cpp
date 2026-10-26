@@ -41,13 +41,15 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
     bool active = false;
     bool readNull = false;
     std::thread thread([&] {
-        Mutator* owner = Mutator::NewMutator();
-        owner->SetManagedContext(false);
+        auto& manager = MutatorManager::Instance();
+        // Creation, GC attachment and SMR publication precede carrier binding.
+        // A bare NewMutator is not yet a runnable logical thread.
+        Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         before = owner->GetGCData().storeGoodMask;
+        manager.UnbindMutator(*owner);
         ready.store(true, std::memory_order_release);
         while (!collected.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         auto* tls = ThreadLocal::GetThreadLocalData();
-        auto& manager = MutatorManager::Instance();
         if (managerBinding) {
             manager.BindMutator(*owner);
         } else {
@@ -74,9 +76,7 @@ void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false,
         auto* field = reinterpret_cast<RefField<false>*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
         readNull = CJ_MCC_ReadRefField(object, field) == nullptr;
         MRT_EnterSaferegion(false);
-        manager.UnbindMutator(*owner);
-        manager.UnregisterMarkFlushThread(tls);
-        delete owner;
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     });
     while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     if (collect) {

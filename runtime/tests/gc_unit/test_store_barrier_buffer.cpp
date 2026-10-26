@@ -26,6 +26,7 @@
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
+#include "reference_layout_fixture.hpp"
 #include "Concurrency/ConcurrencyModel.h"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -902,8 +903,9 @@ void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool refle
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
+    ReferenceLayoutFixture reference;
     if (weakHolder) {
-        fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+        reference.Place(reinterpret_cast<MAddress>(fx.obj0), nullptr);
     }
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj0));
@@ -912,13 +914,16 @@ void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool refle
     // Flush the product buffer through its normal phase-change consumer.
     // A weak entry must remember without publishing previous-value mark work.
     if (reflection) {
-        TypeInfo* fieldTypes[] = {fx.typeInfo};
+        TypeInfo* fieldTypes[] = {fx.typeInfo, fx.typeInfo, fx.typeInfo, fx.typeInfo};
         U32 offsets[] = {0};
-        fx.typeInfo->SetFieldNum(1);
-        fx.typeInfo->SetFieldAddr(fieldTypes);
-        fx.typeInfo->SetOffsets(offsets);
+        TypeInfo* holderType = fx.obj0->GetTypeInfo();
+        if (!weakHolder) {
+            holderType->SetFieldNum(1);
+            holderType->SetOffsets(offsets);
+        }
+        holderType->SetFieldAddr(fieldTypes);
         InstanceFieldInfo fieldInfo{};
-        MCC_SetInstanceFieldValue(&fieldInfo, fx.typeInfo,
+        MCC_SetInstanceFieldValue(&fieldInfo, holderType,
             reinterpret_cast<MObject*>(fx.obj0), reinterpret_cast<MObject*>(fx.obj1));
     } else {
         entry(fx.obj1, fx.obj0, &field);
@@ -1431,7 +1436,8 @@ extern "C" void MCC_WriteRefField_Strong(BaseObject*, BaseObject*, HeapSlot<>*);
 GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
 {
     GcHeapFixture fx;
-    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    ReferenceLayoutFixture reference;
+    reference.Place(reinterpret_cast<MAddress>(fx.obj0), nullptr);
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
@@ -1453,7 +1459,8 @@ GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
 GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
 {
     GcHeapFixture fx;
-    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    ReferenceLayoutFixture reference;
+    reference.Place(reinterpret_cast<MAddress>(fx.obj0), nullptr);
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
