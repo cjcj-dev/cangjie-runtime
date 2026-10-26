@@ -240,6 +240,12 @@ function(make_cangjie_lib target_name)
 
             set(target_lib_full_name
                 ${CMAKE_BINARY_DIR}/lib/${output_std_cj_lib_dir}/libcangjie-${target_name}${CMAKE_SHARED_LIBRARY_SUFFIX})
+            if(NOT DARWIN AND NOT MINGW)
+                # Absolute-path preloads and DT_NEEDED names must identify the same ELF DSO.
+                # This custom link command does not inherit CMake's shared-library SONAME flags.
+                get_filename_component(target_lib_soname "${target_lib_full_name}" NAME)
+                list(APPEND flags_to_compile "${LINKER_OPTION_PREFIX}-soname=${target_lib_soname}")
+            endif()
         else()
             set(target_lib_full_name ${CMAKE_BINARY_DIR}/bin/${target_name}${CMAKE_EXECUTABLE_SUFFIX})
         endif()
