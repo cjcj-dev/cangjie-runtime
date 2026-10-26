@@ -29,6 +29,8 @@
 this build needs -DNOMINMAX (see runtime/src/os/Windows/WinModuleManager.h)"
 #endif
 
+#include <functional>
+#include <string>
 #include <unordered_set>
 
 #include "Base/CString.h"
