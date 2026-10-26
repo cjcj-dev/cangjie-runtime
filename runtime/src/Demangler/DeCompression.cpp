@@ -6,6 +6,8 @@
 
 
 #include "DeCompression.h"
+#include <cctype>
+#include <cstdlib>
 #ifdef BUILD_LIB_CANGJIE_DEMANGLE // To reuse the code to compile CangjieDemangle.cpp
 #include <cstring>
 #include <string>
@@ -178,7 +180,7 @@ bool DeCompression<T>::IsVarDeclEncode(T& mangled)
         if (idx < n && mangled[idx] == END) {
             return true;
         }
-    } else if (isdigit(mangled[0])) {
+    } else if (std::isdigit(mangled[0])) {
         idx = ForwardName(mangled);
         if (idx < n && mangled[idx] == MANGLE_COUNT_PREFIX) {
             idx = ForwardNumber(mangled, idx + MANGLE_CHAR_LEN);
@@ -520,15 +522,15 @@ size_t DeCompression<T>::ForwardName(T& mangled, size_t idx)
     if (IsOperatorName(mangled, idx) || IsPropName(mangled, idx)) {
         return idx + SPECIAL_NAME_LEN;
     }
-    if (!isdigit(mangled[idx])) {
+    if (!std::isdigit(mangled[idx])) {
         return idx;
     }
     if (mangled[idx] == MANGLE_ANONYMOUS_PREFIX) { return idx + MANGLE_CHAR_LEN; }
     size_t numberLen = 0;
-    while (idx + numberLen < mangled.Length() && isdigit(mangled[idx + numberLen])) {
+    while (idx + numberLen < mangled.Length() && std::isdigit(mangled[idx + numberLen])) {
         numberLen++;
     }
-    size_t number = atoi(mangled.SubStr(idx, numberLen).Str());
+    size_t number = std::atoi(mangled.SubStr(idx, numberLen).Str());
     if (number > mangled.Length() - idx - numberLen) {
         return idx;
     }
@@ -716,7 +718,7 @@ void DeCompression<T>::SpanningVarDeclTree()
         return;
     }
     size_t change = std::get<0>(UpdateCompressedName(this->decompressed, idx));
-    if (isdigit(this->decompressed[idx])) {
+    if (std::isdigit(this->decompressed[idx])) {
         idx = ForwardName(this->decompressed, idx);
         if (idx != this->currentIndex && change == 0) {
             std::tuple<size_t, size_t> pos(this->currentIndex, idx - this->currentIndex);
@@ -739,7 +741,7 @@ void DeCompression<T>::SpanningFuncDeclTree()
     }
     this->isRecord = true;
     size_t change = std::get<0>(UpdateCompressedName(this->decompressed, idx));
-    if (isdigit(this->decompressed[idx]) || IsOperatorName(this->decompressed, idx) ||
+    if (std::isdigit(this->decompressed[idx]) || IsOperatorName(this->decompressed, idx) ||
         IsPropName(this->decompressed, idx)) {
         idx = ForwardName(this->decompressed, idx);
         if (idx != this->currentIndex && change == 0) {
@@ -1053,7 +1055,7 @@ size_t DeCompression<T>::TryParsePath(T mangled)
             if (nextIdx == idx + MANGLE_CHAR_LEN || change > 0) {
                 nextIdx = idx;
             }
-        } else if (isdigit(ch) || IsOperatorName(mangled, idx) || IsPropName(mangled, idx)) {
+        } else if (std::isdigit(ch) || IsOperatorName(mangled, idx) || IsPropName(mangled, idx)) {
             std::tuple<size_t, size_t, size_t> rParams{idx, entityId, change};
             nextIdx = TryNamePrefixPath(mangled, count, curMangled, rParams);
         } else if (ch == MANGLE_EXTEND_PREFIX) {

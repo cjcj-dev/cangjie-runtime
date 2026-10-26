@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <cstdlib>
+
 #ifdef BUILD_LIB_CANGJIE_DEMANGLE // to reuse the code to compile CangjieDemangle.cpp
 #include <cstring>
 #include <string>
@@ -275,7 +277,7 @@ uint32_t Demangler<T>::DemangleLength()
         ++currentIndex;
         isValid = true;
     }
-    return atoi(numStr.Str());
+    return std::atoi(numStr.Str());
 }
 
 template<typename T>
