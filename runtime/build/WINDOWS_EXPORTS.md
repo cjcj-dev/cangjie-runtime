@@ -1,5 +1,31 @@
 # Windows export contract
 
+## Static archive installation
+
+The DLL export check does not complete the installation. The normal Windows
+install also processes `lib/windows_x86_64_cjnative/libcangjie-runtime.a` through
+`build/windows_rename_section.mjs`. CMake resolves Node.js and GNU `objdump` and
+`objcopy` as `WINDOWS_RUNTIME_NODE`, `WINDOWS_RUNTIME_OBJDUMP`, and
+`WINDOWS_RUNTIME_OBJCOPY`; their absolute paths can be supplied when configuring.
+The script prints the selected tools and their versions and preserves tool
+diagnostics. A failed tool or section verification fails the normal install.
+
+The postprocessor renames every `.text` subsection to `.text_rt` with its suffix
+preserved. It reads section rows with or without leading spaces, deduplicates
+the names, and passes the options through a response file so the native Windows
+command line does not grow with the archive. It checks the resulting section
+names, multiplicities, declared alignments and aligned extents before replacing
+the installed archive. GNU BFD may pad COFF raw sizes to the declared alignment;
+an unpadded compiler size is not an invariant of an objcopy round trip.
+
+Already processed archives are checked without renaming a second time. On a
+failure after creating the response file, `.runtime-sections-*` beside the
+archive retains the response and any output for diagnosis. The original archive
+is replaced only after verification. Default/explicit install prefixes and
+`DESTDIR` are resolved by the existing `install_runtime_postprocess` entry.
+
+## DLL caller contract
+
 The native link still uses `--export-all-symbols`. The checked contract covers
 exports referenced by compiler emitters and the standard library, captured in
 `src/windows_export_references.json`. Each entry has caller file/line evidence;
