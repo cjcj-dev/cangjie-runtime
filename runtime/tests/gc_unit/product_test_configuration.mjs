@@ -33,8 +33,9 @@ export function copyObject(library, compiler) {
   const identity = elf(join(library, 'libcangjie-runtime.so'));
   if (String(machines[target]) !== String(identity)) throw Error(`compiler target ${target} differs from runtime ELF ${identity}`);
   if (identity[2] !== 183) return '';
-  if (!process.env.GCV2_RUNTIME_COPY_OBJECT) throw Error('set GCV2_RUNTIME_COPY_OBJECT to the selected build RuntimeCopy object');
-  const path = realpathSync(process.env.GCV2_RUNTIME_COPY_OBJECT);
+  // RuntimeOutputLayout passes the selected RuntimeCopy target to the
+  // publisher, which retains it beside this exact published library pair.
+  const path = realpathSync(join(library, 'gc-unit', 'Copy_aarch64.o'));
   if (String(elf(path)) !== String(identity)) throw Error('RuntimeCopy object and selected runtime ELF architectures differ');
   return path;
 }
