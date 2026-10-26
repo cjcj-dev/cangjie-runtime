@@ -587,7 +587,12 @@ extern "C" MRT_EXPORT bool CJ_MCC_ReferenceRuntimeRunning()
     return Heap::GetHeap().GetFinalizerProcessor().IsRunning();
 }
 extern "C" MRT_EXPORT int64_t CJ_MCC_ReferenceNanoTime() { return TimeUtil::NanoSeconds(); }
+#ifdef _WIN64
+// The public Windows entry has a native return bridge in CalleeSavedStub.S.
+extern "C" void MCC_ReferenceInvokeFinalize(BaseObject* object)
+#else
 extern "C" MRT_EXPORT void CJ_MCC_ReferenceInvokeFinalize(BaseObject* object)
+#endif
 {
     FinalizerProcessor::InvokeFinalize(object);
 }

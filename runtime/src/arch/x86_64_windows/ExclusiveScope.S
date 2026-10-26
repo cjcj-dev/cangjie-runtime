@@ -310,6 +310,16 @@ unwindPCForExclusiveStub:
     xorq    %rax, %rax
 
 .L_exc_cleanup:
+    // Native callbacks have returned and restored their C++ resources.
+    movq    %rax, -112(%rbp)
+    movapd  %xmm0, -128(%rbp)
+    movapd  %xmm1, -144(%rbp)
+    movq    %rbp, %rcx
+    xorl    %edx, %edx
+    callq   MRT_CompleteWindowsExceptionReturn
+    movq    -112(%rbp), %rax
+    movapd  -128(%rbp), %xmm0
+    movapd  -144(%rbp), %xmm1
     // Restore callee-saved registers
     movq    -8(%rbp), %r15
     movq    -16(%rbp), %r14

@@ -7,14 +7,28 @@ const [object, unwindFile, disassemblyFile, mode = 'n2c'] = process.argv.slice(2
 const data = fs.readFileSync(object);
 assert.equal(data.readUInt16LE(0), 0x8664, 'production object must remain AMD64 COFF');
 const symoff = data.readUInt32LE(8), count = data.readUInt32LE(12);
-const strings = symoff + count * 18, symbols = new Map();
+const strings = symoff + count * 18, symbols = new Map(), symbolNames = new Map();
 for (let i = 0; i < count;) {
   const at = symoff + i * 18;
   const name = data.readUInt32LE(at) === 0
     ? data.subarray(strings + data.readUInt32LE(at + 4)).toString().split('\0')[0]
     : data.subarray(at, at + 8).toString().split('\0')[0];
   if (data.readInt16LE(at + 12) > 0) symbols.set(name, data.readUInt32LE(at + 8));
+  symbolNames.set(i, name);
   i += 1 + data[at + 17];
+}
+const callTargets = new Map();
+for (let i = 0; i < data.readUInt16LE(2); ++i) {
+  const section = 20 + data.readUInt16LE(16) + i * 40;
+  const name = data.subarray(section, section + 8).toString().split('\0')[0];
+  if (name !== '.text') continue;
+  const relocs = data.readUInt32LE(section + 24);
+  for (let j = 0; j < data.readUInt16LE(section + 32); ++j) {
+    const at = relocs + j * 10;
+    if (data.readUInt16LE(at + 8) === 4) {
+      callTargets.set(data.readUInt32LE(at) - 1, symbolNames.get(data.readUInt32LE(at + 4)));
+    }
+  }
 }
 const instructions = new Map();
 for (const line of fs.readFileSync(disassemblyFile, 'utf8').split('\n')) {
@@ -39,6 +53,8 @@ function execute(s, [op, args]) {
   else if (op === 'subq') s.r[a[1].slice(1)] -= BigInt(a[0].slice(1));
   else if (op === 'addq') s.r[a[1].slice(1)] += BigInt(a[0].slice(1));
   else if (op === 'leaq') s.r[a[1].slice(1)] = address(s, a[0]);
+  else if (op === 'xorl' && a[0] === '%edx' && a[1] === '%edx') s.r.rdx = 0n;
+  else if (op === 'movl' && a[1] === '%edx' && a[0].startsWith('$')) s.r.rdx = BigInt(a[0].slice(1));
   else if (['movq', 'movapd'].includes(op)) {
     const n = op === 'movapd' ? 16 : 8;
     const v = a[0].startsWith('%') ? s.r[a[0].slice(1)] : a[0].startsWith('$') ? BigInt(a[0].slice(1)) : read(s.mem, address(s, a[0]), n);
@@ -195,27 +211,32 @@ for (const block of blocks) {
     write(state.mem, stack + 40n, fifth, 8);
     const moreArgs = functionBody.some(([, i]) => i[0] === 'movq' && i[1] === '48(%rbp), %rax');
     let calls = 0, returned = false;
-    for (const [, insn] of functionBody) {
+    for (const [pc, insn] of functionBody) {
       if (insn[0] === 'callq') {
         calls++;
         if (calls === 1) {
           for (const reg of ['rcx', 'rdx', 'r8', 'r9']) assert.equal(state.r[reg], initial[reg], name + ': forwarded argument changed');
           if (moreArgs) assert.equal(read(state.mem, state.r.rsp + 32n, 8), fifth, name + ': fifth argument outside native slot');
-        } else {
-          assert.equal(calls, 2, name + ': unexpected wrapper call');
+        } else if (calls === 2) {
           // The result must not overwrite the saved r15 used for unwinding
           // while MRT_GetThreadLocalData is executing.
+          unwind(state, prolog + 1);
+        } else {
+          assert.equal(calls, 3, name + ': unexpected wrapper call');
+          assert.equal(callTargets.get(pc), 'MRT_CompleteWindowsExceptionReturn', name + ': real exception bridge edge');
+          assert.equal(state.r.rcx, s.r.rbp, name + ': exception bridge frame');
+          assert.equal(state.r.rdx, 0n, name + ': exception bridge private cleanup');
           unwind(state, prolog + 1);
         }
         for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
         for (const reg of ['rcx', 'rdx', 'r8', 'r9', 'r10', 'r11']) state.r[reg] = 0xBADn;
-        state.r.rax = calls === 1 ? result : tls;
+        state.r.rax = calls === 1 ? result : calls === 2 ? tls : 0xBADn;
       } else {
         execute(state, insn);
         if (insn[0] === 'retq') { returned = true; break; }
       }
     }
-    assert.equal(calls, 2); assert.ok(returned, name + ': wrapper return not reached');
+    assert.equal(calls, 3); assert.ok(returned, name + ': wrapper return not reached');
     for (const reg of nonvolatile) assert.equal(state.r[reg], reg === 'r15' ? tls : initial[reg], name + ': wrapper return lost ' + reg);
     assert.equal(state.r.rax, result, name + ': wrapper result lost');
     assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
@@ -227,7 +248,7 @@ for (const block of blocks) {
     write(state.mem, stack + 40n, tls, 8);
     write(state.mem, initial.r9 + 8n, functionPc, 8);
     let calls = 0, returned = false;
-    for (const [, insn] of functionBody) {
+    for (const [pc, insn] of functionBody) {
       if (insn[0] === 'callq') {
         calls++;
         if (calls === 1) {
@@ -238,8 +259,13 @@ for (const block of blocks) {
           assert.equal(insn[1], '*%r11'); assert.equal(state.r.r11, functionPc);
           assert.equal(state.r.rcx, initial.rcx, 'exclusive sret argument');
           assert.equal(state.r.rdx, initial.r8, 'exclusive closure argument');
-        } else {
+        } else if (calls === 3) {
           assert.equal(calls, 3); assert.equal(state.r.rcx, s.r.rbp);
+        } else {
+          assert.equal(calls, 4);
+          assert.equal(callTargets.get(pc), 'MRT_CompleteWindowsExceptionReturn');
+          assert.equal(state.r.rcx, s.r.rbp, 'exclusive exception boundary');
+          assert.equal(state.r.rdx, 0n, 'exclusive private cleanup');
         }
         for (let i = 0; i < 32; i++) state.mem.set(state.r.rsp + BigInt(i), 0xA5);
         for (const reg of ['rax', 'rcx', 'rdx', 'r8', 'r9', 'r10', 'r11', 'xmm0', 'xmm1']) state.r[reg] = 0xBADn;
@@ -250,12 +276,23 @@ for (const block of blocks) {
         if (insn[0] === 'retq') { returned = true; break; }
       }
     }
-    assert.equal(calls, 3); assert.ok(returned, 'exclusive managed return not reached');
+    assert.equal(calls, 4); assert.ok(returned, 'exclusive managed return not reached');
     for (const reg of nonvolatile) assert.equal(state.r[reg], initial[reg], 'exclusive return lost ' + reg);
     assert.equal(state.r.rax, result); assert.equal(state.r.xmm0, float0); assert.equal(state.r.xmm1, float1);
     assert.equal(state.r.rip, returnPc); assert.equal(state.r.rsp, stack + 8n); checks++;
   }
   if (mode === 'c2n' || (mode === 'closure' && name === 'CJ_MCC_C2NStub')) {
+    const bridges = functionBody.filter(([pc, i]) => i[0] === 'callq' &&
+      callTargets.get(pc) === 'MRT_CompleteWindowsExceptionReturn');
+    assert.equal(bridges.length, 2, 'C2N normal and stack-check return must both reach the exception bridge');
+    for (const bridge of bridges) {
+      const i = functionBody.indexOf(bridge);
+      const state = {r: {...s.r}, mem: new Map(s.mem)};
+      execute(state, functionBody[i - 2][1]); execute(state, functionBody[i - 1][1]);
+      assert.equal(state.r.rcx, s.r.rbp, 'C2N actual exception frame');
+      assert.equal(state.r.rdx, 16n, 'C2N exception transfer must account for RET16');
+      checks++;
+    }
     const index = functionBody.findIndex(([,i])=>i[0] === 'movapd' && i[1] === '-176(%rbp), %xmm6');
     assert.ok(index >= 0, 'C2N production restore must be present');
     const tail = functionBody.slice(index);const end=tail.findIndex(([,i])=>i[0]==='retq');assert.ok(end>=0);tail.length=end+1;

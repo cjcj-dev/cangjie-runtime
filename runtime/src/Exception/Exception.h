@@ -23,7 +23,9 @@
 
 namespace MapleRuntime {
 // Restore the register context before jumping to the Cangjie code.
+#ifndef _WIN64
 extern "C" void RestoreContextForEH();
+#endif
 // Use the register information in stackmap to restore correlative registers layer by layer.
 extern "C" uintptr_t MRT_RestoreContext(CalleeSavedRegisterContext& context);
 
@@ -76,6 +78,9 @@ public:
         throwingSOFFramePc = nullptr;
         adjustedSize = 0;
         fatalException = false;
+#ifdef _WIN64
+        topManagedPC = 0;
+#endif
         ehFrameInfos.clear();
         liteFrameInfos.clear();
         if (message != nullptr) {
@@ -89,9 +94,27 @@ public:
 
     ExceptionRef& GetExceptionRef() { return exceptionRef; }
 
+#ifdef _WIN64
+    // Windows defers the transfer until this native boundary has returned from
+    // its C++ callee. Keep its real return address intact for OS unwinding.
+    // Reuse the existing word; the runtime/compiler layout does not change.
+    void SetWindowsReturnFrame(FrameAddress* frame) { topManagedPC = reinterpret_cast<uintptr_t>(frame); }
+    FrameAddress* GetWindowsReturnFrame() const { return reinterpret_cast<FrameAddress*>(topManagedPC); }
+    void ShiftWindowsExceptionFrames(intptr_t offset)
+    {
+        if (topManagedPC == 0) { return; }
+        topManagedPC += offset;
+        for (auto& frame : ehFrameInfos) { frame->ShiftStack(offset); }
+    }
+    uintptr_t GetTopManagedPC() const
+    {
+        auto* frame = GetWindowsReturnFrame();
+        return frame == nullptr ? 0 : reinterpret_cast<uintptr_t>(frame->returnAddress);
+    }
+#else
     void SetTopManagedPC(const uintptr_t ptr) { topManagedPC = ptr; }
-
     uintptr_t GetTopManagedPC() const { return topManagedPC; }
+#endif
 
 #ifdef INTERPRETER_ENABLED
     void SetCurrentCatchFunctionPC(const uintptr_t ptr) { currentCatchFunctionPC = ptr; }

@@ -37,6 +37,9 @@ public:
     virtual const uint32_t* GetIP() const = 0;
     virtual FrameAddress* GetFA() const = 0;
     virtual MachineFrame GetMachineFrame() const = 0;
+#ifdef _WIN64
+    virtual void ShiftStack(intptr_t offset) = 0;
+#endif
 
     virtual const CString GetFunctionName() const = 0;
 };
@@ -197,6 +200,16 @@ public:
     {
         return mFrame;
     }
+
+#ifdef _WIN64
+    void ShiftStack(intptr_t offset) override
+    {
+        if (mFrame.GetFA() != nullptr) {
+            mFrame.SetFA(reinterpret_cast<FrameAddress*>(reinterpret_cast<uintptr_t>(mFrame.GetFA()) + offset));
+        }
+        if (mFrame.GetSP() != 0) { mFrame.SetSP(mFrame.GetSP() + offset); }
+    }
+#endif
 
     const CString GetFunctionName() const override
     {

@@ -21,6 +21,9 @@ CJ_MCC_ThrowStackOverflowError:                   # @CJ_MCC_ThrowStackOverflowEr
     .seh_setframe %rbp, 32
     .seh_endprologue
     callq  MCC_ThrowStackOverflowError
+    movq   %rbp, %rcx
+    xorl   %edx, %edx
+    callq  MRT_CompleteWindowsExceptionReturn
     leaq    0(%rbp), %rsp
     popq    %rbp
     retq

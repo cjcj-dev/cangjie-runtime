@@ -60,7 +60,7 @@ elseif (WINDOWS_FLAG MATCHES 1)
         "Exception.cpp"
         "EhTable.cpp"
         "ExceptionCApi.cpp"
-        "${CMAKE_SOURCE_DIR}/src/arch/x86_64_windows/RestoreContextForEH.S"
+        "WindowsExceptionTransfer.cpp"
     )
 endif()
 add_library(Exception STATIC ${SRC_LIST})

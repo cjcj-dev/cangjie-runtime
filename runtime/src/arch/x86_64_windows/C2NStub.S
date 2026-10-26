@@ -231,6 +231,9 @@ unwindPCForC2NStub:
     movq    %rax, -8(%rbp)
     .global unwindPCForTPE
 unwindPCForTPE:
+    movq    %rbp, %rcx
+    movl    $16, %edx
+    callq   MRT_CompleteWindowsExceptionReturn
 
     // set potential return value
     movq    -64(%rbp), %rax
@@ -265,5 +268,12 @@ unwindPCForTPE:
     call    MCC_ThrowStackOverflowError
     callq   MRT_GetThreadLocalData
     movq    %rax, -8(%rbp)
+    movq    %rax, -64(%rbp)
+    movapd  %xmm0, -80(%rbp)
+    movq    %rbp, %rcx
+    movl    $16, %edx
+    callq   MRT_CompleteWindowsExceptionReturn
+    movq    -64(%rbp), %rax
+    movapd  -80(%rbp), %xmm0
     jmp     .L_stack_check
     .seh_endproc

@@ -67,6 +67,10 @@
     callq   MRT_GetThreadLocalData
     movq    %rax, %r15
 
+    movq    %rbp, %rcx
+    xorl    %edx, %edx
+    callq   MRT_CompleteWindowsExceptionReturn
+
     movq    -64(%rbp),  %rax
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
@@ -124,6 +128,10 @@
     callq   MRT_GetThreadLocalData
     movq    %rax, %r15
 
+    movq    %rbp, %rcx
+    xorl    %edx, %edx
+    callq   MRT_CompleteWindowsExceptionReturn
+
     movq    -64(%rbp),  %rax
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
@@ -140,6 +148,11 @@
 
 .global unwindPCForC2RStubStart
 unwindPCForC2RStubStart:
+    // These entries can raise after managed callbacks or a direct throw. On
+    // Windows they need the same return bridge as allocating runtime calls.
+    CalleeSavedRegistersStub MCC_ThrowException CJ_MCC_ThrowException
+    CalleeSavedRegistersStub MCC_OnFinalizerCreated CJ_MCC_OnFinalizerCreated
+    CalleeSavedRegistersStub MCC_ReferenceInvokeFinalize CJ_MCC_ReferenceInvokeFinalize
     CalleeSavedRegistersStub MCC_PackageInitBegin CJ_MCC_PackageInitBegin
     CalleeSavedRegistersStub MCC_PackageInitComplete CJ_MCC_PackageInitComplete
     CalleeSavedRegistersStub MCC_PackageInitFail CJ_MCC_PackageInitFail

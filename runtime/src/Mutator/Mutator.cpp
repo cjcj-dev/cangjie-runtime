@@ -697,6 +697,12 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             uwContext.anchorFA = reinterpret_cast<uint32_t*>(
                 reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
         }
+#ifdef _WIN64
+        // A pending exception returns through a live native boundary. Its
+        // anchor and collected managed frames share the copied stack's lifetime
+        // (continuationFreezeThaw.cpp:323-350), just like the published context.
+        exceptionWrapper.ShiftWindowsExceptionFrames(stackOffset);
+#endif
         MutatorUnlock();
 
         return stackOffset;

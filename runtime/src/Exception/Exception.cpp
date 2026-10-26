@@ -190,6 +190,16 @@ void ExceptionHandling::ChangeEHStackInfoLR() const
         eWrapper->SetLandingPad(reinterpret_cast<uintptr_t>(const_cast<uint32_t*>(addr)));
     }
 
+#ifdef _WIN64
+    // The Windows return bridge runs only after native C++ frames (and their
+    // RAII objects) have returned normally. Do not replace a live return PC
+    // with a trampoline lacking a native call frame.
+    extern bool IsWindowsExceptionReturnBoundary(const MachineFrame& frame);
+    CHECK_DETAIL(IsWindowsExceptionReturnBoundary(lastRuntimeFrame.mFrame),
+                 "Windows exception has no return bridge: pc=%p fa=%p",
+                 lastRuntimeFrame.mFrame.GetIP(), lastRuntimeFrame.mFrame.GetFA());
+    eWrapper->SetWindowsReturnFrame(lastRuntimeFrame.mFrame.GetFA());
+#else
     eWrapper->SetTopManagedPC(
         reinterpret_cast<uintptr_t>(const_cast<uint32_t*>(lastRuntimeFrame.mFrame.GetFA()->returnAddress)));
 
@@ -206,5 +216,6 @@ void ExceptionHandling::ChangeEHStackInfoLR() const
 
     DLOG(EXCEPTION, "  Last runtime frame (fa=%p, ip=%p) redirected to RestoreContextForEH",
         lastRuntimeFrame.mFrame.GetFA(), lastRuntimeFrame.mFrame.GetIP());
+#endif
 }
 } // namespace MapleRuntime

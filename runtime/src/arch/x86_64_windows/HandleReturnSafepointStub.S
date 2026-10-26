@@ -92,6 +92,9 @@ unwindPCForReturnSafepointHandlerStub:
     movq   %rax, %r15
     movq   %rax, %rcx
     callq  MRT_DeleteC2NContext
+    movq   %rbp, %rcx
+    xorl   %edx, %edx
+    callq  MRT_CompleteWindowsExceptionReturn
 
     movq    -8(%rbp), %rax
     movq    -16(%rbp), %rbx

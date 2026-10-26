@@ -8,7 +8,9 @@
 #ifndef COMMON_ALIAS_SRC
 #define COMMON_ALIAS_SRC
 
+#ifndef _WIN64
 extern "C" MRT_EXPORT ObjRef CJ_MCC_OnFinalizerCreated(ObjRef ref) __attribute__((alias("MCC_OnFinalizerCreated")));
+#endif
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
     __attribute__((alias("MCC_WriteRefField")));
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField_Strong(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
@@ -56,7 +58,7 @@ extern "C" MRT_EXPORT void CJ_MCC_SetGCThreshold(uint64_t GCThreshold) __attribu
 extern "C" MRT_EXPORT void* CJ_MCC_PostThrowException(ExceptionWrapper* mExceptionWrapper)
     __attribute__((alias("MCC_PostThrowException")));
 
-#if !defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+#if !defined(ENABLE_BACKWARD_PTRAUTH_CFI) && !defined(_WIN64)
 extern "C" MRT_EXPORT MRT_OPTIONAL_BRANCH_PROTECT_NONE
 void CJ_MCC_ThrowException(ExceptionRef exception) __attribute__((alias("MCC_ThrowException")));
 #endif
