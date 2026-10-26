@@ -6,8 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include "gc_unit/gc_unittest.hpp"
-
-extern uintptr_t windowsC2NBodyEnd;
+#include "windows_exception_markers.h"
 
 int main(int argc, char** argv)
 {
@@ -17,6 +16,8 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "load error=%lu\n", GetLastError());
         return 3;
     }
+    // The shared dllimport declaration reads the real DLL address through the
+    // IAT, not the import library's EXE code thunk. The GC TU uses it too.
     // A different DLL found by the loader must not silently supply the tests.
     if (reinterpret_cast<uintptr_t>(GetProcAddress(product, "windowsC2NBodyEnd")) !=
         reinterpret_cast<uintptr_t>(&windowsC2NBodyEnd)) {

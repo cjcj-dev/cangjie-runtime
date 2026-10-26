@@ -189,10 +189,7 @@ GC_TEST(UnwindRegress, FallbackZeroesPcAndLine)
 
 #ifdef _WIN64
 #include "UnwindWin.h"
-extern uintptr_t windowsC2NLeaveReturn, windowsC2NOverflowReturn;
-extern uintptr_t windowsC2NBodyStart, windowsC2NBodyEnd, windowsC2NFailureEnd;
-extern uintptr_t windowsStackGrowBodyEnd, windowsSafepointBodyEnd, windowsReturnSafepointBodyEnd;
-extern uintptr_t windowsExclusiveBodyEnd, windowsStackOverflowBodyEnd;
+#include "../windows_exception_markers.h"
 namespace MapleRuntime { bool IsWindowsExceptionReturnBoundary(const MachineFrame&); }
 namespace {
 // These native frame consumers do not require an initialized managed Runtime.
@@ -217,8 +214,8 @@ const WindowsReturnCase windowsReturns[] = {
 }
 GC_TEST(UnwindRegress, WindowsExceptionBoundaryRealReturns)
 {
-    // Symbol addresses come from the linked product CALL sites. No replacement
-    // PC is supplied to the classifier or to Windows' frame metadata lookup.
+    // Explicit IAT imports supply the linked DLL's CALL sites, not EXE thunks.
+    // No replacement PC is supplied to the classifier or PE metadata lookup.
     FrameAddress anchor{};
     FrameAddress nativeCallee{};
     nativeCallee.callerFrameAddress = &anchor;

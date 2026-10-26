@@ -109,6 +109,23 @@ Two further native consumer groups cover distinct parts of the new mechanism:
   `WindowsC2NPrivateCallerSP`. Build with the actual runtime/bounds import
   libraries and headers, `-std=gnu++17 -fexceptions -fno-rtti`. Its imported
   `windowsC2NBodyEnd` must match GetProcAddress on the explicitly selected DLL.
+  Both this entry and the GC TU include `windows_exception_markers.h`: explicit
+  `dllimport` declarations load every marker through the IAT. Plain extern
+  addresses can resolve to EXE code thunks even though the DLL exports real
+  `.text` labels; they cannot supply the classifier's PCs. Keep the identity
+  assertion and all three case assertions.
+
+Check the two actual compiled consumers before linking:
+
+```text
+node runtime/tests/windows_exception_imports.mjs installed-entry.obj entry
+node runtime/tests/windows_exception_imports.mjs gc-consumer.obj gc
+```
+
+This bounded check requires undefined `__imp_` references and AMD64 REL32 IAT
+relocations, rejecting direct/thunk marker references. `gc-control` checks the
+nine other markers independently when cutting the BodyEnd import. These COFF
+checks do not qualify actual import-library linking, DLL loading or GC execution.
 
 Run all three native groups against the normal independent install and again
 against the same-install package unpack, with dependencies from the matching
