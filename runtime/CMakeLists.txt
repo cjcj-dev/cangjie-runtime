@@ -953,8 +953,13 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
     set(OBJCOPY_PROGRAM objcopy)
     set(STRIP_PROGRAM strip)
     if (WINDOWS_FLAG MATCHES 1)
-        install_runtime_postprocess(cangjie-runtime "bash"
-            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" ${CMAKE_SOURCE_DIR}/build/windows_rename_section.sh)
+        find_program(WINDOWS_RUNTIME_NODE NAMES node REQUIRED)
+        find_program(WINDOWS_RUNTIME_OBJDUMP NAMES objdump REQUIRED)
+        find_program(WINDOWS_RUNTIME_OBJCOPY NAMES objcopy REQUIRED)
+        install_runtime_postprocess(cangjie-runtime "${WINDOWS_RUNTIME_NODE}"
+            "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a"
+            "${CMAKE_SOURCE_DIR}/build/windows_rename_section.mjs"
+            "${WINDOWS_RUNTIME_OBJDUMP}" "${WINDOWS_RUNTIME_OBJCOPY}")
     elseif (NOT (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2))
         install_runtime_postprocess(cangjie-runtime "${OBJCOPY_PROGRAM}"
             "lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-runtime.a" -D --rename-section .text=.text_runtime)
