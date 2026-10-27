@@ -45,7 +45,7 @@ add_cangjie_library(sample IS_PACKAGE IS_STDLIB IS_CJNATIVE_BACKEND NO_INSTALL
     const query = run(arm + '-query', 'ninja', ['-t', 'query', bitcode], build);
     const queryFile = path.join(output, arm + '-query.stdout');
     // This child owns the target assertion/rc. An order-only edge cannot dirty BC.
-    run(arm + '-target', process.execPath, ['--input-type=module', '-e', `
+    const targetOutput = run(arm + '-target', process.execPath, ['--input-type=module', '-e', `
 import fs from 'node:fs';import assert from 'node:assert/strict';
 const text=fs.readFileSync(process.argv[1],'utf8');
 const inputs=text.split('  input:')[1].split('  outputs:')[0]
@@ -54,6 +54,11 @@ console.log('LTO_FILE_DEPENDENCY_TARGET executed=1');
 assert.ok(inputs.some(s=>s===process.argv[2] || s.endsWith('/'+process.argv[2])),
   'LTO_ARCHIVE_FILE_EDGE_REQUIRED');
 `, queryFile, archive], build, expected);
+    assert.ok(targetOutput.includes('LTO_FILE_DEPENDENCY_TARGET executed=1'));
+    if (expected !== 0) {
+        assert.match(fs.readFileSync(path.join(output, arm + '-target.stderr'), 'utf8'),
+            /AssertionError.*LTO_ARCHIVE_FILE_EDGE_REQUIRED/s);
+    }
     const control = run(arm + '-control-query', 'ninja', ['-t', 'query', archive], build);
     const controlInputs = control.split('  input:')[1].split('  outputs:')[0]
         .split('\n').map(s => s.trim()).filter(s => s && !s.startsWith('|'));
