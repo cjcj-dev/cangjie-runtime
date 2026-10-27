@@ -66,6 +66,7 @@ if(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
         thread.cj
         exception.cj
         error.cj
+        macro_reset_failure.cj
         array.cj
         array_intrinsic.cj
         atomic.cj

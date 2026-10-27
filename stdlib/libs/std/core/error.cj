@@ -32,6 +32,12 @@ public open class Error <: ToString {
         }
     }
 
+    // See reportResetFailureV1: this non-open accessor stays in the defining
+    // package and never exposes an object layout to another runtime.
+    internal func resetFailureMessageV1(): String {
+        return detailMessage
+    }
+
     public open func toString(): String {
         let className: String = getClassName()
         let message: String = this.message

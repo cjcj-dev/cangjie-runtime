@@ -91,6 +91,12 @@ public open class Exception <: ToString {
         }
     }
 
+    // Internal reset-failure transport must preserve the original payload,
+    // without invoking an overridden message getter or formatter.
+    internal func resetFailureMessageV1(): String {
+        return detailMessage
+    }
+
     /*
      * Cause of this exception, which may be null. The cause is the exception that caused this exception to get thrown.
      * It is possible that `printStackTrace` will recurse infinitely and eventually cause a stack overflow. Be careful.
