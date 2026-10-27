@@ -310,7 +310,9 @@ function(add_cangjie_library target_name)
             # ${target_name}_bc depends on ${target_name} so they will not run simultaneously. <target> and <target>_bc
             # compile the same package, which means they may write the same bc cache file. Running simultaneously
             # may cause IO error on windows in some cases.
-            DEPENDS ${target_name}
+            # A custom target alone only orders Ninja jobs. Track its actual
+            # archive as well so source/import changes invalidate installed BC.
+            DEPENDS ${target_name} ${output_full_name}
             COMMENT "Generating ${target_name}_bc")
 
         add_custom_target(
