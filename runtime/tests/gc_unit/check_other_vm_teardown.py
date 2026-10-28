@@ -52,9 +52,12 @@ def main():
                 print("TEARDOWN_OBSERVE %s workers=%d names=%s" %
                       (self.location, len(workers), ",".join(workers)))
                 if self.completion:
-                    pool = "MapleRuntime::ZCollectedHeap::_collected_heap->safepoint_workers()"
-                    counts = tuple(int(gdb.parse_and_eval("%s->%s()" % (pool, method)))
-                                   for method in ("created_workers", "active_workers"))
+                    # All-stop observation must not execute getters in the inferior.
+                    # Read the Linux/libstdc++ atomic storage through its debug type;
+                    # missing fields remain observation errors, never zero counts.
+                    pool = "MapleRuntime::ZCollectedHeap::_collected_heap->_runtime_workers._workers"
+                    counts = tuple(int(gdb.parse_and_eval("%s.%s" % (pool, field)))
+                                   for field in ("_created_workers._M_i", "_active_workers"))
                     published.append(counts)
                     print("TEARDOWN_POOL created=%d active=%d" % counts)
             except Exception as error:
@@ -63,6 +66,7 @@ def main():
 
     gdb.execute("set pagination off")
     gdb.execute("set confirm off")
+    gdb.execute("set may-call-functions off")
     gdb.execute("set breakpoint pending on")
     Observe("MapleRuntime::Heap::StopGCWork()", live)
     Observe("MapleRuntime::GcUnit::CompleteTestRun(int)", completed, completion=True)
