@@ -587,8 +587,10 @@ extern "C" MRT_EXPORT bool CJ_MCC_ReferenceRuntimeRunning()
     return Heap::GetHeap().GetFinalizerProcessor().IsRunning();
 }
 extern "C" MRT_EXPORT int64_t CJ_MCC_ReferenceNanoTime() { return TimeUtil::NanoSeconds(); }
-#ifdef _WIN64
-// The public Windows entry has a native return bridge in CalleeSavedStub.S.
+#if defined(_WIN64) || defined(__linux__)
+// The managed caller can retain stack pointers in callee-saved registers.
+// Keep its slots visible across the native frame and nested managed finalizer
+// through the public CalleeSavedStub.S entry, as for other managed callbacks.
 extern "C" void MCC_ReferenceInvokeFinalize(BaseObject* object)
 #else
 extern "C" MRT_EXPORT void CJ_MCC_ReferenceInvokeFinalize(BaseObject* object)
