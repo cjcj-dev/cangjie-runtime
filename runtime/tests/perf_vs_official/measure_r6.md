@@ -96,3 +96,32 @@ No new receipt/schema/qualification flag is produced. Existing workload
 qualification holds, minor C3, independent review and real measurement remain
 separate obligations. See the lane's `minor-perf-1031/C3-SOURCE-CONTRACT.md` for
 the precise current allocation-observation gap; no runtime counter was added.
+
+## Public run entry integration fixture
+
+`node test_measure_run.mjs NEW_ABSOLUTE_DIRECTORY` exercises the unchanged
+public `run CONFIG.json` CLI, with real GNU time/timeout/taskset/env-i and a
+real cgroup. It requires an admitted CPUs144–159 scope (SMT siblings48–63),
+CPUQuota400%, MemoryMax4GiB, Swap0, core soft/hard0, and a total service deadline
+of 120 seconds. It does not bypass the 16-core range check or reduce N=5.
+The original 86 parser/plan checks are not invoked by this integration test.
+
+The executable inputs are short generated ESM fixtures with an absolute Node
+shebang, not compiler-produced NW or SD. Each stdout starts with an explicit
+synthetic-fixture label. Their timer/checksum payloads are controlled data,
+including deliberate sleep separation to exercise the successful final
+summary. Files bearing the two library names contain an explicit identity
+fixture label, are not ELF and are not loaded. These tests establish neither
+runtime ABI/loader qualification nor performance.
+
+The success arm completes the unchanged 40-entry plan and checks each recorded
+argv/cwd/time rc, actual child CPU mask/cgroup limits, the exact permitted
+environment, and removal of a deliberately supplied parent-only sentinel.
+Separate exit7 and self-SIGTERM fixtures fail at the first subject entry after
+one successful official entry; neither may start the third entry or write a
+final summary. GNU time's observed signal diagnostic and the wrapper's actual
+rc are retained separately; a self-signal request is not alone an observed
+exit status. A real out-of-scope 128–143 request must fail before any fixture
+starts, without changing or faking the current cgroup. The 300-second target
+timeout is not deliberately reached in this <=120-second integration test;
+the outer service deadline is a bound, not a measured timeout recovery claim.
