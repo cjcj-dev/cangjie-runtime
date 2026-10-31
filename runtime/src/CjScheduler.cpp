@@ -442,6 +442,7 @@ bool MRT_NewForeignCJThread()
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
         auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
         scheduler = runtime->CreateSubSchedulerAndInit(SCHEDULE_FOREIGN_THREAD);
+        CHECK_DETAIL(scheduler != nullptr, "failed to create foreign scheduler");
         CJThreadAttr attr;
         CJThreadAttrInit(&attr);
         CJThreadAttrNameSet(&attr, "cangjie");
@@ -449,6 +450,13 @@ bool MRT_NewForeignCJThread()
         CJThreadHandle cjthread =
             CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData),
             CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
+        if (cjthread == nullptr) {
+            // CJThreadNew already retires a constructed identity if queue
+            // publication fails. Release the otherwise unused scheduler too;
+            // false is reserved for nested entry, never an attach failure.
+            (void)runtime->FiniSubScheduler(scheduler);
+            LOG(RTLOG_FATAL, "failed to create foreign cjthread");
+        }
         MutatorManager::Instance().SetMainThreadHandle(cjthread);
         CJThreadPreemptOffCntAdd();
         RebindCJThread(cjthread);
@@ -456,6 +464,12 @@ bool MRT_NewForeignCJThread()
         ThreadLocal::SetSchedule(scheduler);
         ThreadLocal::SetProtectAddr(nullptr);
         ScheduleNetpollInit(); // Initializes netpool only on the first execution.
+    } else {
+        // EndForeign retires the logical Mutator, but the OS thread retains
+        // its scheduling carrier until TLS destruction. Re-entry must create
+        // a new identity, not bind the retired one or skip managed setup.
+        // Active/nested entries returned above and never reach this branch.
+        ConcurrencyModel::ConstructMutator(ThreadLocal::GetForeignCJThread());
     }
 
     void* cjthread = ThreadLocal::GetForeignCJThread();

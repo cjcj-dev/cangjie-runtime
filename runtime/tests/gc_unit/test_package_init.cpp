@@ -29,6 +29,7 @@
 #include "loader_access_test.hpp"
 #include "LoaderManager.h"
 #include "Mutator/Handshake.h"
+#include "Mutator/ThreadSMR.h"
 #include "schedule.h"
 #include "waitqueue.h"
 
@@ -535,6 +536,94 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
+
+#if defined(__x86_64__)
+// The compiler's exported-entry ABI puts copy-size and callee on the stack.
+// The real N2C stub consumes both words on return. The body below is a native
+// ABI fixture, not a compiler-generated managed exception consumer.
+extern "C" void GcUnitForeignN2C(void (*body)());
+asm(".text\n.p2align 4\n.globl GcUnitForeignN2C\n"
+    ".type GcUnitForeignN2C,@function\n"
+    "GcUnitForeignN2C:\n.cfi_startproc\n"
+    "pushq %rbp\n.cfi_def_cfa_offset 16\n.cfi_offset %rbp,-16\n"
+    "movq %rsp,%rbp\n.cfi_def_cfa_register %rbp\n"
+    "pushq %rdi\npushq $0\ncall CJ_MCC_N2CStub@PLT\n"
+    "leave\n.cfi_def_cfa %rsp,8\nret\n.cfi_endproc\n"
+    ".size GcUnitForeignN2C,.-GcUnitForeignN2C\n");
+namespace {
+thread_local unsigned foreignBodies = 0;
+thread_local Mutator* outerForeign = nullptr;
+void ForeignBody()
+{
+    auto* owner = Mutator::GetMutator();
+    Target("foreign-body-owner", owner != nullptr && owner->IsForeignThread() && !owner->IsGCDetached());
+    Target("foreign-body-carrier", owner->GetCjthreadPtr() == ThreadLocal::GetForeignCJThread());
+    Target("foreign-body-binding", ThreadLocal::GetThreadLocalData()->gcData == &owner->GetGCData());
+    ThreadsListHandle list;
+    Target("foreign-body-published", list.list()->includes(owner));
+    ++foreignBodies;
+}
+void ForeignNestedBody()
+{
+    ForeignBody();
+    outerForeign = Mutator::GetMutator();
+    GcUnitForeignN2C(ForeignBody);
+    Target("nested-keeps-logical-owner", Mutator::GetMutator() == outerForeign);
+    // Exercise the existing caught-exception wrapper cleanup before returning
+    // through N2C. This does not pretend to throw a CJ exception through C++.
+    auto& wrapper = outerForeign->GetExceptionWrapper();
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)] {};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(64);
+    auto* pending = MCC_NewObject(type, 64 + TYPEINFO_PTR_SIZE);
+    Target("caught-pending-object", pending != nullptr);
+    wrapper.SetExceptionRef(pending);
+    wrapper.SetTypeIndex(19);
+    Target("caught-pending-positive", ExceptionManager::HasPendingException());
+    ExceptionManager::ClearPendingException();
+    Target("caught-state-cleared", !ExceptionManager::HasPendingException());
+}
+void ForeignCycles(unsigned cycles, bool nested)
+{
+    foreignBodies = 0;
+    void* carrier = nullptr;
+    for (unsigned i = 0; i < cycles; ++i) {
+        GcUnitForeignN2C(nested ? ForeignNestedBody : ForeignBody);
+        Target("outer-return-unbound", Mutator::GetMutator() == nullptr &&
+               ThreadLocal::GetThreadLocalData()->cjthread == nullptr);
+        void* current = ThreadLocal::GetForeignCJThread();
+        Target("outer-return-carrier-retained", current != nullptr && (carrier == nullptr || current == carrier));
+        carrier = current;
+    }
+    Target("foreign-body-count", foreignBodies == cycles * (nested ? 2u : 1u));
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ForeignReentry, FirstN2CEntryControl)
+{
+    Init();
+    std::thread first([] { ForeignCycles(1, false); });
+    first.join(); // real TLS destructor releases the retained foreign scheduler
+    Target("foreign-first-fini", FiniCJRuntime() == E_OK);
+}
+GC_RUNTIME_OTHER_VM_TEST(ForeignReentry, SameThreadN2CTwice)
+{
+    Init();
+    std::thread repeated([] { ForeignCycles(2, false); });
+    repeated.join();
+    Target("foreign-repeat-fini", FiniCJRuntime() == E_OK);
+}
+GC_RUNTIME_OTHER_VM_TEST(ForeignReentry, NestedCaughtStateAndThreadExit)
+{
+    Init();
+    std::thread first([] { ForeignCycles(2, true); });
+    first.join();
+    std::thread second([] { ForeignCycles(2, true); });
+    second.join();
+    Target("foreign-multiple-thread-fini", FiniCJRuntime() == E_OK);
+}
+#endif
+
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryCodeUnloadReloadHasNewState)
 {
     Init();

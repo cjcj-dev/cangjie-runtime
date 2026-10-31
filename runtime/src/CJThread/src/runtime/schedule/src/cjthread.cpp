@@ -22,6 +22,7 @@
 #include "Mutator/ThreadSMR.h"
 #include "Mutator/MutatorManager.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Concurrency/ConcurrencyModel.h"
 
 #include "cjthread.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
@@ -31,6 +32,26 @@
 #ifndef MRT_WINDOWS
 #include <sys/mman.h>
 #endif
+
+namespace MapleRuntime {
+void ConcurrencyModel::ConstructMutator(void* carrier)
+{
+    auto* cjthread = static_cast<CJThread*>(carrier);
+    CHECK_DETAIL(cjthread != nullptr && cjthread->mutator == nullptr,
+                 "logical mutator construction requires an empty carrier");
+    // threads.cpp:1048-1064: construct before publishing; attach the GC
+    // state and the SMR list in the same phase. This also applies when a
+    // foreign OS thread reuses its carrier after the previous logical exit.
+    ScopedEnterSaferegion safe(false);
+    cjthread->mutator = Mutator::NewMutator();
+    cjthread->mutator->SetCjthreadPtr(cjthread);
+    auto& manager = MutatorManager::Instance();
+    manager.MutatorManagementRLock();
+    cjthread->mutator->AttachToGC();
+    ThreadsSMRSupport::add_thread(cjthread->mutator);
+    manager.MutatorManagementRUnlock();
+}
+} // namespace MapleRuntime
 
 #ifdef __cplusplus
 extern "C" {
@@ -767,19 +788,7 @@ static void GsStackContextInit(struct CJThread *newCJThread)
 MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
                                     CJThreadFunc func, struct CJThread *newCJThread)
 {
-    // JavaThread construction precedes Threads::add and first execution.
-    // Leave managed execution before external initialization or blocking on
-    // the same management lock that STW holds across its phase publication.
-    MapleRuntime::ScopedEnterSaferegion safe(false);
-    newCJThread->mutator = MapleRuntime::Mutator::NewMutator();
-    newCJThread->mutator->SetCjthreadPtr(newCJThread);
-    auto& manager = MapleRuntime::MutatorManager::Instance();
-    manager.MutatorManagementRLock();
-    // ZGC 5b2d6991a1279d375f9a3c00c7bcd0bbcc7081d6 threads.cpp:1048-1064.
-    // Keep the masks, watermark epoch, store buffer and list in one phase.
-    newCJThread->mutator->AttachToGC();
-    MapleRuntime::ThreadsSMRSupport::add_thread(newCJThread->mutator);
-    manager.MutatorManagementRUnlock();
+    MapleRuntime::ConcurrencyModel::ConstructMutator(newCJThread);
     newCJThread->func = func;
     (void)memset_s(&newCJThread->context, sizeof(struct CJThreadContext), 0, sizeof(struct CJThreadContext));
 
