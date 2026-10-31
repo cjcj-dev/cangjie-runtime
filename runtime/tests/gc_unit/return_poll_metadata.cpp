@@ -10,6 +10,7 @@
 #include "Heap/z/zStackWatermark.hpp"
 #include "CangjieRuntime.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "UnwindStack/PrintStackInfo.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +63,14 @@ static bool expectPoll;
 static bool passed;
 static bool mixed;
 static int drainMode;
+class ExplicitFrameWalk : public PrintStackInfo {
+public:
+    void Visit(Mutator& owner, const FrameInfo& frame)
+    {
+        SetProcessingOwner(&owner);
+        ProcessOnIteration(frame);
+    }
+};
 extern "C" __attribute__((noinline)) void observe_watermark(int)
 {
     auto& owner = *Mutator::GetMutator();
@@ -84,13 +93,35 @@ extern "C" __attribute__((noinline)) void observe_watermark(int)
     passed = frontier == reinterpret_cast<uintptr_t>(expected) && done == !expectPoll;
     std::fprintf(stderr, "RETURN_METADATA_TARGET poll=%d mode=%d frontier=%p expected=%p done=%d pass=%d\n",
                  expectPoll, drainMode, reinterpret_cast<void*>(frontier), expected, done, passed);
-    if (drainMode == 1) {
+    if (drainMode == 3 || drainMode == 4) {
+        // Use real LLVM frames and the same explicit-frame entry as EH. The
+        // third frame has been processed, but its caller is still pending.
+        StackFrameStream frames(&context);
+        frames.Start();
+        frames.Next();
+        frames.Next();
+        const FrameInfo exposed = frames.Current();
+        if (drainMode == 3) { context.GoIntoManagedCode(); }
+        ExplicitFrameWalk walk;
+        walk.Visit(owner, exposed);
+        const bool advanced = watermark.last_processed_raw() > frontier;
+        const bool safe = watermark.IsDone() || exposed.mFrame.GetSP() < watermark.last_processed_raw();
+        const bool anchorEmpty = context.frameInfo.mFrame.GetIP() == nullptr &&
+            context.frameInfo.mFrame.GetFA() == nullptr;
+        const bool iterationPassed = expectPoll && !done && advanced && safe &&
+            anchorEmpty == (drainMode == 3);
+        std::fprintf(stderr, "EXPLICIT_FRAME_ITERATION mode=%d anchor_empty=%d advanced=%d safe=%d "
+            "before=%p after=%p exposed_sp=%p pass=%d\n", drainMode, anchorEmpty, advanced, safe,
+            reinterpret_cast<void*>(frontier), reinterpret_cast<void*>(watermark.last_processed_raw()),
+            reinterpret_cast<void*>(exposed.mFrame.GetSP()), iterationPassed);
+        passed &= iterationPassed;
+    } else if (drainMode == 1) {
         watermark.finish_processing(nullptr);
     } else if (drainMode == 2) {
         watermark.BeginGrowFlush();
         watermark.EndGrowFlush();
     }
-    if (drainMode != 0) {
+    if (drainMode == 1 || drainMode == 2) {
         auto* fp = managedFP;
         uintptr_t previousSP = reinterpret_cast<uintptr_t>(observerFP + 2);
         uintptr_t lastBarrier = 0;

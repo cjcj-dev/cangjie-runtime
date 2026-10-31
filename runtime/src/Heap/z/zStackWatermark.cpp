@@ -344,7 +344,12 @@ void StackWatermark::after_unwind()
 void StackWatermark::on_iteration(const FrameInfo& frame)
 {
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) { return; }
+    if (IsDone()) { return; }
+    // Unlike before/after_unwind, the walker supplies the exposed frame here.
+    // A synchronous throw on Linux walks the live stack with a RELIABLE (empty)
+    // saved UW context. Requiring that context would skip both EH traversal and
+    // register restoration, leaving the persistent cursor in retired frames.
+    // HotSpot stackWatermark.inline.hpp:127-131 also uses the supplied frame.
     ensure_safe(frame);
 }
 
