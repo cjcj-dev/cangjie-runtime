@@ -22,7 +22,6 @@
 #include "Mutator/ThreadSMR.h"
 #include "Mutator/MutatorManager.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Concurrency/ConcurrencyModel.h"
 
 #include "cjthread.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
@@ -34,7 +33,7 @@
 #endif
 
 namespace MapleRuntime {
-void ConcurrencyModel::ConstructMutator(void* carrier)
+void MutatorManager::ConstructMutator(void* carrier)
 {
     auto* cjthread = static_cast<CJThread*>(carrier);
     CHECK_DETAIL(cjthread != nullptr && cjthread->mutator == nullptr,
@@ -788,7 +787,7 @@ static void GsStackContextInit(struct CJThread *newCJThread)
 MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
                                     CJThreadFunc func, struct CJThread *newCJThread)
 {
-    MapleRuntime::ConcurrencyModel::ConstructMutator(newCJThread);
+    MapleRuntime::MutatorManager::ConstructMutator(newCJThread);
     newCJThread->func = func;
     (void)memset_s(&newCJThread->context, sizeof(struct CJThreadContext), 0, sizeof(struct CJThreadContext));
 

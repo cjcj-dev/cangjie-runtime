@@ -469,7 +469,7 @@ bool MRT_NewForeignCJThread()
         // its scheduling carrier until TLS destruction. Re-entry must create
         // a new identity, not bind the retired one or skip managed setup.
         // Active/nested entries returned above and never reach this branch.
-        ConcurrencyModel::ConstructMutator(ThreadLocal::GetForeignCJThread());
+        MutatorManager::ConstructMutator(ThreadLocal::GetForeignCJThread());
     }
 
     void* cjthread = ThreadLocal::GetForeignCJThread();

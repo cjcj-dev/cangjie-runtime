@@ -76,6 +76,9 @@ public:
     MutatorManager& operator=(MutatorManager&&) = delete;
 
     static MutatorManager& Instance() noexcept;
+    // Scheduler-owned construction; an empty carrier gets a new logical
+    // identity before first execution or foreign re-entry after logical exit.
+    static void ConstructMutator(void* carrier);
 
     void Init();
     void Fini() {}

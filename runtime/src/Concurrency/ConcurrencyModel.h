@@ -59,9 +59,6 @@ public:
     // Get thread-local mutator according to concurrency model
     static Mutator* GetMutator();
     static void SetMutator(Mutator* mutator);
-    // Construct and publish a new logical identity on an empty scheduler
-    // carrier. The carrier's owner serializes construction with its exit.
-    static void ConstructMutator(void* carrier);
 
     ConcurrencyModel() = default;
     virtual ~ConcurrencyModel() = default;
