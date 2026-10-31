@@ -590,6 +590,19 @@ void ElfUnloadQuiescence::UnlinkImage(Uptr imageAddress)
 
 bool ElfUnloadQuiescence::IsLinkedAddress(Uptr address)
 {
+    if (address != 0) {
+        if (const auto image = RegisteredImageForAddress(address)) {
+            const Uptr registered = image->identity;
+            if (unloadWriter && unloadWriterImage == registered) {
+                return true;
+            }
+            for (auto& slot : linkedImages) {
+                if (slot.load(std::memory_order_acquire) == registered) {
+                    return true;
+                }
+            }
+        }
+    }
     Uptr identity = ResolveImageIdentity(address);
     if (identity == 0) {
         return false;
