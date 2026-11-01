@@ -27,6 +27,7 @@ namespace MapleRuntime {
 // registries.
 class ElfUnloadQuiescence final {
     friend class ElfUnloadQuiescenceTest;
+    friend class CJFileLoader;
 public:
     struct ImageAddressMap {
         struct Range { Uptr start; size_t size; bool executable; };

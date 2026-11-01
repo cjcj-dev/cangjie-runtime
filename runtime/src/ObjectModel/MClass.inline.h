@@ -12,6 +12,7 @@
 #include "Flags.h"
 #include "MClass.h"
 #include "TypeInfoManager.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 inline bool TypeTemplate::IsRawArray() const { return type == TypeKind::TYPE_KIND_RAWARRAY; }
@@ -285,6 +286,7 @@ inline U16 TypeInfo::GetValidInheritNum() const
 
 inline U32 TypeInfo::GetUUID()
 {
+    ElfUnloadQuiescence::ReadScope reader;
     if (IsInitialUUID()) {
         TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
         std::lock_guard<std::recursive_mutex> lock(manager.tiMutex);

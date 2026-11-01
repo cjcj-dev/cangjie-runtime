@@ -1344,7 +1344,8 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
     Target("publication-image-open", library != nullptr);
     auto metadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
     auto namedType = reinterpret_cast<DYN_TypeInfo* (*)()>(dlsym(library, "PackageInitImageNamedType"));
-    Target("publication-image-symbols", metadata && namedType);
+    auto extension = reinterpret_cast<DYN_ExtensionData* (*)()>(dlsym(library, "PackageInitImageExtension"));
+    Target("publication-image-symbols", metadata && namedType && extension);
     auto* file = new CJFile(CString("publication-image"), reinterpret_cast<Uptr>(metadata()));
     TypeInfo* ti = reinterpret_cast<TypeInfo*>(namedType());
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
@@ -1353,6 +1354,20 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
     const Uptr address = file->GetFileMetaAddr();
     loader->RecordTypeInfo(ti);
     Target("publication-before-unlink", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
+    DYN_TypeInfo early {}, late {};
+    early.typeInfoName = "gc.lock:ResidentEarly";
+    late.typeInfoName = "gc.lock:ResidentLate";
+    auto* earlyTi = reinterpret_cast<TypeInfo*>(&early);
+    auto* lateTi = reinterpret_cast<TypeInfo*>(&late);
+    auto& manager = TypeInfoManager::GetTypeInfoManager();
+    manager.AddTypeInfo(earlyTi);
+    manager.AddTypeInfo(lateTi);
+    earlyTi->TryInitMTable();
+    lateTi->TryInitMTable();
+    auto* ed = reinterpret_cast<ExtensionData*>(extension());
+    const U32 interfaceUUID = ti->GetUUID();
+    earlyTi->AddMTable(ti, ed);
+    Target("publication-early-mtable", earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
     auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
     std::thread closer([&] { loader->RemoveLoadedFiles(file); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -1363,11 +1378,18 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
     // metadata is alive until it returns, but must not re-enter the cache.
     loader->RecordTypeInfo(ti);
     const bool absent = loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == nullptr;
+    lateTi->AddMTable(ti, ed);
+    const bool lateAbsent = lateTi->GetMTableDesc()->mTable.count(interfaceUUID) == 0;
     reader.reset();
     closer.join();
     const int closed = dlclose(library);
+    const bool earlyRemoved = earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 0;
+    std::fprintf(stderr, "PUBLICATION_UNLINK cache_absent=%d late_mtable_absent=%d early_mtable_removed=%d\n",
+                 absent, lateAbsent, earlyRemoved);
     Target("publication-unlink-reached", unlinked);
     Target("publication-after-unlink-rejected", absent);
+    Target("publication-late-mtable-rejected", lateAbsent);
+    Target("publication-purged-mtable", earlyRemoved);
     Target("publication-image-close", closed == 0);
     Target("publication-runtime-finish", FiniCJRuntime() == E_OK);
 }

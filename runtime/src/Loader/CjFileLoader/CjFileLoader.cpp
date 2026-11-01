@@ -444,8 +444,8 @@ void CJFileLoader::PurgeLoadedFile(BaseFile* baseFile)
     Uptr imageAddress = baseFile->GetFileMetaAddr();
     CHECK_DETAIL(ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress),
                  "ELF metadata purge requires pending/active authorization");
-    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
-        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
+    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosForImage(
+        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize(), imageAddress);
     ElfUnloadQuiescence::UnlinkImage(imageAddress);
     delete baseFile;
 }
@@ -609,27 +609,29 @@ TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemp
     return nullptr;
 }
 
-bool CJFileLoader::CanPublishTypeInfo(TypeInfo* ti) const
+bool CJFileLoader::CanPublishAddress(const void* address) const
 {
     // Image maps survive unlink until reader drain/purge. Their identity is
     // evidence of ownership, not publication permission: loadedFiles is the
     // discovery set, changed under this same catalog lock by UnlinkLoadedFile.
-    auto publishedAddress = [this](const void* address) {
-        auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
-        if (image == nullptr) { return true; } // Runtime-allocated metadata.
-        return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
-            return file->GetImageAddressMap().identity == image->identity;
-        });
-    };
+    auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
+    if (image == nullptr) { return true; } // Runtime-allocated metadata.
+    return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
+        return file->GetImageAddressMap().identity == image->identity;
+    });
+}
+
+bool CJFileLoader::CanPublishTypeInfo(TypeInfo* ti) const
+{
     std::vector<TypeInfo*> pending { ti };
     std::unordered_set<TypeInfo*> visited;
     while (!pending.empty()) {
         TypeInfo* current = pending.back();
         pending.pop_back();
         if (current == nullptr || !visited.insert(current).second) { continue; }
-        if (!publishedAddress(current)) { return false; }
+        if (!CanPublishAddress(current)) { return false; }
         if (!current->IsGenericTypeInfo() || current->IsVArray()) { continue; }
-        if (!publishedAddress(current->GetSourceGeneric())) { return false; }
+        if (!CanPublishAddress(current->GetSourceGeneric())) { return false; }
         if (current->IsRawArray() || current->IsCPointer()) {
             pending.push_back(current->GetComponentTypeInfo());
         } else {

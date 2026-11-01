@@ -117,10 +117,14 @@ public:
     void ResetAtomicInfoArray(size_t size) { cachedTypeInfos = AtomicTypeInfoArray(size); }
     TypeInfo* GetCachedTypeInfo(size_t index) const { return cachedTypeInfos.Get(index); }
     void SetCachedTypeInfo(size_t index, TypeInfo* ti) { cachedTypeInfos.Set(index, ti); }
+    void ClearCachedTypeInfos() { cachedTypeInfos.Clear(); }
 private:
     class AtomicTypeInfoArray {
     public:
         AtomicTypeInfoArray() = default;
+        void Clear() {
+            for (size_t i = 0; i < cacheSize; ++i) { typeInfos[i].store(nullptr, std::memory_order_release); }
+        }
         AtomicTypeInfoArray(const AtomicTypeInfoArray& other) : cacheSize(other.cacheSize)
         {
             if (cacheSize == 0) {

@@ -363,25 +363,50 @@ void TypeInfoManager::ForgetTypeInfoImage(uintptr_t base, size_t size)
 
 void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
 {
-    if (size == 0) {
+    ElfUnloadQuiescence::ReadScope reader;
+    RemoveTypeInfosForImage(begin, size, 0);
+}
+
+void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uintptr_t imageAddress)
+{
+    if (size == 0 && imageAddress == 0) {
         return;
     }
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
-    auto inRange = [begin, size](const void* ptr) {
+    auto inRange = [begin, size, imageAddress](const void* ptr) {
         uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        if (imageAddress != 0) { return ElfUnloadQuiescence::IsAddressInImage(address, imageAddress); }
         return address >= begin && address - begin < size;
     };
+    // The loader calls this after reader drain and before unmapping the image.
+    // Generic TIs live in the runtime arena: remove the dependency closure,
+    // rather than testing only the address of each instantiated TI itself.
+    std::unordered_set<TypeInfo*> removed;
+    bool changed;
+    do {
+        changed = false;
+        for (TypeInfo* ti : registeredTypeInfos) {
+            if (removed.count(ti) != 0) { continue; }
+            bool remove = inRange(ti);
+            if (!remove && ti->IsGenericTypeInfo() && !ti->IsVArray()) {
+                remove = inRange(ti->GetSourceGeneric());
+                if (ti->IsRawArray() || ti->IsCPointer()) {
+                    auto* arg = ti->GetComponentTypeInfo();
+                    remove = remove || inRange(arg) || removed.count(arg) != 0;
+                } else {
+                    for (U32 i = 0; !remove && i < ti->GetTypeArgNum(); ++i) {
+                        auto* arg = ti->GetTypeArgs()[i];
+                        remove = inRange(arg) || removed.count(arg) != 0;
+                    }
+                }
+            }
+            if (remove) { removed.insert(ti); changed = true; }
+        }
+    } while (changed);
     std::unordered_set<U32> removedUUIDs;
     for (auto it = registeredTypeInfos.begin(); it != registeredTypeInfos.end();) {
         TypeInfo* ti = *it;
-        bool remove = inRange(ti);
-        if (!remove && ti->IsGenericTypeInfo()) {
-            remove = inRange(ti->GetSourceGeneric());
-            for (U32 idx = 0; !remove && idx < ti->GetTypeArgNum(); ++idx) {
-                remove = inRange(ti->GetTypeArgs()[idx]);
-            }
-        }
-        if (remove) {
+        if (removed.count(ti) != 0) {
             removedUUIDs.insert(ti->GetUUID());
             it = registeredTypeInfos.erase(it);
         } else {
@@ -396,14 +421,14 @@ void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
         }
     }
     for (auto it = nonGenericTypeInfos.begin(); it != nonGenericTypeInfos.end();) {
-        if (inRange(it->first) || inRange(it->second)) {
+        if (inRange(it->first) || removed.count(it->second) != 0) {
             it = nonGenericTypeInfos.erase(it);
         } else {
             ++it;
         }
     }
     for (auto it = genericTypeInfos.begin(); it != genericTypeInfos.end();) {
-        if (inRange(it->first) || inRange(it->second)) {
+        if (inRange(it->first) || removed.count(it->second) != 0) {
             it = genericTypeInfos.erase(it);
         } else {
             ++it;
@@ -432,8 +457,27 @@ void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
             mTableList.erase(mTableIt);
         }
     }
+    if (imageAddress != 0) {
+        // Surviving types can own tables containing extensions from this image.
+        // Admission is still closed; no catalog lock is held while taking the
+        // table lock, so the normal table -> catalog publication order remains.
+        for (auto& entry : mTableList) {
+            MTableDesc* desc = entry.second;
+            std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+            for (auto it = desc->mTable.begin(); it != desc->mTable.end();) {
+                if (inRange(it->second.GetExtensionData()) || removed.count(it->second.GetSuperTi()) != 0) {
+                    it = desc->mTable.erase(it);
+                    desc->needsResolveInner.store(true, std::memory_order_release);
+                    desc->needsResolveOuter.store(true, std::memory_order_release);
+                } else {
+                    it->second.ClearCachedTypeInfos();
+                    ++it;
+                }
+            }
+        }
+    }
     genericTypeInfoFastMap.Invalidate();
-    genericTypeInfoDescMap.RemoveInRange(begin, size);
+    genericTypeInfoDescMap.RemoveForImage(begin, size, imageAddress, removed);
 }
 
 std::pair<size_t, size_t> TypeInfoManager::GetTypeInfoIndexShape()
@@ -521,8 +565,15 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGen
 
 void TypeInfoManager::GenericTiDescHashMap::RemoveInRange(uintptr_t begin, size_t size)
 {
-    auto inRange = [begin, size](const void* ptr) {
+    RemoveForImage(begin, size, 0, {});
+}
+
+void TypeInfoManager::GenericTiDescHashMap::RemoveForImage(
+    uintptr_t begin, size_t size, uintptr_t imageAddress, const std::unordered_set<TypeInfo*>& removed)
+{
+    auto inRange = [begin, size, imageAddress](const void* ptr) {
         uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        if (imageAddress != 0) { return ElfUnloadQuiescence::IsAddressInImage(address, imageAddress); }
         return address >= begin && address - begin < size;
     };
     for (auto& bucket : buckets) {
@@ -531,9 +582,9 @@ void TypeInfoManager::GenericTiDescHashMap::RemoveInRange(uintptr_t begin, size_
             auto& descriptions = mapIt->second;
             for (auto descIt = descriptions.begin(); descIt != descriptions.end();) {
                 GenericTiDesc* desc = *descIt;
-                bool remove = inRange(desc->tt) || inRange(desc->typeInfo);
+                bool remove = inRange(desc->tt) || inRange(desc->typeInfo) || removed.count(desc->typeInfo) != 0;
                 for (U32 idx = 0; !remove && idx < desc->argSize; ++idx) {
-                    remove = inRange(desc->args[idx]);
+                    remove = inRange(desc->args[idx]) || removed.count(desc->args[idx]) != 0;
                 }
                 if (remove) {
                     delete desc;

@@ -21,6 +21,7 @@ struct ImageMetadata {
     NativeSlot root { MAddress { 0 } };
     NativeSlot* roots[1] { nullptr };
     alignas(16) DYN_TypeInfo namedType {};
+    DYN_ExtensionData extension {};
 } metadata;
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
@@ -46,6 +47,7 @@ extern "C" DYN_TypeInfo* PackageInitImageNamedType()
     metadata.header.tables[TYPE_INFO_TABLE] = { offsetof(ImageMetadata, namedType), sizeof(metadata.namedType) };
     return &metadata.namedType;
 }
+extern "C" DYN_ExtensionData* PackageInitImageExtension() { return &metadata.extension; }
 
 namespace {
 void (*unloadNotice)() = nullptr;

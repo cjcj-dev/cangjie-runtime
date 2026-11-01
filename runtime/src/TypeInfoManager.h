@@ -50,6 +50,7 @@ public:
     void InvalidateGenericTypeInfoFastMap();
     void AddTypeInfo(TypeInfo* ti);
     void RemoveTypeInfosInRange(uintptr_t begin, size_t size);
+    void RemoveTypeInfosForImage(uintptr_t begin, size_t size, uintptr_t imageAddress);
     bool ContainsTypeInfo(TypeInfo* ti);
     std::pair<size_t, size_t> GetTypeInfoIndexShape();
     static U32 GetTypeSize(TypeInfo* ti);
@@ -181,6 +182,8 @@ private:
         GenericTiDesc* InsertGenericTiDesc(GenericTiDesc& desc);
         GenericTiDesc* GetGenericTiDesc(GenericTiDesc& desc);
         void RemoveInRange(uintptr_t begin, size_t size);
+        void RemoveForImage(uintptr_t begin, size_t size, uintptr_t imageAddress,
+                            const std::unordered_set<TypeInfo*>& removed);
     private:
         struct Bucket {
             std::unordered_map<U32, std::vector<GenericTiDesc*>> maps;

@@ -21,6 +21,8 @@
 #include "Interpreter/Options.h"
 #include "LoaderManager.h"
 #include "Loader/ILoader.h"
+#include "Loader/CjFileLoader/CjFileLoader.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "MClass.inline.h" // module internal header
 #include "Mutator/Mutator.h"
 #include "ObjectManager.inline.h"
@@ -165,6 +167,7 @@ void TypeInfo::SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo)
 
 void TypeInfo::TryInitMTable()
 {
+    ElfUnloadQuiescence::ReadScope reader;
     if (IsMTableDescUnInitialized()) {
         TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
         std::lock_guard<std::recursive_mutex> lock(manager.tiMutex);
@@ -244,6 +247,7 @@ inline bool IsSameRootPackage(TypeInfo* itf1, TypeInfo* itf2)
  */
 void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionData)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     auto itfUUID = itf->GetUUID();
     if (this->GetUUID() == itfUUID) {
         return;
@@ -327,12 +331,20 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
 // This interface mustn't be invoked locklessly.
 void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     TryInitMTableNoLock();
     U32 itfUUID = itf->GetUUID();
     CHECK(itfUUID != 0);
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
     std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+    // Resolve/initialize before catalog acquisition. The existing table lock
+    // precedes catalog (outer resolution already uses this order). Commit the
+    // persistent entry only while its image and TI dependencies remain linked.
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    std::lock_guard<std::recursive_mutex> catalogLock(loader->catalogMutex);
+    if (!loader->CanPublishAddress(extensionData) || !loader->CanPublishTypeInfo(this) ||
+        !loader->CanPublishTypeInfo(itf)) { return; }
     auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
@@ -541,6 +553,7 @@ void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> g
 
 void TypeInfo::GetInterfaces(std::vector<TypeInfo*> &itfs)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     TryInitMTable();
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
@@ -588,6 +601,7 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
 
 ExtensionData* TypeInfo::FindExtensionData(TypeInfo* itf, bool searchRecursively)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     TryInitMTable();
     auto itfUUID = itf->GetUUID();
     MTableDesc* desc = GetMTableDesc();
@@ -622,6 +636,7 @@ ExtensionData* TypeInfo::FindExtensionData(TypeInfo* itf, bool searchRecursively
 
 FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     if (GetUUID() == 0) {
         TypeInfoManager::GetTypeInfoManager().AddTypeInfo(this);
     }
@@ -657,6 +672,7 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
 
 TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     U32 itfUUID = itf->GetUUID();
     if (this == itf || this->GetUUID() == itfUUID) {
         return this;

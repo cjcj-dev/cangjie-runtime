@@ -22,6 +22,7 @@
 namespace MapleRuntime {
 class CJFileLoader : public ILoader {
     friend class CJFileLoaderTest;
+    friend class TypeInfo;
 public:
     CJFileLoader()
     {
@@ -104,6 +105,7 @@ private:
     mutable std::recursive_mutex catalogMutex;
     // Caller holds catalogMutex and a metadata ReadScope.
     bool CanPublishTypeInfo(TypeInfo* ti) const;
+    bool CanPublishAddress(const void* address) const;
     std::list<LibNameToHandler> cjLibHandlers;
     std::list<BaseFile*> loadedFiles;
     std::unordered_map<const char*, PackageInfo*, HashString, EqualString> packageInfos;
