@@ -1,6 +1,7 @@
 package finalizer_thread_data
 
 import std.collection.*
+import std.convert.*
 
 foreign {
     func PrepareThreadDataProbe(): Int64
@@ -12,7 +13,7 @@ class Tracked {
     init(id: Int64) {
         this.id = id
     }
-    ~init {}
+    ~init() {}
 }
 
 func workload(rounds: Int64): Int64 {
@@ -38,6 +39,9 @@ main(args: Array<String>): Int64 {
     var total = 0
     for (worker in workers) {
         total += worker.get()
+    }
+    if (total != threads * (rounds / 2)) {
+        return 101
     }
     println("FINALIZER_THREAD_DATA_DONE threads=${threads} rounds=${rounds} total=${total}")
     return 0

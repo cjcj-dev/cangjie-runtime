@@ -12,6 +12,6 @@ reads r15 before any native call can change it and compares it with
 
 Exit 3 with `FINALIZER_THREAD_DATA_TARGET` is the target failure. Exit 100 or
 `FINALIZER_THREAD_DATA_INPUT_MISSING` is a missing input, not a target red. A
-SIGABRT from a spurious stack grow is the same defect reached first, and a clean
-single-thread run is the control. A green multi-thread run on a build without the
+SIGABRT must retain its own assertion and input evidence; it does not by itself
+prove this target failure. A clean single-thread run is the control. A green multi-thread run on a build without the
 stub does not show that the defect is absent, because migration is timing dependent.
