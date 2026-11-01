@@ -601,6 +601,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             stackOffset = CJThreadStackGrow(newSize);
             if (stackOffset == -1 || stackOffset == 0) {
                 DLOG(INTERPRETER, "       stack overflow at %p", ip);
+                // The managed raiser may process a new watermark epoch on this stack.
+                flush.End();
                 ExceptionManager::StackOverflow(adjustedSize, ip);
                 return 0;
             }
@@ -640,6 +642,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             }
             stackOffset = CJThreadStackGrow(newSize);
             if (stackOffset == -1 || stackOffset == 0) {
+                // No stack switch follows failure; release before entering managed code.
+                flush.End();
                 ExceptionManager::StackOverflow(adjustedSize, ip);
                 return 0;
             }
