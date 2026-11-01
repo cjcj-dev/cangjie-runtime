@@ -1,6 +1,7 @@
 """The log observer releases only a completed minor, never a phase or a major."""
 
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -17,9 +18,9 @@ class PhaseEntryWaitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fixture = root / "fixture"
+            source = root / "fixture.py"
             # This is a producer fixture for the observer, not a GC model.
-            fixture.write_text(f"#!{sys.executable}\n" +
-                               "import pathlib, sys, time\n" +
+            source.write_text("import pathlib, sys, time\n" +
                                f"print({record!r}, flush=True)\n" +
                                ("receipt = pathlib.Path(sys.argv[1])\n"
                                 "deadline = time.monotonic() + 2\n"
@@ -27,6 +28,10 @@ class PhaseEntryWaitTest(unittest.TestCase):
                                 "    time.sleep(0.01)\n"
                                 "assert receipt.read_text() == 'seq=1\\n'\n"
                                 if expect_ack else ""))
+            # Keep the kernel shebang short; relocated SDK interpreter paths
+            # can exceed its limit. exec preserves the waiter's child status.
+            fixture.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " +
+                               shlex.quote(str(source)) + ' "$@"\n')
             fixture.chmod(0o700)
             result = subprocess.run([sys.executable, str(WAITER), str(fixture), str(root / "run.log")],
                                     capture_output=True, text=True, timeout=5)
