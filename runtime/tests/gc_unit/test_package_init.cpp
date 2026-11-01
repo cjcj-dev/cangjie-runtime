@@ -1336,6 +1336,42 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ExtensionCallbackAllowsConcurrentTypePubli
     Target("extension-runtime-finish", FiniCJRuntime() == E_OK);
 }
 
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
+{
+    Init();
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("publication-image-open", library != nullptr);
+    auto metadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto namedType = reinterpret_cast<DYN_TypeInfo* (*)()>(dlsym(library, "PackageInitImageNamedType"));
+    Target("publication-image-symbols", metadata && namedType);
+    auto* file = new CJFile(CString("publication-image"), reinterpret_cast<Uptr>(metadata()));
+    TypeInfo* ti = reinterpret_cast<TypeInfo*>(namedType());
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    const Uptr address = file->GetFileMetaAddr();
+    loader->RecordTypeInfo(ti);
+    Target("publication-before-unlink", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
+    auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
+    std::thread closer([&] { loader->RemoveLoadedFiles(file); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    bool unlinked = false;
+    while (!(unlinked = loader->GetBaseFileByMetaAddr(address) == nullptr) &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    // This is a pre-cut reader finishing its real publication after unlink;
+    // metadata is alive until it returns, but must not re-enter the cache.
+    loader->RecordTypeInfo(ti);
+    const bool absent = loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == nullptr;
+    reader.reset();
+    closer.join();
+    const int closed = dlclose(library);
+    Target("publication-unlink-reached", unlinked);
+    Target("publication-after-unlink-rejected", absent);
+    Target("publication-image-close", closed == 0);
+    Target("publication-runtime-finish", FiniCJRuntime() == E_OK);
+}
+
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);

@@ -409,7 +409,7 @@ void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
     loadedFiles.remove(baseFile);
 
     for (auto it = typeInfoCache.begin(); it != typeInfoCache.end();) {
-        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second))) {
+        if (!CanPublishTypeInfo(it->second)) {
             it = typeInfoCache.erase(it);
         } else {
             ++it;
@@ -576,6 +576,7 @@ TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
         }
         return nullptr;
     }
+    if (!CanPublishTypeInfo(ti)) { return nullptr; }
     return typeInfoCache.emplace(ti->GetName(), ti).first->second;
 }
 
@@ -608,11 +609,45 @@ TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemp
     return nullptr;
 }
 
+bool CJFileLoader::CanPublishTypeInfo(TypeInfo* ti) const
+{
+    // Image maps survive unlink until reader drain/purge. Their identity is
+    // evidence of ownership, not publication permission: loadedFiles is the
+    // discovery set, changed under this same catalog lock by UnlinkLoadedFile.
+    auto publishedAddress = [this](const void* address) {
+        auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
+        if (image == nullptr) { return true; } // Runtime-allocated metadata.
+        return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
+            return file->GetImageAddressMap().identity == image->identity;
+        });
+    };
+    std::vector<TypeInfo*> pending { ti };
+    std::unordered_set<TypeInfo*> visited;
+    while (!pending.empty()) {
+        TypeInfo* current = pending.back();
+        pending.pop_back();
+        if (current == nullptr || !visited.insert(current).second) { continue; }
+        if (!publishedAddress(current)) { return false; }
+        if (!current->IsGenericTypeInfo() || current->IsVArray()) { continue; }
+        if (!publishedAddress(current->GetSourceGeneric())) { return false; }
+        if (current->IsRawArray() || current->IsCPointer()) {
+            pending.push_back(current->GetComponentTypeInfo());
+        } else {
+            for (U32 i = 0; i < current->GetTypeArgNum(); ++i) {
+                pending.push_back(current->GetTypeArgs()[i]);
+            }
+        }
+    }
+    return true;
+}
+
 void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 {
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    typeInfoCache.insert({ ti->GetName(), ti });
+    if (CanPublishTypeInfo(ti)) {
+        typeInfoCache.insert({ ti->GetName(), ti });
+    }
 }
 
 void CJFileLoader::ClearLoadedFiles()

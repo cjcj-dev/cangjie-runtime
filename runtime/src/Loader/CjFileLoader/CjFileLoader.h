@@ -102,6 +102,8 @@ private:
     };
     mutable std::mutex libCjsoHandlersMutex;
     mutable std::recursive_mutex catalogMutex;
+    // Caller holds catalogMutex and a metadata ReadScope.
+    bool CanPublishTypeInfo(TypeInfo* ti) const;
     std::list<LibNameToHandler> cjLibHandlers;
     std::list<BaseFile*> loadedFiles;
     std::unordered_map<const char*, PackageInfo*, HashString, EqualString> packageInfos;

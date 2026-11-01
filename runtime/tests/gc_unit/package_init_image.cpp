@@ -5,6 +5,7 @@
 #include <cstddef>
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
 #include "ObjectModel/RefField.h"
+#include "Interpreter/RuntimeTypes.h"
 using namespace MapleRuntime;
 extern "C" void PackageInitImagePackage() {}
 extern "C" void PackageInitImageUnit() {}
@@ -19,6 +20,7 @@ struct ImageMetadata {
     // slot addresses, as LoaderManager.h:25-27 declares.
     NativeSlot root { MAddress { 0 } };
     NativeSlot* roots[1] { nullptr };
+    alignas(16) DYN_TypeInfo namedType {};
 } metadata;
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
@@ -34,6 +36,15 @@ extern "C" void* PackageInitImageMetadata()
     metadata.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(ImageMetadata, entries), sizeof(metadata.entries) };
     metadata.header.tables[GC_ROOT_TABLE] = { offsetof(ImageMetadata, roots), sizeof(metadata.roots) };
     return &metadata;
+}
+
+// Opt in only for the publication/unlink test; existing image cases retain
+// their empty TI table. The type and name really belong to this unloadable DSO.
+extern "C" DYN_TypeInfo* PackageInitImageNamedType()
+{
+    metadata.namedType.typeInfoName = "gc.lock:UnloadedPublication";
+    metadata.header.tables[TYPE_INFO_TABLE] = { offsetof(ImageMetadata, namedType), sizeof(metadata.namedType) };
+    return &metadata.namedType;
 }
 
 namespace {
