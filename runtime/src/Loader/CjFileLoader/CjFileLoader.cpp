@@ -444,8 +444,23 @@ void CJFileLoader::PurgeLoadedFile(BaseFile* baseFile)
     Uptr imageAddress = baseFile->GetFileMetaAddr();
     CHECK_DETAIL(ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress),
                  "ELF metadata purge requires pending/active authorization");
-    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosForImage(
-        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize(), imageAddress);
+    bool hasRemainingOwner;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        const Uptr identity = baseFile->GetImageAddressMap().identity;
+        hasRemainingOwner = std::any_of(loadedFiles.begin(), loadedFiles.end(), [identity](BaseFile* file) {
+            return file->GetImageAddressMap().identity == identity;
+        });
+    }
+    // LinkImage/UnlinkImage keep the ELF mapped while any metadata owner
+    // remains. Canonical TIs and extension tables can be shared by those
+    // owners: retain them for that same physical-image lifetime. The last
+    // owner retires the complete image dependency closure, after reader drain.
+    // Do not hold catalog while acquiring tiMutex in the purge.
+    if (!hasRemainingOwner) {
+        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosForImage(
+            baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize(), imageAddress);
+    }
     ElfUnloadQuiescence::UnlinkImage(imageAddress);
     delete baseFile;
 }

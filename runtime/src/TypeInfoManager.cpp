@@ -414,7 +414,8 @@ void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uint
         }
     }
     for (auto it = imageList.begin(); it != imageList.end();) {
-        if (it->first == begin && it->second == size) {
+        if (imageAddress != 0 ? inRange(reinterpret_cast<const void*>(it->first)) :
+            (it->first == begin && it->second == size)) {
             it = imageList.erase(it);
         } else {
             ++it;

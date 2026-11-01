@@ -94,6 +94,7 @@ struct Metadata {
     CJFileHeader header {};
     CJGCFlagsTable flags { 1, 1, 0 };
     Uptr entries[2] { reinterpret_cast<Uptr>(&PackageA), reinterpret_cast<Uptr>(&PackageB) };
+    alignas(16) DYN_TypeInfo namedType {};
 };
 Metadata metadata;
 Metadata secondaryMetadata;
@@ -119,6 +120,9 @@ CJFile* RegisterMetadata(Metadata& value, const char* name)
     value.header.cJFileSize = sizeof(value);
     value.header.tables[GC_FLAGS_TABLE] = { offsetof(Metadata, flags), sizeof(value.flags) };
     value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(Metadata, entries), sizeof(value.entries) };
+    if (value.namedType.typeInfoName != nullptr) {
+        value.header.tables[TYPE_INFO_TABLE] = { offsetof(Metadata, namedType), sizeof(value.namedType) };
+    }
     auto* file = new CJFile(CString(name), reinterpret_cast<Uptr>(&value));
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     loader->AddLoadedFiles(file);
@@ -849,12 +853,19 @@ GC_RUNTIME_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); 
 GC_RUNTIME_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
 {
+    metadata.namedType.typeInfoName = "gc.lock:RemainingMetadataOwner";
+    secondaryMetadata.namedType.typeInfoName = "gc.lock:RetiringMetadataOwner";
     Init();
     // The second metadata owner shares the executable image, with P as its
     // only canonical initializer. Q remains unambiguous in the first owner.
     secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageA);
     secondaryMetadata.entries[1] = reinterpret_cast<Uptr>(&PackageA);
     auto* secondary = RegisterMetadata(secondaryMetadata, "package-init-secondary");
+    auto* remainingTi = reinterpret_cast<TypeInfo*>(&metadata.namedType);
+    remainingTi->TryInitMTable();
+    auto* remainingTable = remainingTi->GetMTableDesc();
+    Target("remaining-owner-ti-initialized", remainingTable != nullptr &&
+        TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(remainingTi));
     std::atomic<bool> done { false };
     Start([](void* argument) {
         void* token = reinterpret_cast<void*>(1);
@@ -867,6 +878,9 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity
     }, &done);
     Target("multi-owner-completed", Await(done));
     static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(secondary);
+    Target("remaining-owner-ti-retained", TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(remainingTi));
+    Target("remaining-owner-table-retained", remainingTi->GetMTableDesc() == remainingTable);
+    remainingTi->TryInitMTable();
     Target("remaining-image-still-linked", ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(P())));
     done.store(false, std::memory_order_release);
     Start([](void* argument) {
