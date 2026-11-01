@@ -36,18 +36,28 @@ void CJFileLoader::Fini()
 void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
 {
     ScopedEntryTrace trace("CJRT_RegisterLoadFile");
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
     if (file == nullptr) {
         return;
     }
-    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    file->RegisterFile();
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        if (file->IsRegistered()) { return; }
+        file->RegisterFile();
 #ifndef __arm__
-    AddPackageInfos(file);
+        AddPackageInfos(file);
 #endif
-    RegisterTypeExt(file);
+        RegisterTypeExt(file);
+    }
+    // AddTypeInfo publishes the canonical TI under tiMutex and records it in
+    // the catalog. Do not hold the catalog across this reverse call chain.
+    // The reader pins metadata through both initialization and publication;
+    // registrationMutex also excludes unlink and duplicate registration.
     RegisterTypeInfoCreatedByFE(file);
     RegisterOuterTypeExtensions(file);
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     file->SetRegistered(true);
 }
 
@@ -174,23 +184,23 @@ void CJFileLoader::VisitExtensionData(
     TypeInfo* ti, const std::function<bool(ExtensionData* ed)>& f, TypeTemplate* tt) const
 {
     ElfUnloadQuiescence::ReadScope reader;
-    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     ti->TryInitMTable();
-    CHECK(loadedFiles.size() >= extensionDatas.size());
-    for (auto baseFile : loadedFiles) {
-        auto it1 = extensionDatas.find(baseFile);
-        if (it1 == extensionDatas.end()) {
-            continue;
-        }
-        auto& extensions = it1->second;
-        auto range = extensions.equal_range(tt);
-        if (range.first == range.second) {
-            continue;
-        }
-        for (auto it2 = range.first; it2 != range.second; ++it2) {
-            f(it2->second);
+    std::vector<ExtensionData*> selected;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        CHECK(loadedFiles.size() >= extensionDatas.size());
+        for (auto baseFile : loadedFiles) {
+            auto it1 = extensionDatas.find(baseFile);
+            if (it1 == extensionDatas.end()) { continue; }
+            auto range = it1->second.equal_range(tt);
+            for (auto it2 = range.first; it2 != range.second; ++it2) {
+                selected.push_back(it2->second);
+            }
         }
     }
+    // Callbacks may instantiate/register types. The same reader keeps every
+    // selected extension alive even if its image is concurrently unlinked.
+    for (auto* extension : selected) { f(extension); }
 }
 
 void CJFileLoader::ParseEnumCtor(TypeInfo* ti)
@@ -223,6 +233,8 @@ void CJFileLoader::ParseEnumCtor(TypeInfo* ti)
 
 void CJFileLoader::RegisterTypeExt(BaseFile* baseFile)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     Uptr typeExtBase = baseFile->GetTypeExtBase();
     Uptr typeExtEnd = typeExtBase + baseFile->GetTypeExtTotalSize();
     while (typeExtBase < typeExtEnd) {
@@ -259,7 +271,7 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
 
     Uptr staticGIBase = baseFile->GetStaticGIBase();
     Uptr staticGIEnd = staticGIBase + baseFile->GetStaticGISize();
-    staticGIs.clear();
+    std::vector<TypeInfo*> selectedStaticGIs;
     while (staticGIBase < staticGIEnd) {
         I32 offset = *reinterpret_cast<I32*>(staticGIBase);
 #if defined(__APPLE__)
@@ -268,13 +280,15 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
         TypeInfo* ti = reinterpret_cast<TypeInfo*>(staticGIBase + offset);
 #endif
         staticGIBase += sizeof(I32);
-        staticGIs.push_back(ti);
+        selectedStaticGIs.push_back(ti);
         if (ti->IsEnum() || ti->IsTempEnum()) {
             continue;
         } else if (ti->IsGenericTypeInfo() && ti->ReflectInfoIsNull() && !ti->GetSourceGeneric()->ReflectInfoIsNull()) {
             typeInfoMgr.FillReflectInfo(ti->GetSourceGeneric(), ti);
         }
     }
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    staticGIs = std::move(selectedStaticGIs);
 }
 
 void CJFileLoader::RegisterOuterTypeExtensions(BaseFile* baseFile)
@@ -298,10 +312,12 @@ void CJFileLoader::RegisterOuterTypeExtensions(BaseFile* baseFile)
             typeInfoMgr.AddTypeInfo(itf);
             TypeInfo* ti = reinterpret_cast<TypeInfo*>(extensionData->GetTargetType());
             typeInfoMgr.AddTypeInfo(ti);
+            ti->TryInitMTable();
             ti->AddMTable(itf, extensionData);
             continue;
         }
         TypeTemplate* tt = reinterpret_cast<TypeTemplate*>(extensionData->GetTargetType());
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
         extensionDatas[baseFile].emplace(tt, extensionData);
     }
 }
@@ -387,6 +403,7 @@ PackageInfo* CJFileLoader::GetPackageInfo(const char* pkgName) const
 
 void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
 {
+    std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     extensionDatas.erase(baseFile);
     loadedFiles.remove(baseFile);
@@ -521,30 +538,33 @@ void CJFileLoader::VisitBaseFile(const std::function<bool(BaseFile*)>& f) const
 TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    auto it = typeInfoCache.find(typeInfoName);
-    if (it != typeInfoCache.end()) {
-        return it->second;
-    }
-    CString pkgName;
-    CString typeInfoNameStr = CString(typeInfoName);
-    int idx = typeInfoNameStr.RFind(":");
-    if (idx < 0) {
-        pkgName = "std.core";
-    } else {
-        pkgName = typeInfoNameStr.SubStr(0, idx);
-    }
-    auto pkgIt = packageInfos.find(pkgName.Str());
-    if (pkgIt != packageInfos.end()) {
-        PackageInfo* pkgInfo = pkgIt->second;
-        TypeInfo* ti = pkgInfo->GetTypeInfo(typeInfoName);
-        if (ti == nullptr) {
-            return nullptr;
+    TypeInfo* ti = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        auto it = typeInfoCache.find(typeInfoName);
+        if (it != typeInfoCache.end()) {
+            return it->second;
         }
-        typeInfoCache.insert({ ti->GetName(), ti });
-        return ti;
+        CString pkgName;
+        CString typeInfoNameStr = CString(typeInfoName);
+        int idx = typeInfoNameStr.RFind(":");
+        if (idx < 0) {
+            pkgName = "std.core";
+        } else {
+            pkgName = typeInfoNameStr.SubStr(0, idx);
+        }
+        auto pkgIt = packageInfos.find(pkgName.Str());
+        if (pkgIt != packageInfos.end()) {
+            ti = pkgIt->second->GetTypeInfo(typeInfoName);
+        }
     }
-    return nullptr;
+    if (ti == nullptr) { return nullptr; }
+    // A package may be visible while its image is registering. Complete the
+    // TI through its own serialization before publishing a lookup cache entry.
+    // Keep the image reader, but never acquire tiMutex with catalogMutex held.
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(ti);
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    return typeInfoCache.emplace(ti->GetName(), ti).first->second;
 }
 
 TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemplateName)

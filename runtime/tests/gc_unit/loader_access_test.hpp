@@ -8,6 +8,10 @@
 namespace MapleRuntime {
 class CJFileLoaderTest {
 public:
+    static void AddExtension(CJFileLoader& loader, BaseFile* file, TypeTemplate* tt, ExtensionData* extension) {
+        std::lock_guard<std::recursive_mutex> lock(loader.catalogMutex);
+        loader.extensionDatas[file].emplace(tt, extension);
+    }
     static void* Handle(const CJFileLoader& loader, const char* name) {
         const CString base = Os::Path::GetBaseName(name);
         std::lock_guard<std::mutex> lock(loader.libCjsoHandlersMutex);

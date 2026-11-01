@@ -275,7 +275,6 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
             ti->SetUUID(tiMaxUUID.fetch_add(1));
             tiDesc->typeInfo = ti;
             ti->TryInitMTableNoLock();
-            LoaderManager::GetInstance()->RecordTypeInfo(ti);
         }
         bool needRefresh = ti->NeedRefresh() && !tiDesc->IsIniting();
         if (UNLIKELY(needRefresh)) {
@@ -295,6 +294,12 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
             }
         }
         tiDesc->SetTypeInfoStatus(TypeInfoStatus::TYPEINFO_INITED);
+        // Publish only the fully initialized canonical entry. Keep tiMutex
+        // through the cache insert so duplicate registration cannot substitute
+        // an incompletely initialized or noncanonical TI.
+        if (!hasExisted) {
+            LoaderManager::GetInstance()->RecordTypeInfo(ti);
+        }
     } else {
         auto it = nonGenericTypeInfos.find(typeInfoName);
         if (it != nonGenericTypeInfos.end()) {
@@ -924,6 +929,7 @@ void TypeInfoManager::FillReflectInfo(TypeTemplate *tt, TypeInfo *ti)
 
 void TypeInfoManager::InitAnyAndObjectType()
 {
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
     if (anyTi == nullptr) {
         auto it = nonGenericTypeInfos.find(CString("std.core:Any").Str());
         if (it != nonGenericTypeInfos.end()) {

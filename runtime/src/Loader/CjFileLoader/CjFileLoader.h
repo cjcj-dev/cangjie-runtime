@@ -120,6 +120,10 @@ private:
     std::mutex lazyStaticGIMutex;
     std::vector<TypeInfo*> staticGIs;
     CjSemanticVersion compatibility;
+    // Serialize image registration/unlink, not type instantiation. Never take
+    // this lock from a TypeInfo or extension lookup. Catalog lock only protects
+    // the maps; it must not enclose TI initialization or extension callbacks.
+    std::recursive_mutex registrationMutex;
 };
 } // namespace MapleRuntime
 #endif // MRT_CJ_FILE_LOADER_H

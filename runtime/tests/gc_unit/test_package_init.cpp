@@ -28,6 +28,8 @@
 #include "gc_heap_fixture.hpp"
 #include "loader_access_test.hpp"
 #include "LoaderManager.h"
+#include "Interpreter/RuntimeTypes.h"
+#include "TypeInfoManager.h"
 #include "Mutator/Handshake.h"
 #include "Mutator/ThreadSMR.h"
 #include "schedule.h"
@@ -1252,6 +1254,88 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
     Target("static-root-runtime-finish", FiniCJRuntime() == E_OK);
 }
 #endif
+// These tests bound the catalog-held phase, not a synthetic mutex algorithm.
+// The other thread runs the public type publication path; the bounded wait
+// lets the old implementation unwind and join before reporting the target red.
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegistrationAllowsConcurrentTypePublication)
+{
+    Init();
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    DYN_TypeInfo type {};
+    type.typeInfoName = "gc.lock:Registration";
+    auto* ti = reinterpret_cast<TypeInfo*>(&type);
+    std::atomic<bool> requested{false}, published{false};
+    std::thread publisher([&] {
+        while (!requested.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        TypeInfoManager::GetTypeInfoManager().AddTypeInfo(ti);
+        loader->RecordTypeInfo(ti);
+        published.store(true, std::memory_order_release);
+    });
+    class RegisterFile final : public CJFile {
+    public:
+        RegisterFile(Uptr address, std::atomic<bool>& request, std::atomic<bool>& complete)
+            : CJFile(CString("type-publication-main"), address), requested(request), published(complete) {}
+        Uptr GetTypeInfoBase() override {
+            if (!entered) {
+                entered = true;
+                requested.store(true, std::memory_order_release);
+                progressed = Await(published);
+            }
+            return CJFile::GetTypeInfoBase();
+        }
+        bool progressed{false};
+    private:
+        bool entered{false};
+        std::atomic<bool>& requested;
+        std::atomic<bool>& published;
+    };
+    static Metadata local {};
+    local.header.cJFileSize = sizeof(local);
+    local.header.tables[GC_FLAGS_TABLE] = { offsetof(Metadata, flags), sizeof(local.flags) };
+    auto* file = new RegisterFile(reinterpret_cast<Uptr>(&local), requested, published);
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    publisher.join();
+    Target("registration-concurrent-type-publication", file->progressed);
+    Target("registration-published-cache", loader->FindTypeInfoFromLoadedFiles(type.typeInfoName) == ti);
+    DYN_TypeInfo duplicate {};
+    duplicate.typeInfoName = type.typeInfoName;
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(reinterpret_cast<TypeInfo*>(&duplicate));
+    Target("registration-duplicate-canonical-uuid", type.uuid != 0 && type.uuid == duplicate.uuid);
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    Target("registration-repeat-complete", file->IsRegistered());
+    Target("registration-runtime-finish", FiniCJRuntime() == E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ExtensionCallbackAllowsConcurrentTypePublication)
+{
+    Init();
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    DYN_TypeInfo type {};
+    type.typeInfoName = "gc.lock:Extension";
+    auto* ti = reinterpret_cast<TypeInfo*>(&type);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(ti);
+    DYN_ExtensionData extension {};
+    CJFileLoaderTest::AddExtension(*loader, image, nullptr, reinterpret_cast<ExtensionData*>(&extension));
+    std::atomic<bool> requested{false}, published{false};
+    std::thread publisher([&] {
+        while (!requested.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        loader->RecordTypeInfo(ti);
+        published.store(true, std::memory_order_release);
+    });
+    bool reached = false, progressed = false;
+    loader->VisitExtensionData(ti, [&](ExtensionData* actual) {
+        reached = actual == reinterpret_cast<ExtensionData*>(&extension);
+        requested.store(true, std::memory_order_release);
+        progressed = Await(published);
+        return false;
+    }, nullptr);
+    publisher.join();
+    Target("extension-callback-type-publication", reached && progressed);
+    Target("extension-published-cache", loader->FindTypeInfoFromLoadedFiles(type.typeInfoName) == ti);
+    Target("extension-runtime-finish", FiniCJRuntime() == E_OK);
+}
+
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);
