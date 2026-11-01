@@ -22,6 +22,18 @@
 #include "Heap/z/zDriverPort.hpp"
 #include "Inspector/CjHeapData.h"
 namespace MapleRuntime {
+namespace {
+// This native caller owns the inhibition until its managed raiser returns.
+// A throw/catch must not consume an enclosing N2C's inhibition instead.
+class ScopedRaiserStackGrow final {
+public:
+    ScopedRaiserStackGrow() { MRT_SetStackGrow(false); }
+    ~ScopedRaiserStackGrow() { MRT_SetStackGrow(true); }
+    ScopedRaiserStackGrow(const ScopedRaiserStackGrow&) = delete;
+    ScopedRaiserStackGrow& operator=(const ScopedRaiserStackGrow&) = delete;
+};
+} // namespace
+
 std::mutex ExceptionManager::gUncaughtExceptionHandlerMtx;
 #if defined(__OHOS__) && (__OHOS__ == 1)
 std::mutex ExceptionManager::gEventMtx;
@@ -186,8 +198,11 @@ MRT_OPTIONAL_DISABLE_TAIL_CALL void ExceptionManager::IncompatiblePackageExpecti
         LOG(RTLOG_FATAL, "Cangjie initialization failed, implicit exception is nullptr.");
     }
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
-    ExecuteCangjieStub(reinterpret_cast<void*>(static_cast<intptr_t>(INCOMP)),  reinterpret_cast<void*>(msg.GetStr()),
-                       0, reinterpret_cast<void*>(func), reinterpret_cast<void*>(threadData), 0);
+    {
+        ScopedRaiserStackGrow stackGrow;
+        ExecuteCangjieStub(reinterpret_cast<void*>(static_cast<intptr_t>(INCOMP)), reinterpret_cast<void*>(msg.GetStr()),
+                           0, reinterpret_cast<void*>(func), reinterpret_cast<void*>(threadData), 0);
+    }
 
     MRT_ThrowPendingException();
 }
@@ -360,7 +375,6 @@ void ExceptionManager::DumpException()
 // call.
 void ExceptionManager::ThrowImplicitException(ImplicitExceptionType type)
 {
-    MRT_SetStackGrow(false);
     ExceptionWrapper& eWrapper = Mutator::GetMutator()->GetExceptionWrapper();
     eWrapper.SetExceptionMessage(nullptr, 0);
     ExceptionRaiser func = Runtime::Current().GetExceptionManager().GetExceptionRaiser();
@@ -368,6 +382,7 @@ void ExceptionManager::ThrowImplicitException(ImplicitExceptionType type)
         LOG(RTLOG_FATAL, "Cangjie initialization failed, implicit exception is nullptr.");
     }
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
+    ScopedRaiserStackGrow stackGrow;
     ExecuteCangjieStub(reinterpret_cast<void*>(static_cast<intptr_t>(type)), 0, 0, reinterpret_cast<void*>(func),
         reinterpret_cast<void*>(threadData), 0);
 }
@@ -375,7 +390,6 @@ void ExceptionManager::ThrowImplicitException(ImplicitExceptionType type)
 void ExceptionManager::ThrowException(const ExceptionRef& exception)
 {
     ScopedEntryTrace trace("CJRT_THROW_EXCEPTION");
-    MRT_SetStackGrow(true);
     ExceptionWrapper& mExceptionWrapper = Mutator::GetMutator()->GetExceptionWrapper();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     DLOG(EXCEPTION, "start throw exception");
