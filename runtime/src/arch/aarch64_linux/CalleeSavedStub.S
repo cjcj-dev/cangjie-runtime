@@ -215,6 +215,7 @@ unwindPCForC2RStubStart:
     CalleeSavedRegistersStub MCC_NewArray64 CJ_MCC_NewArray64
     CalleeSavedRegistersStub MCC_InvokeGCImpl CJ_MCC_InvokeGC
     CalleeSavedRegistersStub MCC_ReferenceInvokeFinalize CJ_MCC_ReferenceInvokeFinalize
+    CalleeSavedRegistersStub MCC_OnFinalizerCreated CJ_MCC_OnFinalizerCreated
     CalleeSavedRegistersStub MCC_FillInStackTraceImpl CJ_MCC_FillInStackTrace
     CalleeSavedRegistersStub MCC_StringDedupCanonicalImpl CJ_MCC_StringDedupCanonical
     CalleeSavedRegistersStub MCC_DecodeStackTraceImpl CJ_MCC_DecodeStackTrace

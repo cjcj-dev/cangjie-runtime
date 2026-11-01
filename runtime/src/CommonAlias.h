@@ -8,7 +8,9 @@
 #ifndef COMMON_ALIAS_SRC
 #define COMMON_ALIAS_SRC
 
-#ifndef _WIN64
+// Linux and Windows enter through CalleeSavedStub.S: registration runs managed
+// code that can park, so the managed caller must reload its thread data on return.
+#if !defined(_WIN64) && !defined(__linux__)
 extern "C" MRT_EXPORT ObjRef CJ_MCC_OnFinalizerCreated(ObjRef ref) __attribute__((alias("MCC_OnFinalizerCreated")));
 #endif
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
