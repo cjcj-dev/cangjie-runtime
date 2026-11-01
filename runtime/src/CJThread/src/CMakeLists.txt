@@ -46,6 +46,21 @@ add_subdirectory(trace)
 
 set(LIBRARY_OUTPUT_PATH ${RUNTIME_OUTPUT_ROOT}/lib)
 
+# Resolve the prefix at install time, including staged DESTDIR installations.
+function(install_cjthread_postprocess program)
+    set(arguments "")
+    foreach(argument IN LISTS ARGN)
+        string(APPEND arguments " \"${argument}\"")
+    endforeach()
+    install(CODE "
+        execute_process(COMMAND \"${program}\"${arguments}
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a\"
+            RESULT_VARIABLE postprocess_result)
+        if(NOT \"\${postprocess_result}\" STREQUAL \"0\")
+            message(FATAL_ERROR \"${program}: libcangjie-thread.a: \${postprocess_result}\")
+        endif()"
+        COMPONENT cangjie-thread)
+endfunction()
 
 add_library(cangjie-thread ${LIBTYPE}
 $<TARGET_OBJECTS:schedule>
@@ -87,22 +102,18 @@ if(${PLATFORM_NAME} STREQUAL "linux_aarch64_cangjie" OR ${PLATFORM_NAME} STREQUA
     ${PLATFORM_NAME} STREQUAL "ios_cangjie_x86_64" OR ${PLATFORM_NAME} STREQUAL "ios_simulator_x86_64_cangjie" OR
     ${PLATFORM_NAME} STREQUAL "mac_x86_64_cangjie" OR ${PLATFORM_NAME} STREQUAL "mac_aarch64_cangjie" OR
     ${PLATFORM_NAME} STREQUAL "windows_x86_64" OR ${PLATFORM_NAME} STREQUAL "cross_windows_x86_64")
-install(TARGETS cangjie-thread ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
+install(TARGETS cangjie-thread ARCHIVE DESTINATION lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 set(OBJCOPY_PROGRAM objcopy)
 set(STRIP_PROGRAM strip)
 
 if (NOT (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS"))
-install(CODE "execute_process(COMMAND ${OBJCOPY_PROGRAM} -D --rename-section .text=.text_thread \
-            ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
-        COMPONENT cangjie-thread)
+install_cjthread_postprocess(${OBJCOPY_PROGRAM} -D --rename-section .text=.text_thread)
 endif()
 if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "MinSizeRel")
     if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
-        COMPONENT cangjie-thread)
+    install_cjthread_postprocess(${STRIP_PROGRAM} -x)
     else()
-    install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} --strip-unneeded ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
-        COMPONENT cangjie-thread)
+    install_cjthread_postprocess(${STRIP_PROGRAM} --strip-unneeded)
     endif()
 endif()
 endif()
@@ -147,4 +158,4 @@ endif()
 add_library(cjthread-trace ${LIBTYPE}
 $<TARGET_OBJECTS:trace>
 )
-install(TARGETS cangjie-aio ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH})
+install(TARGETS cangjie-aio ARCHIVE DESTINATION lib/${TARGET_ARCH})

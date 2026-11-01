@@ -333,6 +333,12 @@ if (DEFINED _cjthread_result)
 endif()
 endif() # BUILD_CJTHREAD
 
+# CJThread is configured separately, so add its install rules explicitly.
+# A runtime-only reconfigure can reuse an already built CJThread tree.
+if (BUILD_CJTHREAD OR EXISTS "${CMAKE_BINARY_DIR}/cjthread-build/cmake_install.cmake")
+    install(SCRIPT "${CMAKE_BINARY_DIR}/cjthread-build/cmake_install.cmake")
+endif()
+
 if (BUILD_RUNTIME)
 include_directories(${DOPRA_INCLUDE})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
