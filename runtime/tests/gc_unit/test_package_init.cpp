@@ -905,7 +905,6 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBod
     packageBody = nullptr;
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-#ifdef MRT_TESTABLE_INTERNALS
 namespace {
 std::string FixtureBesideExecutable(const char* name)
 {
@@ -915,6 +914,7 @@ std::string FixtureBesideExecutable(const char* name)
     return path.substr(0, path.find_last_of('/') + 1) + name;
 }
 }
+#ifdef MRT_TESTABLE_INTERNALS
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadWaitsForPostUnlinkObserver)
 {
     Init();
