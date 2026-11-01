@@ -539,13 +539,14 @@ TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
 {
     ElfUnloadQuiescence::ReadScope reader;
     TypeInfo* ti = nullptr;
+    PackageInfo* selectedPackage = nullptr;
+    CString pkgName;
     {
         std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
         auto it = typeInfoCache.find(typeInfoName);
         if (it != typeInfoCache.end()) {
             return it->second;
         }
-        CString pkgName;
         CString typeInfoNameStr = CString(typeInfoName);
         int idx = typeInfoNameStr.RFind(":");
         if (idx < 0) {
@@ -555,6 +556,7 @@ TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
         }
         auto pkgIt = packageInfos.find(pkgName.Str());
         if (pkgIt != packageInfos.end()) {
+            selectedPackage = pkgIt->second;
             ti = pkgIt->second->GetTypeInfo(typeInfoName);
         }
     }
@@ -564,6 +566,16 @@ TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
     // Keep the image reader, but never acquire tiMutex with catalogMutex held.
     TypeInfoManager::GetTypeInfoManager().AddTypeInfo(ti);
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    // A reader pins storage, not catalog membership: unload may already have
+    // unlinked this package while AddTypeInfo was running. Do not republish it.
+    auto currentPackage = packageInfos.find(pkgName.Str());
+    if (currentPackage == packageInfos.end() || currentPackage->second != selectedPackage) {
+        auto cached = typeInfoCache.find(ti->GetName());
+        if (cached != typeInfoCache.end() && cached->second == ti) {
+            typeInfoCache.erase(cached);
+        }
+        return nullptr;
+    }
     return typeInfoCache.emplace(ti->GetName(), ti).first->second;
 }
 
