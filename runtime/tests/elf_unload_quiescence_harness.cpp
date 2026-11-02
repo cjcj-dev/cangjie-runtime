@@ -17,6 +17,8 @@
 
 #include <dlfcn.h>
 
+using namespace MapleRuntime;
+
 extern "C" void* MRT_TestElfUnloadReaderEnter();
 extern "C" void MRT_TestElfUnloadReaderExit(void* token);
 extern "C" bool MRT_TestElfUnloadAddressLinked(uintptr_t address);
