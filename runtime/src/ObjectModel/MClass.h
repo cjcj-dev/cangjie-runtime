@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "Base/AtomicSpinLock.h"
@@ -25,6 +26,23 @@
 #include "PackageInfo.h"
 
 namespace MapleRuntime {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
+extern "C" __attribute__((weak)) void MRT_TestStableInvalidationWait(const void* desc);
+inline void StableMutationTestObserveInline()
+{
+    if (MRT_TestStableMutationAttempt != nullptr) {
+        MRT_TestStableMutationAttempt();
+    }
+}
+inline void StableInvalidationWaitTestObserveInline(const void* desc)
+{
+    if (MRT_TestStableInvalidationWait != nullptr) {
+        MRT_TestStableInvalidationWait(desc);
+    }
+}
+#endif
+
 class ExtensionData;
 class BaseFile;
 constexpr U8 BITS_FOR_REF = 1;
@@ -224,12 +242,45 @@ private:
     AtomicTypeInfoArray cachedTypeInfos;
 };
 struct MTableDesc {
+    using StableTable = std::unordered_map<U32, const InheritFuncTable*>;
+
+    class StableReadGuard {
+    public:
+        explicit StableReadGuard(const MTableDesc& owner) : owner(owner)
+        {
+            owner.stableReaders.fetch_add(1, std::memory_order_seq_cst);
+            table = owner.stableTable.load(std::memory_order_seq_cst);
+            if (table == nullptr) {
+                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+            }
+        }
+        StableReadGuard(const StableReadGuard&) = delete;
+        StableReadGuard& operator=(const StableReadGuard&) = delete;
+        ~StableReadGuard()
+        {
+            if (table != nullptr) {
+                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+            }
+        }
+        StableTable* Get() const { return table; }
+
+    private:
+        const MTableDesc& owner;
+        StableTable* table { nullptr };
+    };
+
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
     std::atomic<bool> pending { false };
     std::atomic<bool> needsResolveInner { true };
     std::atomic<bool> needsResolveOuter { true };
+    // Published after both resolution passes. Ordinary table updates first
+    // detach the snapshot and wait for StableReadGuard users before replacing
+    // mutable cache/function-table storage. Unload uses the same retirement
+    // rule after ElfUnloadQuiescence has drained readers.
+    std::atomic<StableTable*> stableTable { nullptr };
+    mutable std::atomic<U32> stableReaders { 0 };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
@@ -237,6 +288,31 @@ struct MTableDesc {
     inline bool NeedResolveOuter() const { return needsResolveOuter.load(std::memory_order_acquire); }
     inline void MarkInnerResolved() { needsResolveInner.store(false, std::memory_order_release); }
     inline void MarkOuterResolved() { needsResolveOuter.store(false, std::memory_order_release); }
+    ~MTableDesc()
+    {
+        InvalidateStableTable();
+    }
+    void PublishStableTable();
+    void InvalidateStableTable()
+    {
+        auto* old = stableTable.exchange(nullptr, std::memory_order_seq_cst);
+        if (old == nullptr) {
+            return;
+        }
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+        // The test rendezvous is after snapshot detachment and immediately
+        // before the reader-quiescence wait.  It therefore proves that this
+        // exact descriptor has a retired table and that the writer reached
+        // the safety point, rather than merely having been scheduled.
+        StableInvalidationWaitTestObserveInline(this);
+#endif
+#if !defined(MRT_BROKEN_STABLE_WAIT)
+        while (stableReaders.load(std::memory_order_seq_cst) != 0) {
+            std::this_thread::yield();
+        }
+#endif
+        delete old;
+    }
 };
 
 typedef TypeInfo* (*GenericFunc)(TypeInfo**);

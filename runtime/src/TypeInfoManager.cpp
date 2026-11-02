@@ -465,6 +465,7 @@ void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uint
         for (auto& entry : mTableList) {
             MTableDesc* desc = entry.second;
             std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+            desc->InvalidateStableTable();
             for (auto it = desc->mTable.begin(); it != desc->mTable.end();) {
                 if (inRange(it->second.GetExtensionData()) || removed.count(it->second.GetSuperTi()) != 0) {
                     it = desc->mTable.erase(it);

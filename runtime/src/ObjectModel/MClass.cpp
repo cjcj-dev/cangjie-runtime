@@ -40,6 +40,26 @@
 #endif
 
 namespace MapleRuntime {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+// Test-only rendezvous.  The production build does not compile this hook;
+// the harness supplies the weak symbol from its executable when validating
+// the guard-held writer interleave.
+extern "C" __attribute__((weak)) void MRT_TestStableHitPause(U32 api);
+extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
+static inline void StableHitTestPause(U32 api)
+{
+    if (MRT_TestStableHitPause != nullptr) {
+        MRT_TestStableHitPause(api);
+    }
+}
+static inline void StableMutationTestObserve()
+{
+    if (MRT_TestStableMutationAttempt != nullptr) {
+        MRT_TestStableMutationAttempt();
+    }
+}
+#endif
+
 #ifdef __arm__
 const size_t TYPEINFO_PTR_SIZE = sizeof(TypeInfo*) + 4;
 #else
@@ -180,6 +200,29 @@ MTableDesc::MTableDesc(ArchUInt bitmap_)
     mTableBitmap.tag = bitmap_;
 }
 
+void MTableDesc::PublishStableTable()
+{
+    // Traverse* normally runs under this recursive mutex; keep the helper
+    // correct for direct callers as well so the snapshot never races a map
+    // insertion or rehash.
+    std::lock_guard<std::recursive_mutex> tableLock(mTableMutex);
+    if (!IsFullyHandled()) {
+        return;
+    }
+    auto* stable = new (std::nothrow) StableTable();
+    CHECK_DETAIL(stable != nullptr, "fail to allocate stable MTable snapshot");
+    stable->reserve(mTable.size());
+    for (const auto& entry : mTable) {
+        stable->emplace(entry.first, &entry.second);
+    }
+    StableTable* candidate = stable;
+    StableTable* expected = nullptr;
+    if (!stableTable.compare_exchange_strong(expected, candidate,
+                                             std::memory_order_release, std::memory_order_acquire)) {
+        delete candidate;
+    }
+}
+
 void TypeInfo::TryInitMTableNoLock()
 {
     if (IsMTableDescUnInitialized()) {
@@ -279,6 +322,7 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         MTableDesc* desc = GetMTableDesc();
         CHECK(desc != nullptr);
         std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+        desc->InvalidateStableTable();
         TraverseInnerExtensionDefs();
         auto& mTable = desc->mTable;
         for (const auto& superTypePair : mTable) {
@@ -325,6 +369,7 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         }
         mTable.find(itfUUID)->second.ResetAtomicInfoArray(itfFtSize);
         extensionData->SetFuncTableUpdated();
+        desc->PublishStableTable();
     } while (true);
 }
 
@@ -332,6 +377,9 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
 void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
 {
     ElfUnloadQuiescence::ReadScope reader;
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+    StableMutationTestObserve();
+#endif
     TryInitMTableNoLock();
     U32 itfUUID = itf->GetUUID();
     CHECK(itfUUID != 0);
@@ -348,7 +396,11 @@ void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
     auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
+        desc->InvalidateStableTable();
         mTable.emplace(itfUUID, InheritFuncTable(extensionData, itf, extensionData->GetFuncTableSize()));
+        if (desc->IsFullyHandled()) {
+            desc->PublishStableTable();
+        }
     }
 }
 
@@ -431,7 +483,11 @@ static void MergeMTableSnapshot(TypeInfo* dest, TypeInfo* src)
         }
     }
     std::lock_guard<std::recursive_mutex> destLock(destDesc->mTableMutex);
+    destDesc->InvalidateStableTable();
     destDesc->mTable.insert(std::make_move_iterator(snapshot.begin()), std::make_move_iterator(snapshot.end()));
+    if (destDesc->IsFullyHandled()) {
+        destDesc->PublishStableTable();
+    }
 }
 
 static void ResolveInnerExtensionDefs(
@@ -505,6 +561,7 @@ void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> g
     }
     desc->pending.store(false, std::memory_order_relaxed);
     desc->MarkInnerResolved();
+    desc->PublishStableTable();
 }
 
 void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
@@ -549,6 +606,7 @@ void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> g
         },
         sourceGeneric);
     desc->MarkOuterResolved();
+    desc->PublishStableTable();
 }
 
 void TypeInfo::GetInterfaces(std::vector<TypeInfo*> &itfs)
@@ -581,6 +639,9 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
     }
 
     MTableDesc* desc = GetMTableDesc();
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+    StableMutationTestObserve();
+#endif
     CHECK(desc != nullptr);
     std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
     for (const auto& pair : desc->mTable) {
@@ -592,7 +653,11 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         auto found = super->FindExtensionData(itf, true);
         if (found) {
             // This won't cause the issue of iterator invalidation since the function will exit immediately.
+            desc->InvalidateStableTable();
             desc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
+            if (desc->IsFullyHandled()) {
+                desc->PublishStableTable();
+            }
             return found;
         }
     }
@@ -649,6 +714,21 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     MTableDesc* desc = GetMTableDesc();
     if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
+        {
+            MTableDesc::StableReadGuard stableRead(*desc);
+            if (auto stable = stableRead.Get()) {
+                auto stableIt = stable->find(itfUUID);
+                if (stableIt != stable->end()) {
+                    ExtensionData* ed = stableIt->second->GetExtensionData();
+                    if (LIKELY(ed->IsFuncTableUpdated())) {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+                        StableHitTestPause(0);
+#endif
+                        return ed->GetFuncTable();
+                    }
+                }
+            }
+        }
         std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
         auto it = desc->mTable.find(itfUUID);
         if (it != desc->mTable.end()) {
@@ -687,6 +767,22 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     }
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
+    {
+        MTableDesc::StableReadGuard stableRead(*desc);
+        if (auto stable = stableRead.Get()) {
+            auto stableIt = stable->find(itfUUID);
+            if (stableIt != stable->end()) {
+                auto* stableEntry = stableIt->second;
+                auto* outerTi = stableEntry->GetCachedTypeInfo(index);
+                if (LIKELY(outerTi != nullptr)) {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+                    StableHitTestPause(1);
+#endif
+                    return outerTi;
+                }
+            }
+        }
+    }
     std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
     auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);

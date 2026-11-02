@@ -20,6 +20,38 @@ public class UnloadProbeType {
     }
 }
 
+public interface UnloadProbeInterface {
+    func probeValue(): Int64
+}
+
+public interface UnloadProbeHitInterface {
+    func hitValue(): Int64
+}
+
+public open class UnloadProbeBase <: UnloadProbeInterface {
+    public open func probeValue(): Int64 {
+        return 17
+    }
+}
+
+public class UnloadProbeTypeWithInterface <: UnloadProbeBase & UnloadProbeHitInterface {
+    public let value: Int64
+
+    public init(value: Int64) {
+        this.value = value
+    }
+
+    public func probeValue(): Int64 {
+        return value
+    }
+
+    public func hitValue(): Int64 {
+        return value + 1
+    }
+}
+
+public var unloadInterfaceRoot: ?UnloadProbeTypeWithInterface = UnloadProbeTypeWithInterface(11)
+
 public var unloadStaticRoot: ?UnloadProbeType = UnloadProbeType(7)
 public var unloadInitSentinel: Int64 = unloadInitBlock()
 
