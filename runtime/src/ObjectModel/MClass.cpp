@@ -676,13 +676,15 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     MTableDesc* desc = GetMTableDesc();
     if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
-        MTableDesc::StableReadGuard stableRead(*desc);
-        if (auto stable = stableRead.Get()) {
-            auto stableIt = stable->find(itfUUID);
-            if (stableIt != stable->end()) {
-                ExtensionData* ed = stableIt->second->GetExtensionData();
-                if (LIKELY(ed->IsFuncTableUpdated())) {
-                    return ed->GetFuncTable();
+        {
+            MTableDesc::StableReadGuard stableRead(*desc);
+            if (auto stable = stableRead.Get()) {
+                auto stableIt = stable->find(itfUUID);
+                if (stableIt != stable->end()) {
+                    ExtensionData* ed = stableIt->second->GetExtensionData();
+                    if (LIKELY(ed->IsFuncTableUpdated())) {
+                        return ed->GetFuncTable();
+                    }
                 }
             }
         }
@@ -724,14 +726,16 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     }
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
-    MTableDesc::StableReadGuard stableRead(*desc);
-    if (auto stable = stableRead.Get()) {
-        auto stableIt = stable->find(itfUUID);
-        if (stableIt != stable->end()) {
-            auto* stableEntry = stableIt->second;
-            auto* outerTi = stableEntry->GetCachedTypeInfo(index);
-            if (LIKELY(outerTi != nullptr)) {
-                return outerTi;
+    {
+        MTableDesc::StableReadGuard stableRead(*desc);
+        if (auto stable = stableRead.Get()) {
+            auto stableIt = stable->find(itfUUID);
+            if (stableIt != stable->end()) {
+                auto* stableEntry = stableIt->second;
+                auto* outerTi = stableEntry->GetCachedTypeInfo(index);
+                if (LIKELY(outerTi != nullptr)) {
+                    return outerTi;
+                }
             }
         }
     }
