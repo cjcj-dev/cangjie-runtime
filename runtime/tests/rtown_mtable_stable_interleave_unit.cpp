@@ -22,6 +22,7 @@ int main()
 
     std::atomic<bool> entered { false };
     std::atomic<bool> release { false };
+    std::atomic<bool> writerStarted { false };
     std::atomic<bool> invalidated { false };
     std::thread reader([&]() {
         MTableDesc::StableReadGuard guard(desc);
@@ -40,6 +41,7 @@ int main()
     }
 
     std::thread writer([&]() {
+        writerStarted.store(true, std::memory_order_release);
 #if defined(BROKEN_NO_WAIT)
         // Negative control: detach without waiting. The assertion below must
         // reject this implementation while the product reader is active.
@@ -52,6 +54,9 @@ int main()
         invalidated.store(true, std::memory_order_release);
     });
 
+    while (!writerStarted.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     for (int i = 0; i < 10000 && !invalidated.load(std::memory_order_acquire); ++i) {
         std::this_thread::yield();
     }
