@@ -38,10 +38,6 @@ public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
 
 public var unloadInterfaceRoot: ?UnloadProbeTypeWithInterface = UnloadProbeTypeWithInterface(11)
 
-public func makeUnloadProbe(): UnloadProbeTypeWithInterface {
-    return UnloadProbeTypeWithInterface(13)
-}
-
 public var unloadStaticRoot: ?UnloadProbeType = UnloadProbeType(7)
 public var unloadInitSentinel: Int64 = unloadInitBlock()
 

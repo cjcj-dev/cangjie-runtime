@@ -46,6 +46,14 @@ bool FindTypes(void* packageInfo, TypeInfo*& klass, TypeInfo*& itf)
     return klass != nullptr && itf != nullptr;
 }
 
+bool FindTypesFromLoader(LoaderManager* loader, const char* packageName, TypeInfo*& klass, TypeInfo*& itf)
+{
+    const std::string prefix(packageName);
+    klass = loader->FindTypeInfoFromLoadedFiles((prefix + ":UnloadProbeTypeWithInterface").c_str());
+    itf = loader->FindTypeInfoFromLoadedFiles((prefix + ":UnloadProbeInterface").c_str());
+    return klass != nullptr && itf != nullptr;
+}
+
 bool ReadMTableApis(TypeInfo* klass, TypeInfo* itf)
 {
 #ifdef BROKEN_NO_READ_APIS
@@ -76,7 +84,10 @@ int Run(const char* plugin)
     }
     TypeInfo* klass = nullptr;
     TypeInfo* itf = nullptr;
-    const bool typesFound = FindTypes(package, klass, itf);
+    bool typesFound = FindTypes(package, klass, itf);
+    if (!typesFound) {
+        typesFound = FindTypesFromLoader(loader, "elfunloadprobe", klass, itf);
+    }
     const std::string className = typesFound ? klass->GetName() : std::string();
     const bool published = typesFound &&
         loader->FindTypeInfoFromLoadedFiles(className.c_str()) == klass;
@@ -95,6 +106,9 @@ int Run(const char* plugin)
         klass = nullptr;
         itf = nullptr;
         reloaded = reloaded && FindTypes(package, klass, itf);
+        if (!reloaded) {
+            reloaded = FindTypesFromLoader(loader, "elfunloadprobe_reload", klass, itf);
+        }
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
