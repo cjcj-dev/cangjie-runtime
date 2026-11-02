@@ -105,7 +105,7 @@ bool FindInterleaveTypes(LoaderManager* loader, TypeInfo*& klass, TypeInfo*& hit
     return klass != nullptr && hitItf != nullptr && recursiveItf != nullptr;
 }
 
-bool RunStableInterleave(LoaderManager* loader)
+bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const char* updatePath1)
 {
 #ifdef BROKEN_NO_STABLE_WAIT
     (void)loader;
@@ -127,6 +127,11 @@ bool RunStableInterleave(LoaderManager* loader)
     }
 
     bool allPassed = true;
+    const char* updatePaths[2] = { updatePath0, updatePath1 };
+    const char* updateInterfaces[2] = {
+        "elfunloadprobe_update0:UnloadProbeMutationInterface0",
+        "elfunloadprobe_update1:UnloadProbeMutationInterface1"
+    };
     for (U32 api = 0; api < 2; ++api) {
         StableInterleaveState state;
         gStableInterleave[api] = &state;
@@ -154,10 +159,14 @@ bool RunStableInterleave(LoaderManager* loader)
             return false;
         }
         std::thread writer([&] {
-            // This is the real loader-facing read/update route: when the
-            // inherited interface is absent from the derived mtable it
-            // enters FindExtensionDataRecursively and emplaces the entry.
-            bool ok = CJ_MCC_GetMTable(klass, recursiveItf) != nullptr;
+            // Loading the second image is the real late extension/update
+            // entry.  Its metadata targets the already-loaded class, so the
+            // loader must publish a new mtable entry under the same table
+            // mutex while this reader owns the stable snapshot.
+            void* updatePackage = CJ_MCC_LoadPackage(updatePaths[api]);
+            auto* updateItf = loader->FindTypeInfoFromLoadedFiles(updateInterfaces[api]);
+            bool ok = reinterpret_cast<uintptr_t>(updatePackage) > 3 && updateItf != nullptr &&
+                CJ_MCC_GetMTable(klass, updateItf) != nullptr;
             writerValue.store(ok, std::memory_order_release);
             writerDone.store(true, std::memory_order_release);
         });
@@ -171,8 +180,9 @@ bool RunStableInterleave(LoaderManager* loader)
 
         // After the reader releases the guard, the mutation must complete and
         // both APIs must observe valid metadata from the same real image.
-        const bool recovered = writerValue.load(std::memory_order_acquire) &&
-            CJ_MCC_GetMTable(klass, recursiveItf) != nullptr &&
+        const auto* updateItf = loader->FindTypeInfoFromLoadedFiles(updateInterfaces[api]);
+        const bool recovered = writerValue.load(std::memory_order_acquire) && updateItf != nullptr &&
+            CJ_MCC_GetMTable(klass, updateItf) != nullptr &&
             CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
         const bool passed = blocked && readerDone.load() && readerValue.load() && recovered;
         std::printf("STABLE_API_INTERLEAVE api=%u blocked=%d released=%d writer=%d recovered=%d result=%s\n",
@@ -209,7 +219,10 @@ int Run(const char* plugin)
     const bool published = typesFound &&
         loader->FindTypeInfoFromLoadedFiles(className.c_str()) == klass;
     const bool reads = published && ReadMTableApis(klass, itf);
-    const bool stableInterleave = typesFound && RunStableInterleave(loader);
+    const std::string updatePath0 = std::string(plugin) + ".update0.so";
+    const std::string updatePath1 = std::string(plugin) + ".update1.so";
+    const bool stableInterleave = typesFound &&
+        RunStableInterleave(loader, updatePath0.c_str(), updatePath1.c_str());
 
     const int unload = UnloadCJLibrary(plugin);
     const bool removed = typesFound &&
@@ -230,8 +243,10 @@ int Run(const char* plugin)
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
+    const int updateUnload0 = UnloadCJLibrary(updatePath0.c_str());
+    const int updateUnload1 = UnloadCJLibrary(updatePath1.c_str());
     const bool passed = typesFound && published && reads && stableInterleave && unload == E_OK && removed &&
-        reloaded && recovered && reloadUnload == E_OK;
+        reloaded && recovered && reloadUnload == E_OK && updateUnload0 == E_OK && updateUnload1 == E_OK;
     std::printf("MTABLE_API_LIFECYCLE result=%s types=%d published=%d reads=%d unload=%d "
                 "removed=%d reloaded=%d recovered=%d reload_unload=%d\n",
                 passed ? "PASS" : "FAIL", typesFound, published, reads, unload, removed,
