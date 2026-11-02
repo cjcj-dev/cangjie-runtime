@@ -26,6 +26,16 @@
 #include "PackageInfo.h"
 
 namespace MapleRuntime {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
+inline void StableMutationTestObserveInline()
+{
+    if (MRT_TestStableMutationAttempt != nullptr) {
+        MRT_TestStableMutationAttempt();
+    }
+}
+#endif
+
 class ExtensionData;
 class BaseFile;
 constexpr U8 BITS_FOR_REF = 1;
@@ -278,6 +288,9 @@ struct MTableDesc {
     void PublishStableTable();
     void InvalidateStableTable()
     {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+        StableMutationTestObserveInline();
+#endif
         auto* old = stableTable.exchange(nullptr, std::memory_order_seq_cst);
         if (old == nullptr) {
             return;
