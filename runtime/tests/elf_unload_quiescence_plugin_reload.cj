@@ -23,6 +23,8 @@ public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
     }
 }
 
+public var unloadInterfaceRoot: ?UnloadProbeTypeWithInterface = UnloadProbeTypeWithInterface(11)
+
 public var unloadInitSentinel: Int64 = unsafe {
     MRT_TestElfUnloadMaybeNativeBlock()
     1

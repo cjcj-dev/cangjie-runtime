@@ -36,6 +36,8 @@ public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
     }
 }
 
+public var unloadInterfaceRoot: ?UnloadProbeTypeWithInterface = UnloadProbeTypeWithInterface(11)
+
 public var unloadStaticRoot: ?UnloadProbeType = UnloadProbeType(7)
 public var unloadInitSentinel: Int64 = unloadInitBlock()
 
