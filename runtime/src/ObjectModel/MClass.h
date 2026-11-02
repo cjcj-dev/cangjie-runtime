@@ -28,10 +28,17 @@
 namespace MapleRuntime {
 #if defined(MRT_STABLE_HIT_TEST_HOOK)
 extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
+extern "C" __attribute__((weak)) void MRT_TestStableInvalidationWait(const void* desc);
 inline void StableMutationTestObserveInline()
 {
     if (MRT_TestStableMutationAttempt != nullptr) {
         MRT_TestStableMutationAttempt();
+    }
+}
+inline void StableInvalidationWaitTestObserveInline(const void* desc)
+{
+    if (MRT_TestStableInvalidationWait != nullptr) {
+        MRT_TestStableInvalidationWait(desc);
     }
 }
 #endif
@@ -288,13 +295,17 @@ struct MTableDesc {
     void PublishStableTable();
     void InvalidateStableTable()
     {
-#if defined(MRT_STABLE_HIT_TEST_HOOK)
-        StableMutationTestObserveInline();
-#endif
         auto* old = stableTable.exchange(nullptr, std::memory_order_seq_cst);
         if (old == nullptr) {
             return;
         }
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+        // The test rendezvous is after snapshot detachment and immediately
+        // before the reader-quiescence wait.  It therefore proves that this
+        // exact descriptor has a retired table and that the writer reached
+        // the safety point, rather than merely having been scheduled.
+        StableInvalidationWaitTestObserveInline(this);
+#endif
 #if !defined(MRT_BROKEN_STABLE_WAIT)
         while (stableReaders.load(std::memory_order_seq_cst) != 0) {
             std::this_thread::yield();

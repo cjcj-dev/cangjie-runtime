@@ -26,7 +26,10 @@ namespace {
 struct StableInterleaveState {
     std::atomic<bool> active { false };
     std::atomic<bool> entered { false };
+    std::atomic<bool> invalidationWaitEntered { false };
+    std::atomic<bool> invalidationDescMatched { false };
     std::atomic<bool> release { false };
+    const MTableDesc* expectedDesc { nullptr };
 };
 
 StableInterleaveState* gStableInterleave[2] { nullptr, nullptr };
@@ -53,6 +56,18 @@ extern "C" __attribute__((visibility("default"))) void MRT_TestStableHitPause(U3
 extern "C" __attribute__((visibility("default"))) void MRT_TestStableMutationAttempt()
 {
     gStableMutationAttempt.store(true, std::memory_order_release);
+}
+
+extern "C" __attribute__((visibility("default"))) void MRT_TestStableInvalidationWait(const void* desc)
+{
+    for (auto* state : gStableInterleave) {
+        if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
+            continue;
+        }
+        state->invalidationDescMatched.store(desc == state->expectedDesc, std::memory_order_release);
+        state->invalidationWaitEntered.store(true, std::memory_order_release);
+        return;
+    }
 }
 } // namespace
 
@@ -140,6 +155,11 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
     };
     for (U32 api = 0; api < 2; ++api) {
         StableInterleaveState state;
+        state.expectedDesc = klass->GetMTableDesc();
+        if (state.expectedDesc == nullptr) {
+            std::fprintf(stderr, "stable API %u has no target mtable descriptor\n", api);
+            return false;
+        }
         gStableInterleave[api] = &state;
         state.active.store(true, std::memory_order_release);
         std::atomic<bool> readerDone { false };
@@ -177,8 +197,18 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
             writerValue.store(ok, std::memory_order_release);
             writerDone.store(true, std::memory_order_release);
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        const bool blocked = !writerDone.load(std::memory_order_acquire);
+        // Do not infer writer progress from a wall-clock sleep.  The runtime
+        // hook fires after this descriptor's snapshot is detached and exactly
+        // before the reader-quiescence wait.  Both the normal and broken
+        // builds must reach this same rendezvous before we inspect writerDone.
+        const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!state.invalidationWaitEntered.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < waitDeadline) {
+            std::this_thread::yield();
+        }
+        const bool waitReached = state.invalidationWaitEntered.load(std::memory_order_acquire);
+        const bool descMatched = state.invalidationDescMatched.load(std::memory_order_acquire);
+        const bool blocked = waitReached && descMatched && !writerDone.load(std::memory_order_acquire);
         state.release.store(true, std::memory_order_release);
         reader.join();
         writer.join();
@@ -192,9 +222,11 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
             CJ_MCC_GetMTable(klass, updateItf) != nullptr &&
             CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
         const bool mutationAttempted = gStableMutationAttempt.load(std::memory_order_acquire);
-        const bool passed = blocked && mutationAttempted && readerDone.load() && readerValue.load() && recovered;
-        std::printf("STABLE_API_INTERLEAVE api=%u blocked=%d mutation=%d released=%d writer=%d recovered=%d result=%s\n",
-                    api, blocked, mutationAttempted, !state.release.load() ? 0 : 1,
+        const bool passed = waitReached && descMatched && blocked && mutationAttempted &&
+            readerDone.load() && readerValue.load() && recovered;
+        std::printf("STABLE_API_INTERLEAVE api=%u wait=%d desc=%d blocked=%d mutation=%d released=%d writer=%d recovered=%d result=%s\n",
+                    api, waitReached, descMatched, blocked, mutationAttempted,
+                    !state.release.load() ? 0 : 1,
                     writerDone.load(), recovered, passed ? "PASS" : "FAIL");
         allPassed = allPassed && passed;
     }
