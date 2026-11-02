@@ -40,7 +40,13 @@ int main()
     }
 
     std::thread writer([&]() {
+#if defined(BROKEN_NO_WAIT)
+        // Negative control: detach without waiting. The assertion below must
+        // reject this implementation while the product reader is active.
+        (void)desc.stableTable.exchange(nullptr, std::memory_order_seq_cst);
+#else
         desc.InvalidateStableTable();
+#endif
         // This is the product mutation that used to race a lockless cache hit.
         entry.ResetAtomicInfoArray(2);
         invalidated.store(true, std::memory_order_release);
