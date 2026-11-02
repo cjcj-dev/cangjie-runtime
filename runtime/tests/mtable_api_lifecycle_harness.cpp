@@ -30,6 +30,7 @@ struct StableInterleaveState {
 };
 
 StableInterleaveState* gStableInterleave[2] { nullptr, nullptr };
+std::atomic<bool> gStableMutationAttempt { false };
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestStableHitPause(U32 api)
 {
@@ -47,6 +48,11 @@ extern "C" __attribute__((visibility("default"))) void MRT_TestStableHitPause(U3
     while (!state->release.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
+}
+
+extern "C" __attribute__((visibility("default"))) void MRT_TestStableMutationAttempt()
+{
+    gStableMutationAttempt.store(true, std::memory_order_release);
 }
 } // namespace
 
@@ -140,6 +146,7 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
         std::atomic<bool> readerValue { false };
         std::atomic<bool> writerDone { false };
         std::atomic<bool> writerValue { false };
+        gStableMutationAttempt.store(false, std::memory_order_release);
         std::thread reader([&, api] {
             bool ok = api == 0 ? CJ_MCC_GetMTable(klass, hitItf) != nullptr
                                : CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
@@ -184,9 +191,10 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
         const bool recovered = writerValue.load(std::memory_order_acquire) && updateItf != nullptr &&
             CJ_MCC_GetMTable(klass, updateItf) != nullptr &&
             CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
-        const bool passed = blocked && readerDone.load() && readerValue.load() && recovered;
-        std::printf("STABLE_API_INTERLEAVE api=%u blocked=%d released=%d writer=%d recovered=%d result=%s\n",
-                    api, blocked, !state.release.load() ? 0 : 1,
+        const bool mutationAttempted = gStableMutationAttempt.load(std::memory_order_acquire);
+        const bool passed = blocked && mutationAttempted && readerDone.load() && readerValue.load() && recovered;
+        std::printf("STABLE_API_INTERLEAVE api=%u blocked=%d mutation=%d released=%d writer=%d recovered=%d result=%s\n",
+                    api, blocked, mutationAttempted, !state.release.load() ? 0 : 1,
                     writerDone.load(), recovered, passed ? "PASS" : "FAIL");
         allPassed = allPassed && passed;
     }

@@ -45,10 +45,17 @@ namespace MapleRuntime {
 // the harness supplies the weak symbol from its executable when validating
 // the guard-held writer interleave.
 extern "C" __attribute__((weak)) void MRT_TestStableHitPause(U32 api);
+extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
 static inline void StableHitTestPause(U32 api)
 {
     if (MRT_TestStableHitPause != nullptr) {
         MRT_TestStableHitPause(api);
+    }
+}
+static inline void StableMutationTestObserve()
+{
+    if (MRT_TestStableMutationAttempt != nullptr) {
+        MRT_TestStableMutationAttempt();
     }
 }
 #endif
@@ -370,6 +377,9 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
 void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
 {
     ElfUnloadQuiescence::ReadScope reader;
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+    StableMutationTestObserve();
+#endif
     TryInitMTableNoLock();
     U32 itfUUID = itf->GetUUID();
     CHECK(itfUUID != 0);
@@ -629,6 +639,9 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
     }
 
     MTableDesc* desc = GetMTableDesc();
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+    StableMutationTestObserve();
+#endif
     CHECK(desc != nullptr);
     std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
     for (const auto& pair : desc->mTable) {
