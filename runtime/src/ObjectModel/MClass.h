@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -224,12 +225,19 @@ private:
     AtomicTypeInfoArray cachedTypeInfos;
 };
 struct MTableDesc {
+    using StableTable = std::unordered_map<U32, const InheritFuncTable*>;
+
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
     std::atomic<bool> pending { false };
     std::atomic<bool> needsResolveInner { true };
     std::atomic<bool> needsResolveOuter { true };
+    // Published after both resolution passes.  Entries remain valid until an
+    // unload invalidates this snapshot before erasing table nodes.  Readers
+    // already hold ElfUnloadQuiescence::ReadScope, so a raw published snapshot
+    // avoids the implementation-defined lock used by atomic shared_ptr.
+    std::atomic<StableTable*> stableTable { nullptr };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
@@ -237,6 +245,16 @@ struct MTableDesc {
     inline bool NeedResolveOuter() const { return needsResolveOuter.load(std::memory_order_acquire); }
     inline void MarkInnerResolved() { needsResolveInner.store(false, std::memory_order_release); }
     inline void MarkOuterResolved() { needsResolveOuter.store(false, std::memory_order_release); }
+    ~MTableDesc()
+    {
+        delete stableTable.exchange(nullptr, std::memory_order_acq_rel);
+    }
+    StableTable* LoadStableTable() const { return stableTable.load(std::memory_order_acquire); }
+    void PublishStableTable();
+    void InvalidateStableTable()
+    {
+        delete stableTable.exchange(nullptr, std::memory_order_acq_rel);
+    }
 };
 
 typedef TypeInfo* (*GenericFunc)(TypeInfo**);

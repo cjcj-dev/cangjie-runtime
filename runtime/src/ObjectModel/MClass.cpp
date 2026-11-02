@@ -180,6 +180,24 @@ MTableDesc::MTableDesc(ArchUInt bitmap_)
     mTableBitmap.tag = bitmap_;
 }
 
+void MTableDesc::PublishStableTable()
+{
+    if (!IsFullyHandled()) {
+        return;
+    }
+    auto stable = std::make_shared<StableTable>();
+    stable->reserve(mTable.size());
+    for (const auto& entry : mTable) {
+        stable->emplace(entry.first, &entry.second);
+    }
+    StableTable* candidate = stable.release();
+    StableTable* expected = nullptr;
+    if (!stableTable.compare_exchange_strong(expected, candidate,
+                                             std::memory_order_release, std::memory_order_acquire)) {
+        delete candidate;
+    }
+}
+
 void TypeInfo::TryInitMTableNoLock()
 {
     if (IsMTableDescUnInitialized()) {
@@ -505,6 +523,7 @@ void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> g
     }
     desc->pending.store(false, std::memory_order_relaxed);
     desc->MarkInnerResolved();
+    desc->PublishStableTable();
 }
 
 void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
@@ -549,6 +568,7 @@ void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> g
         },
         sourceGeneric);
     desc->MarkOuterResolved();
+    desc->PublishStableTable();
 }
 
 void TypeInfo::GetInterfaces(std::vector<TypeInfo*> &itfs)
@@ -649,6 +669,15 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     MTableDesc* desc = GetMTableDesc();
     if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
+        if (auto stable = desc->LoadStableTable()) {
+            auto stableIt = stable->find(itfUUID);
+            if (stableIt != stable->end()) {
+                ExtensionData* ed = stableIt->second->GetExtensionData();
+                if (LIKELY(ed->IsFuncTableUpdated())) {
+                    return ed->GetFuncTable();
+                }
+            }
+        }
         std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
         auto it = desc->mTable.find(itfUUID);
         if (it != desc->mTable.end()) {
@@ -687,6 +716,16 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     }
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
+    if (auto stable = desc->LoadStableTable()) {
+        auto stableIt = stable->find(itfUUID);
+        if (stableIt != stable->end()) {
+            auto* stableEntry = stableIt->second;
+            auto* outerTi = stableEntry->GetCachedTypeInfo(index);
+            if (LIKELY(outerTi != nullptr)) {
+                return outerTi;
+            }
+        }
+    }
     std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
     auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
