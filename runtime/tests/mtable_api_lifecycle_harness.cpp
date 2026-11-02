@@ -28,11 +28,14 @@ bool FindTypes(void* packageInfo, TypeInfo*& klass, TypeInfo*& itf)
         return false;
     }
     const U32 count = CJ_MCC_GetPackageNumOfTypeInfos(packageInfo);
+    std::printf("PACKAGE_TYPES count=%u\n", count);
     for (U32 index = 0; index < count; ++index) {
         TypeInfo* ti = CJ_MCC_GetPackageTypeInfo(packageInfo, index);
         if (ti == nullptr) {
             continue;
         }
+        std::printf("PACKAGE_TYPE index=%u name=%s interface=%d class=%d\n", index, ti->GetName(),
+                    ti->IsInterface(), ti->IsClass());
         if (ti->IsInterface()) {
             itf = ti;
         } else if (ti->IsClass() &&
