@@ -231,6 +231,11 @@ int Run(const char* plugin)
     const std::string updatePath1 = std::string(plugin) + ".update1.so";
     const bool stableInterleave = typesFound &&
         RunStableInterleave(loader, updatePath0.c_str(), updatePath1.c_str());
+    // Drop the two extension images first.  Their metadata entries retain
+    // the primary class image until they are unlinked, so primary unload is
+    // checked only after the real update producers have drained.
+    const int updateUnload0 = UnloadCJLibrary(updatePath0.c_str());
+    const int updateUnload1 = UnloadCJLibrary(updatePath1.c_str());
 
     const int unload = UnloadCJLibrary(plugin);
     const bool removed = typesFound &&
@@ -251,8 +256,6 @@ int Run(const char* plugin)
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
-    const int updateUnload0 = UnloadCJLibrary(updatePath0.c_str());
-    const int updateUnload1 = UnloadCJLibrary(updatePath1.c_str());
     const bool passed = typesFound && published && reads && stableInterleave && unload == E_OK && removed &&
         reloaded && recovered && reloadUnload == E_OK && updateUnload0 == E_OK && updateUnload1 == E_OK;
     std::printf("MTABLE_API_LIFECYCLE result=%s types=%d published=%d reads=%d unload=%d "
