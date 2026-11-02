@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "Base/AtomicSpinLock.h"
@@ -226,17 +227,43 @@ private:
 struct MTableDesc {
     using StableTable = std::unordered_map<U32, const InheritFuncTable*>;
 
+    class StableReadGuard {
+    public:
+        explicit StableReadGuard(const MTableDesc& owner) : owner(owner)
+        {
+            owner.stableReaders.fetch_add(1, std::memory_order_seq_cst);
+            table = owner.stableTable.load(std::memory_order_seq_cst);
+            if (table == nullptr) {
+                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+            }
+        }
+        StableReadGuard(const StableReadGuard&) = delete;
+        StableReadGuard& operator=(const StableReadGuard&) = delete;
+        ~StableReadGuard()
+        {
+            if (table != nullptr) {
+                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+            }
+        }
+        StableTable* Get() const { return table; }
+
+    private:
+        const MTableDesc& owner;
+        StableTable* table { nullptr };
+    };
+
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
     std::atomic<bool> pending { false };
     std::atomic<bool> needsResolveInner { true };
     std::atomic<bool> needsResolveOuter { true };
-    // Published after both resolution passes. Entries remain valid until an
-    // unload invalidates this snapshot before erasing table nodes. Readers
-    // already hold ElfUnloadQuiescence::ReadScope, so a raw published snapshot
-    // avoids the shared_ptr atomic free-function's control-block operation.
+    // Published after both resolution passes. Ordinary table updates first
+    // detach the snapshot and wait for StableReadGuard users before replacing
+    // mutable cache/function-table storage. Unload uses the same retirement
+    // rule after ElfUnloadQuiescence has drained readers.
     std::atomic<StableTable*> stableTable { nullptr };
+    mutable std::atomic<U32> stableReaders { 0 };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
@@ -246,13 +273,19 @@ struct MTableDesc {
     inline void MarkOuterResolved() { needsResolveOuter.store(false, std::memory_order_release); }
     ~MTableDesc()
     {
-        delete stableTable.exchange(nullptr, std::memory_order_acq_rel);
+        InvalidateStableTable();
     }
-    StableTable* LoadStableTable() const { return stableTable.load(std::memory_order_acquire); }
     void PublishStableTable();
     void InvalidateStableTable()
     {
-        delete stableTable.exchange(nullptr, std::memory_order_acq_rel);
+        auto* old = stableTable.exchange(nullptr, std::memory_order_seq_cst);
+        if (old == nullptr) {
+            return;
+        }
+        while (stableReaders.load(std::memory_order_seq_cst) != 0) {
+            std::this_thread::yield();
+        }
+        delete old;
     }
 };
 

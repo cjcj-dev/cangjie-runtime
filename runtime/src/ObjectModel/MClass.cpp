@@ -302,6 +302,7 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         MTableDesc* desc = GetMTableDesc();
         CHECK(desc != nullptr);
         std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+        desc->InvalidateStableTable();
         TraverseInnerExtensionDefs();
         auto& mTable = desc->mTable;
         for (const auto& superTypePair : mTable) {
@@ -348,6 +349,7 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         }
         mTable.find(itfUUID)->second.ResetAtomicInfoArray(itfFtSize);
         extensionData->SetFuncTableUpdated();
+        desc->PublishStableTable();
     } while (true);
 }
 
@@ -674,7 +676,8 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     MTableDesc* desc = GetMTableDesc();
     if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
-        if (auto stable = desc->LoadStableTable()) {
+        MTableDesc::StableReadGuard stableRead(*desc);
+        if (auto stable = stableRead.Get()) {
             auto stableIt = stable->find(itfUUID);
             if (stableIt != stable->end()) {
                 ExtensionData* ed = stableIt->second->GetExtensionData();
@@ -721,7 +724,8 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     }
     MTableDesc* desc = GetMTableDesc();
     CHECK(desc != nullptr);
-    if (auto stable = desc->LoadStableTable()) {
+    MTableDesc::StableReadGuard stableRead(*desc);
+    if (auto stable = stableRead.Get()) {
         auto stableIt = stable->find(itfUUID);
         if (stableIt != stable->end()) {
             auto* stableEntry = stableIt->second;
