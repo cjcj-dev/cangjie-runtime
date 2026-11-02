@@ -187,7 +187,7 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
 
         // After the reader releases the guard, the mutation must complete and
         // both APIs must observe valid metadata from the same real image.
-        const auto* updateItf = loader->FindTypeInfoFromLoadedFiles(updateInterfaces[api]);
+        auto* updateItf = loader->FindTypeInfoFromLoadedFiles(updateInterfaces[api]);
         const bool recovered = writerValue.load(std::memory_order_acquire) && updateItf != nullptr &&
             CJ_MCC_GetMTable(klass, updateItf) != nullptr &&
             CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
