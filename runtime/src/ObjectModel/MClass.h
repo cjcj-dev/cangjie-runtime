@@ -13,7 +13,6 @@
 #include <atomic>
 #include <cstring>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -233,10 +232,10 @@ struct MTableDesc {
     std::atomic<bool> pending { false };
     std::atomic<bool> needsResolveInner { true };
     std::atomic<bool> needsResolveOuter { true };
-    // Published after both resolution passes.  Entries remain valid until an
-    // unload invalidates this snapshot before erasing table nodes.  Readers
+    // Published after both resolution passes. Entries remain valid until an
+    // unload invalidates this snapshot before erasing table nodes. Readers
     // already hold ElfUnloadQuiescence::ReadScope, so a raw published snapshot
-    // avoids the implementation-defined lock used by atomic shared_ptr.
+    // avoids the shared_ptr atomic free-function's control-block operation.
     std::atomic<StableTable*> stableTable { nullptr };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;

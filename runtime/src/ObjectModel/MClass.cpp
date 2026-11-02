@@ -182,15 +182,20 @@ MTableDesc::MTableDesc(ArchUInt bitmap_)
 
 void MTableDesc::PublishStableTable()
 {
+    // Traverse* normally runs under this recursive mutex; keep the helper
+    // correct for direct callers as well so the snapshot never races a map
+    // insertion or rehash.
+    std::lock_guard<std::recursive_mutex> tableLock(mTableMutex);
     if (!IsFullyHandled()) {
         return;
     }
-    auto stable = std::make_shared<StableTable>();
+    auto* stable = new (std::nothrow) StableTable();
+    CHECK_DETAIL(stable != nullptr, "fail to allocate stable MTable snapshot");
     stable->reserve(mTable.size());
     for (const auto& entry : mTable) {
         stable->emplace(entry.first, &entry.second);
     }
-    StableTable* candidate = stable.release();
+    StableTable* candidate = stable;
     StableTable* expected = nullptr;
     if (!stableTable.compare_exchange_strong(expected, candidate,
                                              std::memory_order_release, std::memory_order_acquire)) {

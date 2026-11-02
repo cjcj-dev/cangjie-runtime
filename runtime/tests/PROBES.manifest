@@ -100,6 +100,7 @@ rtown_mtable_publish_unit.cpp             orphan     no runner; BUG-18 MTable pu
 rtown_functable_cache_unit.cpp            orphan     no runner; BUG-19 functable cache UAF unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
+finalizer_thread_data                      manual     Linux x86-64 SDK consumer; compile main.cj + native.c and run the managed registration/thread-data migration check explicitly
 gcparity                                  manual     built runtime SO + official control SO + official/selfhost cjc + cpuset; REPORT-gcparity release matrix and beats-official survival/allocation matrix (run_matrix.sh)
 perf_vs_official                          manual     built subject/official SDKs + private cpuset; release comparison matrix is run explicitly, not during configure
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)

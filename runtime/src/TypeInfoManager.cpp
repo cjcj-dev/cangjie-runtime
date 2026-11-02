@@ -464,8 +464,8 @@ void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uint
         // table lock, so the normal table -> catalog publication order remains.
         for (auto& entry : mTableList) {
             MTableDesc* desc = entry.second;
-            desc->InvalidateStableTable();
             std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+            desc->InvalidateStableTable();
             for (auto it = desc->mTable.begin(); it != desc->mTable.end();) {
                 if (inRange(it->second.GetExtensionData()) || removed.count(it->second.GetSuperTi()) != 0) {
                     it = desc->mTable.erase(it);
