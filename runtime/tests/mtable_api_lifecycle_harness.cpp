@@ -6,7 +6,10 @@
 
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <chrono>
 #include <string>
+#include <thread>
 
 using namespace MapleRuntime;
 
@@ -18,6 +21,34 @@ extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 in
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadNativeBlock() {}
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadMaybeNativeBlock() {}
+
+namespace {
+struct StableInterleaveState {
+    std::atomic<bool> active { false };
+    std::atomic<bool> entered { false };
+    std::atomic<bool> release { false };
+};
+
+StableInterleaveState* gStableInterleave[2] { nullptr, nullptr };
+
+extern "C" __attribute__((visibility("default"))) void MRT_TestStableHitPause(U32 api)
+{
+    if (api >= 2) {
+        return;
+    }
+    auto* state = gStableInterleave[api];
+    if (state == nullptr || !state->active.load(std::memory_order_acquire)) {
+        return;
+    }
+    bool expected = false;
+    if (!state->entered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    while (!state->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+} // namespace
 
 namespace {
 bool FindTypes(void* packageInfo, TypeInfo*& klass, TypeInfo*& itf)
@@ -66,6 +97,92 @@ bool ReadMTableApis(TypeInfo* klass, TypeInfo* itf)
 #endif
 }
 
+bool FindInterleaveTypes(LoaderManager* loader, TypeInfo*& klass, TypeInfo*& hitItf, TypeInfo*& recursiveItf)
+{
+    klass = loader->FindTypeInfoFromLoadedFiles("elfunloadprobe:UnloadProbeTypeWithInterface");
+    hitItf = loader->FindTypeInfoFromLoadedFiles("elfunloadprobe:UnloadProbeHitInterface");
+    recursiveItf = loader->FindTypeInfoFromLoadedFiles("elfunloadprobe:UnloadProbeInterface");
+    return klass != nullptr && hitItf != nullptr && recursiveItf != nullptr;
+}
+
+bool RunStableInterleave(LoaderManager* loader)
+{
+#ifdef BROKEN_NO_STABLE_WAIT
+    (void)loader;
+#endif
+    TypeInfo* klass = nullptr;
+    TypeInfo* hitItf = nullptr;
+    TypeInfo* recursiveItf = nullptr;
+    if (!FindInterleaveTypes(loader, klass, hitItf, recursiveItf)) {
+        std::fprintf(stderr, "interleave types not found\n");
+        return false;
+    }
+    // Prime both real API paths so the subsequent reader enters a published
+    // stable hit.  The writer still goes through the public MTable API and
+    // may recursively emplace the inherited interface entry.
+    if (CJ_MCC_GetMTable(klass, hitItf) == nullptr ||
+        CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) == nullptr) {
+        std::fprintf(stderr, "interleave hit APIs did not prime\n");
+        return false;
+    }
+
+    bool allPassed = true;
+    for (U32 api = 0; api < 2; ++api) {
+        StableInterleaveState state;
+        gStableInterleave[api] = &state;
+        state.active.store(true, std::memory_order_release);
+        std::atomic<bool> readerDone { false };
+        std::atomic<bool> readerValue { false };
+        std::atomic<bool> writerDone { false };
+        std::atomic<bool> writerValue { false };
+        std::thread reader([&, api] {
+            bool ok = api == 0 ? CJ_MCC_GetMTable(klass, hitItf) != nullptr
+                               : CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
+            readerValue.store(ok, std::memory_order_release);
+            readerDone.store(true, std::memory_order_release);
+        });
+        const auto enteredDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!state.entered.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < enteredDeadline) {
+            std::this_thread::yield();
+        }
+        if (!state.entered.load(std::memory_order_acquire)) {
+            state.release.store(true, std::memory_order_release);
+            reader.join();
+            gStableInterleave[api] = nullptr;
+            std::fprintf(stderr, "stable API %u did not enter its guard hook\n", api);
+            return false;
+        }
+        std::thread writer([&] {
+            // This is the real loader-facing read/update route: when the
+            // inherited interface is absent from the derived mtable it
+            // enters FindExtensionDataRecursively and emplaces the entry.
+            bool ok = CJ_MCC_GetMTable(klass, recursiveItf) != nullptr;
+            writerValue.store(ok, std::memory_order_release);
+            writerDone.store(true, std::memory_order_release);
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const bool blocked = !writerDone.load(std::memory_order_acquire);
+        state.release.store(true, std::memory_order_release);
+        reader.join();
+        writer.join();
+        state.active.store(false, std::memory_order_release);
+        gStableInterleave[api] = nullptr;
+
+        // After the reader releases the guard, the mutation must complete and
+        // both APIs must observe valid metadata from the same real image.
+        const bool recovered = writerValue.load(std::memory_order_acquire) &&
+            CJ_MCC_GetMTable(klass, recursiveItf) != nullptr &&
+            CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
+        const bool passed = blocked && readerDone.load() && readerValue.load() && recovered;
+        std::printf("STABLE_API_INTERLEAVE api=%u blocked=%d released=%d writer=%d recovered=%d result=%s\n",
+                    api, blocked, !state.release.load() ? 0 : 1,
+                    writerDone.load(), recovered, passed ? "PASS" : "FAIL");
+        allPassed = allPassed && passed;
+    }
+    return allPassed;
+}
+
 int Run(const char* plugin)
 {
     RuntimeParam param {};
@@ -92,6 +209,7 @@ int Run(const char* plugin)
     const bool published = typesFound &&
         loader->FindTypeInfoFromLoadedFiles(className.c_str()) == klass;
     const bool reads = published && ReadMTableApis(klass, itf);
+    const bool stableInterleave = typesFound && RunStableInterleave(loader);
 
     const int unload = UnloadCJLibrary(plugin);
     const bool removed = typesFound &&
@@ -112,7 +230,7 @@ int Run(const char* plugin)
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
-    const bool passed = typesFound && published && reads && unload == E_OK && removed &&
+    const bool passed = typesFound && published && reads && stableInterleave && unload == E_OK && removed &&
         reloaded && recovered && reloadUnload == E_OK;
     std::printf("MTABLE_API_LIFECYCLE result=%s types=%d published=%d reads=%d unload=%d "
                 "removed=%d reloaded=%d recovered=%d reload_unload=%d\n",

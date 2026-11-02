@@ -24,7 +24,17 @@ public interface UnloadProbeInterface {
     func probeValue(): Int64
 }
 
-public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
+public interface UnloadProbeHitInterface {
+    func hitValue(): Int64
+}
+
+public class UnloadProbeBase <: UnloadProbeInterface {
+    public func probeValue(): Int64 {
+        return 17
+    }
+}
+
+public class UnloadProbeTypeWithInterface <: UnloadProbeBase & UnloadProbeHitInterface {
     public let value: Int64
 
     public init(value: Int64) {
@@ -33,6 +43,10 @@ public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
 
     public func probeValue(): Int64 {
         return value
+    }
+
+    public func hitValue(): Int64 {
+        return value + 1
     }
 }
 

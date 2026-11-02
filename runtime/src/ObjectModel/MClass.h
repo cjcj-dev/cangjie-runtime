@@ -282,9 +282,11 @@ struct MTableDesc {
         if (old == nullptr) {
             return;
         }
+#if !defined(MRT_BROKEN_STABLE_WAIT)
         while (stableReaders.load(std::memory_order_seq_cst) != 0) {
             std::this_thread::yield();
         }
+#endif
         delete old;
     }
 };

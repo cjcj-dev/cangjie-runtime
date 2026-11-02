@@ -40,6 +40,19 @@
 #endif
 
 namespace MapleRuntime {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+// Test-only rendezvous.  The production build does not compile this hook;
+// the harness supplies the weak symbol from its executable when validating
+// the guard-held writer interleave.
+extern "C" __attribute__((weak)) void MRT_TestStableHitPause(U32 api);
+static inline void StableHitTestPause(U32 api)
+{
+    if (MRT_TestStableHitPause != nullptr) {
+        MRT_TestStableHitPause(api);
+    }
+}
+#endif
+
 #ifdef __arm__
 const size_t TYPEINFO_PTR_SIZE = sizeof(TypeInfo*) + 4;
 #else
@@ -695,6 +708,9 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
                 if (stableIt != stable->end()) {
                     ExtensionData* ed = stableIt->second->GetExtensionData();
                     if (LIKELY(ed->IsFuncTableUpdated())) {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+                        StableHitTestPause(0);
+#endif
                         return ed->GetFuncTable();
                     }
                 }
@@ -746,6 +762,9 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
                 auto* stableEntry = stableIt->second;
                 auto* outerTi = stableEntry->GetCachedTypeInfo(index);
                 if (LIKELY(outerTi != nullptr)) {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+                    StableHitTestPause(1);
+#endif
                     return outerTi;
                 }
             }
