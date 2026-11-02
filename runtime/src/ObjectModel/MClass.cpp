@@ -373,7 +373,11 @@ void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
     auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
+        desc->InvalidateStableTable();
         mTable.emplace(itfUUID, InheritFuncTable(extensionData, itf, extensionData->GetFuncTableSize()));
+        if (desc->IsFullyHandled()) {
+            desc->PublishStableTable();
+        }
     }
 }
 
@@ -456,7 +460,11 @@ static void MergeMTableSnapshot(TypeInfo* dest, TypeInfo* src)
         }
     }
     std::lock_guard<std::recursive_mutex> destLock(destDesc->mTableMutex);
+    destDesc->InvalidateStableTable();
     destDesc->mTable.insert(std::make_move_iterator(snapshot.begin()), std::make_move_iterator(snapshot.end()));
+    if (destDesc->IsFullyHandled()) {
+        destDesc->PublishStableTable();
+    }
 }
 
 static void ResolveInnerExtensionDefs(
@@ -619,7 +627,11 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         auto found = super->FindExtensionData(itf, true);
         if (found) {
             // This won't cause the issue of iterator invalidation since the function will exit immediately.
+            desc->InvalidateStableTable();
             desc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
+            if (desc->IsFullyHandled()) {
+                desc->PublishStableTable();
+            }
             return found;
         }
     }
