@@ -25,6 +25,10 @@ public class UnloadProbeTypeWithInterface <: UnloadProbeInterface {
 
 public var unloadInterfaceRoot: ?UnloadProbeTypeWithInterface = UnloadProbeTypeWithInterface(11)
 
+public func makeUnloadProbe(): UnloadProbeTypeWithInterface {
+    return UnloadProbeTypeWithInterface(13)
+}
+
 public var unloadInitSentinel: Int64 = unsafe {
     MRT_TestElfUnloadMaybeNativeBlock()
     1
