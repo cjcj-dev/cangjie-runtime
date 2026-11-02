@@ -28,8 +28,8 @@ public interface UnloadProbeHitInterface {
     func hitValue(): Int64
 }
 
-public class UnloadProbeBase <: UnloadProbeInterface {
-    public func probeValue(): Int64 {
+public open class UnloadProbeBase <: UnloadProbeInterface {
+    public open func probeValue(): Int64 {
         return 17
     }
 }
