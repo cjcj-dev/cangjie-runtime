@@ -83,17 +83,18 @@ int Run(const char* plugin)
     const bool removed = typesFound &&
         loader->FindTypeInfoFromLoadedFiles(className.c_str()) == nullptr;
 
+    const std::string reloadPath = std::string(plugin) + ".reload.so";
     bool reloaded = false;
     bool recovered = false;
     if (unload == E_OK) {
-        package = CJ_MCC_LoadPackage(plugin);
+        package = CJ_MCC_LoadPackage(reloadPath.c_str());
         reloaded = reinterpret_cast<uintptr_t>(package) > 3;
         klass = nullptr;
         itf = nullptr;
         reloaded = reloaded && FindTypes(package, klass, itf);
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
-    const int reloadUnload = reloaded ? UnloadCJLibrary(plugin) : E_ARGS;
+    const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
     const bool passed = typesFound && published && reads && unload == E_OK && removed &&
         reloaded && recovered && reloadUnload == E_OK;
     std::printf("MTABLE_API_LIFECYCLE result=%s types=%d published=%d reads=%d unload=%d "
