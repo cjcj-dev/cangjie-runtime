@@ -102,6 +102,7 @@ rtown_functable_cache_unit.cpp            orphan     no runner; BUG-19 functable
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
 finalizer_thread_data                      manual     Linux x86-64 SDK consumer; compile main.cj + native.c and run the managed registration/thread-data migration check explicitly
 rtown_mtable_stable_interleave_unit.cpp    manual     product MTableDesc stable-hit reader/writer interleave; compile against testable runtime and require retirement blocking plus republish recovery
+elf_unload_quiescence_harness.cpp          manual     product loader entry; load real class/interface metadata, call CJ_MCC_GetMTable/CJ_MCC_GetMethodOuterTI, unload and reload the image, then require read recovery
 gcparity                                  manual     built runtime SO + official control SO + official/selfhost cjc + cpuset; REPORT-gcparity release matrix and beats-official survival/allocation matrix (run_matrix.sh)
 perf_vs_official                          manual     built subject/official SDKs + private cpuset; release comparison matrix is run explicitly, not during configure
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)

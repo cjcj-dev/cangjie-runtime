@@ -3,6 +3,8 @@
 // with Runtime Library Exception.
 
 #include "Cangjie.h"
+#include "LoaderManager.h"
+#include "ObjectModel/MClass.h"
 
 #include <atomic>
 #include <chrono>
@@ -10,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <string>
 #include <thread>
 
 #include <dlfcn.h>
@@ -46,6 +49,9 @@ extern "C" void* CJ_MCC_LoadPackage(const char* path);
 extern "C" const char* CJ_MCC_GetPackageVersion(void* packageInfo);
 extern "C" const char* CJ_MCC_GetPackageName(void* packageInfo);
 extern "C" uint32_t CJ_MCC_GetPackageNumOfTypeInfos(void* packageInfo);
+extern "C" void* CJ_MCC_GetPackageTypeInfo(void* packageInfo, uint32_t index);
+extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf);
+extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);
 extern "C" void MRT_PreInitializePackage(uint64_t address);
 namespace {
 std::atomic<bool> nativeEntered { false };
@@ -620,6 +626,81 @@ int RunPackageInfoUse(const char* plugin)
     }
     return rc;
 }
+
+bool FindMTableTypes(void* packageInfo, TypeInfo*& klass, TypeInfo*& itf)
+{
+    klass = nullptr;
+    itf = nullptr;
+    if (packageInfo == nullptr) {
+        return false;
+    }
+    const U32 count = CJ_MCC_GetPackageNumOfTypeInfos(packageInfo);
+    for (U32 index = 0; index < count; ++index) {
+        auto* ti = reinterpret_cast<TypeInfo*>(CJ_MCC_GetPackageTypeInfo(packageInfo, index));
+        if (ti == nullptr) {
+            continue;
+        }
+        if (ti->IsInterface()) {
+            itf = ti;
+        } else if (ti->IsClass() && std::strstr(ti->GetName(), "UnloadProbeTypeWithInterface") != nullptr) {
+            klass = ti;
+        }
+    }
+    return klass != nullptr && itf != nullptr;
+}
+
+int RunMTableApiLifecycle(const char* plugin)
+{
+    if (!InitRuntime() || LoadCJLibraryWithInit(plugin) != E_OK) {
+        std::fprintf(stderr, "runtime or loader initialization failed\n");
+        return 2;
+    }
+    auto* loader = LoaderManager::GetInstance();
+    auto* package = CJ_MCC_LoadPackage(plugin);
+    TypeInfo* klass = nullptr;
+    TypeInfo* itf = nullptr;
+    bool typesFound = FindMTableTypes(package, klass, itf);
+    std::string className = typesFound ? klass->GetName() : std::string();
+    bool loaderPublished = typesFound && loader->FindTypeInfoFromLoadedFiles(className.c_str()) == klass;
+    bool readsReached = false;
+#ifndef BROKEN_NO_READ_APIS
+    if (typesFound && loaderPublished) {
+        auto* table = CJ_MCC_GetMTable(klass, itf);
+        auto* outer = CJ_MCC_GetMethodOuterTI(klass, itf, 0);
+        readsReached = table != nullptr && outer != nullptr;
+    }
+#endif
+    const int firstUnload = UnloadCJLibrary(plugin);
+    bool removed = typesFound && loader->FindTypeInfoFromLoadedFiles(className.c_str()) == nullptr;
+
+    bool reloaded = false;
+    bool readsRecovered = false;
+    if (firstUnload == E_OK && LoadCJLibraryWithInit(plugin) == E_OK) {
+        package = CJ_MCC_LoadPackage(plugin);
+        klass = nullptr;
+        itf = nullptr;
+        reloaded = FindMTableTypes(package, klass, itf);
+#ifndef BROKEN_NO_READ_APIS
+        if (reloaded) {
+            readsRecovered = CJ_MCC_GetMTable(klass, itf) != nullptr &&
+                CJ_MCC_GetMethodOuterTI(klass, itf, 0) != nullptr;
+        }
+#endif
+    }
+    const int secondUnload = reloaded ? UnloadCJLibrary(plugin) : E_ARGS;
+    const bool passed = typesFound && loaderPublished && readsReached && firstUnload == E_OK && removed &&
+        reloaded && readsRecovered && secondUnload == E_OK;
+    Result("ElfUnload.MTableApiLifecycle", passed);
+    std::printf("DETAIL types=%d published=%d reads=%d first_unload=%d removed=%d "
+                "reloaded=%d reads_recovered=%d second_unload=%d\n",
+                typesFound, loaderPublished, readsReached, firstUnload, removed,
+                reloaded, readsRecovered, secondUnload);
+    int rc = passed ? 0 : 1;
+    if (FiniCJRuntime() != E_OK) {
+        rc |= 2;
+    }
+    return rc;
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -664,6 +745,9 @@ int main(int argc, char** argv)
     }
     if (std::strcmp(argv[1], "package") == 0) {
         return RunPackageInfoUse(argv[2]);
+    }
+    if (std::strcmp(argv[1], "mtable") == 0) {
+        return RunMTableApiLifecycle(argv[2]);
     }
     std::fprintf(stderr, "unknown mode: %s\n", argv[1]);
     return 2;
