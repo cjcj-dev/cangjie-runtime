@@ -4,7 +4,7 @@
 
 package elfunloadprobe_update0
 
-import elfunloadprobe
+import elfunloadprobe.*
 
 public interface UnloadProbeMutationInterface0 {
     func mutateValue(): Int64
