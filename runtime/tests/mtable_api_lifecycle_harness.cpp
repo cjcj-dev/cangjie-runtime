@@ -59,13 +59,18 @@ int Run(const char* plugin)
 {
     RuntimeParam param {};
     param.coParam.processorNum = 2;
-    if (InitCJRuntime(&param) != E_OK || LoadCJLibraryWithInit(plugin) != E_OK) {
+    if (InitCJRuntime(&param) != E_OK) {
         std::fprintf(stderr, "runtime or loader initialization failed\n");
         return 2;
     }
 
     auto* loader = LoaderManager::GetInstance();
     void* package = CJ_MCC_LoadPackage(plugin);
+    if (reinterpret_cast<uintptr_t>(package) <= 3) {
+        std::fprintf(stderr, "CJ_MCC_LoadPackage failed: %p\n", package);
+        (void)FiniCJRuntime();
+        return 2;
+    }
     TypeInfo* klass = nullptr;
     TypeInfo* itf = nullptr;
     const bool typesFound = FindTypes(package, klass, itf);
@@ -80,11 +85,12 @@ int Run(const char* plugin)
 
     bool reloaded = false;
     bool recovered = false;
-    if (unload == E_OK && LoadCJLibraryWithInit(plugin) == E_OK) {
+    if (unload == E_OK) {
         package = CJ_MCC_LoadPackage(plugin);
+        reloaded = reinterpret_cast<uintptr_t>(package) > 3;
         klass = nullptr;
         itf = nullptr;
-        reloaded = FindTypes(package, klass, itf);
+        reloaded = reloaded && FindTypes(package, klass, itf);
         recovered = reloaded && ReadMTableApis(klass, itf);
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(plugin) : E_ARGS;
