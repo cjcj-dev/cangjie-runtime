@@ -208,7 +208,16 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
         }
         const bool waitReached = state.invalidationWaitEntered.load(std::memory_order_acquire);
         const bool descMatched = state.invalidationDescMatched.load(std::memory_order_acquire);
-        const bool blocked = waitReached && descMatched && !writerDone.load(std::memory_order_acquire);
+        // Once the exact rendezvous has fired, give the writer a bounded
+        // scheduling window while the reader is still held.  A broken wait
+        // must complete in this window; the normal wait must remain pending.
+        const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!writerDone.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < completionDeadline) {
+            std::this_thread::yield();
+        }
+        const bool writerCompletedBeforeRelease = writerDone.load(std::memory_order_acquire);
+        const bool blocked = waitReached && descMatched && !writerCompletedBeforeRelease;
         state.release.store(true, std::memory_order_release);
         reader.join();
         writer.join();
