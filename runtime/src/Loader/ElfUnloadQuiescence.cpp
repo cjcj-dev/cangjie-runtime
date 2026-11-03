@@ -383,7 +383,9 @@ void ElfUnloadQuiescence::ReleaseCountedAdmission()
 void ElfUnloadQuiescence::ReleaseSlotAdmission(void* slotAddress)
 {
     auto& slot = *static_cast<ReaderSlot*>(slotAddress);
-    U64 previous = slot.state.exchange(SLOT_IDLE, std::memory_order_release);
+    // Acquire the writer's COUNTED publication before returning its State()
+    // increment. Release also publishes this reader's completed metadata use.
+    U64 previous = slot.state.exchange(SLOT_IDLE, std::memory_order_acq_rel);
     if (previous == SLOT_ACTIVE) {
         return;
     }
