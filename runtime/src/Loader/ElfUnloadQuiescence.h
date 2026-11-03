@@ -185,6 +185,9 @@ private:
     static constexpr U64 READER_MASK = ~WRITER_BIT;
 
     static std::atomic<U64>& State();
+    static void ReleaseCountedAdmission();
+    static void ReleaseSlotAdmission(void* slot);
+    static void CountSlotAdmissions();
     static std::mutex& WriterMutex();
     static std::mutex& DrainMutex();
     static std::condition_variable& DrainCondition();

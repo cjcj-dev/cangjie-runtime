@@ -64,6 +64,85 @@ thread_local bool unloadWriter = false;
 thread_local Uptr unloadWriterImage = 0;
 thread_local Uptr purgeAuthorizedImage = 0;
 thread_local const ElfUnloadQuiescence::TaskAdmissionScope* purgeAdmission = nullptr;
+
+// Distributed reader indicator for ReadScope admission. A reader publishes its
+// own slot and then checks the writer bit (Dekker with UnloadScope), so the hot
+// path writes only a thread-private cache line instead of one shared counter.
+// UnloadScope folds every slot still active after it sets the writer bit into
+// State(), so Synchronize() keeps draining on the single State() reader count.
+// Slots are registered lazily and never block admission: when the registry is
+// busy (another thread, a signal handler re-entering registration, or a forked
+// child) the reader uses the State() counter directly.
+constexpr U64 SLOT_IDLE = 0;
+constexpr U64 SLOT_ACTIVE = 1;
+constexpr U64 SLOT_COUNTED = 2;
+
+struct alignas(64) ReaderSlot {
+    std::atomic<U64> state { SLOT_IDLE };
+    ReaderSlot* prev { nullptr };
+    ReaderSlot* next { nullptr };
+};
+
+struct ReaderSlotRegistry {
+    std::mutex mutex;
+    ReaderSlot* head { nullptr };
+};
+
+ReaderSlotRegistry& SlotRegistry()
+{
+    static ReaderSlotRegistry* registry = new ReaderSlotRegistry();
+    return *registry;
+}
+
+thread_local ReaderSlot* readerSlot = nullptr;
+thread_local bool readerSlotRetired = false;
+thread_local bool readerUsesSlot = false;
+
+struct ReaderSlotOwner {
+    ~ReaderSlotOwner()
+    {
+        ReaderSlot* slot = readerSlot;
+        if (slot == nullptr) {
+            return;
+        }
+        auto& registry = SlotRegistry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        CHECK_DETAIL(slot->state.load(std::memory_order_relaxed) == SLOT_IDLE,
+                     "ELF unload reader slot retired while admitted");
+        (slot->prev != nullptr ? slot->prev->next : registry.head) = slot->next;
+        if (slot->next != nullptr) {
+            slot->next->prev = slot->prev;
+        }
+        readerSlot = nullptr;
+        readerSlotRetired = true;
+        delete slot;
+    }
+};
+thread_local ReaderSlotOwner readerSlotOwner;
+
+ReaderSlot* CurrentReaderSlot()
+{
+    if (readerSlot != nullptr || readerSlotRetired) {
+        return readerSlot;
+    }
+    auto& registry = SlotRegistry();
+    std::unique_lock<std::mutex> lock(registry.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return nullptr;
+    }
+    auto* slot = new (std::nothrow) ReaderSlot();
+    if (slot == nullptr) {
+        return nullptr;
+    }
+    slot->next = registry.head;
+    if (registry.head != nullptr) {
+        registry.head->prev = slot;
+    }
+    registry.head = slot;
+    readerSlot = slot;
+    (void)&readerSlotOwner;
+    return slot;
+}
 } // namespace
 
 std::atomic<U64>& ElfUnloadQuiescence::State()
@@ -210,6 +289,22 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
     }
 
     auto& state = State();
+    if (ReaderSlot* slot = CurrentReaderSlot()) {
+        for (;;) {
+            U64 previous = slot->state.exchange(SLOT_ACTIVE, std::memory_order_seq_cst);
+            CHECK_DETAIL(previous == SLOT_IDLE, "ELF unload reader slot is already admitted");
+            if ((state.load(std::memory_order_seq_cst) & WRITER_BIT) == 0) {
+                readerUsesSlot = true;
+                readerDepth = 1;
+                active = true;
+                return;
+            }
+            ReleaseSlotAdmission(slot);
+            while ((state.load(std::memory_order_acquire) & WRITER_BIT) != 0) {
+                std::this_thread::yield();
+            }
+        }
+    }
     for (;;) {
         U64 observed = state.load(std::memory_order_acquire);
         if ((observed & WRITER_BIT) != 0) {
@@ -235,10 +330,52 @@ ElfUnloadQuiescence::ReadScope::~ReadScope()
     if (--readerDepth != 0 || unloadWriter) {
         return;
     }
+    if (readerUsesSlot) {
+        readerUsesSlot = false;
+        ReleaseSlotAdmission(readerSlot);
+        return;
+    }
+    ReleaseCountedAdmission();
+}
+
+void ElfUnloadQuiescence::ReleaseCountedAdmission()
+{
     U64 previous = State().fetch_sub(1, std::memory_order_release);
     CHECK_DETAIL((previous & READER_MASK) != 0, "ELF unload reader counter underflow");
     if ((previous & READER_MASK) == 1 && (previous & WRITER_BIT) != 0) {
         DrainCondition().notify_all();
+    }
+}
+
+void ElfUnloadQuiescence::ReleaseSlotAdmission(void* slotAddress)
+{
+    auto& slot = *static_cast<ReaderSlot*>(slotAddress);
+    U64 previous = slot.state.exchange(SLOT_IDLE, std::memory_order_release);
+    if (previous == SLOT_ACTIVE) {
+        return;
+    }
+    CHECK_DETAIL(previous == SLOT_COUNTED, "ELF unload reader slot state is corrupted");
+    // UnloadScope moved this reader into State(); hand that count back.
+    ReleaseCountedAdmission();
+}
+
+void ElfUnloadQuiescence::CountSlotAdmissions()
+{
+    auto& state = State();
+    auto& registry = SlotRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    for (ReaderSlot* slot = registry.head; slot != nullptr; slot = slot->next) {
+        if (slot->state.load(std::memory_order_seq_cst) != SLOT_ACTIVE) {
+            continue;
+        }
+        // Count first, so a reader that is handed SLOT_COUNTED can never
+        // decrement State() below the readers it accounts for.
+        state.fetch_add(1, std::memory_order_relaxed);
+        U64 expected = SLOT_ACTIVE;
+        if (!slot->state.compare_exchange_strong(expected, SLOT_COUNTED, std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+            state.fetch_sub(1, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -249,8 +386,9 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
                  "ELF unload cannot begin from inside a metadata reader");
     CHECK_DETAIL(imageIdentity != 0, "ELF unload image identity is unavailable for %p",
                  reinterpret_cast<void*>(imageAddress));
-    U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_acq_rel);
+    U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_seq_cst);
     CHECK_DETAIL((previous & WRITER_BIT) == 0, "ELF unload writers must be serialized");
+    CountSlotAdmissions();
     unloadWriterImage = imageIdentity;
     unloadWriter = true;
 }
