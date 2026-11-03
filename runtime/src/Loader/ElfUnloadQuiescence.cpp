@@ -338,12 +338,19 @@ Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
 ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
 {
     (void)kind;
+    // Nested scopes only bump the thread-local depth. Keep that path a small
+    // leaf: GetMTable/IsSubType walks enter nested scopes far more often than
+    // outermost ones, and the admission protocol below needs a large frame.
     if (readerDepth != 0 || unloadWriter) {
         ++readerDepth;
         active = true;
         return;
     }
+    AdmitOutermost();
+}
 
+ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
+{
     auto& state = State();
     if (ReaderSlot* slot = CurrentReaderSlot()) {
         for (;;) {
@@ -392,6 +399,11 @@ ElfUnloadQuiescence::ReadScope::~ReadScope()
     if (--readerDepth != 0 || unloadWriter) {
         return;
     }
+    ReleaseOutermost();
+}
+
+ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::ReleaseOutermost()
+{
     if (readerUsesSlot) {
         readerUsesSlot = false;
         ReleaseSlotAdmission(readerSlot);

@@ -62,6 +62,10 @@ public:
         ReadScope& operator=(const ReadScope&) = delete;
 
     private:
+        // Outermost admission and release; nested scopes never reach them.
+        void AdmitOutermost();
+        static void ReleaseOutermost();
+
         bool active { false };
     };
 
