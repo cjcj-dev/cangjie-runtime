@@ -12,6 +12,9 @@
 #include <condition_variable>
 #include <new>
 #include <thread>
+#if defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 #include "Base/Panic.h"
 #include "Common/ScopedObjectAccess.h"
@@ -64,7 +67,139 @@ thread_local bool unloadWriter = false;
 thread_local Uptr unloadWriterImage = 0;
 thread_local Uptr purgeAuthorizedImage = 0;
 thread_local const ElfUnloadQuiescence::TaskAdmissionScope* purgeAdmission = nullptr;
+
+// Distributed reader indicator for ReadScope admission. A reader publishes its
+// own slot and then checks the writer bit (Dekker with UnloadScope), so the hot
+// path writes only a thread-private cache line instead of one shared counter.
+// UnloadScope folds every slot still active after it sets the writer bit into
+// State(), so Synchronize() keeps draining on the single State() reader count.
+// Slots are registered lazily and never block admission: when the registry is
+// busy (another thread, a signal handler re-entering registration, or a forked
+// child) the reader uses the State() counter directly.
+constexpr U64 SLOT_IDLE = 0;
+constexpr U64 SLOT_ACTIVE = 1;
+constexpr U64 SLOT_COUNTED = 2;
+
+struct alignas(64) ReaderSlot {
+    std::atomic<U64> state { SLOT_IDLE };
+    ReaderSlot* prev { nullptr };
+    ReaderSlot* next { nullptr };
+    bool linked { false };
+};
+
+struct ReaderSlotRegistry {
+    std::mutex mutex;
+    ReaderSlot* head { nullptr };
+};
+
+ReaderSlotRegistry& SlotRegistry()
+{
+    static ReaderSlotRegistry* registry = new ReaderSlotRegistry();
+    return *registry;
+}
+
+thread_local ReaderSlot* readerSlot = nullptr;
+thread_local bool readerSlotRetired = false;
+thread_local bool readerUsesSlot = false;
+
+#ifdef MRT_TESTABLE_INTERNALS
+std::atomic<ElfUnloadQuiescence::SlotObserver> slotObserver { nullptr };
+void ObserveSlot(ElfUnloadQuiescence::SlotEvent event, const void* slot, U64 value = 0)
+{
+    if (auto observer = slotObserver.load(std::memory_order_acquire)) {
+        observer(event, slot, value);
+    }
+}
+#endif
+
+#if defined(__linux__) || defined(__APPLE__)
+// Thread-exit retirement goes through a pthread key, not a C++ thread_local
+// destructor: registering the latter takes the dynamic loader lock, which a
+// concurrent dlclose may hold while an UnloadScope counts slot readers.
+void RetireReaderSlot(void* value)
+{
+    auto* slot = static_cast<ReaderSlot*>(value);
+    {
+        auto& registry = SlotRegistry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        CHECK_DETAIL(slot->state.load(std::memory_order_relaxed) == SLOT_IDLE,
+                     "ELF unload reader slot retired while admitted");
+        if (slot->linked) {
+            (slot->prev != nullptr ? slot->prev->next : registry.head) = slot->next;
+            if (slot->next != nullptr) {
+                slot->next->prev = slot->prev;
+            }
+        }
+    }
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(ElfUnloadQuiescence::SlotEvent::RETIRED, slot);
+#endif
+    readerSlot = nullptr;
+    readerSlotRetired = true;
+    delete slot;
+}
+
+bool ReaderSlotKey(pthread_key_t& key)
+{
+    static pthread_key_t slotKey;
+    static const bool created = pthread_key_create(&slotKey, RetireReaderSlot) == 0;
+    key = slotKey;
+    return created;
+}
+
+ReaderSlot* CurrentReaderSlot()
+{
+    ReaderSlot* slot = readerSlot;
+    if ((slot != nullptr && slot->linked) || readerSlotRetired) {
+        return slot;
+    }
+    if (slot == nullptr) {
+        pthread_key_t key;
+        if (!ReaderSlotKey(key)) {
+            return nullptr;
+        }
+        slot = new (std::nothrow) ReaderSlot();
+        if (slot == nullptr) {
+            return nullptr;
+        }
+        if (pthread_setspecific(key, slot) != 0) {
+            delete slot;
+            return nullptr;
+        }
+        readerSlot = slot;
+    }
+    // Link without ever waiting: a busy registry keeps this admission on the
+    // State() counter and the next outermost reader retries.
+    auto& registry = SlotRegistry();
+    std::unique_lock<std::mutex> lock(registry.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return nullptr;
+    }
+    slot->next = registry.head;
+    if (registry.head != nullptr) {
+        registry.head->prev = slot;
+    }
+    registry.head = slot;
+    slot->linked = true;
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(ElfUnloadQuiescence::SlotEvent::LINKED, slot);
+#endif
+    return slot;
+}
+#else
+ReaderSlot* CurrentReaderSlot()
+{
+    return nullptr;
+}
+#endif
 } // namespace
+
+#ifdef MRT_TESTABLE_INTERNALS
+void ElfUnloadQuiescence::SetSlotObserverForTest(SlotObserver observer)
+{
+    slotObserver.store(observer, std::memory_order_release);
+}
+#endif
 
 std::atomic<U64>& ElfUnloadQuiescence::State()
 {
@@ -210,6 +345,25 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
     }
 
     auto& state = State();
+    if (ReaderSlot* slot = CurrentReaderSlot()) {
+        for (;;) {
+            U64 previous = slot->state.exchange(SLOT_ACTIVE, std::memory_order_seq_cst);
+            CHECK_DETAIL(previous == SLOT_IDLE, "ELF unload reader slot is already admitted");
+            if ((state.load(std::memory_order_seq_cst) & WRITER_BIT) == 0) {
+                readerUsesSlot = true;
+                readerDepth = 1;
+                active = true;
+#ifdef MRT_TESTABLE_INTERNALS
+                ObserveSlot(SlotEvent::ADMITTED, slot);
+#endif
+                return;
+            }
+            ReleaseSlotAdmission(slot);
+            while ((state.load(std::memory_order_acquire) & WRITER_BIT) != 0) {
+                std::this_thread::yield();
+            }
+        }
+    }
     for (;;) {
         U64 observed = state.load(std::memory_order_acquire);
         if ((observed & WRITER_BIT) != 0) {
@@ -221,6 +375,9 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
                                         std::memory_order_acquire, std::memory_order_relaxed)) {
             readerDepth = 1;
             active = true;
+#ifdef MRT_TESTABLE_INTERNALS
+            ObserveSlot(SlotEvent::COUNTER_ADMITTED, nullptr);
+#endif
             return;
         }
     }
@@ -235,10 +392,59 @@ ElfUnloadQuiescence::ReadScope::~ReadScope()
     if (--readerDepth != 0 || unloadWriter) {
         return;
     }
+    if (readerUsesSlot) {
+        readerUsesSlot = false;
+        ReleaseSlotAdmission(readerSlot);
+        return;
+    }
+    ReleaseCountedAdmission();
+}
+
+void ElfUnloadQuiescence::ReleaseCountedAdmission()
+{
     U64 previous = State().fetch_sub(1, std::memory_order_release);
     CHECK_DETAIL((previous & READER_MASK) != 0, "ELF unload reader counter underflow");
     if ((previous & READER_MASK) == 1 && (previous & WRITER_BIT) != 0) {
         DrainCondition().notify_all();
+    }
+}
+
+void ElfUnloadQuiescence::ReleaseSlotAdmission(void* slotAddress)
+{
+    auto& slot = *static_cast<ReaderSlot*>(slotAddress);
+    // Acquire the writer's COUNTED publication before returning its State()
+    // increment. Release also publishes this reader's completed metadata use.
+    U64 previous = slot.state.exchange(SLOT_IDLE, std::memory_order_acq_rel);
+    if (previous == SLOT_ACTIVE) {
+        return;
+    }
+    CHECK_DETAIL(previous == SLOT_COUNTED, "ELF unload reader slot state is corrupted");
+    // UnloadScope moved this reader into State(); hand that count back.
+    ReleaseCountedAdmission();
+}
+
+void ElfUnloadQuiescence::CountSlotAdmissions()
+{
+    auto& state = State();
+    auto& registry = SlotRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    for (ReaderSlot* slot = registry.head; slot != nullptr; slot = slot->next) {
+        if (slot->state.load(std::memory_order_seq_cst) != SLOT_ACTIVE) {
+            continue;
+        }
+        // Count first, so a reader that is handed SLOT_COUNTED can never
+        // decrement State() below the readers it accounts for.
+        state.fetch_add(1, std::memory_order_relaxed);
+        U64 expected = SLOT_ACTIVE;
+        if (!slot->state.compare_exchange_strong(expected, SLOT_COUNTED, std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+            state.fetch_sub(1, std::memory_order_relaxed);
+        }
+#ifdef MRT_TESTABLE_INTERNALS
+        else {
+            ObserveSlot(SlotEvent::COUNTED, slot);
+        }
+#endif
     }
 }
 
@@ -249,8 +455,9 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
                  "ELF unload cannot begin from inside a metadata reader");
     CHECK_DETAIL(imageIdentity != 0, "ELF unload image identity is unavailable for %p",
                  reinterpret_cast<void*>(imageAddress));
-    U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_acq_rel);
+    U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_seq_cst);
     CHECK_DETAIL((previous & WRITER_BIT) == 0, "ELF unload writers must be serialized");
+    CountSlotAdmissions();
     unloadWriterImage = imageIdentity;
     unloadWriter = true;
 }
@@ -259,8 +466,15 @@ void ElfUnloadQuiescence::UnloadScope::Synchronize()
 {
     std::unique_lock<std::mutex> lock(DrainMutex());
     DrainCondition().wait(lock, []() {
-        return (State().load(std::memory_order_acquire) & READER_MASK) == 0;
+        const U64 readers = State().load(std::memory_order_acquire) & READER_MASK;
+#ifdef MRT_TESTABLE_INTERNALS
+        ObserveSlot(SlotEvent::DRAIN_CHECK, nullptr, readers);
+#endif
+        return readers == 0;
     });
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(SlotEvent::DRAINED, nullptr);
+#endif
     synchronized = true;
 }
 

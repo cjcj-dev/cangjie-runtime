@@ -29,6 +29,11 @@ class ElfUnloadQuiescence final {
     friend class ElfUnloadQuiescenceTest;
     friend class CJFileLoader;
 public:
+#ifdef MRT_TESTABLE_INTERNALS
+    enum class SlotEvent { LINKED, ADMITTED, COUNTER_ADMITTED, COUNTED, DRAIN_CHECK, DRAINED, RETIRED };
+    using SlotObserver = void (*)(SlotEvent, const void*, U64);
+    static void SetSlotObserverForTest(SlotObserver observer);
+#endif
     struct ImageAddressMap {
         struct Range { Uptr start; size_t size; bool executable; };
         Uptr metadata { 0 };
@@ -185,6 +190,9 @@ private:
     static constexpr U64 READER_MASK = ~WRITER_BIT;
 
     static std::atomic<U64>& State();
+    static void ReleaseCountedAdmission();
+    static void ReleaseSlotAdmission(void* slot);
+    static void CountSlotAdmissions();
     static std::mutex& WriterMutex();
     static std::mutex& DrainMutex();
     static std::condition_variable& DrainCondition();
