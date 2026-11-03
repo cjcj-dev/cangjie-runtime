@@ -836,6 +836,11 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
 
 bool TypeInfo::IsSubType(TypeInfo* typeInfo)
 {
+    // Keep the metadata graph walk under one admission scope.  GetUUID and
+    // recursive IsSubType calls are already guarded individually, but their
+    // thread-local nesting makes those inner scopes cheap once this outer
+    // scope protects the complete traversal.
+    ElfUnloadQuiescence::ReadScope reader;
     if (GetUUID() == typeInfo->GetUUID()) {
         return true;
     }
