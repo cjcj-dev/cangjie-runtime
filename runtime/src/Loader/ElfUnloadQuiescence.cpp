@@ -12,6 +12,9 @@
 #include <condition_variable>
 #include <new>
 #include <thread>
+#if defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 #include "Base/Panic.h"
 #include "Common/ScopedObjectAccess.h"
@@ -81,6 +84,7 @@ struct alignas(64) ReaderSlot {
     std::atomic<U64> state { SLOT_IDLE };
     ReaderSlot* prev { nullptr };
     ReaderSlot* next { nullptr };
+    bool linked { false };
 };
 
 struct ReaderSlotRegistry {
@@ -98,40 +102,64 @@ thread_local ReaderSlot* readerSlot = nullptr;
 thread_local bool readerSlotRetired = false;
 thread_local bool readerUsesSlot = false;
 
-struct ReaderSlotOwner {
-    ~ReaderSlotOwner()
+#if defined(__linux__) || defined(__APPLE__)
+// Thread-exit retirement goes through a pthread key, not a C++ thread_local
+// destructor: registering the latter takes the dynamic loader lock, which a
+// concurrent dlclose may hold while an UnloadScope counts slot readers.
+void RetireReaderSlot(void* value)
+{
+    auto* slot = static_cast<ReaderSlot*>(value);
     {
-        ReaderSlot* slot = readerSlot;
-        if (slot == nullptr) {
-            return;
-        }
         auto& registry = SlotRegistry();
         std::lock_guard<std::mutex> lock(registry.mutex);
         CHECK_DETAIL(slot->state.load(std::memory_order_relaxed) == SLOT_IDLE,
                      "ELF unload reader slot retired while admitted");
-        (slot->prev != nullptr ? slot->prev->next : registry.head) = slot->next;
-        if (slot->next != nullptr) {
-            slot->next->prev = slot->prev;
+        if (slot->linked) {
+            (slot->prev != nullptr ? slot->prev->next : registry.head) = slot->next;
+            if (slot->next != nullptr) {
+                slot->next->prev = slot->prev;
+            }
         }
-        readerSlot = nullptr;
-        readerSlotRetired = true;
-        delete slot;
     }
-};
-thread_local ReaderSlotOwner readerSlotOwner;
+    readerSlot = nullptr;
+    readerSlotRetired = true;
+    delete slot;
+}
+
+bool ReaderSlotKey(pthread_key_t& key)
+{
+    static pthread_key_t slotKey;
+    static const bool created = pthread_key_create(&slotKey, RetireReaderSlot) == 0;
+    key = slotKey;
+    return created;
+}
 
 ReaderSlot* CurrentReaderSlot()
 {
-    if (readerSlot != nullptr || readerSlotRetired) {
-        return readerSlot;
+    ReaderSlot* slot = readerSlot;
+    if ((slot != nullptr && slot->linked) || readerSlotRetired) {
+        return slot;
     }
+    if (slot == nullptr) {
+        pthread_key_t key;
+        if (!ReaderSlotKey(key)) {
+            return nullptr;
+        }
+        slot = new (std::nothrow) ReaderSlot();
+        if (slot == nullptr) {
+            return nullptr;
+        }
+        if (pthread_setspecific(key, slot) != 0) {
+            delete slot;
+            return nullptr;
+        }
+        readerSlot = slot;
+    }
+    // Link without ever waiting: a busy registry keeps this admission on the
+    // State() counter and the next outermost reader retries.
     auto& registry = SlotRegistry();
     std::unique_lock<std::mutex> lock(registry.mutex, std::try_to_lock);
     if (!lock.owns_lock()) {
-        return nullptr;
-    }
-    auto* slot = new (std::nothrow) ReaderSlot();
-    if (slot == nullptr) {
         return nullptr;
     }
     slot->next = registry.head;
@@ -139,10 +167,15 @@ ReaderSlot* CurrentReaderSlot()
         registry.head->prev = slot;
     }
     registry.head = slot;
-    readerSlot = slot;
-    (void)&readerSlotOwner;
+    slot->linked = true;
     return slot;
 }
+#else
+ReaderSlot* CurrentReaderSlot()
+{
+    return nullptr;
+}
+#endif
 } // namespace
 
 std::atomic<U64>& ElfUnloadQuiescence::State()
