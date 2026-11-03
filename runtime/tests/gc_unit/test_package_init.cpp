@@ -929,6 +929,122 @@ std::string FixtureBesideExecutable(const char* name)
 }
 }
 #ifdef MRT_TESTABLE_INTERNALS
+namespace {
+using SlotEvent = ElfUnloadQuiescence::SlotEvent;
+std::atomic<const void*> selectedSlot { nullptr };
+std::atomic<bool> slotAdmitted { false }, counterAdmitted { false }, slotCounted { false };
+std::atomic<bool> slotRelease { false }, slotRetired { false }, slotDrainChecked { false };
+std::atomic<bool> slotDrained { false }, registryHeld { false }, registryRelease { false };
+std::atomic<U64> slotDrainCount { 0 };
+thread_local bool selectedReader = false, selectedWriter = false, holdRegistry = false;
+
+void ObserveReaderSlot(SlotEvent event, const void* slot, U64 value)
+{
+    if (event == SlotEvent::LINKED && holdRegistry) {
+        registryHeld.store(true, std::memory_order_release);
+        while (!registryRelease.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    }
+    if (selectedReader && event == SlotEvent::ADMITTED) {
+        selectedSlot.store(slot, std::memory_order_release);
+        slotAdmitted.store(true, std::memory_order_release);
+    }
+    if (selectedReader && event == SlotEvent::COUNTER_ADMITTED) {
+        counterAdmitted.store(true, std::memory_order_release);
+    }
+    if (slot != nullptr && slot == selectedSlot.load(std::memory_order_acquire)) {
+        if (event == SlotEvent::COUNTED) { slotCounted.store(true, std::memory_order_release); }
+        if (event == SlotEvent::RETIRED) { slotRetired.store(true, std::memory_order_release); }
+    }
+    if (selectedWriter && event == SlotEvent::DRAIN_CHECK &&
+        !slotRelease.load(std::memory_order_acquire)) {
+        slotDrainCount.store(value, std::memory_order_relaxed);
+        slotDrainChecked.store(true, std::memory_order_release);
+    }
+    if (selectedWriter && event == SlotEvent::DRAINED) {
+        // This point is after the actual drain wait, before loader purge.
+        Target("slot-reader-release-before-purge", slotRelease.load(std::memory_order_acquire));
+        slotDrained.store(true, std::memory_order_release);
+    }
+}
+
+void CheckReaderSlotUnload(bool fallback)
+{
+    Init();
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("slot-image-open", library != nullptr);
+    auto getMetadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto arm = reinterpret_cast<void (*)(void (*)())>(dlsym(library, "PackageInitImageArmUnload"));
+    Target("slot-image-symbols", getMetadata && arm);
+    auto* file = new CJFile(CString("slot-drain-image"), reinterpret_cast<Uptr>(getMetadata()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    const Uptr imageAddress = file->GetFileMetaAddr();
+    arm([]() {});
+
+    ElfUnloadQuiescence::SetSlotObserverForTest(ObserveReaderSlot);
+    std::thread holder;
+    if (fallback) {
+        holder = std::thread([]() {
+            holdRegistry = true;
+            ElfUnloadQuiescence::ReadScope reader;
+        });
+        Target("fallback-registry-actually-held", Await(registryHeld));
+    }
+    std::atomic<bool> ready { false }, closed { false };
+    std::thread reader([&]() {
+        selectedReader = true;
+        {
+            ElfUnloadQuiescence::ReadScope scope;
+            ready.store(true, std::memory_order_release);
+            while (!slotRelease.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        }
+        // Return through the real pthread-key destructor to retire the slot.
+    });
+    Target("slot-reader-ready", Await(ready));
+    Target("slot-selected-real-admission", fallback ?
+        (counterAdmitted.load() && !slotAdmitted.load()) :
+        (slotAdmitted.load() && selectedSlot.load() != nullptr && !counterAdmitted.load()));
+    if (fallback) {
+        registryRelease.store(true, std::memory_order_release);
+        holder.join();
+    }
+    std::thread closer([&]() {
+        selectedWriter = true;
+        Target("slot-real-dlclose", dlclose(library) == 0);
+        closed.store(true, std::memory_order_release);
+    });
+    Target("slot-writer-reached-drain", Await(slotDrainChecked));
+    // A disconnected folding arm must reach DRAINED and fail the invariant
+    // there; do not release the reader to conceal the premature drain.
+    if (slotDrainCount.load() == 0) {
+        (void)Await(slotDrained);
+        Target("slot-reader-release-before-purge", false);
+    }
+    Target("slot-folded-and-blocking", slotDrainCount.load() > 0 &&
+        (fallback || slotCounted.load()) && !closed.load() &&
+        ElfUnloadQuiescence::IsAddressInImage(imageAddress, imageAddress));
+    slotRelease.store(true, std::memory_order_release);
+    reader.join();
+    Target("slot-close-after-reader", Await(closed));
+    closer.join();
+    Target("slot-count-returned-and-reopened",
+        ElfUnloadQuiescenceTest::ReaderCount() == 0 && !ElfUnloadQuiescenceTest::UnloadPending());
+    Target("slot-image-purged", !ElfUnloadQuiescence::IsAddressInImage(imageAddress, imageAddress));
+    Target("slot-owner-retired", fallback || slotRetired.load());
+    ElfUnloadQuiescence::SetSlotObserverForTest(nullptr);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, SlotCountedHandoffDrainsBeforePurge)
+{
+    CheckReaderSlotUnload(false);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ContendedSlotRegistryUsesCounterDrain)
+{
+    CheckReaderSlotUnload(true);
+}
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadWaitsForPostUnlinkObserver)
 {
     Init();

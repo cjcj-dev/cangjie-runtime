@@ -29,6 +29,11 @@ class ElfUnloadQuiescence final {
     friend class ElfUnloadQuiescenceTest;
     friend class CJFileLoader;
 public:
+#ifdef MRT_TESTABLE_INTERNALS
+    enum class SlotEvent { LINKED, ADMITTED, COUNTER_ADMITTED, COUNTED, DRAIN_CHECK, DRAINED, RETIRED };
+    using SlotObserver = void (*)(SlotEvent, const void*, U64);
+    static void SetSlotObserverForTest(SlotObserver observer);
+#endif
     struct ImageAddressMap {
         struct Range { Uptr start; size_t size; bool executable; };
         Uptr metadata { 0 };

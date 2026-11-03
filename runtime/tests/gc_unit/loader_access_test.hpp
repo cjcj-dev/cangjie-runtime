@@ -22,6 +22,9 @@ public:
 };
 class ElfUnloadQuiescenceTest {
 public:
+    static U64 ReaderCount() {
+        return ElfUnloadQuiescence::State().load(std::memory_order_acquire) & ElfUnloadQuiescence::READER_MASK;
+    }
     static bool UnloadPending() {
         return (ElfUnloadQuiescence::State().load(std::memory_order_acquire) & ElfUnloadQuiescence::WRITER_BIT) != 0;
     }

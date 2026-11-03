@@ -102,6 +102,16 @@ thread_local ReaderSlot* readerSlot = nullptr;
 thread_local bool readerSlotRetired = false;
 thread_local bool readerUsesSlot = false;
 
+#ifdef MRT_TESTABLE_INTERNALS
+std::atomic<ElfUnloadQuiescence::SlotObserver> slotObserver { nullptr };
+void ObserveSlot(ElfUnloadQuiescence::SlotEvent event, const void* slot, U64 value = 0)
+{
+    if (auto observer = slotObserver.load(std::memory_order_acquire)) {
+        observer(event, slot, value);
+    }
+}
+#endif
+
 #if defined(__linux__) || defined(__APPLE__)
 // Thread-exit retirement goes through a pthread key, not a C++ thread_local
 // destructor: registering the latter takes the dynamic loader lock, which a
@@ -121,6 +131,9 @@ void RetireReaderSlot(void* value)
             }
         }
     }
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(ElfUnloadQuiescence::SlotEvent::RETIRED, slot);
+#endif
     readerSlot = nullptr;
     readerSlotRetired = true;
     delete slot;
@@ -168,6 +181,9 @@ ReaderSlot* CurrentReaderSlot()
     }
     registry.head = slot;
     slot->linked = true;
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(ElfUnloadQuiescence::SlotEvent::LINKED, slot);
+#endif
     return slot;
 }
 #else
@@ -177,6 +193,13 @@ ReaderSlot* CurrentReaderSlot()
 }
 #endif
 } // namespace
+
+#ifdef MRT_TESTABLE_INTERNALS
+void ElfUnloadQuiescence::SetSlotObserverForTest(SlotObserver observer)
+{
+    slotObserver.store(observer, std::memory_order_release);
+}
+#endif
 
 std::atomic<U64>& ElfUnloadQuiescence::State()
 {
@@ -330,6 +353,9 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
                 readerUsesSlot = true;
                 readerDepth = 1;
                 active = true;
+#ifdef MRT_TESTABLE_INTERNALS
+                ObserveSlot(SlotEvent::ADMITTED, slot);
+#endif
                 return;
             }
             ReleaseSlotAdmission(slot);
@@ -349,6 +375,9 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
                                         std::memory_order_acquire, std::memory_order_relaxed)) {
             readerDepth = 1;
             active = true;
+#ifdef MRT_TESTABLE_INTERNALS
+            ObserveSlot(SlotEvent::COUNTER_ADMITTED, nullptr);
+#endif
             return;
         }
     }
@@ -411,6 +440,11 @@ void ElfUnloadQuiescence::CountSlotAdmissions()
                                                  std::memory_order_acquire)) {
             state.fetch_sub(1, std::memory_order_relaxed);
         }
+#ifdef MRT_TESTABLE_INTERNALS
+        else {
+            ObserveSlot(SlotEvent::COUNTED, slot);
+        }
+#endif
     }
 }
 
@@ -432,8 +466,15 @@ void ElfUnloadQuiescence::UnloadScope::Synchronize()
 {
     std::unique_lock<std::mutex> lock(DrainMutex());
     DrainCondition().wait(lock, []() {
-        return (State().load(std::memory_order_acquire) & READER_MASK) == 0;
+        const U64 readers = State().load(std::memory_order_acquire) & READER_MASK;
+#ifdef MRT_TESTABLE_INTERNALS
+        ObserveSlot(SlotEvent::DRAIN_CHECK, nullptr, readers);
+#endif
+        return readers == 0;
     });
+#ifdef MRT_TESTABLE_INTERNALS
+    ObserveSlot(SlotEvent::DRAINED, nullptr);
+#endif
     synchronized = true;
 }
 
