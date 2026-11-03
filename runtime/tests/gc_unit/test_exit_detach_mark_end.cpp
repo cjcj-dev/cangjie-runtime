@@ -405,3 +405,73 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
     GC_EXPECT_TRUE(published);
 }
 #endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// Exit-path in-flight lock versus a pause that has published its request but
+// does not own the management lock yet (frontend "Wait mutator list lock
+// timeout"). StopTheWorld sets syncTriggered before AcquireMutatorManagementWLock,
+// and GlobalPoll() reports it, so the exiting owner that won the lock inside its
+// saferegion must release it before processing (interfaceSupport.inline.hpp:215-220
+// processes only under the predicate that released the in-flight lock).
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, PublishedPauseAtActiveTransitionReleasesLock)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<ThreadLocalData*> ownerTls{nullptr};
+    std::atomic<bool> exitNow{false};
+    std::thread exiting([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        (void)current->LeaveSaferegion();
+        StackWatermarkSet::on_safepoint(*current);
+        ownerTls.store(ThreadLocal::GetThreadLocalData(), std::memory_order_release);
+        owner.store(current, std::memory_order_release);
+        while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    const bool created = WaitFor([&] { return owner.load() != nullptr; }, 10000);
+    if (!created) { std::abort(); }
+    Mutator* target = owner.load();
+    auto& manager = MutatorManager::Instance();
+    manager.MutatorManagementWLock();
+    exitNow.store(true, std::memory_order_release);
+    // The exit path blocks acquiring the management lock inside its saferegion.
+    const bool blocked = WaitFor([&] {
+        return target->InSaferegion() && target->GetHandshakeState().observed_safe();
+    }, 10000);
+    if (!blocked) { std::abort(); }
+    // Pin the owner right after it wins the lock: DoLeaveSaferegion publishes
+    // leave_safe() and then takes this mutex before deciding on requests.
+    target->MutatorLock();
+    manager.MutatorManagementWUnlock();
+    const bool restoring = WaitFor([&] { return !target->GetHandshakeState().observed_safe(); }, 10000);
+    if (!restoring) { std::abort(); }
+    const bool acquired = manager.TryAcquireMutatorManagementWLock();
+    if (acquired) { manager.MutatorManagementWUnlock(); }
+    // A pause requester that is not a mutator: it publishes syncTriggered and
+    // then waits for the lock that the exiting owner now holds.
+    std::atomic<bool> paused{false};
+    std::thread requester([&] {
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        ScopedStopTheWorld stw("EXIT_PUBLISHED_PAUSE requester", false);
+        paused.store(true, std::memory_order_release);
+    });
+    const bool triggered = WaitFor([&] { return manager.SyncTriggered(); }, 10000);
+    // The owner's poll is armed, as left by an earlier pause it slept through
+    // while blocked; no suspension flag or handshake is queued for it.
+    ArmThreadPoll(ownerTls.load(std::memory_order_acquire));
+    const bool flagged = target->HasAnySuspensionRequest() || target->GetHandshakeState().has_operation();
+    std::fprintf(stderr, "EXIT_PUBLISHED_PAUSE_WINDOW restoring=%d lock_held=%d triggered=%d flagged=%d\n",
+                 restoring, !acquired, triggered, flagged);
+    target->MutatorUnlock();
+    const bool completed = WaitFor([&] { return paused.load(std::memory_order_acquire); }, 20000);
+    std::fprintf(stderr, "EXIT_PUBLISHED_PAUSE_RESULT pause_completed=%d\n", completed);
+    if (!completed) { std::abort(); }
+    requester.join();
+    exiting.join();
+    GC_EXPECT_TRUE(restoring && !acquired && triggered && !flagged);
+    GC_EXPECT_TRUE(completed);
+    GC_EXPECT_FALSE(manager.SyncTriggered());
+}
+#endif
