@@ -195,6 +195,8 @@ void TypeInfo::TryInitMTable()
     }
 }
 
+MTableDesc::StableReaderStripe MTableDesc::stableReaderStripes[MTableDesc::STABLE_READER_STRIPES];
+
 MTableDesc::MTableDesc(ArchUInt bitmap_)
 {
     mTableBitmap.tag = bitmap_;

@@ -244,14 +244,36 @@ private:
 struct MTableDesc {
     using StableTable = std::unordered_map<U32, const InheritFuncTable*>;
 
+    // Stable-snapshot readers announce themselves on one of these stripes
+    // before loading stableTable, and InvalidateStableTable() waits until every
+    // stripe has drained once after detaching the snapshot. A single per-table
+    // counter put all threads reading the same hot table on one cache line.
+    // The stripes are shared by all tables, so a writer may also wait for
+    // unrelated readers; a guard only spans one snapshot lookup and no table is
+    // ever invalidated while the same thread holds a guard.
+    struct alignas(64) StableReaderStripe {
+        std::atomic<U32> readers { 0 };
+    };
+    static constexpr U32 STABLE_READER_STRIPE_BITS = 6;
+    static constexpr size_t STABLE_READER_STRIPES = size_t { 1 } << STABLE_READER_STRIPE_BITS;
+    static StableReaderStripe stableReaderStripes[STABLE_READER_STRIPES];
+    // Keyed by the guard's stack address: no thread-local access, and different
+    // threads (or cjthread stacks) spread across stripes. Inc and dec of one
+    // guard always use the stripe it recorded.
+    static StableReaderStripe& StableReaderStripeFor(const void* guard)
+    {
+        const U64 key = static_cast<U64>(reinterpret_cast<uintptr_t>(guard)) >> 12;
+        return stableReaderStripes[(key * 0x9E3779B97F4A7C15ULL) >> (64 - STABLE_READER_STRIPE_BITS)];
+    }
+
     class StableReadGuard {
     public:
-        explicit StableReadGuard(const MTableDesc& owner) : owner(owner)
+        explicit StableReadGuard(const MTableDesc& owner) : stripe(StableReaderStripeFor(this))
         {
-            owner.stableReaders.fetch_add(1, std::memory_order_seq_cst);
+            stripe.readers.fetch_add(1, std::memory_order_seq_cst);
             table = owner.stableTable.load(std::memory_order_seq_cst);
             if (table == nullptr) {
-                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+                stripe.readers.fetch_sub(1, std::memory_order_seq_cst);
             }
         }
         StableReadGuard(const StableReadGuard&) = delete;
@@ -259,13 +281,13 @@ struct MTableDesc {
         ~StableReadGuard()
         {
             if (table != nullptr) {
-                owner.stableReaders.fetch_sub(1, std::memory_order_seq_cst);
+                stripe.readers.fetch_sub(1, std::memory_order_seq_cst);
             }
         }
         StableTable* Get() const { return table; }
 
     private:
-        const MTableDesc& owner;
+        StableReaderStripe& stripe;
         StableTable* table { nullptr };
     };
 
@@ -280,7 +302,6 @@ struct MTableDesc {
     // mutable cache/function-table storage. Unload uses the same retirement
     // rule after ElfUnloadQuiescence has drained readers.
     std::atomic<StableTable*> stableTable { nullptr };
-    mutable std::atomic<U32> stableReaders { 0 };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
@@ -307,8 +328,13 @@ struct MTableDesc {
         StableInvalidationWaitTestObserveInline(this);
 #endif
 #if !defined(MRT_BROKEN_STABLE_WAIT)
-        while (stableReaders.load(std::memory_order_seq_cst) != 0) {
-            std::this_thread::yield();
+        // A reader that loaded `old` incremented its stripe before that load,
+        // so the increment precedes the exchange above in the seq_cst order;
+        // a stripe seen at zero afterwards has no such reader left.
+        for (auto& stripe : stableReaderStripes) {
+            while (stripe.readers.load(std::memory_order_seq_cst) != 0) {
+                std::this_thread::yield();
+            }
         }
 #endif
         delete old;
