@@ -702,7 +702,7 @@ ExtensionData* TypeInfo::FindExtensionData(TypeInfo* itf, bool searchRecursively
 FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    if (GetUUID() == 0) {
+    if (GetUUIDInReadScope() == 0) {
         TypeInfoManager::GetTypeInfoManager().AddTypeInfo(this);
     }
     if (UNLIKELY(IsTempEnum() && GetSuperTypeInfo())) {
@@ -713,7 +713,7 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     // find holds mTableMutex. The flags only skip the initial resolve.
     MTableDesc* desc = GetMTableDesc();
     if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
-        const U32 itfUUID = itf->GetUUID();
+        const U32 itfUUID = itf->GetUUIDInReadScope();
         {
             MTableDesc::StableReadGuard stableRead(*desc);
             if (auto stable = stableRead.Get()) {
@@ -753,8 +753,8 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
 TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    U32 itfUUID = itf->GetUUID();
-    if (this == itf || this->GetUUID() == itfUUID) {
+    U32 itfUUID = itf->GetUUIDInReadScope();
+    if (this == itf || this->GetUUIDInReadScope() == itfUUID) {
         return this;
     }
     TypeInfo* superTi = GetSuperTypeInfo();
@@ -810,7 +810,7 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
             continue;
         }
         TypeInfo* superTi = superTypePair.second.GetSuperTi();
-        if (superTi == this || superTi->GetUUID() == GetUUID()) {
+        if (superTi == this || superTi->GetUUIDInReadScope() == GetUUIDInReadScope()) {
             continue;
         }
         auto* superEdItf = superTi->FindExtensionData(itf);
@@ -841,7 +841,7 @@ bool TypeInfo::IsSubType(TypeInfo* typeInfo)
     // thread-local nesting makes those inner scopes cheap once this outer
     // scope protects the complete traversal.
     ElfUnloadQuiescence::ReadScope reader;
-    if (GetUUID() == typeInfo->GetUUID()) {
+    if (GetUUIDInReadScope() == typeInfo->GetUUIDInReadScope()) {
         return true;
     }
     if (IsNothing()) {
@@ -898,7 +898,7 @@ bool TypeInfo::IsSubType(TypeInfo* typeInfo)
             return true;
         }
         while (super != nullptr) {
-            if (super->GetUUID() == typeInfo->GetUUID()) {
+            if (super->GetUUIDInReadScope() == typeInfo->GetUUIDInReadScope()) {
                 return true;
             }
             super = super->GetSuperTypeInfo();

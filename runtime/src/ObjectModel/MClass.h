@@ -846,6 +846,10 @@ public:
     FuncPtr* GetMTable(TypeInfo* itf);
     TypeInfo* GetMethodOuterTI(TypeInfo* itf, U64 index);
     U32 GetUUID();
+    // Same result as GetUUID() for a caller that already holds an
+    // ElfUnloadQuiescence::ReadScope over its whole metadata walk; that
+    // enclosing scope is what keeps this TypeInfo admitted.
+    U32 GetUUIDInReadScope();
     inline U32 GetClassSize() const;
     inline TypeInfo* GetSuperTypeInfo() const;                     // it can be null
     struct RAIISpinLock {

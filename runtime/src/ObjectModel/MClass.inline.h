@@ -284,9 +284,11 @@ inline U16 TypeInfo::GetValidInheritNum() const
     return inherit & ((1ULL << 15) - 1);
 }
 
-inline U32 TypeInfo::GetUUID()
+inline U32 TypeInfo::GetUUIDInReadScope()
 {
-    ElfUnloadQuiescence::ReadScope reader;
+    if (::MapleRuntime::ENABLE_DEBUG_CHECKS) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     if (IsInitialUUID()) {
         TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
         std::lock_guard<std::recursive_mutex> lock(manager.tiMutex);
@@ -296,6 +298,12 @@ inline U32 TypeInfo::GetUUID()
         CHECK(!IsInitialUUID());
     }
     return uuid;
+}
+
+inline U32 TypeInfo::GetUUID()
+{
+    ElfUnloadQuiescence::ReadScope reader;
+    return GetUUIDInReadScope();
 }
 
 inline U32 TypeInfo::GetClassSize() const
