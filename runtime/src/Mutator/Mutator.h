@@ -173,28 +173,41 @@ public:
     // Force current mutator leave saferegion, internal use only.
     // interfaceSupport.inline.hpp:213-220: publish the active state with a
     // fence, then release any in-flight lock before processing requests.
+    // The in-flight form mirrors ThreadBlockInVMPreprocess: the lock is released
+    // under the same predicate that admits request processing, and nothing is
+    // processed while it is still held. GlobalPoll() (syncTriggered) is published
+    // by StopTheWorld before it owns the mutator management lock, so a thread that
+    // still holds that lock would otherwise spin in HandleSuspensionRequest while
+    // the requester waits for the lock.
     template<class Preprocess>
     __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
-        for (;;) {
-            MarkFlushBeginLeaveSaferegion();
-            MutatorLock();
-            SetInSaferegion(SAFE_REGION_FALSE);
-            MarkFlushEndLeaveSaferegion();
-            MutatorUnlock();
-            break;
-        }
-        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+        PublishLeaveSaferegion();
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread() ||
+                     HasPendingSafepoint(tls) || (tls != nullptr && tls->IsPollArmed()))) {
             preprocess();
+            ArmThreadPoll(tls);
+            ProcessSafepointIfRequested(tls);
+        }
+    }
+
+    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    {
+        PublishLeaveSaferegion();
+        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
         ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
-    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    __attribute__((always_inline)) inline void PublishLeaveSaferegion()
     {
-        auto preprocess = [] {};
-        DoLeaveSaferegion(preprocess);
+        MarkFlushBeginLeaveSaferegion();
+        MutatorLock();
+        SetInSaferegion(SAFE_REGION_FALSE);
+        MarkFlushEndLeaveSaferegion();
+        MutatorUnlock();
     }
 
     __attribute__((always_inline)) inline void RejectInconsistentUnwindTop();
