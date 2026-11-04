@@ -28,6 +28,13 @@ main(args: Array<String>): Int64 {
         println("TREE_INDEPENDENT_PASS")
         return 0
     }
+    // Updating the midpoint of a full child must return its old value after
+    // that child is split, without adding a duplicate or changing the size.
+    let splitUpdate = TreeMap<Int64, Array<String>>()
+    for (i in 0..17) { splitUpdate.add(i, ["value-${i}"]) }
+    require(splitUpdate.add(11, ["updated"]).getOrThrow()[0] == "value-11", "split-midpoint-old")
+    require(splitUpdate.size == 17 && splitUpdate.get(11).getOrThrow()[0] == "updated", "split-midpoint-update")
+
     // Degree six: 144 sorted inserts produce multiple internal levels. Opposite
     // insertion/deletion orders and a coprime permutation exercise both siblings.
     for (mode in 0..3) {

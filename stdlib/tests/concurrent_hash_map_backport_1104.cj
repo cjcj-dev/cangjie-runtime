@@ -13,6 +13,11 @@ class BucketKey <: Hashable & Equatable<BucketKey> {
     public operator func !=(right: BucketKey): Bool { id != right.id }
 }
 
+class CallbackCounts {
+    var predicates: Int64 = 0
+    var evals: Int64 = 0
+}
+
 func payload(id: Int64): Payload {
     (id, Array<String>(8, repeat: "payload-${id}"), "label-${id}", Array<Int64>(8, repeat: id))
 }
@@ -34,6 +39,11 @@ main(args: Array<String>): Int64 {
         return 0
     }
 
+    let emptyBucket = ConcurrentHashMap<BucketKey, Payload>()
+    emptyBucket.add(BucketKey(1, 7), payload(1))
+    require(valid(emptyBucket.remove(BucketKey(1, 7)).getOrThrow(), 1), "drop-without-previous")
+    require(emptyBucket.isEmpty() && emptyBucket.get(BucketKey(1, 7)).isNone(), "empty-bucket-dropped")
+
     // These hashes share the old bucket and split after resizing. Removing the
     // only entry in a migrated bucket must not expose the stale previous table.
     let split = ConcurrentHashMap<BucketKey, Payload>(16)
@@ -49,23 +59,22 @@ main(args: Array<String>): Int64 {
     for (i in 0..9) { map.add(BucketKey(i, 7), payload(i)) }
     let snapshot = map.iterator()
     require(valid(map.add(BucketKey(3, 7), payload(103)).getOrThrow(), 3), "overwrite-old")
-    var predicates = 0
-    var evals = 0
-    require(map.remove(BucketKey(99, 7), { _ => predicates++; true }).isNone(), "missing-remove")
-    require(predicates == 0, "missing-predicate-zero")
-    require(map.remove(BucketKey(4, 7), { _ => predicates++; false }).isNone(), "reject-remove")
-    require(predicates == 1, "reject-predicate-once")
-    require(valid(map.replace(BucketKey(5, 7), { v => predicates++; valid(v, 5) },
-        { _ => evals++; payload(105) }).getOrThrow(), 5), "replace-old")
-    require(predicates == 2 && evals == 1, "replace-callbacks-once")
-    require(map.replace(BucketKey(6, 7), { _ => predicates++; false },
-        { _ => evals++; payload(106) }).isNone(), "reject-replace")
-    require(predicates == 3 && evals == 1, "reject-eval-zero")
-    require(map.replace(BucketKey(99, 7), { _ => predicates++; true },
-        { _ => evals++; payload(199) }).isNone(), "missing-replace")
-    require(predicates == 3 && evals == 1, "missing-callbacks-zero")
-    require(valid(map.remove(BucketKey(4, 7), { _ => predicates++; true }).getOrThrow(), 4), "middle-remove")
-    require(predicates == 4, "remove-predicate-once")
+    let counts = CallbackCounts()
+    require(map.remove(BucketKey(99, 7), { _ => counts.predicates++; true }).isNone(), "missing-remove")
+    require(counts.predicates == 0, "missing-predicate-zero")
+    require(map.remove(BucketKey(4, 7), { _ => counts.predicates++; false }).isNone(), "reject-remove")
+    require(counts.predicates == 1, "reject-predicate-once")
+    require(valid(map.replace(BucketKey(5, 7), { v => counts.predicates++; valid(v, 5) },
+        { _ => counts.evals++; payload(105) }).getOrThrow(), 5), "replace-old")
+    require(counts.predicates == 2 && counts.evals == 1, "replace-callbacks-once")
+    require(map.replace(BucketKey(6, 7), { _ => counts.predicates++; false },
+        { _ => counts.evals++; payload(106) }).isNone(), "reject-replace")
+    require(counts.predicates == 3 && counts.evals == 1, "reject-eval-zero")
+    require(map.replace(BucketKey(99, 7), { _ => counts.predicates++; true },
+        { _ => counts.evals++; payload(199) }).isNone(), "missing-replace")
+    require(counts.predicates == 3 && counts.evals == 1, "missing-callbacks-zero")
+    require(valid(map.remove(BucketKey(4, 7), { _ => counts.predicates++; true }).getOrThrow(), 4), "middle-remove")
+    require(counts.predicates == 4, "remove-predicate-once")
     require(valid(map.remove(BucketKey(0, 7)).getOrThrow(), 0), "first-remove")
     require(valid(map.remove(BucketKey(8, 7)).getOrThrow(), 8), "last-remove")
     map.entryView(BucketKey(20, 7), { view => view.value = payload(20) })
@@ -100,6 +109,6 @@ main(args: Array<String>): Int64 {
     for (i in 0..96) {
         require(valid(concurrent.get(BucketKey(i, (i % 8) * 16)).getOrThrow(), i), "migrated-reference")
     }
-    println("CHM_BATCH_PASS predicates=${predicates} evals=${evals} migrated=96 gc=${getGCCount() - beforeGC}")
+    println("CHM_BATCH_PASS predicates=${counts.predicates} evals=${counts.evals} migrated=96 gc=${getGCCount() - beforeGC}")
     return 0
 }
