@@ -431,6 +431,7 @@ MAIN_SOURCES=(
   "$SRC/test_watermark_iteration.cpp"
   "$SRC/test_binding_poll.cpp"
   "$SRC/test_thread_smr_reclaim.cpp"
+  "$SRC/test_typeinfo_arena.cpp"
 )
 
 PUBLICATION_COMPILE_FLAGS=(

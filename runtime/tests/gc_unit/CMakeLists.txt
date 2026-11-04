@@ -124,6 +124,7 @@ set(GC_UNIT_SOURCES
     test_watermark_iteration.cpp
     test_binding_poll.cpp
     test_thread_smr_reclaim.cpp
+    test_typeinfo_arena.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
