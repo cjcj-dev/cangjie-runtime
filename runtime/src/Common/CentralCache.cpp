@@ -40,7 +40,8 @@ Span* CentralCache::GetOneSpan(SpanList& list, size_t alignBytes)
     span->freeBlocks = start;
     start += alignBytes;
     void* tail = span->freeBlocks;
-    while (start < end) {
+    // Do not publish a tail block unless the whole aligned allocation fits.
+    while (static_cast<size_t>(end - start) >= alignBytes) {
         NextObj(tail) = start;
         tail = start;
         start += alignBytes;
