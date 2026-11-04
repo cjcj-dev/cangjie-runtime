@@ -140,3 +140,5 @@ windows_exception_frames.cpp            manual     link existing gc_unit/test_un
 windows_exception_imports.mjs           manual     actual installed-entry and GC consumer AMD64 COFF objects; verify IAT relocations before normal Windows link, not DLL execution
 windows_module_header.cpp               manual     compile the product WinModuleManager header first with actual Windows target CXX flags and standard-library headers; compare real affected TUs, not an OS/runtime execution gate
 finalizer_thread_data                   manual     installed Linux x64 runtime and CJ compiler; compare finalizer registration return TLS with current carrier TLS; controlled old/new arms, not run at configure time
+
+native_safety                           manual     product RwLock LLVM CAS-order check and native allocator boundary regression; see native_safety/README.md

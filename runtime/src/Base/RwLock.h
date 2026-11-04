@@ -27,7 +27,8 @@ public:
 
     void LockWrite()
     {
-        for (int count = 0; !lockCount.compare_exchange_weak(count, WRITE_LOCKED, std::memory_order_release);
+        for (int count = 0; !lockCount.compare_exchange_weak(count, WRITE_LOCKED, std::memory_order_acq_rel,
+                                                             std::memory_order_relaxed);
              count = 0) {
             sched_yield();
         }
@@ -36,7 +37,8 @@ public:
     bool TryLockWrite()
     {
         int count = 0;
-        if (lockCount.compare_exchange_weak(count, WRITE_LOCKED, std::memory_order_release)) {
+        if (lockCount.compare_exchange_weak(count, WRITE_LOCKED, std::memory_order_acq_rel,
+                                            std::memory_order_relaxed)) {
             return true;
         }
         return false;
