@@ -47,6 +47,7 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentBumpAndLargeRequest)
 {
     using MapleRuntime::TypeInfoManager;
     using MapleRuntime::TypeInfoManagerTestAccess;
+    using MapleRuntime::MB;
 
     TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
     manager.Fini();
