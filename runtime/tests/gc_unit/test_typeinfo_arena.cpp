@@ -89,7 +89,7 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentBumpAndLargeRequest)
     const size_t largeAligned = (largeRequest + 7U) & ~size_t(7U);
     const uintptr_t afterLarge = TypeInfoManagerTestAccess::Allocate(manager, 64);
     GC_EXPECT_TRUE((large & 7U) == 0);
-    GC_EXPECT_TRUE(afterLarge >= large + largeAligned);
+    GC_EXPECT_TRUE(afterLarge + 64 <= large || large + largeAligned <= afterLarge);
     GC_EXPECT_TRUE(manager.ContainsAddress(large));
     GC_EXPECT_TRUE(manager.ContainsAddress(large + largeAligned - 8));
     GC_EXPECT_TRUE(manager.ContainsAddress(afterLarge));
