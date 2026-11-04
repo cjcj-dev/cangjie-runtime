@@ -120,7 +120,12 @@ struct TestTypeTemplateLayout {
 
 static_assert(sizeof(TestTypeTemplateLayout) == sizeof(TypeTemplate));
 
-TypeTemplate* MakeRawArrayTemplate(void* storage, const char* name, U16 uuid)
+TypeInfo* ReturnFirstTypeInfo(TypeInfo** args)
+{
+    return args[0];
+}
+
+TypeTemplate* MakeRawArrayTemplate(void* storage, const char* name, U16 uuid, const GenericFunc* fieldFns)
 {
     std::memset(storage, 0, sizeof(TestTypeTemplateLayout));
     auto* layout = reinterpret_cast<TestTypeTemplateLayout*>(storage);
@@ -128,6 +133,7 @@ TypeTemplate* MakeRawArrayTemplate(void* storage, const char* name, U16 uuid)
     layout->type = TypeKind::TYPE_KIND_RAWARRAY;
     layout->typeArgsNum = 1;
     layout->uuid.store(uuid, std::memory_order_relaxed);
+    layout->fieldFns = fieldFns;
     return reinterpret_cast<TypeTemplate*>(storage);
 }
 } // namespace
@@ -149,8 +155,9 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentGenericCreation)
 
     alignas(TypeTemplate) std::byte storageA[sizeof(TypeTemplate)];
     alignas(TypeTemplate) std::byte storageB[sizeof(TypeTemplate)];
-    TypeTemplate* templateA = MakeRawArrayTemplate(storageA, "arena:A", 101);
-    TypeTemplate* templateB = MakeRawArrayTemplate(storageB, "arena:B", 102);
+    const GenericFunc fieldFns[] = { ReturnFirstTypeInfo };
+    TypeTemplate* templateA = MakeRawArrayTemplate(storageA, "arena:A", 101, fieldFns);
+    TypeTemplate* templateB = MakeRawArrayTemplate(storageB, "arena:B", 102, fieldFns);
     TypeInfo* created[2] = { nullptr, nullptr };
     std::thread first([&] { created[0] = TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(templateA, 1, args); });
     std::thread second([&] { created[1] = TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(templateB, 1, args); });
