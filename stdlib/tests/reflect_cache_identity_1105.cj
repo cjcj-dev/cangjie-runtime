@@ -18,6 +18,10 @@ public class Second {
     public init() {}
 }
 
+public class Box<T> {
+    public init() {}
+}
+
 public struct Parcel {
     public let value: Int64
     public init(value: Int64) { this.value = value }
@@ -42,6 +46,8 @@ main(args: Array<String>): Int64 {
     require(refEq(second, TypeInfo.of<Second>()), "second-warm-pointer-identity")
     require(refEq(first, TypeInfo.get(first.qualifiedName)), "name-current-identity")
     require(refEq(second, TypeInfo.get(second.qualifiedName)), "second-name-current-identity")
+    let generic = TypeInfo.of<Box<Int64>>()
+    require(refEq(generic, TypeInfo.get(generic.qualifiedName)), "generic-name-current-identity")
     let parcel = (TypeInfo.of<Parcel>() as StructTypeInfo).getOrThrow()
     var missingConstructor = false
     try {
