@@ -19,6 +19,32 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${output_triple_name}
 set(output_cj_object_dir ${CMAKE_BINARY_DIR}/modules/${output_cj_object_dir})
 # file(MAKE_DIRECTORY ${output_cj_object_dir}/std)
 
+
+# envFFI embeds processFFI, and console also links envFFI. Keep each shared
+# library's native implementation local; public Cangjie entry points remain
+# exported. Static libraries retain their native symbols for static linking.
+set(EXCLUDE_ENV_PROCESS_FFI_OPTIONS)
+if(NOT DARWIN AND NOT MINGW)
+    list(APPEND EXCLUDE_ENV_PROCESS_FFI_OPTIONS
+        ${LINKER_OPTION_PREFIX}--exclude-libs=libcangjie-std-envFFI.a
+        ${LINKER_OPTION_PREFIX}--exclude-libs=libcangjie-std-processFFI.a)
+endif()
+set(ENV_FFI_LINK_OPTION -lcangjie-std-envFFI)
+set(PROCESS_FFI_LINK_OPTION -lcangjie-std-processFFI)
+set(ENV_FFI_FORCE_ARCHIVES cangjie-std-envFFI)
+if(DARWIN)
+    # ld64 consumes literal paths with -load_hidden, not -l search names.
+    # The combined env archive is a custom target, not a CMake library.
+    get_target_property(env_ffi_archive cangjie-std-envFFI COMBINED_STATIC_LIB_LOC)
+    if(NOT env_ffi_archive)
+        message(FATAL_ERROR "cangjie-std-envFFI has no combined archive")
+    endif()
+    set(ENV_FFI_LINK_OPTION -load_hidden "${env_ffi_archive}")
+    set(PROCESS_FFI_LINK_OPTION -load_hidden $<TARGET_FILE:cangjie-std-processFFI>)
+    set(ENV_FFI_FORCE_ARCHIVES)
+endif()
+# llvm-mingw's linker does not implement --exclude-libs; keep its exports.
+
 make_cangjie_lib(
     std-core IS_SHARED
     DEPENDS cangjie${BACKEND_TYPE}Core cangjie-std-coreFFI
@@ -285,7 +311,7 @@ make_cangjie_lib(
         std-sync
         std-sort
     OBJECTS ${output_cj_object_dir}/std/console.o
-    FLAGS -lcangjie-std-envFFI)
+    FLAGS ${ENV_FFI_LINK_OPTION} ${EXCLUDE_ENV_PROCESS_FFI_OPTIONS})
 
 add_library(cangjie-std-console STATIC  $<TARGET_OBJECTS:cangjie-std-envFFI-objs> ${output_cj_object_dir}/std/console.o)
 install(TARGETS cangjie-std-console DESTINATION lib/${output_triple_name}_${CJNATIVE_BACKEND}${SANITIZER_SUBPATH})
@@ -318,7 +344,7 @@ make_cangjie_lib(
     CANGJIE_STD_LIB_INDIRECT_DEPENDS std-math
     OBJECTS ${output_cj_object_dir}/std/process.o
     FLAGS
-        -lcangjie-std-processFFI)
+        ${PROCESS_FFI_LINK_OPTION} ${EXCLUDE_ENV_PROCESS_FFI_OPTIONS})
 
 add_library(
     cangjie-std-process STATIC
@@ -338,9 +364,8 @@ make_cangjie_lib(
         std-sort
     CANGJIE_STD_LIB_INDIRECT_DEPENDS std-math
     OBJECTS ${output_cj_object_dir}/std/env.o
-    FORCE_LINK_ARCHIVES
-            cangjie-std-envFFI
-    FLAGS -lcangjie-std-processFFI)
+    FORCE_LINK_ARCHIVES ${ENV_FFI_FORCE_ARCHIVES}
+    FLAGS ${ENV_FFI_LINK_OPTION} ${PROCESS_FFI_LINK_OPTION} ${EXCLUDE_ENV_PROCESS_FFI_OPTIONS})
 
     add_and_combine_static_lib(
         OUTPUT_NAME libcangjie-std-env.a
