@@ -43,6 +43,9 @@ class SplitKey <: Hashable & Equatable<SplitKey> {
 
 class ReentrantKey <: Hashable & Equatable<ReentrantKey> {
     let id: Int64
+    static var reentrantMap: HashMap<ReentrantKey, Array<String>> = HashMap()
+    static var reentrantHead: ReentrantKey = ReentrantKey(1)
+    static var reentrantEnabled: Bool = false
 
     init(id: Int64) {
         this.id = id
@@ -53,9 +56,9 @@ class ReentrantKey <: Hashable & Equatable<ReentrantKey> {
     }
 
     public operator func ==(right: ReentrantKey): Bool {
-        if (reentrantEnabled && this.id == 2 && right.id == 1) {
-            reentrantEnabled = false
-            reentrantMap.remove(reentrantHead)
+        if (ReentrantKey.reentrantEnabled && this.id == 2 && right.id == 1) {
+            ReentrantKey.reentrantEnabled = false
+            ReentrantKey.reentrantMap.remove(ReentrantKey.reentrantHead)
         }
         return this.id == right.id
     }
@@ -64,10 +67,6 @@ class ReentrantKey <: Hashable & Equatable<ReentrantKey> {
         return this.id != right.id
     }
 }
-
-var reentrantMap: HashMap<ReentrantKey, Array<String>> = HashMap()
-var reentrantHead: ReentrantKey = ReentrantKey(1)
-var reentrantEnabled: Bool = false
 
 main(): Int64 {
     let map = HashMap<CollisionKey, Array<String>>()
@@ -97,26 +96,26 @@ main(): Int64 {
 
     // Equality may remove the current chain head. The traversal must continue
     // from the entry snapshot and preserve the old value of the live successor.
-    reentrantMap = HashMap<ReentrantKey, Array<String>>()
+    ReentrantKey.reentrantMap = HashMap<ReentrantKey, Array<String>>()
     let reentrantB = ReentrantKey(2)
     let reentrantA = ReentrantKey(1)
-    reentrantHead = reentrantA
-    reentrantMap.add(reentrantB, Array<String>(2, repeat: "old"))
-    reentrantMap.add(reentrantA, Array<String>(2, repeat: "head"))
-    reentrantEnabled = true
-    if (!reentrantMap.contains(ReentrantKey(2)) || reentrantMap.size != 1) {
+    ReentrantKey.reentrantHead = reentrantA
+    ReentrantKey.reentrantMap.add(reentrantB, Array<String>(2, repeat: "old"))
+    ReentrantKey.reentrantMap.add(reentrantA, Array<String>(2, repeat: "head"))
+    ReentrantKey.reentrantEnabled = true
+    if (!ReentrantKey.reentrantMap.contains(ReentrantKey(2)) || ReentrantKey.reentrantMap.size != 1) {
         return 7
     }
 
-    reentrantMap = HashMap<ReentrantKey, Array<String>>()
-    reentrantHead = ReentrantKey(1)
-    reentrantMap.add(reentrantB, Array<String>(2, repeat: "old"))
-    reentrantMap.add(reentrantHead, Array<String>(2, repeat: "head"))
-    reentrantEnabled = true
-    let old = reentrantMap.add(ReentrantKey(2), Array<String>(2, repeat: "new"))
+    ReentrantKey.reentrantMap = HashMap<ReentrantKey, Array<String>>()
+    ReentrantKey.reentrantHead = ReentrantKey(1)
+    ReentrantKey.reentrantMap.add(reentrantB, Array<String>(2, repeat: "old"))
+    ReentrantKey.reentrantMap.add(ReentrantKey.reentrantHead, Array<String>(2, repeat: "head"))
+    ReentrantKey.reentrantEnabled = true
+    let old = ReentrantKey.reentrantMap.add(ReentrantKey(2), Array<String>(2, repeat: "new"))
     match (old) {
         case Some(v) =>
-            if (v[0] != "old" || reentrantMap.size != 1) { return 8 }
+            if (v[0] != "old" || ReentrantKey.reentrantMap.size != 1) { return 8 }
         case None => return 9
     }
 
