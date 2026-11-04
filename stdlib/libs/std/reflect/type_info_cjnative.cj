@@ -423,7 +423,7 @@ sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
         }
     }
 
-    static func createConcreteTypeInfo(typeInfoPointer: CPointer<Unit>, qualifiedName: String): TypeInfo {
+    static func createConcreteTypeInfo(typeInfoPointer: CPointer<Unit>, qualifiedName: String, uuid!: ?String = None): TypeInfo {
         if (qualifiedName.isEmpty()) {
             throw ReflectException("Unexpected empty 'qualifiedName'.")
         }
