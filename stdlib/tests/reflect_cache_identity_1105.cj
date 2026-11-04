@@ -76,6 +76,7 @@ main(args: Array<String>): Int64 {
         require(!refEq(aliasB, afterAlias), "uuid-alias-not-wrapper-identity")
         unsafe { ReflectFixtureSet(1, 0x70000004); ReflectFixtureSameName() }
         let sameNameOtherAddress = TypeInfo.of<Second>()
+        require(sameNameOtherAddress.qualifiedName == first.qualifiedName, "same-name-fixture-applied")
         require(!refEq(afterAlias, sameNameOtherAddress), "same-name-new-address")
         require(!refEq(afterAlias, TypeInfo.of<First>()), "name-alias-clears-old-pointer")
     } finally {
