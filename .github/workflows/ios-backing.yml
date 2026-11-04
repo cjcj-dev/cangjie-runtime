@@ -6,8 +6,6 @@ on:
         description: Run only simulator backing launcher regression evidence
         type: boolean
         default: false
-  push:
-    branches: ['sym/1182-*']
 permissions:
   contents: read
 jobs:

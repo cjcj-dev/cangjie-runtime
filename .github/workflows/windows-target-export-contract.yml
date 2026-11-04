@@ -1,8 +1,6 @@
 name: Windows target export contract
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1236-*']
 permissions:
   contents: read
 jobs:

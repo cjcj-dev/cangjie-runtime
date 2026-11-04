@@ -1,8 +1,6 @@
 name: Managed metadata platform checks
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1284-implement-*']
 permissions:
   contents: read
 jobs:

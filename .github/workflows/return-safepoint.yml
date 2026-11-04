@@ -1,8 +1,6 @@
 name: Return safepoint ABI
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1178-*']
 permissions:
   contents: read
 jobs:

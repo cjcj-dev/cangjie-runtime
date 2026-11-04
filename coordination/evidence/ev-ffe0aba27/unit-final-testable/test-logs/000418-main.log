@@ -1,6 +1,0 @@
-[  RUN   ] RootStorageSegments.WeakFinalizer
-[  RUN   ] RootStorageSegments.WeakFinalizer
-ROOT_SEGMENT_TARGET executed=1 family=1 slots=1536 remaining=1536 transitioned=1536 values_valid=1
-GC_UNIT_OTHER_VM_OKIDOKI RootStorageSegments.WeakFinalizer
-[  PASS  ] RootStorageSegments.WeakFinalizer
-[========] 1 tests: 1 passed, 0 failed

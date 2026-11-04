@@ -1,3 +1,0 @@
-[  RUN   ] DefectRegress.LiveHolderOnAllocatingPageKeepsSlot
-[  PASS  ] DefectRegress.LiveHolderOnAllocatingPageKeepsSlot
-[========] 1 tests: 1 passed, 0 failed

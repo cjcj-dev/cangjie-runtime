@@ -2,14 +2,6 @@ name: cjthread windows bat rc
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "sym/650-*"
-    paths:
-      - runtime/build/build_cjthread_windows.bat
-      - .github/workflows/cjthread-windows-bat-rc.yml
-      - .github/workflows/cjthread-windows-bat-rc.ps1
-
 permissions:
   contents: read
 

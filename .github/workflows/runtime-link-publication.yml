@@ -1,8 +1,6 @@
 name: Native runtime link publication
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1234-*']
 permissions:
   contents: read
 jobs:

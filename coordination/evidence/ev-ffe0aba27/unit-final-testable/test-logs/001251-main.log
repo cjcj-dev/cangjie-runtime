@@ -1,4 +1,0 @@
-[  RUN   ] UpstreamDemangle.CorePackageUsesPublicResult
-UPSTREAM_DEMANGLE_TARGET package=core actual=std.core.foo() expected=std.core.foo()
-[  PASS  ] UpstreamDemangle.CorePackageUsesPublicResult
-[========] 1 tests: 1 passed, 0 failed

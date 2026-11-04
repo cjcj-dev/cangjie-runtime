@@ -2,15 +2,6 @@ name: CJThread Windows native configure
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["sym/1181-*"]
-    paths:
-      - runtime/build/build_cjthread_windows.bat
-      - runtime/config.cmake
-      - runtime/src/**
-      - runtime/tests/cjthread_windows_native.py
-      - .github/workflows/cjthread-windows-native.yml
-
 permissions:
   contents: read
 

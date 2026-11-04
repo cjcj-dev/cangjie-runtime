@@ -1,5 +1,0 @@
-[  RUN   ] FindToPublicState.NotManagedIsObservable
-[  RUN   ] FindToPublicState.NotManagedIsObservable
-GC_UNIT_OTHER_VM_OKIDOKI FindToPublicState.NotManagedIsObservable
-[  PASS  ] FindToPublicState.NotManagedIsObservable
-[========] 1 tests: 1 passed, 0 failed

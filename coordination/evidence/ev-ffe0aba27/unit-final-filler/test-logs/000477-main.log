@@ -1,3 +1,0 @@
-[  RUN   ] ZVirtualMemoryManagerTest.test_reserve_discontiguous_and_coalesce
-[  PASS  ] ZVirtualMemoryManagerTest.test_reserve_discontiguous_and_coalesce
-[========] 1 tests: 1 passed, 0 failed
