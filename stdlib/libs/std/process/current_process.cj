@@ -240,10 +240,7 @@ public class CurrentProcess <: Process {
         // check the process still running, make sure not kill the wrong process.
         if (status == PROCESS_STATUS_ALIVE) {
             CJ_CORE_ExecAtexitCallbacks()
-            let terminateResult: Int32 = unsafe { CJ_OS_Terminate(Int32(pid), force) }
-            if (terminateResult != 0) {
-                throw ProcessException("Failed to terminate process '${pid}'.")
-            }
+            unsafe { CJ_OS_Terminate(Int32(pid), force) }
             return
         }
 
