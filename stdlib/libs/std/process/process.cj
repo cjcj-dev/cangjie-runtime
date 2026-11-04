@@ -208,7 +208,14 @@ public open class Process {
     ): Int64 {
         let subProcess: SubProcess = start(command, arguments, workingDirectory: workingDirectory,
             environment: environment, stdIn: stdIn, stdOut: stdOut, stdErr: stdErr)
-        return subProcess.wait(timeout: timeout)
+        try {
+            return subProcess.wait(timeout: timeout)
+        } catch (e: TimeoutException) {
+            // Only a local reference is held here, so after the timeout the
+            // child would otherwise never be reaped on Unix.
+            reapSubProcessAfterTimeout(subProcess)
+            throw e
+        }
     }
 
     /**
@@ -329,7 +336,10 @@ public open class Process {
         let processStatus: Int8 = unsafe { CJ_OS_GetProcessAliveStatus(pid, this._startTime) }
         // check the process still running, make sure not kill the wrong process.
         if (processStatus == PROCESS_STATUS_ALIVE) {
-            unsafe { CJ_OS_Terminate(Int32(pid), force) }
+            let terminateResult: Int32 = unsafe { CJ_OS_Terminate(Int32(pid), force) }
+            if (terminateResult != 0) {
+                throw ProcessException("Failed to terminate process '${pid}'.")
+            }
             return
         }
 
@@ -833,7 +843,10 @@ func buildSubProcess(command: String, arguments: Array<String>, workingDir_c: CS
         if (!processRtnData_cp.isNull()) {
             let processRtnData: ProcessRtnData = unsafe { processRtnData_cp.read() }
             if (processRtnData.pid != 0) {
-                unsafe { CJ_OS_WaitSubProcessExit(processRtnData.pid) }
+                let reapResult: Int64 = unsafe { CJ_OS_WaitSubProcessExit(processRtnData.pid) }
+                if (reapResult < 0) {
+                    throw ProcessException("Failed to reap process '${processRtnData.pid}'.")
+                }
             }
         }
         throw e
@@ -882,7 +895,12 @@ func matchRedirectFileHandle(redirect: ProcessRedirect, stdio: StdIO): IntNative
                 throw ProcessException("Failed to open null file: cannot redirect stdio to discard mode.")
             }
         case ProcessRedirect.FromFile(file: File) =>
-            if (!exists(file.info.path) || file.isClosed()) {
+            let fileUnavailable: Bool = if (exists(file.info.path)) {
+                file.isClosed()
+            } else {
+                true
+            }
+            if (fileUnavailable) {
                 throw ProcessException("Redirect file is closed or does not exist.")
             }
             file.fileDescriptor.fileHandle
@@ -1043,7 +1061,14 @@ private func executeImpl(
 ): Int64 {
     let subProcess = launch(command, arguments, workingDirectory: workingDirectory, environment: environment,
         stdIn: stdIn, stdOut: stdOut, stdErr: stdErr)
-    subProcess.wait(timeout: timeout)
+    try {
+        return subProcess.wait(timeout: timeout)
+    } catch (e: TimeoutException) {
+        // Only a local reference is held here, so after the timeout the child
+        // would otherwise never be reaped on Unix.
+        reapSubProcessAfterTimeout(subProcess)
+        throw e
+    }
 }
 
 /**
