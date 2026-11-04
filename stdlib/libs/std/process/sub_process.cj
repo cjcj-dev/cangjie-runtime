@@ -31,6 +31,7 @@ public class SubProcess <: Process {
     var _waitReaped: Bool = false
     var _waitExitCode: Int64 = -1
     var _waitMutex: Mutex = Mutex()
+    var _stdStreamMutex: Mutex = Mutex()
 
     init(
         pid: Int64,
@@ -119,6 +120,7 @@ public class SubProcess <: Process {
     var _waitReaped: Bool = false
     var _waitExitCode: Int64 = -1
     var _waitMutex: Mutex = Mutex()
+    var _stdStreamMutex: Mutex = Mutex()
 
     init(
         pid: Int64,
@@ -256,11 +258,14 @@ func reapSubProcessAfterTimeout(process: SubProcess): Unit {
     }
     // Capture only the PID so the reaper does not retain the SubProcess.
     let pid: Int32 = Int32(process.pid) // cjlint-ignore !G.VAR.02
-    let _ = spawn {
+    let reaper: Future<Unit> = spawn {
         =>
         let _ = unsafe { CJ_OS_WaitSubProcessExit(pid) }
         return
     }
+    // The wait itself runs asynchronously, but do not let execute() return
+    // until the child has been consumed and cannot remain a zombie.
+    reaper.get()
 }
 
 private func subProcessWaitOutput(process: SubProcess): (Int64, Array<Byte>, Array<Byte>) {
@@ -291,32 +296,34 @@ private func subProcessWaitOutput(process: SubProcess): (Int64, Array<Byte>, Arr
 }
 
 private func subProcessCloseStdStream(process: SubProcess): Unit {
-    if (let Some(stdInStream) <- (process._stdIn as ProcessOutputStream)) {
-        if (let Some(stdInPipeOutputStream) <- (stdInStream.outputStream as PipeOutputStream)) {
-            try {
-                stdInPipeOutputStream.close()
-            } finally {
-                stdInStream.outputStream = NullProcessStream()
+    synchronized(process._stdStreamMutex) {
+        if (let Some(stdInStream) <- (process._stdIn as ProcessOutputStream)) {
+            if (let Some(stdInPipeOutputStream) <- (stdInStream.outputStream as PipeOutputStream)) {
+                try {
+                    stdInPipeOutputStream.close()
+                } finally {
+                    stdInStream.outputStream = NullProcessStream()
+                }
             }
         }
-    }
 
-    if (let Some(stdOutStream) <- (process._stdOut as ProcessInputStream)) {
-        if (let Some(stdOutPipeInputStream) <- (stdOutStream.inputStream as PipeInputStream)) {
-            try {
-                stdOutPipeInputStream.close()
-            } finally {
-                stdOutStream.inputStream = NullProcessStream()
+        if (let Some(stdOutStream) <- (process._stdOut as ProcessInputStream)) {
+            if (let Some(stdOutPipeInputStream) <- (stdOutStream.inputStream as PipeInputStream)) {
+                try {
+                    stdOutPipeInputStream.close()
+                } finally {
+                    stdOutStream.inputStream = NullProcessStream()
+                }
             }
         }
-    }
 
-    if (let Some(stdErrStream) <- (process._stdErr as ProcessInputStream)) {
-        if (let Some(stdErrPipeInputStream) <- (stdErrStream.inputStream as PipeInputStream)) {
-            try {
-                stdErrPipeInputStream.close()
-            } finally {
-                stdErrStream.inputStream = NullProcessStream()
+        if (let Some(stdErrStream) <- (process._stdErr as ProcessInputStream)) {
+            if (let Some(stdErrPipeInputStream) <- (stdErrStream.inputStream as PipeInputStream)) {
+                try {
+                    stdErrPipeInputStream.close()
+                } finally {
+                    stdErrStream.inputStream = NullProcessStream()
+                }
             }
         }
     }

@@ -28,19 +28,19 @@ main(): Int64 {
     }
 
     // execute() owns the temporary SubProcess, so its timeout path must kill
-    // and reap the child before returning. A post-timeout shell action must
-    // never run.
+    // and reap the child before returning. The short delayed write makes a
+    // failed kill observable within this test instead of checking too early.
     let marker = Path("/tmp/cj_subprocess_timeout_marker")
     if (exists(marker)) {
         remove(marker)
     }
     try {
-        execute("/bin/sh", ["-c", "sleep 5; echo late > /tmp/cj_subprocess_timeout_marker"],
+        execute("/bin/sh", ["-c", "sleep 0.2; echo late > /tmp/cj_subprocess_timeout_marker"],
             stdOut: Discard, stdErr: Discard, timeout: Duration.millisecond * 10)
         return 4
     } catch (_: TimeoutException) {
     }
-    sleep(Duration.millisecond * 100)
+    sleep(Duration.millisecond * 400)
     if (exists(marker)) {
         remove(marker)
         return 5

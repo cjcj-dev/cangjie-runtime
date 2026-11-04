@@ -336,7 +336,10 @@ public open class Process {
         let processStatus: Int8 = unsafe { CJ_OS_GetProcessAliveStatus(pid, this._startTime) }
         // check the process still running, make sure not kill the wrong process.
         if (processStatus == PROCESS_STATUS_ALIVE) {
-            unsafe { CJ_OS_Terminate(Int32(pid), force) }
+            let terminateResult: Int32 = unsafe { CJ_OS_Terminate(Int32(pid), force) }
+            if (terminateResult != 0) {
+                throw ProcessException("Failed to terminate process '${pid}'.")
+            }
             return
         }
 
