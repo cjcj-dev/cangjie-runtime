@@ -506,12 +506,17 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
             // Read the hash in place so the miss path does not copy the whole entry (K/V).
             let entryHash: Int64 = entries[entryIndex].hash
             if (hash == entryHash) {
-                if (key == entries[entryIndex].key) {
-                    let oldValue: Option<V> = Some(entries[entryIndex].value)
-                    entries[entryIndex] = HashMapEntry<K, V>(hash, entries[entryIndex].next,
-                        entries[entryIndex].key, value)
+                // Snapshot the hit entry before invoking user equality. Equality may
+                // re-enter this map and recycle the slot while the callback runs.
+                let entry = entries[entryIndex]
+                if (key == entry.key) {
+                    let oldValue: Option<V> = Some(entry.value)
+                    entries[entryIndex] = HashMapEntry<K, V>(entry.hash, entry.next,
+                        entry.key, value)
                     return oldValue
                 }
+                entryIndex = entry.next
+                continue
             }
             entryIndex = entries[entryIndex].next
         }
@@ -556,9 +561,12 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
         while (entryIndex >= 0) {
             let entryHash: Int64 = entries[entryIndex].hash
             if (hash == entryHash) {
-                if (key == entries[entryIndex].key) {
-                    return Some(entries[entryIndex].value)
+                let entry = entries[entryIndex]
+                if (key == entry.key) {
+                    return Some(entry.value)
                 }
+                entryIndex = entry.next
+                continue
             }
             entryIndex = entries[entryIndex].next
         }
@@ -588,11 +596,14 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
         while (entryIndex >= 0) {
             let entryHash: Int64 = entries[entryIndex].hash
             if (hash == entryHash) {
-                if (key == entries[entryIndex].key) {
-                    entries[entryIndex] = HashMapEntry<K, V>(hash, entries[entryIndex].next,
-                        entries[entryIndex].key, value)
+                let entry = entries[entryIndex]
+                if (key == entry.key) {
+                    entries[entryIndex] = HashMapEntry<K, V>(entry.hash, entry.next,
+                        entry.key, value)
                     return
                 }
+                entryIndex = entry.next
+                continue
             }
             entryIndex = entries[entryIndex].next
         }
@@ -837,9 +848,12 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
         while (bucket >= 0) {
             let entryHash: Int64 = entries[bucket].hash
             if (hash == entryHash) {
-                if (key == entries[bucket].key) {
+                let entry = entries[bucket]
+                if (key == entry.key) {
                     return true
                 }
+                bucket = entry.next
+                continue
             }
             bucket = entries[bucket].next
         }
