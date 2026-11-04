@@ -8,6 +8,7 @@
 #include <new>
 
 #include "TypeInfoManager.h"
+#include <new>
 #include "Base/CString.h"
 #include "Base/MemUtils.h"
 #include "Common/ColourEncoding.h"
@@ -179,7 +180,7 @@ void TypeInfoManager::Fini()
     registeredTypeInfos.clear();
     imageList.clear();
     for (const auto& mTable : mTableList) {
-        delete mTable.second;
+        mTable.second->~MTableDesc();
     }
     mTableList.clear();
     for (const auto& m : mmapList) {
@@ -456,7 +457,7 @@ void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uint
     for (U32 uuid : removedUUIDs) {
         auto mTableIt = mTableList.find(uuid);
         if (mTableIt != mTableList.end()) {
-            delete mTableIt->second;
+            mTableIt->second->~MTableDesc();
             mTableList.erase(mTableIt);
         }
     }
@@ -1396,5 +1397,13 @@ uintptr_t TypeInfoManager::Allocate(size_t size)
     }
     position.store(current + size, std::memory_order_relaxed);
     return current;
+}
+MTableDesc* TypeInfoManager::AllocateMTableDesc(ArchUInt bitmap)
+{
+    // The arena's low-48-bit seal keeps the short-bitmap marker clear.
+    // Retire member resources in place on unload/Fini; storage remains in the arena.
+    constexpr size_t alignment = alignof(MTableDesc);
+    uintptr_t address = MRT_ALIGN(Allocate(sizeof(MTableDesc) + alignment - 1), alignment);
+    return new (reinterpret_cast<void*>(address)) MTableDesc(bitmap);
 }
 } // namespace MapleRuntime

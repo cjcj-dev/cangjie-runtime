@@ -233,8 +233,7 @@ void TypeInfo::TryInitMTableNoLock()
         auto desc = tim.GetMTableDesc(tiUUID);
         if (desc == nullptr) {
             ArchUInt bitmap = GetResolveBitmapFromMTableDesc();
-            desc = new (std::nothrow) MTableDesc(bitmap);
-            CHECK_DETAIL(desc != nullptr, "fail to allocate MTableDesc");
+            desc = tim.AllocateMTableDesc(bitmap);
             tim.RecordMTableDesc(tiUUID, desc);
         }
         SetMTableDesc(desc);

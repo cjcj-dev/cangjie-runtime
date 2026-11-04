@@ -113,6 +113,11 @@ class InheritedAndExtendedMembers {}
  */
 sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
     private static let CACHE = HashMap<String, TypeInfo>()
+    // All cache state is guarded by TYPE_INFO_CREATE_LOCK. UUID 0 cannot
+    // establish identity. Metadata must remain valid throughout a call;
+    // these checks do not lease an image or make old wrappers unload-safe.
+    private static let PTR_MEMO = HashMap<UIntNative, TypeInfo>()
+    private static let PTR_MEMO_UUID = HashMap<UIntNative, Int32>()
 
     // this is a pointer to type metadata
     protected let _info: CPointer<Unit>
@@ -175,31 +180,14 @@ sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
         if (qualifiedName.contains("/")) {
             throw InfoNotFoundException("TypeInfo '${qualifiedName}' not found.")
         }
-        synchronized(TYPE_INFO_CREATE_LOCK) {
-            let name = normalize(qualifiedName)
-            if (let Some(ti) <- CACHE.get(name)) {
-                return ti
-            }
-
-            if (let Some(ti) <- CACHE.get(qualifiedName)) {
-                if (qualifiedName != name) {
-                    CACHE.add(name, ti)
-                }
-                return ti
-            }
-
-            return if (!name.contains("<")) {
-                let replacedName = name.replace("::", "/")
-                let (realName, typeInfoPointer) = getInfoPointerByQualifiedName(replacedName)
-                let newQualifiedName = realName.replace("std.core.", "")
-                if (isGeneric(typeInfoPointer)) {
-                    createGenericTypeInfo(typeInfoPointer, newQualifiedName)
-                } else {
-                    createConcreteTypeInfo(typeInfoPointer, newQualifiedName)
-                }
-            } else {
-                TypeTemplateParser().parse(name.replace("std.core.", ""))
-            }
+        // Resolve against the current loader before consulting a wrapper cache.
+        // A name alone does not identify a load generation, even without address reuse.
+        let name = normalize(qualifiedName)
+        return if (!name.contains("<")) {
+            let (_, typeInfoPointer) = getInfoPointerByQualifiedName(name.replace("::", "/"))
+            getOrCreate(typeInfoPointer)
+        } else {
+            TypeTemplateParser().parse(name.replace("std.core.", ""))
         }
     }
 
@@ -327,24 +315,67 @@ sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
         sb.toString()
     }
 
+    // Remove by wrapper identity, not TypeInfo's name-based equality. Collect
+    // keys before mutation and never dereference the retired wrapper's metadata.
+    private static func invalidateCachedTypeInfo(stale: TypeInfo): Unit {
+        let names = ArrayList<String>()
+        for ((key, value) in CACHE) {
+            if (refEq(value, stale)) {
+                names.add(key)
+            }
+        }
+        for (key in names) {
+            CACHE.remove(key)
+        }
+        let pointers = ArrayList<UIntNative>()
+        for ((key, value) in PTR_MEMO) {
+            if (refEq(value, stale)) {
+                pointers.add(key)
+            }
+        }
+        for (key in pointers) {
+            PTR_MEMO.remove(key)
+            PTR_MEMO_UUID.remove(key)
+        }
+    }
+
     static func getOrCreate(typeInfoPointer: CPointer<Unit>): TypeInfo {
         if (typeInfoPointer.isNull()) {
             throw InfoNotFoundException("Failed to get TypeInfo from pointer.")
         }
-        let isGenericTypeInfo: Bool = isGeneric(typeInfoPointer)
+        let ptrKey = typeInfoPointer.toUIntNative()
         synchronized(TYPE_INFO_CREATE_LOCK) {
-            if (isGenericTypeInfo) {
-                let qualifiedName = getQualifiedName(typeInfoPointer)
-                return CACHE.get(qualifiedName) ?? createGenericTypeInfo(typeInfoPointer, qualifiedName)
+            let uuid = unsafe { CPointer<Int32>(CPointer<Byte>(typeInfoPointer) + UUID_OFFSET).read() }
+            if (let Some(cached) <- PTR_MEMO.get(ptrKey)) {
+                if (uuid != 0 && PTR_MEMO_UUID.get(ptrKey) == Some(uuid)) {
+                    return cached
+                }
+                invalidateCachedTypeInfo(cached)
             }
-
-            let uuid = unsafe { CPointer<Int32>(CPointer<Byte>(typeInfoPointer) + UUID_OFFSET).read().toString() }
-            return if (let Some(ti) <- CACHE.get(uuid)) {
-                ti
+            let qualifiedName = getQualifiedName(typeInfoPointer)
+            let uuidKey = uuid.toString()
+            // The same name may now resolve to a different address. Neither a
+            // stale name nor a UUID alias may reinsert the old wrapper into the memo.
+            if (let Some(stale) <- CACHE.get(qualifiedName)) {
+                invalidateCachedTypeInfo(stale)
+            }
+            if (uuid != 0) {
+                if (let Some(stale) <- CACHE.get(uuidKey)) {
+                    invalidateCachedTypeInfo(stale)
+                }
+            }
+            let typeInfo = if (isGeneric(typeInfoPointer)) {
+                createGenericTypeInfo(typeInfoPointer, qualifiedName)
             } else {
-                let qualifiedName = getQualifiedName(typeInfoPointer)
-                CACHE.get(qualifiedName) ?? createConcreteTypeInfo(typeInfoPointer, qualifiedName, uuid: uuid)
+                createConcreteTypeInfo(typeInfoPointer, qualifiedName)
             }
+            if (uuid != 0) {
+                CACHE.add(qualifiedName, typeInfo)
+                CACHE.add(uuidKey, typeInfo)
+                PTR_MEMO.add(ptrKey, typeInfo)
+                PTR_MEMO_UUID.add(ptrKey, uuid)
+            }
+            return typeInfo
         }
     }
 
@@ -353,7 +384,6 @@ sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
             throw ReflectException("Unexpected empty 'qualifiedName'.")
         }
         let typeInfo = GenericTypeInfo(typeInfoPointer)
-        CACHE.add(qualifiedName, typeInfo)
         typeInfo
     }
 
@@ -393,18 +423,15 @@ sealed abstract class TypeInfo <: Equatable<TypeInfo> & Hashable & ToString {
         }
     }
 
-    static func createConcreteTypeInfo(typeInfoPointer: CPointer<Unit>, qualifiedName: String, uuid!: ?String = None): TypeInfo {
+    static func createConcreteTypeInfo(typeInfoPointer: CPointer<Unit>, qualifiedName: String): TypeInfo {
         if (qualifiedName.isEmpty()) {
             throw ReflectException("Unexpected empty 'qualifiedName'.")
         }
 
         let typeInfo = TypeInfo.getTypeInfoByPointer(typeInfoPointer, qualifiedName)
 
-        let uuidStr = uuid ?? unsafe { CPointer<Int32>(CPointer<Byte>(typeInfoPointer) + UUID_OFFSET).read().toString() }
         let replacedName = qualifiedName.replace("/", "::")
         typeInfo._replacedName = replacedName
-        CACHE.add(replacedName, typeInfo)
-        CACHE.add(uuidStr, typeInfo)
         typeInfo
     }
 

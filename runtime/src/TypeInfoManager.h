@@ -113,6 +113,7 @@ public:
     void ForgetTypeInfoImage(uintptr_t base, size_t size);
 private:
     uintptr_t Allocate(size_t size);
+    MTableDesc* AllocateMTableDesc(ArchUInt bitmap);
     CString GetGCTibStr(TypeInfo* typeInfo);
     void AddMTable(TypeTemplate* tt, TypeInfo* newTypeInfo, U32 argSize, TypeInfo* args[]);
     // Helper methods for copying method and parameter information

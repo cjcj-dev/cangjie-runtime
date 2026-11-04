@@ -143,3 +143,5 @@ windows_module_header.cpp               manual     compile the product WinModule
 finalizer_thread_data                   manual     installed Linux x64 runtime and CJ compiler; compare finalizer registration return TLS with current carrier TLS; controlled old/new arms, not run at configure time
 
 native_safety                           manual     product RwLock LLVM CAS-order check and native allocator boundary regression; see native_safety/README.md
+
+mtable_arena.cpp                          manual     Linux installed runtime SO; build plugin with MTABLE_ARENA_PLUGIN and native host, actual GetMTable dispatch plus loader unload and runtime Fini
