@@ -17,6 +17,13 @@ main(): Int64 {
     if (process.wait() != 7 || process.wait() != 7) {
         return 2
     }
+    // A reap-complete process must propagate a failed terminate instead of
+    // treating the platform return value as a successful kill.
+    try {
+        process.terminate(force: true)
+        return 7
+    } catch (_: ProcessException) {
+    }
 
     // Concurrent waiters share one native reap and observe one cached status.
     let concurrent = launch("/bin/sh", ["-c", "printf concurrent; printf err >&2; exit 9"],

@@ -843,7 +843,10 @@ func buildSubProcess(command: String, arguments: Array<String>, workingDir_c: CS
         if (!processRtnData_cp.isNull()) {
             let processRtnData: ProcessRtnData = unsafe { processRtnData_cp.read() }
             if (processRtnData.pid != 0) {
-                unsafe { CJ_OS_WaitSubProcessExit(processRtnData.pid) }
+                let reapResult: Int64 = unsafe { CJ_OS_WaitSubProcessExit(processRtnData.pid) }
+                if (reapResult < 0) {
+                    throw ProcessException("Failed to reap process '${processRtnData.pid}'.")
+                }
             }
         }
         throw e

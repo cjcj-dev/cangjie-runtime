@@ -235,11 +235,7 @@ private func subProcessWait(process: SubProcess, timeout: ?Duration): Int64 {
 func reapSubProcessAfterTimeout(process: SubProcess): Unit {
     // Windows process handles do not create zombies, but execute() still must
     // stop a timed-out child before the local SubProcess becomes unreachable.
-    try {
-        process.terminate(force: true)
-    } catch (_: ProcessException) {
-        // The process may have exited after the timeout poll.
-    }
+    process.terminate(force: true)
 }
 
 @When[os != "Windows"]
@@ -247,25 +243,34 @@ func reapSubProcessAfterTimeout(process: SubProcess): Unit {
     if (process._waitReaped) {
         return
     }
-    // execute() owns no process handle after the timeout is raised. Terminate
-    // first so a command that ignores the timeout cannot run indefinitely, then
-    // reap it in the detached waiter below. A natural exit between the timeout
-    // and terminate is harmless; the waiter still consumes the exit status.
-    try {
-        process.terminate(force: true)
-    } catch (_: ProcessException) {
-        // The process may have exited after the timeout poll.
-    }
-    // Capture only the PID so the reaper does not retain the SubProcess.
-    let pid: Int32 = Int32(process.pid) // cjlint-ignore !G.VAR.02
-    let reaper: Future<Unit> = spawn {
-        =>
-        let _ = unsafe { CJ_OS_WaitSubProcessExit(pid) }
+    // Probe the natural-exit race before attempting to kill the child.
+    let (probeResult, _) = pollSubProcessExit(process)
+    if (probeResult == 1) {
         return
     }
-    // The wait itself runs asynchronously, but do not let execute() return
-    // until the child has been consumed and cannot remain a zombie.
-    reaper.get()
+    if (probeResult < 0) {
+        throw ProcessException("Failed to reap process '${process.pid}'.")
+    }
+
+    // A live child must be terminated before the local SubProcess becomes
+    // unreachable. Do not hide a failed kill behind an unbounded waiter.
+    try {
+        process.terminate(force: true)
+    } catch (e: ProcessException) {
+        let (retryResult, _) = pollSubProcessExit(process)
+        if (retryResult == 1) {
+            return
+        }
+        throw e
+    }
+
+    // Kill succeeded, so reap directly and preserve native failure. The
+    // native wait cannot be left in a detached Future after a failed kill.
+    let pid: Int32 = Int32(process.pid) // cjlint-ignore !G.VAR.02
+    let reapResult: Int64 = unsafe { CJ_OS_WaitSubProcessExit(pid) }
+    if (reapResult < 0) {
+        throw ProcessException("Failed to reap process '${pid}'.")
+    }
 }
 
 private func subProcessWaitOutput(process: SubProcess): (Int64, Array<Byte>, Array<Byte>) {

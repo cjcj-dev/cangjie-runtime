@@ -588,7 +588,9 @@ extern int32_t CJ_OS_Terminate(int32_t pid, bool force)
 
     BOOL res = TerminateProcess(processHandle, 1);
     CloseHandle(processHandle);
-    return (int32_t)res;
+    // Normalize Win32 BOOL to the Unix kill contract used by Process:
+    // zero means success and a negative value means failure.
+    return res ? 0 : -1;
 }
 
 static char* GetProcessCommand(HANDLE processHandle)
