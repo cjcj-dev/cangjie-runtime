@@ -35,6 +35,7 @@ private:
 class TypeInfoManager {
     friend class TypeInfo;
     friend class CJFileLoader;
+    friend class TypeInfoManagerTestAccess;
 public:
     // 1024: number of buckets for the hash map.
     explicit TypeInfoManager() : genericTypeInfoDescMap(1024), genericTypeInfoFastMap(4096) {}
@@ -79,7 +80,7 @@ public:
     bool ContainsAddress(uintptr_t addr) const
     {
         ElfUnloadQuiescence::ReadScope reader;
-        std::lock_guard<std::recursive_mutex> lock(tiMutex);
+        std::lock_guard<std::mutex> lock(allocationMutex);
         for (const auto& m : mmapList) {
             if (addr >= m.first && addr < m.first + m.second) {
                 return true;
@@ -92,12 +93,15 @@ public:
     bool IsResidentTypeInfoAddress(uintptr_t addr) const
     {
         ElfUnloadQuiescence::ReadScope reader;
-        std::lock_guard<std::recursive_mutex> lock(tiMutex);
-        for (const auto& m : mmapList) {
-            if (addr >= m.first && addr < m.first + m.second) {
-                return true;
+        {
+            std::lock_guard<std::mutex> allocationLock(allocationMutex);
+            for (const auto& m : mmapList) {
+                if (addr >= m.first && addr < m.first + m.second) {
+                    return true;
+                }
             }
         }
+        std::lock_guard<std::recursive_mutex> lock(tiMutex);
         for (const auto& m : imageList) {
             if (addr >= m.first && addr < m.first + m.second) {
                 return true;
@@ -240,6 +244,10 @@ private:
     void FillRemainingField(GenericTiDesc* &tiDesc, TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
 
     size_t mapMemory = 1 * MB; // dynamic scaling, 1mb each time.
+    // Protects the current mmap segment, its bump pointer, and mmapList as one
+    // allocator state. TypeInfo construction may run concurrently; only arena
+    // growth and cursor advancement take this lock.
+    mutable std::mutex allocationMutex;
     std::atomic<uintptr_t> position;
     std::mutex ttMutex; //  guaranteed typeTemplates insert and find atomic
     mutable std::recursive_mutex tiMutex; // guaranteed nonGenericTypeInfo insert and find atomic

@@ -148,6 +148,7 @@ TypeInfoManager& TypeInfoManager::GetTypeInfoManager() { return *typeInfoManager
 
 void TypeInfoManager::Init()
 {
+    std::lock_guard<std::mutex> lock(allocationMutex);
     NewMMap(mapMemory);
     static_assert(sizeof(HeapSlot<>) == sizeof(uintptr_t),
                   "HeapSlot carrier must remain one 64-bit word");
@@ -173,6 +174,7 @@ void TypeInfoManager::Init()
 
 void TypeInfoManager::Fini()
 {
+    std::lock_guard<std::mutex> lock(allocationMutex);
     // release resources
     registeredTypeInfos.clear();
     imageList.clear();
@@ -1362,11 +1364,18 @@ uintptr_t TypeInfoManager::Allocate(size_t size)
     // platforms so tip addresses stay gate-plausible (tipwho: mis8≈908/920 without this).
     // 8 also satisfies 4. sizeof(TypeInfo)=96 is already 8-aligned; name/args pads ≤7 B each.
     size = MRT_ALIGN(size, 8);
-    uintptr_t addr = position.fetch_add(size);
-    if (addr + size > endAddress) {
-        NewMMap(mapMemory);
-        addr = position.fetch_add(size);
+    // position, endAddress and mmapList describe one allocator state. Keep
+    // the fit check, optional growth, and cursor advance in one transaction so
+    // concurrent TypeInfo creators cannot publish overlapping arena ranges or
+    // reset the cursor into a segment installed by another thread.
+    std::lock_guard<std::mutex> lock(allocationMutex);
+    uintptr_t current = position.load(std::memory_order_relaxed);
+    if (current > endAddress || size > endAddress - current) {
+        // A single metadata object may exceed the normal 1 MiB segment.
+        NewMMap(size > mapMemory ? size : mapMemory);
+        current = position.load(std::memory_order_relaxed);
     }
-    return addr;
+    position.store(current + size, std::memory_order_relaxed);
+    return current;
 }
 } // namespace MapleRuntime
