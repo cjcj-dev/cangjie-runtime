@@ -3,6 +3,12 @@ package reflectcache
 
 import std.reflect.*
 
+foreign {
+    func ReflectFixtureInit(): Int32
+    func ReflectFixtureSet(index: Int32, value: UInt32): Unit
+    func ReflectFixtureRestore(): Unit
+}
+
 public class First {
     public init() {}
 }
@@ -44,5 +50,32 @@ main(args: Array<String>): Int64 {
     }
     require(missingConstructor, "construct-missing-exception-name")
     println("REFLECT_CACHE_PUBLIC_PASS")
+    // Only this process's two live fixture types change, after the threads join.
+    // This models serial generations; it is not a loader/unload safety test.
+    require(unsafe { ReflectFixtureInit() } == 0, "serial-fixture-prepared")
+    try {
+        unsafe { ReflectFixtureSet(0, 0); ReflectFixtureSet(1, 0) }
+        let zeroA = TypeInfo.of<First>()
+        let zeroB = TypeInfo.of<Second>()
+        require(!refEq(zeroA, zeroB), "zero-distinct-types")
+        require(!refEq(zeroA, TypeInfo.of<First>()), "zero-not-memoized")
+        unsafe { ReflectFixtureSet(0, 0x70000001); ReflectFixtureSet(1, 0x70000002) }
+        let generationA = TypeInfo.of<First>()
+        require(!refEq(first, generationA), "address-new-uuid")
+        require(refEq(generationA, TypeInfo.of<First>()), "new-generation-warm")
+        unsafe { ReflectFixtureSet(0, 0x70000003) }
+        let byName = TypeInfo.get(first.qualifiedName)
+        require(!refEq(generationA, byName), "name-resolves-current-generation")
+        require(refEq(byName, TypeInfo.of<First>()), "name-and-pointer-agree")
+        // Reusing a UUID on another live address must evict every memo alias.
+        unsafe { ReflectFixtureSet(1, 0x70000003) }
+        let aliasB = TypeInfo.of<Second>()
+        let afterAlias = TypeInfo.of<First>()
+        require(!refEq(byName, afterAlias), "uuid-alias-clears-pointer-memo")
+        require(!refEq(aliasB, afterAlias), "uuid-alias-not-wrapper-identity")
+    } finally {
+        unsafe { ReflectFixtureRestore() }
+    }
+    println("REFLECT_CACHE_SERIAL_FIXTURE_PASS")
     return 0
 }
