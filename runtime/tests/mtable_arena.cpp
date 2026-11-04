@@ -135,7 +135,7 @@ void CreateAndConsume(Fixture& f, unsigned firstSnapshot)
         auto* ti = reinterpret_cast<TypeInfo*>(&f.types[i]);
         desc[i] = ti->GetMTableDesc();
         auto address = reinterpret_cast<uintptr_t>(desc[i]);
-        Check(desc[i] && !ti->IsMTableDescUnInitialized(), "published-descriptor");
+        Check(desc[i] && (f.types[i].validInheritNum & (1U << 15)) == 0, "published-descriptor");
         Check(manager.ContainsAddress(address), "descriptor-in-product-arena");
         Check(address % alignof(MTableDesc) == 0 && address >> 48 == 0, "descriptor-alignment-low48");
         Check(desc[i]->mTableBitmap.tag == (SIGN_BIT | 1U), "short-bitmap-preserved");
