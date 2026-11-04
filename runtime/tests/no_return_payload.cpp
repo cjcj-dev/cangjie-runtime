@@ -6,7 +6,7 @@
 #include <cstring>
 #include <thread>
 #include "Concurrency/ConcurrencyModel.h"
-#include "Runtime.h"
+#include "Common/Runtime.h"
 
 using namespace MapleRuntime;
 extern "C" void* CJ_MCC_NewCJThreadNoReturn(void*, void*, void*, void*);
@@ -22,7 +22,11 @@ bool copied = false;
 unsigned rootMask = 0;
 unsigned nativeRoots = 0;
 
+#if defined(__aarch64__)
+void Consume(void*, TypeInfo* owner)
+#else
 void Consume(void*, void*, TypeInfo* owner)
+#endif
 {
     observed.store(owner, std::memory_order_relaxed);
     reached.store(true, std::memory_order_release);
