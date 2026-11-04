@@ -6,6 +6,7 @@ import std.reflect.*
 foreign {
     func ReflectFixtureInit(): Int32
     func ReflectFixtureSet(index: Int32, value: UInt32): Unit
+    func ReflectFixtureSameName(): Unit
     func ReflectFixtureRestore(): Unit
 }
 
@@ -73,6 +74,10 @@ main(args: Array<String>): Int64 {
         let afterAlias = TypeInfo.of<First>()
         require(!refEq(byName, afterAlias), "uuid-alias-clears-pointer-memo")
         require(!refEq(aliasB, afterAlias), "uuid-alias-not-wrapper-identity")
+        unsafe { ReflectFixtureSet(1, 0x70000004); ReflectFixtureSameName() }
+        let sameNameOtherAddress = TypeInfo.of<Second>()
+        require(!refEq(afterAlias, sameNameOtherAddress), "same-name-new-address")
+        require(!refEq(afterAlias, TypeInfo.of<First>()), "name-alias-clears-old-pointer")
     } finally {
         unsafe { ReflectFixtureRestore() }
     }
