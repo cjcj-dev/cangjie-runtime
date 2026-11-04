@@ -1,2 +1,0 @@
-OHOS_RC=2 wall=42s configure=0
-/usr/bin/grep: unit-ohos/run.log: 没有那个文件或目录

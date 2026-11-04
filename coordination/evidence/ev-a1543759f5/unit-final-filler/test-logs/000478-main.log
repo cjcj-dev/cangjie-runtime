@@ -1,3 +1,0 @@
-[  RUN   ] ZVirtualMemoryManagerTest.test_insert_merges_neighbours
-[  PASS  ] ZVirtualMemoryManagerTest.test_insert_merges_neighbours
-[========] 1 tests: 1 passed, 0 failed

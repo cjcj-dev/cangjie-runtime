@@ -1,7 +1,7 @@
 # Reproducing the runtime-versus-official matrix
 
 Run the campaign on kkk2 from a private directory. Read
-`ops/design/PERF_VS_OFFICIAL_SPEC.md` before interpreting the output.
+`SPEC.md` before interpreting the output.
 
 The official arm is intentionally an uncoloured official SDK. The general
 toolchain preflight assumes a coloured target SDK, so its C2/C9 target-colour

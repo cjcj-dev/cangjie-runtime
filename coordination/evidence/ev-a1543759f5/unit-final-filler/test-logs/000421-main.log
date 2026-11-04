@@ -1,3 +1,0 @@
-[  RUN   ] BarrierOldAtomic.ReflectionStaticAggregateStoreRetiresNativeOldValue
-[  PASS  ] BarrierOldAtomic.ReflectionStaticAggregateStoreRetiresNativeOldValue
-[========] 1 tests: 1 passed, 0 failed
