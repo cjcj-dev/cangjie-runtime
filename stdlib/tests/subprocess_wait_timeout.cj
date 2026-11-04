@@ -5,7 +5,70 @@ import std.process.*
 import std.fs.*
 import std.time.*
 
+@When[os == "Linux"]
+foreign {
+    func CJ_TEST_SubprocessStart(): Int32
+    func CJ_TEST_SubprocessKillFailure(pid: Int32): Int32
+    func CJ_TEST_SubprocessKillRetry(pid: Int32): Int32
+    func CJ_TEST_SubprocessPoll(pid: Int32): Int32
+    func CJ_TEST_SubprocessCleanup(pid: Int32): Unit
+}
+
+@When[os == "Linux"]
+func runNativeWaitControl(): Int64 {
+    let pid = unsafe { CJ_TEST_SubprocessStart() }
+    if (pid <= 0) {
+        return 10
+    }
+    if (unsafe { CJ_TEST_SubprocessKillFailure(pid) } != -1) {
+        unsafe { CJ_TEST_SubprocessCleanup(pid) }
+        return 11
+    }
+    if (unsafe { CJ_TEST_SubprocessKillRetry(pid) } != 0) {
+        unsafe { CJ_TEST_SubprocessCleanup(pid) }
+        return 12
+    }
+
+    let progressStart = MonoTime.now()
+    let progress: Future<Int64> = spawn {=>
+        sleep(Duration.millisecond * 20)
+        return 1
+    }
+    var sawPollZero = false
+    while (true) {
+        let pollResult = unsafe { CJ_TEST_SubprocessPoll(pid) }
+        if (pollResult == 0) {
+            sawPollZero = true
+            sleep(Duration.millisecond)
+            continue
+        }
+        if (pollResult < 0) {
+            unsafe { CJ_TEST_SubprocessCleanup(pid) }
+            return 13
+        }
+        break
+    }
+    if (!sawPollZero || progress.get() != 1 ||
+        MonoTime.now() - progressStart > Duration.millisecond * 500) {
+        return 14
+    }
+    if (unsafe { CJ_TEST_SubprocessPoll(pid) } != -1) {
+        return 15
+    }
+    return 0
+}
+
+@When[os != "Linux"]
+func runNativeWaitControl(): Int64 {
+    return 0
+}
+
 main(): Int64 {
+    let nativeControlResult = runNativeWaitControl()
+    if (nativeControlResult != 0) {
+        return nativeControlResult
+    }
+
     // A timed poll must leave the child waitable, and every later wait must
     // return the same status after the first caller reaps it.
     let process = launch("/bin/sh", ["-c", "sleep 0.05; exit 7"],
