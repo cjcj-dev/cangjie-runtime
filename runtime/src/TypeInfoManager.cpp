@@ -548,6 +548,10 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGen
     const U32 h = desc.GetHash();
     const size_t bucketIdx = h % buckets.size();
     auto &bucket = buckets[bucketIdx];
+    // Prepare the descriptor and its owned argument vector before taking the
+    // bucket lock. Recheck under the lock because another creator may win.
+    GenericTiDesc* newDesc = new (std::nothrow) GenericTiDesc(desc);
+    CHECK_DETAIL(newDesc != nullptr, "fail to allocate GenericTiDesc");
     bucket.rwLock.LockWrite();
     auto it = bucket.maps.find(h);
     if (it != bucket.maps.end()) {
@@ -556,15 +560,14 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGen
                 // Same as GetGenericTiDesc: copy under the lock to avoid UAF.
                 GenericTiDesc* result = *descIt;
                 bucket.rwLock.UnlockWrite();
+                delete newDesc;
                 return result;
             }
         }
     }
-    GenericTiDesc* tiDesc = new (std::nothrow) GenericTiDesc(desc);
-    CHECK_DETAIL(tiDesc != nullptr, "fail to allocate GenericTiDesc");
-    bucket.maps[h].push_back(tiDesc);
+    bucket.maps[h].push_back(newDesc);
     bucket.rwLock.UnlockWrite();
-    return tiDesc;
+    return newDesc;
 }
 
 void TypeInfoManager::GenericTiDescHashMap::RemoveInRange(uintptr_t begin, size_t size)
@@ -834,9 +837,13 @@ TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, Ty
         if (typeInfoDesc->IsIniting() && typeInfoDesc->tid.load() == currentTid) {
             return typeInfoDesc->typeInfo;
         }
-        if (typeInfoDesc->IsNotCreated() && typeInfoDesc->tid.load() == currentTid) {
+        if (typeInfoDesc->tid.load() == currentTid && typeInfoDesc->IsNotCreated()) {
             CreatedTypeInfo(typeInfoDesc, tt, argSize, args);
+            continue;
         }
+        // Only the owning thread reads an unpublished typeInfo. Other threads
+        // wait for the release/acquire INITED publication without busy-spinning.
+        sched_yield();
     } while (true);
 }
 
@@ -888,6 +895,8 @@ void TypeInfoManager::CreatedTypeInfoImpl(GenericTiDesc* &tiDesc, TypeTemplate* 
     } else if (tt->IsCFunc()) {
         newTypeInfo->SetInstanceSize(ptrSize);
         newTypeInfo->SetAlign(ptrSize);
+        AddTypeInfo(newTypeInfo);
+        tiDesc->SetTypeInfoStatus(TypeInfoStatus::TYPEINFO_INITED);
         return;
     }
     U32* offsets = reinterpret_cast<U32*>(Allocate(fieldNum * sizeof(U32)));
