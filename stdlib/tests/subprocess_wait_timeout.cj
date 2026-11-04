@@ -19,8 +19,8 @@ main(): Int64 {
     }
 
     // Concurrent waiters share one native reap and observe one cached status.
-    let concurrent = launch("/bin/sh", ["-c", "sleep 0.02; exit 9"],
-        stdOut: Discard, stdErr: Discard)
+    let concurrent = launch("/bin/sh", ["-c", "printf concurrent; printf err >&2; exit 9"],
+        stdOut: Pipe, stdErr: Pipe)
     let first: Future<Int64> = spawn {=> concurrent.wait()}
     let second: Future<Int64> = spawn {=> concurrent.wait()}
     if (first.get() != 9 || second.get() != 9) {
