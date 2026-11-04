@@ -54,6 +54,7 @@ extern "C" __attribute__((visibility("default"))) Fixture* MTableArenaFixture()
 #else
 #include "Cangjie.h"
 #include "TypeInfoManager.h"
+#include "LoaderManager.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include <atomic>
 #include <cstdio>
@@ -179,7 +180,7 @@ int main(int argc, char** argv)
     auto getFixture = reinterpret_cast<Fixture*(*)()>(dlsym(handle, "MTableArenaFixture"));
     Check(getFixture != nullptr, "plugin-symbol");
     Fixture* fixture = getFixture();
-    CJFileLoader loader;
+    auto& loader = *static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     auto* file = new FixtureFile(handle, fixture);
     loader.AddLoadedFiles(file);
     CreateAndConsume(*fixture, 0);
