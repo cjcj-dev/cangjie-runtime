@@ -28,6 +28,7 @@ func runKillFailureControl(): Int64 {
 
     let terminateFailure = unsafe { CJ_TEST_WrapTerminateFailureSeen() }
     let pollZeroCalls = unsafe { CJ_TEST_WrapPollZeroCalls() }
+    println("KILL_FAILURE_FLAGS terminate=${terminateFailure} poll0=${pollZeroCalls}")
     unsafe { CJ_TEST_WrapCleanup() }
     if (terminateFailure != 1 || pollZeroCalls != 1) {
         return 11
