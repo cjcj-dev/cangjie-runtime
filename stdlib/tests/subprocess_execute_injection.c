@@ -124,7 +124,7 @@ int32_t __wrap_CJ_OS_WaitSubProcessExitNonBlocking(int32_t pid, int64_t* exitCod
         if (gate == 1) {
             // Never block the native call waiting for a managed task. Return
             // to the product's sleep/yield until that task acknowledges.
-            if (++g_poll_zero_calls >= 1000) return -1;
+            if (++g_poll_zero_calls >= 32) return -1;
             return 0;
         }
         if (gate == 2) {
