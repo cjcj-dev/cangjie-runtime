@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 #include "gc_unittest.hpp"
+#include "Cangjie.h"
 #include "TypeInfoManager.h"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <cstring>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -95,4 +97,74 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentBumpAndLargeRequest)
     GC_EXPECT_TRUE(manager.ContainsAddress(afterLarge));
 
     manager.Fini();
+}
+
+namespace {
+// TypeTemplate is a runtime metadata record emitted by the compiler and has a
+// deleted constructor. This layout mirrors that record only for the native
+// product-path test; the call still enters GetOrCreateTypeInfo directly.
+struct TestTypeTemplateLayout {
+    const char* name;
+    I8 type;
+    I8 flag;
+    U16 fieldNum;
+    U16 typeArgsNum;
+    std::atomic<U16> uuid;
+    const GenericFunc* fieldFns;
+    GenericFunc superFn;
+    FuncRef finalizerMethod;
+    ReflectInfo* reflectInfo;
+    ExtensionData** vExtensionDataStart;
+    U16 validInheritNum;
+};
+
+static_assert(sizeof(TestTypeTemplateLayout) == sizeof(TypeTemplate));
+
+TypeTemplate* MakeRawArrayTemplate(void* storage, const char* name, U16 uuid)
+{
+    std::memset(storage, 0, sizeof(TestTypeTemplateLayout));
+    auto* layout = reinterpret_cast<TestTypeTemplateLayout*>(storage);
+    layout->name = name;
+    layout->type = TypeKind::TYPE_KIND_RAWARRAY;
+    layout->typeArgsNum = 1;
+    layout->uuid.store(uuid, std::memory_order_relaxed);
+    return reinterpret_cast<TypeTemplate*>(storage);
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentGenericCreation)
+{
+    RuntimeParam param {};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+
+    DYN_TypeInfo argument {};
+    argument.typeInfoName = "std.core:Int64";
+    argument.type = TypeKind::TYPE_KIND_INT64;
+    argument.instanceSize = sizeof(int64_t);
+    argument.uuid = 1;
+    argument.align = sizeof(int64_t);
+    TypeInfo* args[] = { reinterpret_cast<TypeInfo*>(&argument) };
+
+    alignas(TypeTemplate) std::byte storageA[sizeof(TypeTemplate)];
+    alignas(TypeTemplate) std::byte storageB[sizeof(TypeTemplate)];
+    TypeTemplate* templateA = MakeRawArrayTemplate(storageA, "arena:A", 101);
+    TypeTemplate* templateB = MakeRawArrayTemplate(storageB, "arena:B", 102);
+    TypeInfo* created[2] = { nullptr, nullptr };
+    std::thread first([&] { created[0] = TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(templateA, 1, args); });
+    std::thread second([&] { created[1] = TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(templateB, 1, args); });
+    first.join();
+    second.join();
+
+    GC_EXPECT_TRUE(created[0] != nullptr);
+    GC_EXPECT_TRUE(created[1] != nullptr);
+    GC_EXPECT_NE(created[0], created[1]);
+    GC_EXPECT_TRUE((reinterpret_cast<uintptr_t>(created[0]) & 7U) == 0);
+    GC_EXPECT_TRUE((reinterpret_cast<uintptr_t>(created[1]) & 7U) == 0);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsAddress(
+        reinterpret_cast<uintptr_t>(created[0])));
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsAddress(
+        reinterpret_cast<uintptr_t>(created[1])));
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
