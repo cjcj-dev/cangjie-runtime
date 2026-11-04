@@ -1,0 +1,9 @@
+# Managed Monitor linker classification
+
+Compile `linker_monitor_managed.cj` with the ordinary public cjc driver, `--ffunction-sections --static --static-std`, the newly installed std CJO/archives and normal native runtime install. Compile `linker_monitor_managed.cpp` with the product CXX configuration and link its archive into that executable. Use the real installed `cjstart.o` and `cjld.lds`; do not call a copied classifier or set StackManager boundaries in the test.
+
+The native bridge queries the installed static StackManager classifier after normal runtime initialization. A cjc-generated `@C` function whose name contains Monitor must be classified as user code, a plain managed function remains user code, and the native `MonitorR05Control` function remains runtime code. Target rc is 0. A `control` argument disables only the user assertion, keeping both independent native/plain checks.
+
+For the product cut, change the isolated consumer's actual installed script `.text.Monitor*` back to `.text.*Monitor*`, then link through the same driver. Expected target rc is 41 at `R05_CLASSIFIER_ASSERT`, with native=1/user=1/plain=0; the control must remain 0. Restore the original installed script bytes, relink and rerun both. Preserve cjc stages, map, intermediate sections, ELF identity, script identity and own exit codes. This checks real classification of cjc-produced code; it does not qualify arbitrary stack unwinding or other platforms.
+
+The currently adopted cand5b public compiler rejects both `--ffunction-sections` and `--llc-options=-function-sections` before the target executes. Those first failures are retained and the compiler owner must close the public entry gap before this managed probe can qualify. Do not substitute an internal llc call or manually assigned C sections for this probe. The existing separate C section probe remains a finite linker-layer result.
