@@ -668,6 +668,16 @@ U64 TypeInfoManager::GenericTiDescFastMap::ComputeHash(
     for (U32 idx = 0; idx < argSize; ++idx) {
         mix(reinterpret_cast<Uptr>(args[idx]));
     }
+    // FNV-1a ends in a multiply, so bit k of the result depends only on bits <= k of the mixed
+    // values. TypeTemplate and TypeInfo addresses are 8-byte aligned, which kept the low three
+    // bits constant for a given argSize: only one slot in eight could be a home slot and lookups
+    // walked long linear-probe runs. Fold the high bits down (murmur3 fmix64) before the
+    // power-of-two slot mask is applied.
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
     return hash;
 }
 

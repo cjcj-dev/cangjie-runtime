@@ -197,6 +197,7 @@ private:
         std::vector<Bucket> buckets;
     };
     class GenericTiDescFastMap {
+        friend class TypeInfoManagerTestAccess;
     public:
         explicit GenericTiDescFastMap(size_t initialCapacity);
         ~GenericTiDescFastMap();

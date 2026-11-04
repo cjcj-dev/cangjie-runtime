@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <cstring>
 #include <thread>
@@ -25,6 +26,98 @@ public:
     static uintptr_t Allocate(TypeInfoManager& manager, size_t size)
     {
         return manager.Allocate(size);
+    }
+
+    struct FastMapShape {
+        size_t entries;
+        size_t capacity;
+        size_t totalDistance;
+        size_t maxDistance;
+        bool lookupsExact;
+    };
+
+    // Arena-shaped generic keys: 8-byte aligned TypeTemplate and TypeInfo addresses with the
+    // sizeof(TypeInfo) stride CreatedTypeInfoImpl uses. The fast map only hashes and compares
+    // key and value pointers, so these addresses are never dereferenced.
+    static void FastMapKey(size_t index, TypeTemplate*& tt, U32& argSize, TypeInfo* args[])
+    {
+        constexpr uintptr_t templateBase = 0x7f3a12345000ULL;
+        constexpr uintptr_t arenaBase = 0x7f3b00000000ULL;
+        constexpr uintptr_t typeInfoStride = 96;
+        tt = reinterpret_cast<TypeTemplate*>(templateBase + (index % 64) * 64);
+        argSize = index % 3 == 0 ? 2 : 1;
+        for (U32 arg = 0; arg < argSize; ++arg) {
+            args[arg] = reinterpret_cast<TypeInfo*>(arenaBase + (index * 2 + arg) * typeInfoStride);
+        }
+    }
+
+    static TypeInfoManager::GenericTiDesc* FastMapValue(size_t index)
+    {
+        return reinterpret_cast<TypeInfoManager::GenericTiDesc*>(0x7f3c00000000ULL + index * 64);
+    }
+
+    // Publishes keyCount entries through the product Get/Insert generation handshake, checks every
+    // lookup, and reports how far each published entry sits from its home slot.
+    static FastMapShape FillFastMap(size_t keyCount, size_t initialCapacity)
+    {
+        TypeInfoManager::GenericTiDescFastMap map(initialCapacity);
+        TypeTemplate* tt = nullptr;
+        U32 argSize = 0;
+        TypeInfo* args[2] = { nullptr, nullptr };
+        bool exact = true;
+        for (size_t index = 0; index < keyCount; ++index) {
+            FastMapKey(index, tt, argSize, args);
+            U64 generation = 0;
+            exact = exact && map.Get(tt, argSize, args, generation) == nullptr;
+            map.Insert(tt, argSize, args, FastMapValue(index), generation);
+        }
+        for (size_t index = 0; index < keyCount; ++index) {
+            FastMapKey(index, tt, argSize, args);
+            U64 generation = 0;
+            exact = exact && map.Get(tt, argSize, args, generation) == FastMapValue(index);
+        }
+        FastMapKey(keyCount, tt, argSize, args);
+        U64 generation = 0;
+        exact = exact && map.Get(tt, argSize, args, generation) == nullptr;
+
+        auto* table = map.activeTable.load(std::memory_order_acquire);
+        const size_t mask = table->capacity - 1;
+        FastMapShape shape { 0, table->capacity, 0, 0, exact };
+        for (size_t slot = 0; slot < table->capacity; ++slot) {
+            auto* entry = table->slots[slot].load(std::memory_order_acquire);
+            if (entry == nullptr) {
+                continue;
+            }
+            const size_t distance = (slot - (entry->hash & mask)) & mask;
+            ++shape.entries;
+            shape.totalDistance += distance;
+            shape.maxDistance = std::max(shape.maxDistance, distance);
+        }
+        return shape;
+    }
+
+    // Unload invalidation must keep dropping every cached descriptor and refusing inserts that
+    // observed an older generation.
+    static bool FastMapInvalidationHolds()
+    {
+        TypeInfoManager::GenericTiDescFastMap map(8);
+        TypeTemplate* tt = nullptr;
+        U32 argSize = 0;
+        TypeInfo* args[2] = { nullptr, nullptr };
+        FastMapKey(1, tt, argSize, args);
+        U64 before = 0;
+        bool holds = map.Get(tt, argSize, args, before) == nullptr;
+        map.Insert(tt, argSize, args, FastMapValue(1), before);
+        U64 observed = 0;
+        holds = holds && map.Get(tt, argSize, args, observed) == FastMapValue(1) && observed == before;
+        map.Invalidate();
+        U64 after = 0;
+        holds = holds && map.Get(tt, argSize, args, after) == nullptr && after != before;
+        map.Insert(tt, argSize, args, FastMapValue(1), before);
+        holds = holds && map.Get(tt, argSize, args, observed) == nullptr;
+        map.Insert(tt, argSize, args, FastMapValue(1), after);
+        holds = holds && map.Get(tt, argSize, args, observed) == FastMapValue(1);
+        return holds;
     }
 };
 } // namespace MapleRuntime
@@ -177,4 +270,32 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentGenericCreation)
     GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsAddress(
         reinterpret_cast<uintptr_t>(created[1])));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// GenericTiDescFastMap::Get is the GetOrCreateTypeInfo hit path. Its slot index is the low bits of
+// the key hash, so aligned metadata addresses must still spread over every slot; otherwise each hit
+// walks a linear-probe run and dereferences every non-matching entry on the way.
+GC_TEST(TypeInfoFastMap, AlignedKeysStayNearHomeSlot)
+{
+    using MapleRuntime::TypeInfoManagerTestAccess;
+    const auto atLoad = TypeInfoManagerTestAccess::FillFastMap(2000, 4096);
+    const auto grown = TypeInfoManagerTestAccess::FillFastMap(3000, 8);
+    std::printf("TypeInfoFastMap fixed: entries=%zu capacity=%zu totalDistance=%zu maxDistance=%zu\n",
+        atLoad.entries, atLoad.capacity, atLoad.totalDistance, atLoad.maxDistance);
+    std::printf("TypeInfoFastMap grown: entries=%zu capacity=%zu totalDistance=%zu maxDistance=%zu\n",
+        grown.entries, grown.capacity, grown.totalDistance, grown.maxDistance);
+    GC_EXPECT_TRUE(atLoad.lookupsExact);
+    GC_EXPECT_TRUE(grown.lookupsExact);
+    GC_EXPECT_EQ(atLoad.entries, static_cast<size_t>(2000));
+    GC_EXPECT_EQ(grown.entries, static_cast<size_t>(3000));
+    // Uniform hashing at these loads (0.49 and <= 0.7) averages well under one slot of displacement.
+    GC_EXPECT_TRUE(atLoad.totalDistance <= atLoad.entries);
+    GC_EXPECT_TRUE(grown.totalDistance <= grown.entries);
+    GC_EXPECT_TRUE(atLoad.maxDistance <= 64);
+    GC_EXPECT_TRUE(grown.maxDistance <= 64);
+}
+
+GC_TEST(TypeInfoFastMap, InvalidateDropsEntriesAndStaleInserts)
+{
+    GC_EXPECT_TRUE(MapleRuntime::TypeInfoManagerTestAccess::FastMapInvalidationHolds());
 }
