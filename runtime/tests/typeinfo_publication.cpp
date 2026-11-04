@@ -163,7 +163,9 @@ int main(int argc, char** argv)
     first.join();
     second.join();
     Check(result[0] && result[0] == result[1], "one-canonical-ti");
-    Check(result[0]->GetUUID() != 0, "published-uuid-nonzero");
+    // GetUUID can lazily register a TI; this check must observe publication
+    // without repairing the very condition under test.
+    Check(!result[0]->IsInitialUUID(), "published-uuid-nonzero");
     Check(manager.ContainsTypeInfo(result[0]), "published-ti-registered");
     Check((reinterpret_cast<uintptr_t>(result[0]) & 7U) == 0, "arena-alignment");
     Check(result[0]->GetInstanceSize() == sizeof(void*), "ti-pointer-size");
@@ -186,7 +188,7 @@ int main(int argc, char** argv)
     }
     TypeInfo* recreated = CJ_MCC_GetOrCreateTypeInfo(tt, argCount, args);
     Check(recreated && recreated != result[0], "unload-invalidates-fast-map");
-    Check(recreated->GetUUID() != 0 && recreated->GetUUID() != priorUUID, "recreated-uuid-fresh");
+    Check(!recreated->IsInitialUUID() && recreated->GetUUID() != priorUUID, "recreated-uuid-fresh");
     Check(manager.ContainsTypeInfo(recreated), "recreated-ti-registered");
     Check(FiniCJRuntime() == E_OK, "runtime-fini");
     std::puts(control ? "CONTROL_PASS" : "CFUNC_DESCRIPTOR_PASS");
