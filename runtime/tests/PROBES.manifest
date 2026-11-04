@@ -21,6 +21,7 @@
 # to the accounting that exists to make exactly that visible.
 #
 # <file>                                  <status>   <what it needs / why it is here>
+typeinfo_publication.cpp                  manual     Linux installed runtime SO; native CJ_MCC_GetOrCreateTypeInfo concurrency, descriptor loser ownership and quiescent unload invalidation; compile with clang++ -pthread -fno-rtti and link cangjie-runtime/boundscheck/dl
 syscall_exit_progress                    manual     run.sh: Linux x86-64 product SO, GDB Python/pexpect, CPU window; ordered syscall publication, two product cuts and restoration
 safepoint_windows                        manual     native Windows product SIMD sentinel, read-only GDB home-area observations and home/restore cuts; .github/workflows/safepoint-windows.yml; behavior.json records behavioral evidence
 
