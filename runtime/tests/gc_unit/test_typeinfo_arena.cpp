@@ -28,6 +28,8 @@ public:
 };
 } // namespace MapleRuntime
 
+using namespace MapleRuntime;
+
 namespace {
 struct Allocation {
     uintptr_t address;
