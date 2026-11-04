@@ -583,7 +583,8 @@ extern int32_t CJ_OS_Terminate(int32_t pid, bool force)
     DWORD pidW = (DWORD)pid;
     HANDLE processHandle = OpenProcess(PROCESS_TERMINATE, false, pidW);
     if (processHandle == NULL) {
-        return 0;
+        // OpenProcess failure is a failed terminate, not Win32 BOOL success.
+        return -1;
     }
 
     BOOL res = TerminateProcess(processHandle, 1);

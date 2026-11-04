@@ -25,6 +25,23 @@ main(): Int64 {
     } catch (_: ProcessException) {
     }
 
+    // Timeout cleanup must yield between reap probes. A sibling Future should
+    // make progress while the timed-out child is being killed and collected.
+    let progressStart = MonoTime.now()
+    let progress: Future<Int64> = spawn {=>
+        sleep(Duration.millisecond * 20)
+        return 1
+    }
+    try {
+        execute("/bin/sh", ["-c", "sleep 1"],
+            stdOut: Discard, stdErr: Discard, timeout: Duration.millisecond * 10)
+        return 8
+    } catch (_: TimeoutException) {
+    }
+    if (progress.get() != 1 || MonoTime.now() - progressStart > Duration.millisecond * 500) {
+        return 9
+    }
+
     // Concurrent waiters share one native reap and observe one cached status.
     let concurrent = launch("/bin/sh", ["-c", "printf concurrent; printf err >&2; exit 9"],
         stdOut: Pipe, stdErr: Pipe)

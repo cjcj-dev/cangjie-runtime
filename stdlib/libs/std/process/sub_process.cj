@@ -264,12 +264,18 @@ func reapSubProcessAfterTimeout(process: SubProcess): Unit {
         throw e
     }
 
-    // Kill succeeded, so reap directly and preserve native failure. The
-    // native wait cannot be left in a detached Future after a failed kill.
-    let pid: Int32 = Int32(process.pid) // cjlint-ignore !G.VAR.02
-    let reapResult: Int64 = unsafe { CJ_OS_WaitSubProcessExit(pid) }
-    if (reapResult < 0) {
-        throw ProcessException("Failed to reap process '${pid}'.")
+    // Kill succeeded. Reap through the existing non-blocking native boundary
+    // so the managed scheduler can make progress between probes; a blocking
+    // waitpid here would pin the carrier until the child exits.
+    while (true) {
+        let (reapResult, _) = pollSubProcessExit(process)
+        if (reapResult == 1) {
+            return
+        }
+        if (reapResult < 0) {
+            throw ProcessException("Failed to reap process '${process.pid}'.")
+        }
+        sleep(Duration.millisecond)
     }
 }
 
