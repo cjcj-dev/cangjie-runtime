@@ -142,3 +142,6 @@ windows_module_header.cpp               manual     compile the product WinModule
 finalizer_thread_data                   manual     installed Linux x64 runtime and CJ compiler; compare finalizer registration return TLS with current carrier TLS; controlled old/new arms, not run at configure time
 
 native_safety                           manual     product RwLock LLVM CAS-order check and native allocator boundary regression; see native_safety/README.md
+
+finalizer_old_to_young                    manual     matching compiler/new std and installed runtime; main.cj plus native.cpp request directed young collections and check generation counters/finalization; see README.md
+suspension_order                         manual     actual product CXX flags and clang LLVM IR plus check_ir.mjs; matching compiler/new std and installed runtime for callback.cj/cpp real C2N-N2C stop/resume and no-STW control; see README.md
