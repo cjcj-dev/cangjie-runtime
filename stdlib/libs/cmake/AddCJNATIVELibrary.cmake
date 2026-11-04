@@ -41,6 +41,9 @@ if(DARWIN)
     endif()
     set(ENV_FFI_LINK_OPTION -load_hidden "${env_ffi_archive}")
     set(PROCESS_FFI_LINK_OPTION -load_hidden $<TARGET_FILE:cangjie-std-processFFI>)
+    # -load_hidden extracts referenced members; it does not force-load the
+    # archive. Do not precede it with -force_load, which would load the same
+    # archive before its hidden visibility is applied.
     set(ENV_FFI_FORCE_ARCHIVES)
 endif()
 # llvm-mingw's linker does not implement --exclude-libs; keep its exports.
