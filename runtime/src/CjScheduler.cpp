@@ -667,7 +667,7 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
     // zBarrierSetNMethod.cpp:45-91: entry barrier before consuming group roots.
     CJThreadRootEntryBarrier();
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
-    TypeInfo* futureTi = closureObj != nullptr ? closureObj->GetTypeInfo() : nullptr;
+    TypeInfo* futureTi = lwtData->futureTi;
 #if defined(__aarch64__)
     ExecuteCangjieStub(closureObj, futureTi, 0, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -690,7 +690,7 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
     data.obj = nullptr;
     data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
-    (void)futureTi;
+    data.futureTi = static_cast<TypeInfo*>(futureTi);
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -985,7 +985,7 @@ __asm__(".global _CJ_MRT_CjRuntimeStart\n\t.set _CJ_MRT_CjRuntimeStart, _MRT_CjR
 MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void* scheduler);
 __asm__(
     ".global _CJ_MCC_NewCJThread\n\t.set _CJ_MCC_NewCJThread, _MCC_NewCJThread");
-MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler);
+MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi);
 __asm__(
     ".global _CJ_MCC_NewCJThreadNoReturn\n\t.set _CJ_MCC_NewCJThreadNoReturn, "
         "_MCC_NewCJThreadNoReturn");
@@ -1005,7 +1005,7 @@ MRT_EXPORT void CJ_MRT_CjRuntimeStart(void* execute)
     __attribute__((alias("MRT_CjRuntimeStart")));
 MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void *scheduler)
     __attribute__((alias("MCC_NewCJThread")));
-MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler)
+MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi)
     __attribute__((alias("MCC_NewCJThreadNoReturn")));
 MRT_EXPORT void CJ_MRT_SetCommandLineArgs(int argc, const char* argv[])
     __attribute__((alias("MRT_SetCommandLineArgs")));

@@ -236,9 +236,8 @@ MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr 
     newCJThread->argSize = argAttr->argSize;
     if (argAttr->argStart != nullptr) {
         argBuffer = (char *)newCJThread + sizeof(struct CJThread);
-        // Check CJThreadAttrCheck and ensure that argSize <= COARGS_SIZE_MAX. does not
-        // cause memory corruption.
-        error = memcpy_s(argBuffer, argAttr->argSize, argAttr->argStart, argAttr->argSize);
+        // CJThreadAttrCheck bounds argSize by the allocated argument capacity.
+        error = memcpy_s(argBuffer, COARGS_SIZE_MAX, argAttr->argStart, argAttr->argSize);
         if (error) {
             HILOG_ERROR(error, "memcpy cjthread args failed when init cjthread");
             return error;
@@ -299,7 +298,7 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
 /* low address----------------------------------high address
 * -------------------------------------------
 * |                  |                      |
-* | cjthread struct |  copy arg(32Bytes)    |
+* | cjthread struct |  copy arg(COARGS_SIZE_MAX)    |
 * |                  |                      |
 * -------------------------------------------
 */
@@ -926,7 +925,7 @@ MRT_STATIC_INLINE int CJThreadAttrCheck(const struct CJThreadAttrInner *attr, CJ
 
     if (argSize > COARGS_SIZE_MAX) {
         HILOG_ERROR(ERRNO_SCHD_CJTHREAD_ARG_INVALID, "argSize is %u, max is %u",
-                    argSize, COARGS_SIZE_MAX);
+                    argSize, static_cast<unsigned int>(COARGS_SIZE_MAX));
         return ERRNO_SCHD_CJTHREAD_ARG_INVALID;
     }
     return 0;

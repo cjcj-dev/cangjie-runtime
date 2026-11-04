@@ -33,8 +33,10 @@ using LWTData = struct {
     BaseObject* obj; // Pointer of a Cangjie object;
                // future or env of closure
     BaseObject* threadObject;   // Cangjie class Thread in std/core; never TypeInfo
+    TypeInfo* futureTi; // Native generic environment for NoReturn; never a managed root
 };
-static_assert(sizeof(LWTData) <= 32, "LWTData must fit COARGS_SIZE_MAX");
+// CJThread COARGS_SIZE_MAX reserves at least five pointer-sized fields.
+static_assert(sizeof(LWTData) == 5 * sizeof(void*), "Keep the CJThread argument capacity in sync");
 // CJThread carrier counterpart of ZNMethod: iteration holds the carrier lock.
 class CJThreadRoot {
 public:
