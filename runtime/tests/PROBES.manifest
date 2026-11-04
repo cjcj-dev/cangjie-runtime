@@ -145,3 +145,11 @@ finalizer_thread_data                   manual     installed Linux x64 runtime a
 native_safety                           manual     product RwLock LLVM CAS-order check and native allocator boundary regression; see native_safety/README.md
 
 mtable_arena.cpp                          manual     Linux installed runtime SO; build plugin with MTABLE_ARENA_PLUGIN and native host, actual GetMTable dispatch plus loader unload and runtime Fini
+
+finalizer_old_to_young                    manual     matching compiler/new std and installed runtime; main.cj plus native.cpp request directed young collections and check generation counters/finalization; see README.md
+suspension_order                         manual     actual product CXX flags and clang LLVM IR plus check_ir.mjs; matching compiler/new std and installed runtime for callback.cj/cpp real C2N-N2C stop/resume and no-STW control; see README.md
+std_native_exports                       manual     matching compiler and newly built std CJO/three shared libraries from an independent install; ordinary public env/process/console consumers plus actual dynamic-symbol checker, see README.md
+linker_monitor_scope.c                   manual     clang and the actual native Linux cjld.lds; explicit C section target/control and old-pattern cut/restore only, not managed stack qualification
+no_return_payload.cpp                    manual     normal installed runtime/CJThread and matching product CXX flags; public NoReturn alias copy/native TI delivery and three-root classification, real scheduler main control; managed generic O2 remains separate
+linker_monitor_managed.cj                manual     qualified public cjc emitting per-function sections and new std CJO/static archives plus installed native startup/cjld.lds; real static StackManager classifier target/control and old-pattern cut/recovery
+linker_monitor_managed.cpp               manual     native bridge linked into linker_monitor_managed.cj executable against normal static runtime; no runtime export or StackManager product edits

@@ -1,0 +1,11 @@
+# Finalizer old-to-young regression
+
+This is a managed regression with a test-executable native bridge. It adds no runtime export or GC product change. The supplied compiler, LLVM, new std CJO/libraries and target runtime must form one stable paired input. It has not been executed merely because its sources exist.
+
+`r11Allocate` returns only a weak reference. The normal explicit major request promotes the owner in young preclean before old reference processing invokes its finalizer (`zDriver.cpp`, `ZDriverMajor::collect_young`; `zReferenceProcessor.cpp`, `is_strongly_live`/`should_discover`). The finalizer allocates a fresh small child after that old processing, stores it only in its own field, publishes the gate and waits. No child local is kept across the wait. This tests an executing finalizer root; it does not test a still-pending finalizer queue or application resurrection.
+
+The main thread requests exactly three synchronous young collections through `HeapManager::RequestGC(GC_REASON_YOUNG)`, using `native.cpp` linked into this test executable. The bridge samples generation sequences while holding the driver lock. Each request must advance young without advancing old; an intervening automatic major is a failed precondition, not a pass. No allocation wave is used. The worker then reads the child value, and main checks finalizer count, completion, weak clearing and a separate ordinary strong-root control.
+
+`gc(heavy: false)` cannot supply this test: the current `MCC_InvokeGCImpl(bool)` ignores that argument and requests `GC_REASON_USER`, which is major. Do not replace the native bridge with repeated `gc()` calls. The bridge uses the normal request/driver path, not an internal direct generation call.
+
+Run with the stable paired managed toolchain and link the bridge compiled with the runtime's actual include/definition configuration. Preserve cjc compile rc, executable rc and `R11_CYCLE`/`R11_YOUNG`/`R11_ASSERT` lines. Expected executable rc is 0. A bounded failure is 10 (no finalizer), 11 (target assertion), or bridge rc12 in the log (wrong generation progression). This test still needs compile/run and a precise product cut/recovery in an authorized rootfix domain; source preparation is not qualification.

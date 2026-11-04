@@ -31,7 +31,9 @@ extern "C" {
 
 #define THSTACK_SIZE_DEFAULT (128*1024)
 #define COSTACK_SIZE_DEFAULT (64*1024)
-#define COARGS_SIZE_MAX (32)
+// LWTData carries three managed roots and two native pointers. Keep the
+// historical 32-byte allowance on narrower targets.
+#define COARGS_SIZE_MAX ((5 * sizeof(void *) > 32) ? 5 * sizeof(void *) : 32)
 #define PROCESSOR_NUM_DEFAULT (16)
 #define PROCESSOR_NUM_SINGLE_THREAD (1)
 
