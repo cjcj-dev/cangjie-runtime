@@ -44,7 +44,9 @@ int32_t NativeMain()
     const bool entered = MRT_EnterSaferegion(false);
     const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!reached.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < end) {
-        std::this_thread::yield();
+        // Yield the CJThread, not only the carrier OS thread: this fixture
+        // must also make progress when the bootstrap carrier is the only one.
+        CJThreadResched();
     }
     if (entered) { MRT_LeaveSaferegion(); }
     const bool delivered = reached.load(std::memory_order_acquire) && observed.load() == environment;
