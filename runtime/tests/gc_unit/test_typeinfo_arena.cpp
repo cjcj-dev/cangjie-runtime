@@ -4,6 +4,7 @@
 
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
+#include "Interpreter/RuntimeTypes.h"
 #include "TypeInfoManager.h"
 
 #include <algorithm>
@@ -168,7 +169,7 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentGenericCreation)
 
     GC_EXPECT_TRUE(created[0] != nullptr);
     GC_EXPECT_TRUE(created[1] != nullptr);
-    GC_EXPECT_NE(created[0], created[1]);
+    GC_EXPECT_NE(reinterpret_cast<uintptr_t>(created[0]), reinterpret_cast<uintptr_t>(created[1]));
     GC_EXPECT_TRUE((reinterpret_cast<uintptr_t>(created[0]) & 7U) == 0);
     GC_EXPECT_TRUE((reinterpret_cast<uintptr_t>(created[1]) & 7U) == 0);
     GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsAddress(
