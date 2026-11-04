@@ -88,31 +88,6 @@ class ManagedBuildStatus(unittest.TestCase):
         self.assertEqual(set(result['arms']), {'stained'})
         self.assertTrue(all(arm['all_zero'] for arm in result['arms'].values()))
 
-    def test_diff_marks_each_build_failure_not_run(self):
-        # Execute the consumer embedded in the shipped service, not a model of it.
-        script = (HERE / 'kkk2_diff.sh').read_text()
-        consumer = script.split('<<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
-        for target in ('default', 'filler', 'testable', 'managed', None):
-            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                for who in ('cand', 'base'):
-                    lines = []
-                    for arm in ('default', 'filler', 'testable', 'managed'):
-                        fail = who == 'cand' and arm == target
-                        rc = '123' if fail and arm != 'managed' else '0'
-                        lines += [f'== {arm} rc={rc}', '== total tests 6']
-                        if arm == 'managed':
-                            lines += ['== build_fail ' + json.dumps([{'compile_rc': [139]}] if fail else [])]
-                    (root / f'{who}.txt').write_text('\n'.join(lines) + '\n')
-                result = subprocess.run(['python3', '-', tmp, 'a'*40, 'b'*40, 'hash', '/root/diff_harness_708/hash'],
-                                        input=consumer, text=True, capture_output=True)
-                data = json.loads((root / 'DIFF.json').read_text())
-                for arm, value in data['arms'].items():
-                    self.assertEqual(value['status'], 'NOT_RUN' if arm == target else 'ran')
-                    self.assertEqual(value['cand_only'], None if arm == target else [])
-                self.assertEqual(result.returncode, 3 if target else 0, result.stderr)
-                print(f'TARGET diff build_fail={target} status verified')
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

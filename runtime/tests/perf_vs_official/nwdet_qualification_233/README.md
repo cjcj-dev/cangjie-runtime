@@ -11,7 +11,7 @@ fast branch. This digest is a forbidden input, including when the archive is
 renamed. Other digests still require producer evidence; they are not an allowlist.
 
 The replacement recipe requires a complete std install produced by stage1 using
-the coloured backend, as specified in `/root/cj_build/ops/design/BOOTSTRAP_PATH.md:39`.
+the coloured backend, as the bootstrap path requires.
 With cjcj `ba3e47ed39cfecf858af4423f0bb8dd63867cf48`, step31 runs bootstrap
 stage0, step32 runs stage1 and produces `stdlib-stage2`, and step33 produces
 `final-std-stage2`. The directory called `stdlib-stage1` is a **stage0 uncoloured

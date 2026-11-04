@@ -2,7 +2,7 @@
 # Fail if production sources contain an unreviewed cast to a managed object or
 # slot spelling. Exact existing representation boundaries live in the adjacent
 # allowlist with one source line and one reason per exemption.
-# Design: ops/design/COLOUR_TYPE_DISCIPLINE.md + ctyperest.
+# Design: coloured slot/object type discipline + ctyperest.
 # ⚠ Uses grep (not rg): kkk2 measurement boxes often lack ripgrep.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
