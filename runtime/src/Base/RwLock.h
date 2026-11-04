@@ -22,7 +22,8 @@ public:
                 sched_yield();
                 count = lockCount.load(std::memory_order_acquire);
             }
-        } while (!lockCount.compare_exchange_weak(count, count + 1, std::memory_order_release));
+        } while (!lockCount.compare_exchange_weak(count, count + 1, std::memory_order_acq_rel,
+                                                 std::memory_order_relaxed));
     }
 
     void LockWrite()
@@ -51,7 +52,8 @@ public:
             if (count == WRITE_LOCKED) {
                 return false;
             }
-        } while (!lockCount.compare_exchange_weak(count, count + 1, std::memory_order_release));
+        } while (!lockCount.compare_exchange_weak(count, count + 1, std::memory_order_acq_rel,
+                                                 std::memory_order_relaxed));
         return true;
     }
 
