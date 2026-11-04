@@ -1,8 +1,6 @@
 name: Windows native runtime product
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1205-*']
 permissions:
   contents: read
 jobs:

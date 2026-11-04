@@ -1,8 +1,6 @@
 name: Windows consumer export contract
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1219-*']
 permissions:
   contents: read
 jobs:

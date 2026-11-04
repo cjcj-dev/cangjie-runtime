@@ -1,8 +1,6 @@
 name: Ordinary safepoint Win64 ABI
 on:
   workflow_dispatch:
-  push:
-    branches: ['sym/1179-*']
 permissions:
   contents: read
 jobs:
