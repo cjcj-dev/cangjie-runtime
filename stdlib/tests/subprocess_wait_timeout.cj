@@ -3,6 +3,7 @@
 
 import std.process.*
 import std.fs.*
+import std.time.*
 
 main(): Int64 {
     // A timed poll must leave the child waitable, and every later wait must
