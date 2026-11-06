@@ -32,10 +32,17 @@ int main(int argc, char** argv)
         std::fflush(stdout);
         return 0;
     }
+    auto finish = [](bool ok) {
+        RuntimeParam param {};
+        param.coParam.processorNum = 2;
+        ok &= Check(InitCJRuntime(&param) == E_OK, "path-control-init");
+        ok &= Check(FiniCJRuntime() == E_OK, "path-control-finalize");
+        return ok ? 0 : 1;
+    };
     if (std::strcmp(mode, "missing") == 0) {
         bool ok = Check(LoadCJLibrary(argv[5]) != E_OK, "missing-same-basename-rejected");
-        // Exit intentionally remains part of this public load-only consumer.
-        return ok ? 0 : 1;
+        // Complete runtime shutdown so R1 cannot mask this path assertion.
+        return finish(ok);
     }
     if (std::strcmp(mode, "distinct") == 0) {
         bool ok = Check(LoadCJLibrary(argv[5]) == E_OK, "distinct-same-basename-load");
@@ -44,7 +51,7 @@ int main(int argc, char** argv)
         // RTLD_NOLOAD observes what the public request actually loaded; it
         // cannot make an absent second image appear as a side effect.
         if (second != nullptr) { dlclose(second); }
-        return ok ? 0 : 1;
+        return finish(ok);
     }
     if (std::strcmp(mode, "public-freeze") != 0 && std::strcmp(mode, "native-freeze") != 0) { return 2; }
     setenv("CJ_READSCOPE_FAST", fast ? "0" : "1", 1);
