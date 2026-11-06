@@ -29,6 +29,9 @@ class ElfUnloadQuiescence final {
     friend class ElfUnloadQuiescenceTest;
     friend class CJFileLoader;
 public:
+    // Opt-in process-lifetime image retention, fixed before the first metadata
+    // reader or loader operation. See docs/readscope-no-unload.md.
+    static bool NoUnloadMode();
 #ifdef MRT_TESTABLE_INTERNALS
     enum class SlotEvent { LINKED, ADMITTED, COUNTER_ADMITTED, COUNTED, DRAIN_CHECK, DRAINED, RETIRED };
     using SlotObserver = void (*)(SlotEvent, const void*, U64);

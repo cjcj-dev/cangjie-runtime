@@ -12,11 +12,13 @@
 #include "Base/ImmortalWrapper.h"
 #include "Interpreter/Options.h"
 #include "Loader/ILoader.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "LoaderManager.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+extern "C" bool MRT_CheckRuntimeFinished();
 bool LoaderManager::isReleased;
 LoaderManager* LoaderManager::GetInstance()
 {
@@ -125,6 +127,15 @@ void LoaderManager::LoadFile(Uptr address)
 void LoaderManager::UnloadFile(Uptr address)
 {
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
+    // The native fini callback also runs before runtime initialization. Do not
+    // let direct dlclose bypass the no-unload contract there. After completed
+    // runtime finalization, only process-lifetime metadata remains; exit-time
+    // callbacks have no live runtime to unregister from.
+    if (ElfUnloadQuiescence::NoUnloadMode()) {
+        CHECK_DETAIL(MRT_CheckRuntimeFinished() && !GetInitStatus(),
+                     "ELF unload attempted in no-unload mode (CJ_READSCOPE_FAST=1)");
+        return;
+    }
     // MRT_LibraryUnLoad can be invoked before runtime init
     if (GetInitStatus()) {
         UnregisterLoadFile(address);

@@ -677,6 +677,12 @@ void CJFileLoader::ClearLoadedFiles()
     // and prove the remaining pending side explicitly for every image.
     CHECK_DETAIL(Runtime::CurrentRef() == nullptr,
                  "ELF shutdown cleanup requires a stopped runtime");
+    // In this opt-in mode the loader retains images and their metadata until
+    // process exit. Shutdown does not silently turn reader admission back on
+    // or attempt an unload writer after readers have bypassed that protocol.
+    if (ElfUnloadQuiescence::NoUnloadMode()) {
+        return;
+    }
     ElfUnloadQuiescence::TaskAdmissionScope shutdownAdmission;
     for (;;) {
         BaseFile* file = nullptr;
@@ -735,6 +741,9 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
         if (handlerIt != cjLibHandlers.end() && handlerIt->closing) {
             return nullptr;
         }
+        if (handlerIt != cjLibHandlers.end() && ElfUnloadQuiescence::NoUnloadMode()) {
+            return handlerIt->handler;
+        }
     }
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
@@ -780,6 +789,12 @@ int CJFileLoader::UnloadLibrary(const char* libName)
             });
         if (handlerIt == cjLibHandlers.end() || handlerIt->closing) {
             return -1;
+        }
+        // Logical close succeeds for a known runtime-owned handle, but its
+        // native reference and metadata remain available until process exit.
+        // Macro callers may close/reopen a path without removing the image.
+        if (ElfUnloadQuiescence::NoUnloadMode()) {
+            return 0;
         }
         handler = handlerIt->handler;
         generation = ++handlerIt->generation;

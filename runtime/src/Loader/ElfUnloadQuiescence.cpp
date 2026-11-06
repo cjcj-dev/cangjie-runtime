@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "Base/ImmortalWrapper.h"
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <condition_variable>
 #include <new>
@@ -63,6 +64,7 @@ ImageDirectory& ImageMaps()
     return *maps;
 }
 thread_local U32 readerDepth = 0;
+thread_local bool fastPathReader = false;
 thread_local bool unloadWriter = false;
 thread_local Uptr unloadWriterImage = 0;
 thread_local Uptr purgeAuthorizedImage = 0;
@@ -335,6 +337,22 @@ Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
     return image->identity;
 }
 
+bool ElfUnloadQuiescence::NoUnloadMode()
+{
+    // Function-local initialization serializes the first reader/loader query.
+    // Never re-read the environment: an admitted reader must keep the same
+    // lifetime contract through release, including nested scopes and threads.
+#if defined(__linux__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    static const bool enabled = []() {
+        const char* value = std::getenv("CJ_READSCOPE_FAST");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
 ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
 {
     (void)kind;
@@ -343,6 +361,12 @@ ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
     // outermost ones, and the admission protocol below needs a large frame.
     if (readerDepth != 0 || unloadWriter) {
         ++readerDepth;
+        active = true;
+        return;
+    }
+    if (NoUnloadMode()) {
+        readerDepth = 1;
+        fastPathReader = true;
         active = true;
         return;
     }
@@ -397,6 +421,10 @@ ElfUnloadQuiescence::ReadScope::~ReadScope()
     }
     CHECK_DETAIL(readerDepth != 0, "ELF unload reader depth underflow");
     if (--readerDepth != 0 || unloadWriter) {
+        return;
+    }
+    if (fastPathReader) {
+        fastPathReader = false;
         return;
     }
     ReleaseOutermost();
@@ -463,6 +491,7 @@ void ElfUnloadQuiescence::CountSlotAdmissions()
 ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
     : writerLock(WriterMutex()), imageIdentity(RegisteredIdentity(imageAddress))
 {
+    CHECK_DETAIL(!NoUnloadMode(), "ELF unload attempted in no-unload mode (CJ_READSCOPE_FAST=1)");
     CHECK_DETAIL(readerDepth == 0 && !unloadWriter,
                  "ELF unload cannot begin from inside a metadata reader");
     CHECK_DETAIL(imageIdentity != 0, "ELF unload image identity is unavailable for %p",
