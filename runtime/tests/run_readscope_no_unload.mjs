@@ -35,6 +35,6 @@ for(const value of [undefined,'0','1','10']) {
   run('lifetime-'+(value??'unset'),out+'/harness',['lifetime',out+'/libreadscopeprobe.so',symbol,value==='1'?'1':'0'],env);
 }
 for(const mode of ['direct','preinit-direct']) {
-  for(const value of ['0','1'])run(mode+'-'+value,out+'/harness',[mode,out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value},value==='1');
+  for(const value of ['0','1'])run(mode+'-'+value,out+'/harness',[mode,out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value});
 }
 for(const value of ['0','1'])run('retained-'+value,out+'/harness',['retained',out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value});

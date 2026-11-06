@@ -42,6 +42,7 @@ public:
         Uptr metadata { 0 };
         Uptr identity { 0 };
         U64 generation { 0 };
+        bool retained { false };
         std::vector<Range> ranges;
 #ifdef __APPLE__
         // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.

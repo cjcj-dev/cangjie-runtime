@@ -194,6 +194,44 @@ ReaderSlot* CurrentReaderSlot()
     return nullptr;
 }
 #endif
+// Called by the real metadata producer before publishing an ImageAddressMap.
+// dlopen resolves non-null names in the caller's namespace. Do not assume a
+// matching pathname is sufficient: check the native map against the metadata
+// address, then use the handle's LMID for NODELETE promotion.
+bool RetainNativeImage(Uptr metadata)
+{
+#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    Dl_info info {};
+    void* extra = nullptr;
+    CHECK_DETAIL(dladdr1(reinterpret_cast<void*>(metadata), &info, &extra, RTLD_DL_LINKMAP) != 0 && extra != nullptr,
+                 "ELF no-unload pin: metadata has no native image");
+    const auto* expected = static_cast<const link_map*>(extra);
+    const char* name = expected->l_name[0] == '\0' ? nullptr : expected->l_name;
+    void* handle = dlopen(name, RTLD_NOW | RTLD_NOLOAD);
+    CHECK_DETAIL(handle != nullptr, "ELF no-unload pin: existing image lookup failed");
+    link_map* actual = nullptr;
+    Lmid_t lmid = LM_ID_BASE;
+    CHECK_DETAIL(dlinfo(handle, RTLD_DI_LINKMAP, &actual) == 0 && actual == expected &&
+                     dlinfo(handle, RTLD_DI_LMID, &lmid) == 0,
+                 "ELF no-unload pin: image or namespace mismatch");
+    void* pinned = dlmopen(lmid, name, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE);
+    CHECK_DETAIL(pinned != nullptr, "ELF no-unload pin: NODELETE promotion failed");
+    link_map* pinnedMap = nullptr;
+    Lmid_t pinnedLmid = LM_ID_BASE;
+    CHECK_DETAIL(dlinfo(pinned, RTLD_DI_LINKMAP, &pinnedMap) == 0 && pinnedMap == expected &&
+                     dlinfo(pinned, RTLD_DI_LMID, &pinnedLmid) == 0 && pinnedLmid == lmid,
+                 "ELF no-unload pin: promoted image or namespace mismatch");
+    // NODELETE survives releasing these temporary lookup references. The
+    // original native load is still in its init callback, before publication.
+    CHECK_DETAIL(dlclose(pinned) == 0 && dlclose(handle) == 0,
+                 "ELF no-unload pin: temporary reference release failed");
+    return true;
+#else
+    (void)metadata;
+    CHECK_DETAIL(false, "ELF no-unload pin: native NODELETE API unavailable");
+    return false;
+#endif
+}
 } // namespace
 
 #ifdef MRT_TESTABLE_INTERNALS
@@ -726,6 +764,9 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     // loader while dlclose is waiting in an image's fini callback.
     auto image = std::make_shared<ImageAddressMap>();
     image->metadata = imageAddress;
+    if (NoUnloadMode()) {
+        image->retained = RetainNativeImage(imageAddress);
+    }
     image->identity = ResolveImageIdentity(imageAddress);
     CHECK_DETAIL(image->identity != 0, "ELF load image identity is unavailable");
     CHECK_DETAIL(!IsImageClosing(imageAddress), "ELF load cannot reopen a closing image generation");

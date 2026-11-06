@@ -159,3 +159,6 @@ linker_monitor_managed.cj                manual     qualified public cjc emittin
 linker_monitor_managed.cpp               manual     native bridge linked into linker_monitor_managed.cj executable against normal static runtime; no runtime export or StackManager product edits
 
 readscope_first_load_harness.cpp manual public load-only exit, full-path native identity, and first public/native producer mode freeze; no mode prequery
+
+readscope_pinned_image_harness.cpp manual installed runtime public/native/same-namespace NODELETE persistence and managed metadata consumer
+readscope_pin_failure.cpp manual test-only LD_PRELOAD failure of the actual native NODELETE promotion; prepublication CHECK required

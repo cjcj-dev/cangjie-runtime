@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include <dlfcn.h>
+#include <link.h>
 
 using MapleRuntime::ElfUnloadQuiescence;
 
@@ -15,6 +16,22 @@ static bool Check(bool ok, const char* name)
     std::printf("ASSERT %s %s\n", name, ok ? "PASS" : "FAIL");
     std::fflush(stdout);
     return ok;
+}
+
+static bool CloseAndCheckImage(void* native, const char* plugin, const char* symbol, bool retained)
+{
+    link_map* before = nullptr;
+    if (!Check(dlinfo(native, RTLD_DI_LINKMAP, &before) == 0, "native-object-before")) { return false; }
+    void* address = dlsym(native, symbol);
+    if (!Check(address != nullptr, "native-symbol-before")) { return false; }
+    if (!Check(dlclose(native) == 0, "direct-close-result")) { return false; }
+    void* after = dlopen(plugin, RTLD_NOW | RTLD_NOLOAD);
+    if (!retained) { return Check(after == nullptr, "normal-direct-unmapped"); }
+    if (!Check(after != nullptr, "direct-close-image-retained")) { return false; }
+    link_map* actual = nullptr;
+    const bool ok = Check(dlinfo(after, RTLD_DI_LINKMAP, &actual) == 0 && actual == before &&
+                          dlsym(after, symbol) == address, "direct-close-same-object");
+    return Check(dlclose(after) == 0, "release-observer-reference") && ok;
 }
 
 int main(int argc, char** argv)
@@ -49,8 +66,7 @@ int main(int argc, char** argv)
         void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
         if (!Check(native != nullptr, "preinit-dlopen")) { return 2; }
         std::puts("TARGET direct-close-before-init"); std::fflush(stdout);
-        dlclose(native);
-        return expected ? 3 : 0;
+        return CloseAndCheckImage(native, plugin, symbol, expected) ? 0 : 1;
     }
     RuntimeParam param {};
     param.coParam.processorNum = 2;
@@ -67,8 +83,8 @@ int main(int argc, char** argv)
         void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
         if (!Check(native != nullptr, "direct-dlopen")) { return 2; }
         std::puts("TARGET direct-close-live"); std::fflush(stdout);
-        dlclose(native);
-        return expected ? 3 : (FiniCJRuntime() == E_OK ? 0 : 2);
+        const bool ok = CloseAndCheckImage(native, plugin, symbol, expected);
+        return Check(FiniCJRuntime() == E_OK, "runtime-finalize") && ok ? 0 : 1;
     }
     if (!Check(LoadCJLibraryWithInit(plugin) == E_OK, "library-init")) { return 2; }
     void* before = FindCJSymbol(plugin, symbol);
