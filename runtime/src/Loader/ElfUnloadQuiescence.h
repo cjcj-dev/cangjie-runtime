@@ -178,7 +178,9 @@ public:
     static void WaitForPendingTasks(Uptr imageAddress);
     static bool BeginImageClosing(Uptr imageAddress);
     static void AbortImageClosing(Uptr imageAddress);
-    static void CommitImageClosing(Uptr imageAddress);
+    // Native identity captured before platform unload; the metadata mapping
+    // and dladdr result may both have disappeared by the time close commits.
+    static void CommitImageClosing(Uptr imageIdentity);
     static bool IsImageClosing(Uptr imageAddress);
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);

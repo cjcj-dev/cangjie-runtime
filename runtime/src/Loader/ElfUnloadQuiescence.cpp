@@ -648,17 +648,11 @@ void ElfUnloadQuiescence::AbortImageClosing(Uptr imageAddress)
     ClosingIdentities().erase(image->identity);
 }
 
-void ElfUnloadQuiescence::CommitImageClosing(Uptr imageAddress)
+void ElfUnloadQuiescence::CommitImageClosing(Uptr imageIdentity)
 {
-    Uptr identity = 0;
-    if (const auto image = RegisteredImage(imageAddress)) {
-        identity = image->identity;
-    } else {
-        identity = ResolveImageIdentity(imageAddress);
-    }
     std::lock_guard<std::mutex> lock(ClosingMutex());
-    if (identity != 0) {
-        ClosingIdentities().erase(identity);
+    if (imageIdentity != 0) {
+        ClosingIdentities().erase(imageIdentity);
     }
 }
 

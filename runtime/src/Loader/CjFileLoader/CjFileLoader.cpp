@@ -814,6 +814,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
 
     int ret = -1;
     Uptr imageAddress = 0;
+    Uptr imageIdentity = 0;
     bool imageClosed = false;
     LibNameToHandler handlerItStorage { baseName, handler, generation, true };
     const LibNameToHandler* handlerIt = &handlerItStorage;
@@ -824,6 +825,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
             return -1;
         }
         imageAddress = baseFile->GetFileMetaAddr();
+        imageIdentity = baseFile->GetImageAddressMap().identity;
         {
             ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
             if (taskAdmission.HasPendingForImage(imageAddress)) {
@@ -854,7 +856,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
     if (commitIt == cjLibHandlers.end()) {
         if (imageAddress != 0) {
             if (imageClosed) {
-                ElfUnloadQuiescence::CommitImageClosing(imageAddress);
+                ElfUnloadQuiescence::CommitImageClosing(imageIdentity);
             } else {
                 ElfUnloadQuiescence::AbortImageClosing(imageAddress);
             }
@@ -863,7 +865,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
     }
     if (shouldErase) {
         if (imageClosed) {
-            ElfUnloadQuiescence::CommitImageClosing(imageAddress);
+            ElfUnloadQuiescence::CommitImageClosing(imageIdentity);
         } else if (imageAddress != 0) {
             ElfUnloadQuiescence::AbortImageClosing(imageAddress);
         }
