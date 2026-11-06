@@ -114,6 +114,9 @@ bool LoaderManager::GetInitStatus() const { return initStatus.load(std::memory_o
 
 void LoaderManager::LoadFile(Uptr address)
 {
+    // Native .init_array callbacks also produce metadata before InitCJRuntime.
+    // Freeze this runtime image before the first registration, not a later reader.
+    (void)ElfUnloadQuiescence::NoUnloadMode();
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
     CheckPackageCompatibility(address);
     // MRT_LibraryOnLoad can be invoked before runtime init

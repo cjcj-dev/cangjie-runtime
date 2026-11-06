@@ -2,7 +2,8 @@
 
 On native Linux (excluding Android and OHOS), set `CJ_READSCOPE_FAST=1`
 before starting the process to opt into process-lifetime retention of Cangjie
-images. The first metadata-reader or loader query freezes the choice for that
+images. The first metadata-reader or loader query, including a pre-init native
+image registration callback, freezes the choice for that
 runtime image. Other values leave normal unload enabled. Changing the environment
 later cannot enable or disable the mode. No public function signature, runtime
 parameter layout, calling convention, or TLS model changes.
@@ -11,8 +12,9 @@ In this mode, nested ReadScopes still maintain their thread-local depth, while
 outermost scopes bypass slot/counter admission and release. `AssertReaderActive`
 still applies. No GC barriers or assertions are disabled.
 
-`LoadCJLibrary` keeps its native library reference. Repeated loads reuse the
-registered handle. `UnloadCJLibrary` logically closes a known handle successfully
+`LoadCJLibrary` keeps its native library reference. Repeated loads are resolved by the native loader using the complete
+requested path, and their native references remain retained. A basename match
+does not bypass native path errors or select a different existing image. `UnloadCJLibrary` logically closes a known handle successfully
 without unmapping its code, unregistering metadata, or releasing its native
 reference. Null and unknown names retain their normal errors. Reopening finds
 the retained image. Image replacement/reload is therefore unavailable until

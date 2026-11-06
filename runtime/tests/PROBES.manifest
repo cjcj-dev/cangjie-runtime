@@ -157,3 +157,5 @@ linker_monitor_scope.c                   manual     clang and the actual native 
 no_return_payload.cpp                    manual     normal installed runtime/CJThread and matching product CXX flags; public NoReturn alias copy/native TI delivery and three-root classification, real scheduler main control; managed generic O2 remains separate
 linker_monitor_managed.cj                manual     qualified public cjc emitting per-function sections and new std CJO/static archives plus installed native startup/cjld.lds; real static StackManager classifier target/control and old-pattern cut/recovery
 linker_monitor_managed.cpp               manual     native bridge linked into linker_monitor_managed.cj executable against normal static runtime; no runtime export or StackManager product edits
+
+readscope_first_load_harness.cpp manual public load-only exit, full-path native identity, and first public/native producer mode freeze; no mode prequery

@@ -731,6 +731,7 @@ void CJFileLoader::RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc)
 
 void* CJFileLoader::LoadCJLibrary(const char* libName)
 {
+    (void)ElfUnloadQuiescence::NoUnloadMode();
     CString baseName = Os::Path::GetBaseName(libName);
     {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
@@ -741,10 +742,10 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
         if (handlerIt != cjLibHandlers.end() && handlerIt->closing) {
             return nullptr;
         }
-        if (handlerIt != cjLibHandlers.end() && ElfUnloadQuiescence::NoUnloadMode()) {
-            return handlerIt->handler;
-        }
     }
+    // Let the native loader resolve the full request, including aliases and
+    // errors. A basename match cannot establish that this is the same image.
+    // In no-unload mode the returned reference remains process-owned.
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
