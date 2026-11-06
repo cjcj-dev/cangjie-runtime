@@ -37,3 +37,4 @@ for(const value of [undefined,'0','1','10']) {
 for(const mode of ['direct','preinit-direct']) {
   for(const value of ['0','1'])run(mode+'-'+value,out+'/harness',[mode,out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value},value==='1');
 }
+for(const value of ['0','1'])run('retained-'+value,out+'/harness',['retained',out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value});

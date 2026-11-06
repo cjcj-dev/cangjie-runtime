@@ -55,6 +55,14 @@ int main(int argc, char** argv)
     RuntimeParam param {};
     param.coParam.processorNum = 2;
     if (!Check(InitCJRuntime(&param) == E_OK, "runtime-init")) { return 2; }
+    if (std::strcmp(mode, "retained") == 0) {
+        // Same lifetime as the compiler's retain=true namespace handles: the
+        // native owner keeps its reference through runtime finalization.
+        void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
+        if (!Check(native != nullptr, "retained-dlopen")) { return 2; }
+        if (!Check(dlsym(native, symbol) != nullptr, "retained-symbol")) { return 1; }
+        return Check(FiniCJRuntime() == E_OK, "retained-runtime-finalize") ? 0 : 1;
+    }
     if (std::strcmp(mode, "direct") == 0) {
         void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
         if (!Check(native != nullptr, "direct-dlopen")) { return 2; }
