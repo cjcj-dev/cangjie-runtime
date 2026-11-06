@@ -1,4 +1,7 @@
 # runtime/tests inventory.
+readscope_no_unload_harness.cpp manual public C API lifetime and native callback checks; run_readscope_no_unload.mjs with installed product SO and SDK
+readscope_no_unload_plugin.cj manual real managed image for run_readscope_no_unload.mjs
+run_readscope_no_unload.mjs manual Linux native installed SDK and runtime; GC enabled, default/0/1/invalid activation and exact forbidden-unload controls
 #
 # Why this file exists: as of 8f13560c this directory held 21 items and exactly one
 # of them ran. Seven probes had runner scripts that nothing invoked, five files had
