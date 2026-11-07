@@ -23,8 +23,10 @@ func copyToControl(): Bool {
             source.copyTo(target, src, dst, count)
             return false
         } catch (e: IllegalArgumentException) {
+            println("COPYTO_MESSAGE_ASSERT case=${checked} illegal=true")
             if (!illegal || e.message != message) { return false }
         } catch (e: IndexOutOfBoundsException) {
+            println("COPYTO_MESSAGE_ASSERT case=${checked} illegal=false")
             if (illegal || e.message != message) { return false }
         }
         checked++
