@@ -434,7 +434,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, CrossOwnerCycleHasTerminalResult)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
-GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageLifetime)
 {
     Init();
     for (int generation = 0; generation != 2; ++generation) {
@@ -443,8 +443,13 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
         Target("lookup-completed", Await(done));
         if (generation == 0) {
             auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
-            loader->RemoveLoadedFiles(image);
-            RegisterImage();
+            if (ElfUnloadQuiescence::RetainsNativeImages()) {
+                Target("main-image-retained", image->GetImageAddressMap().retained &&
+                    loader->GetBaseFileByMetaAddr(image->GetFileMetaAddr()) == image);
+            } else {
+                loader->RemoveLoadedFiles(image);
+                RegisterImage();
+            }
         }
     }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
@@ -469,8 +474,41 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
-GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadAllowsOwnerDependency)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadFollowsNativeLifetime)
 {
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        // Physical purge is illegal when production readers bypass admission.
+        // Require the actual product guard, not just an arbitrary child failure.
+        int output[2];
+        GC_EXPECT_EQ(pipe(output), 0);
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child == 0) {
+            close(output[0]);
+            (void)dup2(output[1], STDERR_FILENO);
+            (void)dup2(output[1], STDOUT_FILENO);
+            close(output[1]);
+            Init();
+            std::fprintf(stderr, "TARGET retained-physical-purge\n");
+            static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(image);
+            std::_Exit(77);
+        }
+        close(output[1]);
+        std::string transcript;
+        char bytes[1024];
+        ssize_t count;
+        while ((count = read(output[0], bytes, sizeof(bytes))) > 0) {
+            transcript.append(bytes, static_cast<size_t>(count));
+        }
+        close(output[0]);
+        int status = 0;
+        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+        Target("retained-purge-target-reached", transcript.find("TARGET retained-physical-purge") != std::string::npos);
+        Target("retained-purge-rejected", transcript.find(
+            "ELF unload attempted with process-lifetime image retention") != std::string::npos);
+        GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+        return;
+    }
     Init();
     UnloadRace race;
     Start(DependencyOwner, &race);
@@ -630,7 +668,7 @@ GC_RUNTIME_OTHER_VM_TEST(ForeignReentry, NestedCaughtStateAndThreadExit)
 }
 #endif
 
-GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryCodeUnloadReloadHasNewState)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryCodeCloseReopenFollowsNativeLifetime)
 {
     Init();
     char executable[4096] {};
@@ -646,22 +684,34 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryCodeUnloadReloadHasNewState)
             const void* package;
             const void* unit;
             std::atomic<bool> done { false };
+            bool alreadyReady { false };
         } context { dlsym(library, "PackageInitImagePackage"), dlsym(library, "PackageInitImageUnit") };
+        context.alreadyReady = generation != 0 && ElfUnloadQuiescence::RetainsNativeImages();
         Target("library-fixture-symbols", getMetadata && context.package && context.unit);
-        auto* file = new CJFile(CString("package-init-library"), reinterpret_cast<Uptr>(getMetadata()));
         auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
-        loader->AddLoadedFiles(file);
-        loader->RegisterLoadFile(file->GetFileMetaAddr());
+        auto* file = loader->GetBaseFileByMetaAddr(reinterpret_cast<Uptr>(getMetadata()));
+        if (context.alreadyReady) {
+            Target("library-same-metadata-owner", file != nullptr && file->GetImageAddressMap().retained);
+        } else {
+            Target("library-new-metadata-owner", file == nullptr);
+            file = new CJFile(CString("package-init-library"), reinterpret_cast<Uptr>(getMetadata()));
+            loader->AddLoadedFiles(file);
+            loader->RegisterLoadFile(file->GetFileMetaAddr());
+        }
         Start([](void* argument) {
             auto& c = *static_cast<Context*>(argument);
             void* token = nullptr;
-            Target("library-new-generation-execute", Begin(c.package, c.unit, 0, &token) == Code(Result::Execute));
-            MCC_PackageInitComplete(token);
+            if (c.alreadyReady) {
+                Target("library-retained-generation-ready", Begin(c.package, c.unit, 0, &token) == Code(Result::Ready) && !token);
+            } else {
+                Target("library-new-generation-execute", Begin(c.package, c.unit, 0, &token) == Code(Result::Execute));
+                MCC_PackageInitComplete(token);
+            }
             Target("library-generation-ready", Begin(c.package, c.unit, 0, &token) == Code(Result::Ready));
             c.done.store(true, std::memory_order_release);
         }, &context);
         Target("library-initialized", Await(context.done));
-        loader->RemoveLoadedFiles(file);
+        if (!ElfUnloadQuiescence::RetainsNativeImages()) { loader->RemoveLoadedFiles(file); }
         Target("library-fixture-closed", dlclose(library) == 0);
     }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
@@ -713,7 +763,13 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, NativeDlcloseAllowsDependency)
         Target("native-close-return", dlclose(library) == 0);
         context.closed.store(true, std::memory_order_release);
     });
-    Target("native-fini-entered", Await(nativeFiniEntered));
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("native-close-with-pending-owner", Await(context.closed));
+        Target("native-fini-deferred", !nativeFiniEntered.load(std::memory_order_acquire));
+        Target("native-metadata-retained", loader->GetBaseFileByMetaAddr(file->GetFileMetaAddr()) == file);
+    } else {
+        Target("native-fini-entered", Await(nativeFiniEntered));
+    }
     context.c.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&context.c.release, nullptr, nullptr);
     Target("native-close-dependency-completed", Await(context.done));
@@ -763,6 +819,17 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
         c.waiterDone.store(true, std::memory_order_release);
     }, &control);
     Target("libinit-body-started", Await(control.ownerStarted));
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("unrelated-native-close", dlclose(library) == 0);
+        Target("unrelated-metadata-retained", loader->GetBaseFileByMetaAddr(unrelated->GetFileMetaAddr()) == unrelated);
+        control.finish.store(true, std::memory_order_release);
+        WaitqueueWakeAll(&control.release, nullptr, nullptr);
+        Target("retained-libinit-dependency-progress", Await(control.waiterDone));
+        packageBody = nullptr;
+        Target("runtime-finish", FiniCJRuntime() == E_OK);
+        WaitqueueDelete(&control.release);
+        return;
+    }
     // A separate short native reader establishes the real loader drain point.
     // The existing testable observation does not alter the product protocol.
     auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
@@ -818,11 +885,16 @@ void CheckTokenMisuse(bool nonOwner)
                 void* token = nullptr;
                 Target("misuse-first-execute", Begin(P(), U(), 0, &token) == Code(Result::Execute));
                 MCC_PackageInitComplete(token);
-                static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(image);
-                RegisterImage();
                 void* newGeneration = nullptr;
-                Target("new-generation-own-token", Begin(P(), U(), 0, &newGeneration) == Code(Result::Execute) &&
-                       newGeneration != nullptr && newGeneration != token);
+                if (ElfUnloadQuiescence::RetainsNativeImages()) {
+                    Target("completed-generation-retained", Begin(P(), U(), 0, &newGeneration) == Code(Result::Ready) &&
+                           newGeneration == nullptr);
+                } else {
+                    static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(image);
+                    RegisterImage();
+                    Target("new-generation-own-token", Begin(P(), U(), 0, &newGeneration) == Code(Result::Execute) &&
+                           newGeneration != nullptr && newGeneration != token);
+                }
                 std::fprintf(stderr, "PACKAGE_INIT_MISUSE_TARGET duplicate\n");
                 MCC_PackageInitFail(token, 1);
                 std::_Exit(77);
@@ -877,7 +949,11 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity
         static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
     }, &done);
     Target("multi-owner-completed", Await(done));
-    static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(secondary);
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("second-metadata-owner-retained", secondary->GetImageAddressMap().retained);
+    } else {
+        static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(secondary);
+    }
     Target("remaining-owner-ti-retained", TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(remainingTi));
     Target("remaining-owner-table-retained", remainingTi->GetMTableDesc() == remainingTable);
     remainingTi->TryInitMTable();
@@ -887,8 +963,12 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity
         void* token = nullptr;
         Target("remaining-owner-state-retained", Begin(reinterpret_cast<const void*>(&PackageB), U(), 0,
             &token) == Code(Result::Ready));
-        Target("former-ambiguity-now-resolves", Begin(P(), U(), 0, &token) == Code(Result::Execute));
-        MCC_PackageInitComplete(token);
+        if (ElfUnloadQuiescence::RetainsNativeImages()) {
+            Target("retained-ambiguity-still-rejected", Begin(P(), U(), 0, &token) == Code(Result::Unavailable) && !token);
+        } else {
+            Target("former-ambiguity-now-resolves", Begin(P(), U(), 0, &token) == Code(Result::Execute));
+            MCC_PackageInitComplete(token);
+        }
         static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
     }, &done);
     Target("remaining-owner-completed", Await(done));
@@ -929,6 +1009,10 @@ std::string FixtureBesideExecutable(const char* name)
 }
 }
 #ifdef MRT_TESTABLE_INTERNALS
+// These assertions require an OS that physically unloads Cangjie images.
+// Native glibc retention instead checks forbidden purge above and live metadata
+// after close in ImageLifetimeControlsTypePublication and the public harness.
+#if !defined(__GLIBC__) || defined(__OHOS__) || defined(__ANDROID__)
 namespace {
 using SlotEvent = ElfUnloadQuiescence::SlotEvent;
 std::atomic<const void*> selectedSlot { nullptr };
@@ -1306,14 +1390,19 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
     Target("fail-handle-cleared", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
+#endif
+GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitFollowsNativeLifetime)
 {
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     Target("uninit-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
     Target("uninit-handle-present", CJFileLoaderTest::Handle(*loader, uPath.c_str()) != nullptr);
     Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
-    Target("uninit-handle-erased", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("uninit-handle-retained", CJFileLoaderTest::Handle(*loader, uPath.c_str()) != nullptr);
+    } else {
+        Target("uninit-handle-erased", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
+    }
 }
 // ZGC zRootsIterator.cpp:107,117 enumerates CLD roots from the loader data
 // graph. The library image is loaded through the product entry
@@ -1372,15 +1461,23 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
                  visited, matched, observed, context.object);
     Target("static-root-enumerated", matched);
     Target("static-root-value", observed == context.object);
-    // CjFile.cpp:19 unload: the same table must leave the enumeration.
-    file->UnregisterFile();
+    // A retained native close preserves roots; physical unregister removes them.
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("static-root-native-close", dlclose(library) == 0);
+    } else {
+        file->UnregisterFile();
+    }
     matched = false;
     LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
         if (reinterpret_cast<MAddress>(&slot) == reinterpret_cast<MAddress>(rootSlot())) { matched = true; }
     });
-    Target("static-root-unregistered", !matched);
-    loader->RemoveLoadedFiles(file);
-    Target("static-root-library-closed", dlclose(library) == 0);
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("static-root-retained-after-close", matched);
+    } else {
+        Target("static-root-unregistered", !matched);
+        loader->RemoveLoadedFiles(file);
+        Target("static-root-library-closed", dlclose(library) == 0);
+    }
     Target("static-root-runtime-finish", FiniCJRuntime() == E_OK);
 }
 #endif
@@ -1466,7 +1563,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ExtensionCallbackAllowsConcurrentTypePubli
     Target("extension-runtime-finish", FiniCJRuntime() == E_OK);
 }
 
-GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLifetimeControlsTypePublication)
 {
     Init();
     const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
@@ -1498,6 +1595,18 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, UnlinkedImageCannotRepublishTypeCache)
     const U32 interfaceUUID = ti->GetUUID();
     earlyTi->AddMTable(ti, ed);
     Target("publication-early-mtable", earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        Target("publication-native-close", dlclose(library) == 0);
+        Target("publication-metadata-still-linked", loader->GetBaseFileByMetaAddr(address) == file);
+        ElfUnloadQuiescence::ReadScope retainedReader;
+        loader->RecordTypeInfo(ti);
+        lateTi->AddMTable(ti, ed);
+        Target("retained-publication-cache-valid", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
+        Target("retained-publication-early-mtable-valid", earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
+        Target("retained-publication-late-mtable-valid", lateTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
+        Target("publication-runtime-finish", FiniCJRuntime() == E_OK);
+        return;
+    }
     auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
     std::thread closer([&] { loader->RemoveLoadedFiles(file); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);

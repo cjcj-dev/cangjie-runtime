@@ -33,10 +33,15 @@ function run(name,exe,args,env=environment,expect={}) {
   if(!pass){console.log(r.stdout,r.stderr);process.exit(1);}
   return r.stdout;
 }
-run('installed-runtime-identity','sha256sum',[runtime+'/libcangjie-runtime.so',sdk+'/bin/cjc']);
+const runtimePaths=[runtime+'/libcangjie-runtime.so',sdk+'/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so',sdk+'/.compiler-exec/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so'];
+const identities=run('installed-runtime-identity','sha256sum',[...runtimePaths,sdk+'/bin/cjc']);
+if(new Set(identities.trim().split('\n').slice(0,3).map(line=>line.split(/\s+/)[0])).size!==1)
+  throw Error('compiler host and target installations must consume the candidate runtime');
 const plugin=out+'/libreadscopeprobe.so';
 // Real normal compiler entry, with the removed selector absent.
 run('compile-plugin',sdk+'/bin/cjc',[source+'/readscope_no_unload_plugin.cj','--output-type=dylib','-o',plugin],{...environment,LD_DEBUG:'libs'});
+const compilerLoad=fs.readFileSync(out+'/compile-plugin.stderr','utf8');
+if(!compilerLoad.includes('calling init: '+runtimePaths[2]))throw Error('normal compiler did not load its installed candidate runtime');
 const symbols=run('plugin-symbols','nm',['-D','--defined-only',plugin]);
 const symbol=symbols.split('\n').find(s=>/readScopeValue/.test(s))?.trim().split(/\s+/).at(-1);
 if(!symbol)throw Error('managed symbol missing');
@@ -44,7 +49,7 @@ fs.writeFileSync(out+'/ordinary.cj','main(): Int64 { println("readscope-default-
 run('compile-ordinary',sdk+'/bin/cjc',[out+'/ordinary.cj','-o',out+'/ordinary'],{...environment,LD_DEBUG:'libs'});
 run('ordinary-default',out+'/ordinary',[],environment,{output:'readscope-default-normal-entry'});
 const flags=['-std=c++17','-O2','-pthread','-I'+source+'/../src','-I'+source+'/../include'];
-for(const [name,file,linked] of [['harness','readscope_no_unload_harness.cpp',true],['first','readscope_first_load_harness.cpp',true],['pinned','readscope_pinned_image_harness.cpp',false]]){
+for(const [name,file,linked] of [['harness','readscope_no_unload_harness.cpp',true],['first','readscope_first_load_harness.cpp',true],['reopen','readscope_public_reopen_harness.cpp',true],['pinned','readscope_pinned_image_harness.cpp',false]]){
   run('compile-'+name,process.env.CXX??'clang++',[...flags,source+'/'+file,...(linked?['-L'+runtime,'-Wl,-rpath,'+runtime,'-lcangjie-runtime','-lboundscheck']:[]),'-ldl','-o',out+'/'+name]);
 }
 run('compile-pin-failure',process.env.CXX??'clang++',['-shared','-fPIC',source+'/readscope_pin_failure.cpp','-ldl','-o',out+'/pin-failure.so']);
@@ -54,6 +59,7 @@ run('compile-companion',sdk+'/bin/cjc',[out+'/readscopeorder.cj','--output-type=
 for(const value of [undefined,'0','1','10']) {
   const env={...environment};if(value!==undefined)env.CJ_READSCOPE_FAST=value;
   const suffix=value??'unset';
+  run('public-reopen-'+suffix,out+'/reopen',[plugin,symbol],env);
   for(const mode of ['lifetime','direct','preinit-direct','retained'])run(mode+'-'+suffix,out+'/harness',[mode,plugin,symbol],env);
   for(const mode of ['exit','missing','distinct','public-freeze','native-freeze','live-exit-retained','live-exit-metadata','live-exit-order-ab','live-exit-order-ba']){
     const extra=mode==='distinct'?out+'/distinct/libreadscopeprobe.so':mode.startsWith('live-exit')?out+'/libreadscopeorder.so':out+'/missing/libreadscopeprobe.so';
@@ -67,6 +73,7 @@ for(const value of [undefined,'0','1','10']) {
   run('pin-failure-'+suffix,out+'/pinned',[runtime+'/libcangjie-runtime.so',plugin,symbol,'base','public-exit'],{...env,LD_PRELOAD:out+'/pin-failure.so'},{pinFailure:true});
   run('pin-restored-'+suffix,out+'/pinned',[runtime+'/libcangjie-runtime.so',plugin,symbol,'base','public-exit'],env);
 }
+fs.writeFileSync(out+'/cut.diff',`--- normal-public-exit environment\n+++ pin-failure environment\n@@ -1 +1 @@\n-LD_PRELOAD unset\n+LD_PRELOAD=${out}/pin-failure.so\n`);
 fs.writeFileSync(out+'/native-control.cpp','#include <dlfcn.h>\nint main(){auto h=dlopen("libm.so.6",RTLD_NOW);return h?dlclose(h):1;}\n');
 run('compile-native-control',process.env.CXX??'clang++',[out+'/native-control.cpp','-ldl','-o',out+'/native-control']);
 run('pin-cut-independent-control',out+'/native-control',[],{...environment,LD_PRELOAD:out+'/pin-failure.so'});

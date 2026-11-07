@@ -34,6 +34,9 @@ resource-release operations where provided; replacing/reloading a plugin image
 requires a new process. Runtime finalization leaves the image catalog resident
 and does not enable unloading. It still stops the managed runtime, so retained
 metadata alone does not authorize managed calls after `FiniCJRuntime`.
+`TypeInfoManager::Fini` still frees runtime-generated method tables and typeinfo
+allocation arenas. Those generated objects do not acquire process lifetime merely
+because the original image and its native metadata remain mapped.
 
 Process exit invokes native finalizers. The runtime's fini callback requires a
 verified pin for that registered image or completed runtime finalization. It
