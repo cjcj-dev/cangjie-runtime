@@ -11,6 +11,7 @@ const environment={...process.env,CANGJIE_HOME:sdk,cjEnableGC:'1',cjHeapSize:'1G
 for(const k of ['CJ_READSCOPE_FAST','LD_PRELOAD','LD_AUDIT','CANGJIE_PATH'])delete environment[k];
 environment.LD_LIBRARY_PATH=[runtime,sdk+'/runtime/lib/linux_x86_64_cjnative',sdk+'/lib/linux_x86_64_cjnative',sdk+'/tools/lib'].join(':');
 const results=[];
+let collectFailures=false;
 function run(name,exe,args,env=environment,expect={}) {
   const start=new Date().toISOString();
   const r=spawnSync(exe,args,{env,cwd:out,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024});
@@ -32,7 +33,7 @@ function run(name,exe,args,env=environment,expect={}) {
   results.push({name,exe,args,CJ_READSCOPE_FAST:env.CJ_READSCOPE_FAST??'unset',start,end:new Date().toISOString(),status:r.status,signal:r.signal,error:r.error?.message,expect,assertions,fini,pass});
   fs.writeFileSync(out+'/results.json',JSON.stringify(results,null,2)+'\n');
   console.log(JSON.stringify(results.at(-1)));
-  if(!pass){console.log(r.stdout,r.stderr);process.exit(1);}
+  if(!pass){console.log(r.stdout,r.stderr);if(!collectFailures)process.exit(1);}
   return r.stdout;
 }
 const runtimePaths=[runtime+'/libcangjie-runtime.so',sdk+'/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so',sdk+'/.compiler-exec/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so'];
@@ -58,6 +59,8 @@ run('compile-pin-failure',process.env.CXX??'clang++',['-shared','-fPIC',source+'
 fs.mkdirSync(out+'/distinct');fs.copyFileSync(plugin,out+'/distinct/libreadscopeprobe.so');
 fs.writeFileSync(out+'/readscopeorder.cj',fs.readFileSync(source+'/readscope_no_unload_plugin.cj','utf8').replace('package readscopeprobe','package readscopeorder'));
 run('compile-companion',sdk+'/bin/cjc',[out+'/readscopeorder.cj','--output-type=dylib','-o',out+'/libreadscopeorder.so']);
+// Complete independent behavioral cases while retaining a nonzero suite result.
+collectFailures=true;
 for(const value of [undefined,'0','1','10']) {
   const env={...environment};if(value!==undefined)env.CJ_READSCOPE_FAST=value;
   const suffix=value??'unset';
@@ -77,6 +80,9 @@ for(const value of [undefined,'0','1','10']) {
 }
 fs.writeFileSync(out+'/cut.diff',`--- normal-public-exit environment\n+++ pin-failure environment\n@@ -1 +1 @@\n-LD_PRELOAD unset\n+LD_PRELOAD=${out}/pin-failure.so\n`);
 fs.writeFileSync(out+'/native-control.cpp','#include <dlfcn.h>\nint main(){auto h=dlopen("libm.so.6",RTLD_NOW);return h?dlclose(h):1;}\n');
+collectFailures=false;
 run('compile-native-control',process.env.CXX??'clang++',[out+'/native-control.cpp','-ldl','-o',out+'/native-control']);
+collectFailures=true;
 run('pin-cut-independent-control',out+'/native-control',[],{...environment,LD_PRELOAD:out+'/pin-failure.so'});
 fs.writeFileSync(out+'/summary.json',JSON.stringify({processes:results.length,failed:results.filter(r=>!r.pass).map(r=>r.name)},null,2)+'\n');
+process.exitCode=results.some(r=>!r.pass)?1:0;
