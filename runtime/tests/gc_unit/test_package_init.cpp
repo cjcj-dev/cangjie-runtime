@@ -357,15 +357,25 @@ void CycleWitness(void* p)
     WaitqueueWakeAll(&c.release, nullptr, nullptr);
 }
 
+struct LookupContext {
+    std::atomic<bool> done { false };
+    bool alreadyReady = false;
+};
 void Lookup(void* p)
 {
+    auto& context = *static_cast<LookupContext*>(p);
     void* token = nullptr;
-    Target("code-to-real-basefile", Begin(P(), U(), 0, &token) == Code(Result::Execute));
-    MCC_PackageInitComplete(token);
+    const auto result = Begin(P(), U(), 0, &token);
+    if (context.alreadyReady) {
+        Target("retained-main-package-ready", result == Code(Result::Ready) && token == nullptr);
+    } else {
+        Target("code-to-real-basefile", result == Code(Result::Execute) && token != nullptr);
+        MCC_PackageInitComplete(token);
+    }
     Target("metadata-is-not-code", Begin(&metadata, U(), 0, &token) == Code(Result::Unavailable));
     Target("other-image-unit-rejected", Begin(P(), reinterpret_cast<const void*>(&MCC_PackageInitBegin), 0,
                                             &token) == Code(Result::Unavailable));
-    static_cast<std::atomic<bool>*>(p)->store(true, std::memory_order_release);
+    context.done.store(true, std::memory_order_release);
 }
 
 struct UnloadRace {
@@ -438,9 +448,10 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageLifetime)
 {
     Init();
     for (int generation = 0; generation != 2; ++generation) {
-        std::atomic<bool> done { false };
-        Start(Lookup, &done);
-        Target("lookup-completed", Await(done));
+        LookupContext context;
+        context.alreadyReady = generation != 0 && ElfUnloadQuiescence::RetainsNativeImages();
+        Start(Lookup, &context);
+        Target("lookup-completed", Await(context.done));
         if (generation == 0) {
             auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
             if (ElfUnloadQuiescence::RetainsNativeImages()) {
