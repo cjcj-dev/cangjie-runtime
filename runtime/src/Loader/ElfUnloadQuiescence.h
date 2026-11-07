@@ -28,6 +28,7 @@ namespace MapleRuntime {
 class ElfUnloadQuiescence final {
     friend class ElfUnloadQuiescenceTest;
     friend class CJFileLoader;
+    friend class LoaderManager;
 public:
     // Opt-in process-lifetime image retention, fixed before the first metadata
     // reader or loader operation. See docs/readscope-no-unload.md.

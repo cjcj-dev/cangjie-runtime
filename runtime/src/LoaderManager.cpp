@@ -130,13 +130,14 @@ void LoaderManager::LoadFile(Uptr address)
 void LoaderManager::UnloadFile(Uptr address)
 {
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
-    // The native fini callback also runs before runtime initialization. Do not
-    // let direct dlclose bypass the no-unload contract there. After completed
-    // runtime finalization, only process-lifetime metadata remains; exit-time
-    // callbacks have no live runtime to unregister from.
+    // NODELETE suppresses native close-time fini/unmap, but process exit still
+    // invokes fini, including before Init and while the runtime is live. Keep
+    // the registered metadata intact and require this image's verified pin.
     if (ElfUnloadQuiescence::NoUnloadMode()) {
-        CHECK_DETAIL(MRT_CheckRuntimeFinished() && !GetInitStatus(),
-                     "ELF unload attempted in no-unload mode (CJ_READSCOPE_FAST=1)");
+        const bool postFini = MRT_CheckRuntimeFinished() && !GetInitStatus();
+        const auto image = ElfUnloadQuiescence::RegisteredImage(address);
+        CHECK_DETAIL(postFini || (image != nullptr && image->retained),
+                     "ELF unload in no-unload mode: image not retained and runtime not finalized");
         return;
     }
     // MRT_LibraryUnLoad can be invoked before runtime init

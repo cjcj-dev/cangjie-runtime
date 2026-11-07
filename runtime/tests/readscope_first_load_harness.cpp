@@ -1,4 +1,6 @@
 #include "Cangjie.h"
+#include "Loader/ElfUnloadQuiescence.h"
+#include <cstdint>
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +22,8 @@ int main(int argc, char** argv)
     const char* symbol = argv[3];
     const bool fast = std::strcmp(argv[4], "1") == 0;
     // Deliberately no runtime init, reader, or mode query before this producer.
+    if (std::strcmp(mode, "live-exit-order-ba") == 0 &&
+        !Check(LoadCJLibrary(argv[5]) == E_OK, "second-image-loaded-first")) { return 2; }
     void* native = nullptr;
     if (std::strcmp(mode, "native-freeze") == 0) {
         native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
@@ -29,6 +33,34 @@ int main(int argc, char** argv)
     }
     if (std::strcmp(mode, "exit") == 0) {
         std::puts("TARGET load-only-normal-exit");
+        std::fflush(stdout);
+        return 0;
+    }
+    if (std::strncmp(mode, "live-exit", 9) == 0) {
+        if (std::strcmp(mode, "live-exit-order-ab") == 0 &&
+            !Check(LoadCJLibrary(argv[5]) == E_OK, "second-image-loaded-last")) { return 2; }
+        RuntimeParam param {};
+        param.coParam.processorNum = 2;
+        if (!Check(InitCJRuntime(&param) == E_OK, "init-after-public-load")) { return 2; }
+        if (std::strcmp(mode, "live-exit-metadata") == 0) {
+            if (!Check(InitCJLibrary(plugin) == E_OK, "library-metadata-init")) { return 2; }
+            void* function = FindCJSymbol(plugin, symbol);
+            void* metadata = FindCJSymbol(plugin, "readscopeprobe:ReadScopeValue.ti");
+            using MapleRuntime::ElfUnloadQuiescence;
+            ElfUnloadQuiescence::ReadScope reader;
+            ElfUnloadQuiescence::AssertReaderActive();
+            if (!Check(function && metadata &&
+                       ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<uintptr_t>(function)) &&
+                       ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<uintptr_t>(metadata)),
+                       "registered-code-and-metadata-under-reader")) { return 1; }
+            Dl_info codeInfo {}, metadataInfo {};
+            if (!Check(dladdr(function, &codeInfo) && dladdr(metadata, &metadataInfo) &&
+                       codeInfo.dli_fbase == metadataInfo.dli_fbase, "same-image-metadata-identity")) { return 1; }
+            volatile uintptr_t word = *static_cast<const uintptr_t*>(metadata);
+            (void)word;
+            if (!Check(true, "metadata-read-under-reader")) { return 1; }
+        }
+        std::puts("TARGET initialized-normal-exit-after-public-first-load");
         std::fflush(stdout);
         return 0;
     }
