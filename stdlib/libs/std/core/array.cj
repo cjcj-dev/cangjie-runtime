@@ -322,19 +322,19 @@ public struct Array<T> {
             return
         }
         if (copyLen < 0) {
-            throw IllegalArgumentException("Invalid argument 'copyLen': expected a non-negative value, got '${copyLen}'.")
+            throw IllegalArgumentException(arrayCopyInvalidLengthExceptionMessage(copyLen))
         }
         if (srcStart < 0 || dstStart < 0) {
-            throw IndexOutOfBoundsException("Index out of bounds: negative index, srcStart is '${srcStart}', dstStart is '${dstStart}'.")
+            throw IndexOutOfBoundsException(arrayCopyNegativeIndexExceptionMessage(srcStart, dstStart))
         }
         if (srcStart >= this.len) {
-            throw IndexOutOfBoundsException("Index out of bounds: srcStart '${srcStart}' is greater than or equal to array size '${this.len}'.")
+            throw IndexOutOfBoundsException(arrayCopySourceIndexExceptionMessage(srcStart, this.len))
         }
         if (dstStart >= dst.size) {
-            throw IndexOutOfBoundsException("Index out of bounds: dstStart '${dstStart}' is greater than or equal to target array size '${dst.size}'.")
+            throw IndexOutOfBoundsException(arrayCopyDestinationIndexExceptionMessage(dstStart, dst.size))
         }
         if (copyLen > this.len - srcStart || copyLen > dst.size - dstStart) {
-            throw IndexOutOfBoundsException("Copy length out of bounds: copyLen is '${copyLen}', but available source length is '${this.len - srcStart}' and available destination length is '${dst.size - dstStart}'.")
+            throw IndexOutOfBoundsException(arrayCopyLengthOutOfBoundsExceptionMessage(copyLen, this.len, srcStart, dst.size, dstStart))
         }
         intrinsicBuiltInCopyTo<T>(this.rawptr, dst.rawptr, this.start + srcStart, dst.start + dstStart, copyLen)
     }
@@ -765,6 +765,27 @@ private func rangeToString(arraySize: Int64, start: Int64, end: Int64,
         case (false, true) => "[${rangeEnd}, ${rangeStart}]"
         case (false, false) => "(${rangeEnd}, ${rangeStart}]"
     }
+}
+
+private func arrayCopyInvalidLengthExceptionMessage(copyLen: Int64): String {
+    "Invalid argument 'copyLen': expected a non-negative value, got '${copyLen}'."
+}
+
+private func arrayCopyNegativeIndexExceptionMessage(srcStart: Int64, dstStart: Int64): String {
+    "Index out of bounds: negative index, srcStart is '${srcStart}', dstStart is '${dstStart}'."
+}
+
+private func arrayCopySourceIndexExceptionMessage(srcStart: Int64, arraySize: Int64): String {
+    "Index out of bounds: srcStart '${srcStart}' is greater than or equal to array size '${arraySize}'."
+}
+
+private func arrayCopyDestinationIndexExceptionMessage(dstStart: Int64, arraySize: Int64): String {
+    "Index out of bounds: dstStart '${dstStart}' is greater than or equal to target array size '${arraySize}'."
+}
+
+private func arrayCopyLengthOutOfBoundsExceptionMessage(
+    copyLen: Int64, sourceSize: Int64, srcStart: Int64, destinationSize: Int64, dstStart: Int64): String {
+    "Copy length out of bounds: copyLen is '${copyLen}', but available source length is '${sourceSize - srcStart}' and available destination length is '${destinationSize - dstStart}'."
 }
 
 private func arraySliceOutOfBoundsExceptionMessage(arraySize: Int64, sliceStart: Int64, sliceLength: Int64): String {
