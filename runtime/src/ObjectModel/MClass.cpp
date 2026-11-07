@@ -835,6 +835,50 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     return this;
 }
 
+FuncPtr* TypeInfo::GetMTableAndOuterTI(TypeInfo* itf, U64 index, TypeInfo** outerTI)
+{
+    // Stable-table hit for both results under one read admission and one
+    // StableReadGuard/find. Every other case runs the unchanged GetMTable and
+    // GetMethodOuterTI in their original order, each with its own admission.
+    // The guard and read scope end before that fallback, so no fallback that
+    // registers, resolves or updates tables runs while this call still holds
+    // a stable-table reader. Nothing is returned from inside the guard.
+    FuncPtr* funcTable = nullptr;
+    TypeInfo* outer = nullptr;
+    {
+        ElfUnloadQuiescence::ReadScope reader;
+        MTableDesc* desc = GetMTableDesc();
+        if (LIKELY(this != itf && GetUUIDInReadScope() != 0 && !(IsTempEnum() && GetSuperTypeInfo() != nullptr) &&
+                   !IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
+            const U32 itfUUID = itf->GetUUIDInReadScope();
+            if (LIKELY(GetUUIDInReadScope() != itfUUID)) {
+                MTableDesc::StableReadGuard stableRead(*desc);
+                if (auto stable = stableRead.Get()) {
+                    auto stableIt = stable->find(itfUUID);
+                    if (stableIt != stable->end()) {
+                        ExtensionData* ed = stableIt->second->GetExtensionData();
+                        TypeInfo* cachedOuter = stableIt->second->GetCachedTypeInfo(index);
+                        if (LIKELY(ed->IsFuncTableUpdated() && cachedOuter != nullptr)) {
+#if defined(MRT_STABLE_HIT_TEST_HOOK)
+                            StableHitTestPause(2);
+#endif
+                            funcTable = ed->GetFuncTable();
+                            outer = cachedOuter;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (LIKELY(funcTable != nullptr)) {
+        *outerTI = outer;
+        return funcTable;
+    }
+    funcTable = GetMTable(itf);
+    *outerTI = GetMethodOuterTI(itf, index);
+    return funcTable;
+}
+
 bool TypeInfo::IsSubType(TypeInfo* typeInfo)
 {
     // Keep the metadata graph walk under one admission scope.  GetUUID and

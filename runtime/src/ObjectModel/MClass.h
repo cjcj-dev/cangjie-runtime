@@ -871,6 +871,9 @@ public:
     void AddMTable(TypeInfo* ti, ExtensionData* extensionData);
     FuncPtr* GetMTable(TypeInfo* itf);
     TypeInfo* GetMethodOuterTI(TypeInfo* itf, U64 index);
+    // GetMTable(itf) and GetMethodOuterTI(itf, index) for one interface
+    // dispatch site. Writes the outer TypeInfo to *outerTI, returns the table.
+    FuncPtr* GetMTableAndOuterTI(TypeInfo* itf, U64 index, TypeInfo** outerTI);
     U32 GetUUID();
     // Same result as GetUUID() for a caller that already holds an
     // ElfUnloadQuiescence::ReadScope over its whole metadata walk; that

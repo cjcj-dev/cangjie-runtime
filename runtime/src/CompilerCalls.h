@@ -172,6 +172,8 @@ extern "C" MRT_EXPORT void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr 
 extern "C" MRT_EXPORT void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size);
 extern "C" MRT_EXPORT FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf);
 extern "C" MRT_EXPORT TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);
+extern "C" MRT_EXPORT FuncPtr* CJ_MCC_GetMTableAndOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index,
+                                                         TypeInfo** outerTI);
 extern "C" MRT_EXPORT void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData);
 extern "C" MRT_EXPORT void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
                                                    const ObjectPtr srcObj, MAddress srcField, size_t srcSize);

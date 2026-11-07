@@ -2147,6 +2147,11 @@ extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 in
     return ti->GetMethodOuterTI(itf, index);
 }
 
+extern "C" FuncPtr* CJ_MCC_GetMTableAndOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index, TypeInfo** outerTI)
+{
+    return ti->GetMTableAndOuterTI(itf, index, outerTI);
+}
+
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData)
 {
     if (UNLIKELY(!extensionData->IsFuncTableUpdated())) {

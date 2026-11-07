@@ -18,6 +18,7 @@ extern "C" U32 CJ_MCC_GetPackageNumOfTypeInfos(void* packageInfo);
 extern "C" TypeInfo* CJ_MCC_GetPackageTypeInfo(void* packageInfo, U32 index);
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf);
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);
+extern "C" FuncPtr* CJ_MCC_GetMTableAndOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index, TypeInfo** outerTI);
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadNativeBlock() {}
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadMaybeNativeBlock() {}
@@ -32,12 +33,12 @@ struct StableInterleaveState {
     const MTableDesc* expectedDesc { nullptr };
 };
 
-StableInterleaveState* gStableInterleave[2] { nullptr, nullptr };
+StableInterleaveState* gStableInterleave[3] { nullptr, nullptr, nullptr };
 std::atomic<bool> gStableMutationAttempt { false };
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestStableHitPause(U32 api)
 {
-    if (api >= 2) {
+    if (api >= 3) {
         return;
     }
     auto* state = gStableInterleave[api];
@@ -113,9 +114,25 @@ bool ReadMTableApis(TypeInfo* klass, TypeInfo* itf)
     (void)itf;
     return false;
 #else
-    return CJ_MCC_GetMTable(klass, itf) != nullptr &&
-        CJ_MCC_GetMethodOuterTI(klass, itf, 0) != nullptr;
+    FuncPtr* table = CJ_MCC_GetMTable(klass, itf);
+    TypeInfo* outer = CJ_MCC_GetMethodOuterTI(klass, itf, 0);
+    // The fused entry must give the same pair on every call of this image,
+    // whether it takes the stable-table hit or the original fallback.
+    bool fusedSame = true;
+    for (int i = 0; i < 2; ++i) {
+        TypeInfo* fusedOuter = nullptr;
+        FuncPtr* fusedTable = CJ_MCC_GetMTableAndOuterTI(klass, itf, 0, &fusedOuter);
+        fusedSame = fusedSame && fusedTable == table && fusedOuter == outer;
+    }
+    return table != nullptr && outer != nullptr && fusedSame;
 #endif
+}
+
+bool ReadFused(TypeInfo* klass, TypeInfo* itf)
+{
+    TypeInfo* outer = nullptr;
+    FuncPtr* table = CJ_MCC_GetMTableAndOuterTI(klass, itf, 0, &outer);
+    return table != nullptr && outer != nullptr;
 }
 
 bool FindInterleaveTypes(LoaderManager* loader, TypeInfo*& klass, TypeInfo*& hitItf, TypeInfo*& recursiveItf)
@@ -126,7 +143,8 @@ bool FindInterleaveTypes(LoaderManager* loader, TypeInfo*& klass, TypeInfo*& hit
     return klass != nullptr && hitItf != nullptr && recursiveItf != nullptr;
 }
 
-bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const char* updatePath1)
+bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const char* updatePath1,
+                         const char* updatePath2)
 {
 #ifdef BROKEN_NO_STABLE_WAIT
     (void)loader;
@@ -148,12 +166,14 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
     }
 
     bool allPassed = true;
-    const char* updatePaths[2] = { updatePath0, updatePath1 };
-    const char* updateInterfaces[2] = {
+    // api 0 GetMTable, api 1 GetMethodOuterTI, api 2 fused GetMTableAndOuterTI.
+    const char* updatePaths[3] = { updatePath0, updatePath1, updatePath2 };
+    const char* updateInterfaces[3] = {
         "elfunloadprobe_update0:UnloadProbeMutationInterface0",
-        "elfunloadprobe_update1:UnloadProbeMutationInterface1"
+        "elfunloadprobe_update1:UnloadProbeMutationInterface1",
+        "elfunloadprobe_update2:UnloadProbeMutationInterface2"
     };
-    for (U32 api = 0; api < 2; ++api) {
+    for (U32 api = 0; api < 3; ++api) {
         StableInterleaveState state;
         state.expectedDesc = klass->GetMTableDesc();
         if (state.expectedDesc == nullptr) {
@@ -169,7 +189,8 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
         gStableMutationAttempt.store(false, std::memory_order_release);
         std::thread reader([&, api] {
             bool ok = api == 0 ? CJ_MCC_GetMTable(klass, hitItf) != nullptr
-                               : CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
+                : api == 1     ? CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr
+                               : ReadFused(klass, hitItf);
             readerValue.store(ok, std::memory_order_release);
             readerDone.store(true, std::memory_order_release);
         });
@@ -229,7 +250,7 @@ bool RunStableInterleave(LoaderManager* loader, const char* updatePath0, const c
         auto* updateItf = loader->FindTypeInfoFromLoadedFiles(updateInterfaces[api]);
         const bool recovered = writerValue.load(std::memory_order_acquire) && updateItf != nullptr &&
             CJ_MCC_GetMTable(klass, updateItf) != nullptr &&
-            CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr;
+            CJ_MCC_GetMethodOuterTI(klass, hitItf, 0) != nullptr && ReadFused(klass, hitItf);
         const bool mutationAttempted = gStableMutationAttempt.load(std::memory_order_acquire);
         const bool passed = waitReached && descMatched && blocked && mutationAttempted &&
             readerDone.load() && readerValue.load() && recovered;
@@ -270,13 +291,15 @@ int Run(const char* plugin)
     const bool reads = published && ReadMTableApis(klass, itf);
     const std::string updatePath0 = std::string(plugin) + ".update0.so";
     const std::string updatePath1 = std::string(plugin) + ".update1.so";
+    const std::string updatePath2 = std::string(plugin) + ".update2.so";
     const bool stableInterleave = typesFound &&
-        RunStableInterleave(loader, updatePath0.c_str(), updatePath1.c_str());
+        RunStableInterleave(loader, updatePath0.c_str(), updatePath1.c_str(), updatePath2.c_str());
     // Drop the two extension images first.  Their metadata entries retain
     // the primary class image until they are unlinked, so primary unload is
     // checked only after the real update producers have drained.
     const int updateUnload0 = UnloadCJLibrary(updatePath0.c_str());
     const int updateUnload1 = UnloadCJLibrary(updatePath1.c_str());
+    const int updateUnload2 = UnloadCJLibrary(updatePath2.c_str());
 
     const int unload = UnloadCJLibrary(plugin);
     const bool removed = typesFound &&
@@ -298,7 +321,8 @@ int Run(const char* plugin)
     }
     const int reloadUnload = reloaded ? UnloadCJLibrary(reloadPath.c_str()) : E_ARGS;
     const bool passed = typesFound && published && reads && stableInterleave && unload == E_OK && removed &&
-        reloaded && recovered && reloadUnload == E_OK && updateUnload0 == E_OK && updateUnload1 == E_OK;
+        reloaded && recovered && reloadUnload == E_OK && updateUnload0 == E_OK && updateUnload1 == E_OK &&
+        updateUnload2 == E_OK;
     std::printf("MTABLE_API_LIFECYCLE result=%s types=%d published=%d reads=%d unload=%d "
                 "removed=%d reloaded=%d recovered=%d reload_unload=%d\n",
                 passed ? "PASS" : "FAIL", typesFound, published, reads, unload, removed,
