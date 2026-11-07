@@ -30,6 +30,7 @@ function run(name,exe,args,env=environment,expect={}) {
     fini={first,second};pass&&=first>=0&&second>=0&&(expect.order==='ab'?first<second:second<first);
   }
   if(expect.output)pass&&=(r.stdout??'').includes(expect.output);
+  if(expect.detectionFailure)pass&&=combined.includes(expect.detectionFailure)&&combined.includes('runtime namespace identity lookup failed');
   results.push({name,exe,args,CJ_READSCOPE_FAST:env.CJ_READSCOPE_FAST??'unset',start,end:new Date().toISOString(),status:r.status,signal:r.signal,error:r.error?.message,expect,assertions,fini,pass});
   fs.writeFileSync(out+'/results.json',JSON.stringify(results,null,2)+'\n');
   console.log(JSON.stringify(results.at(-1)));
@@ -84,5 +85,25 @@ collectFailures=false;
 run('compile-native-control',process.env.CXX??'clang++',[out+'/native-control.cpp','-ldl','-o',out+'/native-control']);
 collectFailures=true;
 run('pin-cut-independent-control',out+'/native-control',[],{...environment,LD_PRELOAD:out+'/pin-failure.so'});
+// Public native loader contract: base GLOBAL, secondary LOCAL with explicit
+// dependencies; failed self-map/LMID discovery must not attempt GLOBAL loading.
+collectFailures=false;
+fs.writeFileSync(out+'/namespace-provider.cpp','extern "C" int readscope_namespace_value(){return 37;}\n');
+fs.writeFileSync(out+'/namespace-dependent.cpp','extern "C" int readscope_namespace_value(); extern "C" int readscope_namespace_dependent(){return readscope_namespace_value();}\n');
+const cxx=process.env.CXX??'clang++';
+run('compile-namespace-probe',cxx,['-shared','-fPIC',source+'/readscope_loader_namespace_probe.cpp','-ldl','-o',out+'/namespace-probe.so']);
+run('compile-namespace-provider',cxx,['-shared','-fPIC',out+'/namespace-provider.cpp','-Wl,-soname,namespace-provider.so','-o',out+'/namespace-provider.so']);
+run('compile-namespace-unbound',cxx,['-shared','-fPIC',out+'/namespace-dependent.cpp','-o',out+'/namespace-unbound.so']);
+run('compile-namespace-needed',cxx,['-shared','-fPIC',out+'/namespace-dependent.cpp','-L'+out,'-l:namespace-provider.so','-Wl,-rpath,$ORIGIN','-o',out+'/namespace-needed.so']);
+run('compile-namespace-harness',cxx,[...flags,source+'/readscope_loader_namespace_harness.cpp','-ldl','-o',out+'/namespace-loader']);
+run('compile-detection-harness',cxx,[...flags,source+'/readscope_loader_detection_harness.cpp','-L'+runtime,'-Wl,-rpath,'+runtime,'-lcangjie-runtime','-lboundscheck','-ldl','-o',out+'/namespace-detection']);
+for(const cut of ['lmid','identity'])run('compile-detection-'+cut,cxx,['-shared','-fPIC',...(cut==='identity'?['-DREADSCOPE_NAMESPACE_IDENTITY_CUT']:[]),source+'/readscope_loader_detection_failure.cpp','-ldl','-o',out+'/detection-'+cut+'.so']);
+collectFailures=true;
+for(const ns of ['base','namespace'])run('public-loader-'+ns,out+'/namespace-loader',[runtime+'/libcangjie-runtime.so',out+'/namespace-probe.so',out+'/namespace-provider.so',out+'/namespace-unbound.so',out+'/namespace-needed.so',ns]);
+for(const cut of ['lmid','identity']){
+  run('detection-'+cut+'-failure',out+'/namespace-detection',[out+'/namespace-provider.so','reject'],{...environment,LD_PRELOAD:out+'/detection-'+cut+'.so'},{detectionFailure:cut==='lmid'?'TARGET namespace-lmid-failure':'TARGET namespace-identity-mismatch'});
+  run('detection-'+cut+'-restored',out+'/namespace-detection',[out+'/namespace-provider.so','load']);
+}
+fs.writeFileSync(out+'/namespace-cut.diff',`--- normal public LoadCJLibrary environment\n+++ namespace identity/LMID failure environment\n@@ -1 +1 @@\n-LD_PRELOAD unset\n+LD_PRELOAD=${out}/detection-{lmid,identity}.so\n`);
 fs.writeFileSync(out+'/summary.json',JSON.stringify({processes:results.length,failed:results.filter(r=>!r.pass).map(r=>r.name)},null,2)+'\n');
 process.exitCode=results.some(r=>!r.pass)?1:0;

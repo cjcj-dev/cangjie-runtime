@@ -162,3 +162,9 @@ readscope_first_load_harness.cpp manual public load-only exit, full-path native 
 
 readscope_pinned_image_harness.cpp manual installed runtime public/native/same-namespace NODELETE persistence and managed metadata consumer
 readscope_pin_failure.cpp manual test-only LD_PRELOAD failure of the actual native NODELETE promotion; prepublication CHECK required
+
+# Public namespace loader: base GLOBAL, secondary LOCAL, explicit dependencies, self-identity/LMID failure and restoration.
+readscope_loader_namespace_harness.cpp manual installed runtime public base GLOBAL and secondary LOCAL visibility, explicit NEEDED and handle symbol controls
+readscope_loader_namespace_probe.cpp manual unrelated namespace observer for NULL-handle semantics and RTLD_DEFAULT visibility
+readscope_loader_detection_harness.cpp manual public load failure and restoration with independent native load control
+readscope_loader_detection_failure.cpp manual LD_PRELOAD self-map/LMID fault injection at actual loader dependency

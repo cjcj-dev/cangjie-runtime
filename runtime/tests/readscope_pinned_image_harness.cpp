@@ -46,6 +46,8 @@ int main(int argc, char** argv)
     auto fini = Api<decltype(&FiniCJRuntime)>(runtime, "FiniCJRuntime");
     auto initLib = Api<decltype(&InitCJLibrary)>(runtime, "InitCJLibrary");
     auto load = Api<decltype(&LoadCJLibrary)>(runtime, "LoadCJLibrary");
+    auto find = Api<decltype(&FindCJSymbol)>(runtime, "FindCJSymbol");
+    auto unload = Api<decltype(&UnloadCJLibrary)>(runtime, "UnloadCJLibrary");
     auto run = Api<decltype(&RunCJTask)>(runtime, "RunCJTask");
     auto result = Api<decltype(&GetTaskRet)>(runtime, "GetTaskRet");
     auto release = Api<decltype(&ReleaseHandle)>(runtime, "ReleaseHandle");
@@ -57,6 +59,28 @@ int main(int argc, char** argv)
     const bool publicLoad = std::strncmp(lifecycle, "public-", 7) == 0;
     if (publicLoad) {
         if (!Check(load(plugin) == E_OK, "public-first-load")) { return 2; }
+        void* function = find(plugin, symbol);
+        void* metadata = find(plugin, "readscopeprobe:ReadScopeValue.ti");
+        void* observer = dlmopen(ns, plugin, RTLD_NOW | RTLD_NOLOAD);
+        Lmid_t loadedNs = LM_ID_BASE;
+        if (!Check(observer && dlinfo(observer, RTLD_DI_LMID, &loadedNs) == 0 && loadedNs == ns &&
+                   function && metadata && dlsym(observer, symbol) == function,
+                   "public-object-in-runtime-namespace")) { return 1; }
+        if (decoy && !Check(dlsym(decoy, symbol) != function, "public-object-distinct-from-base")) { return 1; }
+        const auto word = *static_cast<const uintptr_t*>(metadata);
+        if (!Check(dlclose(observer) == 0, "public-observer-released")) { return 1; }
+        if (!Check(unload(plugin) == E_OK && find(plugin, symbol) == function &&
+                   find(plugin, "readscopeprobe:ReadScopeValue.ti") == metadata &&
+                   *static_cast<const uintptr_t*>(metadata) == word, "public-close-retains-identity")) { return 1; }
+        if (inited) {
+            if (!Check(initLib(plugin) == E_OK, "public-library-init-after-close")) { return 1; }
+            auto task = run(reinterpret_cast<CJTaskFunc>(function), nullptr);
+            if (!Check(task != nullptr, "public-managed-task-after-close")) { return 1; }
+            void* value = nullptr;
+            if (!Check(result(task, &value) == 0 && reinterpret_cast<uintptr_t>(value) == 37,
+                       "public-managed-value-after-close")) { return 1; }
+            release(task);
+        }
         std::puts("TARGET public-normal-exit"); std::fflush(stdout);
         return 0;
     }

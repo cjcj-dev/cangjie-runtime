@@ -65,3 +65,18 @@ values are ignored controls with identical retention assertions. Native pin
 failure is an intentional red at the real publication dependency, followed by
 restoration and an independent non-Cangjie native-load control. Test output does
 not by itself qualify a complete SDK, cross-platform behavior or performance.
+
+## Public loading in glibc namespaces
+
+`LoadCJLibrary` keeps GLOBAL loading in the base namespace. In a secondary
+namespace it loads LOCAL into the current runtime's verified LMID. Use
+`FindCJSymbol` for explicit lookup and ELF NEEDED dependencies between libraries;
+an unrelated LOCAL library does not gain these symbols through RTLD_DEFAULT.
+
+The loader identifies a private address in its own runtime image with `dladdr1`,
+opens that image with NOLOAD, verifies the returned link_map identity, and only
+then queries its LMID. A NULL dlopen handle alone does not prove the caller's
+namespace. Lookup, identity, LMID or temporary-handle release failure returns a
+load error; it never falls through to a secondary GLOBAL load. This detection
+uses the same glibc-only platform boundary as native pinning. Other platform
+loader implementations and the retention policy are unchanged.
