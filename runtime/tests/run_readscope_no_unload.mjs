@@ -22,9 +22,11 @@ function run(name,exe,args,env=environment,expect={}) {
   if(expect.pinFailure)pass=combined.includes('TARGET native-pin-failure')&&combined.includes('ELF no-unload pin: NODELETE promotion failed')&&(r.signal==='SIGABRT'||r.status===134);
   let fini;
   if(expect.order){
+    // The fixed native fixtures produce AB and BA fini order respectively.
+    // Require both callbacks and both orders, as in the frozen 9b evidence.
     const first=combined.indexOf('calling fini: '+out+'/libreadscopeprobe.so ');
     const second=combined.indexOf('calling fini: '+out+'/libreadscopeorder.so ');
-    fini={first,second};pass&&=first>=0&&second>=0&&(expect.order==='ab'?second<first:first<second);
+    fini={first,second};pass&&=first>=0&&second>=0&&(expect.order==='ab'?first<second:second<first);
   }
   if(expect.output)pass&&=(r.stdout??'').includes(expect.output);
   results.push({name,exe,args,CJ_READSCOPE_FAST:env.CJ_READSCOPE_FAST??'unset',start,end:new Date().toISOString(),status:r.status,signal:r.signal,error:r.error?.message,expect,assertions,fini,pass});
