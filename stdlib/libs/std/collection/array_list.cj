@@ -13,7 +13,6 @@
  */
 package std.collection
 
-import std.math.*
 
 /**
  * ArrayList-based Iterator.
@@ -1174,6 +1173,19 @@ func max(a: Int64, b: Int64): Int64 {
     }
 }
 
+func isqrt(n: Int64): Int64 {
+    if (n <= 1) {
+        return n
+    }
+    var x = n
+    var y = (x + 1) >> 1
+    while (y < x) {
+        x = y
+        y = (x + n / x) >> 1
+    }
+    return x
+}
+
 func stableSort<T>(data: Array<T>, compare: (T, T) -> Ordering): Unit {
     if (data.size < 2) {
         return
@@ -1622,7 +1634,13 @@ extend<T> Array<T> {
         // 1.44 and the +8 covers constant terms for small sizes, so the
         // formula is a strict upper bound on the stack depth; do not tighten
         // it into a lower-bound estimate.
-        let stackLen = Int64(log2(Float64(this.size)) * 3.0 / 2.0) + 8
+        var _bitLen: Int64 = 0
+        var _tmp = this.size
+        while (_tmp > 0) {
+            _bitLen++
+            _tmp >>= 1
+        }
+        let stackLen = _bitLen * 3 / 2 + 8
         let runStarts = Array<Int64>(stackLen, repeat: 0)
         let runLengths = Array<Int64>(stackLen, repeat: 0)
         var runTop = -1
@@ -2184,7 +2202,7 @@ extend<T> Array<T> {
         if (rightBound) {
             let finish = start + span - 1
             if (span > 64) {
-                let gallopProbe = Int64(sqrt(Float64(span)))
+                let gallopProbe = isqrt(span)
                 match (compare(candidate, this[finish - gallopProbe])) {
                     case LT => return this.binaryQueryGT(candidate, start, span - gallopProbe, compare)
                     case _ => gallopLimit = gallopProbe
@@ -2207,7 +2225,7 @@ extend<T> Array<T> {
             return this.binaryQueryGT(candidate, start + span - offset, offset - previousOffset, compare)
         } else {
             if (span > 64) {
-                let gallopProbe = Int64(sqrt(Float64(span)))
+                let gallopProbe = isqrt(span)
                 match (compare(candidate, this[start + gallopProbe])) {
                     case LT => gallopLimit = gallopProbe
                     case _ => return this.binaryQueryGT(candidate, start + gallopProbe, span - gallopProbe, compare)
@@ -2238,7 +2256,7 @@ extend<T> Array<T> {
         if (rightBound) {
             let finish = start + span - 1
             if (span > 64) {
-                let gallopProbe = Int64(sqrt(Float64(span)))
+                let gallopProbe = isqrt(span)
                 match (compare(candidate, this[finish - gallopProbe])) {
                     case GT => gallopLimit = gallopProbe
                     case _ => return this.binaryQueryLT(candidate, start, span - gallopProbe, compare)
@@ -2261,7 +2279,7 @@ extend<T> Array<T> {
             return this.binaryQueryLT(candidate, start + span - offset, offset - previousOffset, compare)
         } else {
             if (span > 64) {
-                let gallopProbe = Int64(sqrt(Float64(span)))
+                let gallopProbe = isqrt(span)
                 match (compare(candidate, this[start + gallopProbe])) {
                     case GT => return this.binaryQueryLT(candidate, start + gallopProbe, span - gallopProbe, compare)
                     case _ => gallopLimit = gallopProbe
