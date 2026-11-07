@@ -2,7 +2,7 @@
 readscope_public_reopen_harness.cpp manual baseline/candidate public load-close-reopen reproduction against their real runtime SO; requires built managed plugin
 readscope_no_unload_harness.cpp manual public C API lifetime and native callback checks; run_readscope_no_unload.mjs with installed product SO and SDK
 readscope_no_unload_plugin.cj manual real managed image for run_readscope_no_unload.mjs
-run_readscope_no_unload.mjs manual Linux native installed SDK and runtime; GC enabled, default/0/1/invalid activation and exact forbidden-unload controls
+run_readscope_no_unload.mjs manual glibc Linux installed compiler/runtime default retention; old environment ignored, namespace/metadata/exit checks, native pin cut and restoration
 #
 # Why this file exists: as of 8f13560c this directory held 21 items and exactly one
 # of them ran. Seven probes had runner scripts that nothing invoked, five files had
@@ -158,7 +158,7 @@ no_return_payload.cpp                    manual     normal installed runtime/CJT
 linker_monitor_managed.cj                manual     qualified public cjc emitting per-function sections and new std CJO/static archives plus installed native startup/cjld.lds; real static StackManager classifier target/control and old-pattern cut/recovery
 linker_monitor_managed.cpp               manual     native bridge linked into linker_monitor_managed.cj executable against normal static runtime; no runtime export or StackManager product edits
 
-readscope_first_load_harness.cpp manual public load-only exit, full-path native identity, and first public/native producer mode freeze; no mode prequery
+readscope_first_load_harness.cpp manual public load-only exit, full-path native identity, and first public/native producer retention with removed environment selector ignored
 
 readscope_pinned_image_harness.cpp manual installed runtime public/native/same-namespace NODELETE persistence and managed metadata consumer
 readscope_pin_failure.cpp manual test-only LD_PRELOAD failure of the actual native NODELETE promotion; prepublication CHECK required

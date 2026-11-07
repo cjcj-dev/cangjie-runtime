@@ -18,7 +18,7 @@ static bool Check(bool ok, const char* name)
     return ok;
 }
 
-static bool CloseAndCheckImage(void* native, const char* plugin, const char* symbol, bool retained)
+static bool CloseAndCheckImage(void* native, const char* plugin, const char* symbol)
 {
     link_map* before = nullptr;
     if (!Check(dlinfo(native, RTLD_DI_LINKMAP, &before) == 0, "native-object-before")) { return false; }
@@ -26,7 +26,6 @@ static bool CloseAndCheckImage(void* native, const char* plugin, const char* sym
     if (!Check(address != nullptr, "native-symbol-before")) { return false; }
     if (!Check(dlclose(native) == 0, "direct-close-result")) { return false; }
     void* after = dlopen(plugin, RTLD_NOW | RTLD_NOLOAD);
-    if (!retained) { return Check(after == nullptr, "normal-direct-unmapped"); }
     if (!Check(after != nullptr, "direct-close-image-retained")) { return false; }
     link_map* actual = nullptr;
     const bool ok = Check(dlinfo(after, RTLD_DI_LINKMAP, &actual) == 0 && actual == before &&
@@ -36,20 +35,16 @@ static bool CloseAndCheckImage(void* native, const char* plugin, const char* sym
 
 int main(int argc, char** argv)
 {
-    if (argc != 5) { return 2; }
+    if (argc != 4) { return 2; }
     const char* mode = argv[1];
     const char* plugin = argv[2];
     const char* symbol = argv[3];
-    const bool expected = std::strcmp(argv[4], "1") == 0;
-    if (!Check(ElfUnloadQuiescence::NoUnloadMode() == expected, "activation")) { return 1; }
-    // A later environment edit must not convert an outstanding slow reader
-    // into a fast reader, or permit a writer after fast admission.
+    // The removed selector cannot affect even an outstanding metadata reader.
     {
         ElfUnloadQuiescence::ReadScope outer;
-        setenv("CJ_READSCOPE_FAST", expected ? "0" : "1", 1);
+        setenv("CJ_READSCOPE_FAST", "0", 1);
         ElfUnloadQuiescence::ReadScope inner;
         ElfUnloadQuiescence::AssertReaderActive();
-        if (!Check(ElfUnloadQuiescence::NoUnloadMode() == expected, "immutable-mode")) { return 1; }
     }
     std::vector<std::thread> readers;
     for (int n = 0; n < 4; ++n) {
@@ -66,7 +61,7 @@ int main(int argc, char** argv)
         void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
         if (!Check(native != nullptr, "preinit-dlopen")) { return 2; }
         std::puts("TARGET direct-close-before-init"); std::fflush(stdout);
-        return CloseAndCheckImage(native, plugin, symbol, expected) ? 0 : 1;
+        return CloseAndCheckImage(native, plugin, symbol) ? 0 : 1;
     }
     RuntimeParam param {};
     param.coParam.processorNum = 2;
@@ -83,7 +78,7 @@ int main(int argc, char** argv)
         void* native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
         if (!Check(native != nullptr, "direct-dlopen")) { return 2; }
         std::puts("TARGET direct-close-live"); std::fflush(stdout);
-        const bool ok = CloseAndCheckImage(native, plugin, symbol, expected);
+        const bool ok = CloseAndCheckImage(native, plugin, symbol);
         return Check(FiniCJRuntime() == E_OK, "runtime-finalize") && ok ? 0 : 1;
     }
     if (!Check(LoadCJLibraryWithInit(plugin) == E_OK, "library-init")) { return 2; }
@@ -93,10 +88,10 @@ int main(int argc, char** argv)
     ok &= Check(UnloadCJLibrary("libreadscope-missing.so") != E_OK, "unknown-close-rejected");
     ok &= Check(UnloadCJLibrary(plugin) == E_OK, "library-close");
     void* after = FindCJSymbol(plugin, symbol);
-    ok &= Check(expected ? after == before : after == nullptr, "close-lifetime");
+    ok &= Check(after == before, "close-lifetime");
     ok &= Check(LoadCJLibraryWithInit(plugin) == E_OK, "library-reopen");
     void* reopened = FindCJSymbol(plugin, symbol);
-    ok &= Check(reopened != nullptr && (!expected || reopened == before), "reopen-symbol");
+    ok &= Check(reopened != nullptr && reopened == before, "reopen-symbol");
     ok &= Check(UnloadCJLibrary(plugin) == E_OK, "reopen-close");
     ok &= Check(FiniCJRuntime() == E_OK, "runtime-finalize");
     return ok ? 0 : 1;

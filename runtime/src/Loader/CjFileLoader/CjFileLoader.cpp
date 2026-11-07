@@ -677,10 +677,10 @@ void CJFileLoader::ClearLoadedFiles()
     // and prove the remaining pending side explicitly for every image.
     CHECK_DETAIL(Runtime::CurrentRef() == nullptr,
                  "ELF shutdown cleanup requires a stopped runtime");
-    // In this opt-in mode the loader retains images and their metadata until
+    // With native pinning the loader retains images and their metadata until
     // process exit. Shutdown does not silently turn reader admission back on
     // or attempt an unload writer after readers have bypassed that protocol.
-    if (ElfUnloadQuiescence::NoUnloadMode()) {
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
         return;
     }
     ElfUnloadQuiescence::TaskAdmissionScope shutdownAdmission;
@@ -731,7 +731,6 @@ void CJFileLoader::RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc)
 
 void* CJFileLoader::LoadCJLibrary(const char* libName)
 {
-    (void)ElfUnloadQuiescence::NoUnloadMode();
     CString baseName = Os::Path::GetBaseName(libName);
     {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
@@ -745,7 +744,7 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
     }
     // Let the native loader resolve the full request, including aliases and
     // errors. A basename match cannot establish that this is the same image.
-    // In no-unload mode the returned reference remains process-owned.
+    // With native pinning the returned reference remains process-owned.
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
@@ -794,7 +793,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
         // Logical close succeeds for a known runtime-owned handle, but its
         // native reference and metadata remain available until process exit.
         // Macro callers may close/reopen a path without removing the image.
-        if (ElfUnloadQuiescence::NoUnloadMode()) {
+        if (ElfUnloadQuiescence::RetainsNativeImages()) {
             return 0;
         }
         handler = handlerIt->handler;

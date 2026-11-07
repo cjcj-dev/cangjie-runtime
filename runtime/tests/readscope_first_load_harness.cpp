@@ -16,14 +16,13 @@ static bool Check(bool ok, const char* name)
 
 int main(int argc, char** argv)
 {
-    if (argc != 6) { return 2; }
+    if (argc != 5) { return 2; }
     const char* mode = argv[1];
     const char* plugin = argv[2];
     const char* symbol = argv[3];
-    const bool fast = std::strcmp(argv[4], "1") == 0;
-    // Deliberately no runtime init, reader, or mode query before this producer.
+    // Deliberately no runtime init or reader before this producer.
     if (std::strcmp(mode, "live-exit-order-ba") == 0 &&
-        !Check(LoadCJLibrary(argv[5]) == E_OK, "second-image-loaded-first")) { return 2; }
+        !Check(LoadCJLibrary(argv[4]) == E_OK, "second-image-loaded-first")) { return 2; }
     void* native = nullptr;
     if (std::strcmp(mode, "native-freeze") == 0) {
         native = dlopen(plugin, RTLD_NOW | RTLD_LOCAL);
@@ -38,7 +37,7 @@ int main(int argc, char** argv)
     }
     if (std::strncmp(mode, "live-exit", 9) == 0) {
         if (std::strcmp(mode, "live-exit-order-ab") == 0 &&
-            !Check(LoadCJLibrary(argv[5]) == E_OK, "second-image-loaded-last")) { return 2; }
+            !Check(LoadCJLibrary(argv[4]) == E_OK, "second-image-loaded-last")) { return 2; }
         RuntimeParam param {};
         param.coParam.processorNum = 2;
         if (!Check(InitCJRuntime(&param) == E_OK, "init-after-public-load")) { return 2; }
@@ -72,13 +71,13 @@ int main(int argc, char** argv)
         return ok ? 0 : 1;
     };
     if (std::strcmp(mode, "missing") == 0) {
-        bool ok = Check(LoadCJLibrary(argv[5]) != E_OK, "missing-same-basename-rejected");
+        bool ok = Check(LoadCJLibrary(argv[4]) != E_OK, "missing-same-basename-rejected");
         // Complete runtime shutdown so R1 cannot mask this path assertion.
         return finish(ok);
     }
     if (std::strcmp(mode, "distinct") == 0) {
-        bool ok = Check(LoadCJLibrary(argv[5]) == E_OK, "distinct-same-basename-load");
-        void* second = dlopen(argv[5], RTLD_NOW | RTLD_NOLOAD);
+        bool ok = Check(LoadCJLibrary(argv[4]) == E_OK, "distinct-same-basename-load");
+        void* second = dlopen(argv[4], RTLD_NOW | RTLD_NOLOAD);
         ok &= Check(second != nullptr, "distinct-native-image-present");
         // RTLD_NOLOAD observes what the public request actually loaded; it
         // cannot make an absent second image appear as a side effect.
@@ -86,12 +85,12 @@ int main(int argc, char** argv)
         return finish(ok);
     }
     if (std::strcmp(mode, "public-freeze") != 0 && std::strcmp(mode, "native-freeze") != 0) { return 2; }
-    setenv("CJ_READSCOPE_FAST", fast ? "0" : "1", 1);
+    setenv("CJ_READSCOPE_FAST", "0", 1);
     RuntimeParam param {};
     param.coParam.processorNum = 2;
     if (!Check(InitCJRuntime(&param) == E_OK, "runtime-init-after-toggle")) { return 2; }
-    // Native-first production must also freeze before the public API takes a
-    // handle. Drop only the extra reference, leaving the public owner intact.
+    // Native-first production must retain before the public API takes a handle.
+    // Drop only the extra reference, leaving the public owner intact.
     if (native != nullptr) {
         if (!Check(LoadCJLibrary(plugin) == E_OK, "public-adopt-native-image")) { return 2; }
         dlclose(native);
@@ -100,7 +99,7 @@ int main(int argc, char** argv)
     bool ok = Check(before != nullptr, "symbol-before-close");
     ok &= Check(UnloadCJLibrary(plugin) == E_OK, "public-close-after-toggle");
     void* after = FindCJSymbol(plugin, symbol);
-    ok &= Check(fast ? after == before : after == nullptr, "first-producer-froze-mode");
+    ok &= Check(after == before, "first-producer-retained-with-old-env-zero");
     ok &= Check(FiniCJRuntime() == E_OK, "runtime-finalize");
     return ok ? 0 : 1;
 }

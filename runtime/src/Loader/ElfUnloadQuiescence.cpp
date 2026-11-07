@@ -8,7 +8,6 @@
 #include <algorithm>
 #include "Base/ImmortalWrapper.h"
 #include <climits>
-#include <cstdlib>
 #include <cstring>
 #include <condition_variable>
 #include <new>
@@ -64,7 +63,6 @@ ImageDirectory& ImageMaps()
     return *maps;
 }
 thread_local U32 readerDepth = 0;
-thread_local bool fastPathReader = false;
 thread_local bool unloadWriter = false;
 thread_local Uptr unloadWriterImage = 0;
 thread_local Uptr purgeAuthorizedImage = 0;
@@ -375,37 +373,14 @@ Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
     return image->identity;
 }
 
-bool ElfUnloadQuiescence::NoUnloadMode()
-{
-    // Function-local initialization serializes the first reader/loader query.
-    // Never re-read the environment: an admitted reader must keep the same
-    // lifetime contract through release, including nested scopes and threads.
-#if defined(__linux__) && !defined(__OHOS__) && !defined(__ANDROID__)
-    static const bool enabled = []() {
-        const char* value = std::getenv("CJ_READSCOPE_FAST");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled;
-#else
-    return false;
-#endif
-}
-
 ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
 {
     (void)kind;
     // Nested scopes only bump the thread-local depth. Keep that path a small
     // leaf: GetMTable/IsSubType walks enter nested scopes far more often than
     // outermost ones, and the admission protocol below needs a large frame.
-    if (readerDepth != 0 || unloadWriter) {
+    if (RetainsNativeImages() || readerDepth != 0 || unloadWriter) {
         ++readerDepth;
-        active = true;
-        return;
-    }
-    if (NoUnloadMode()) {
-        readerDepth = 1;
-        fastPathReader = true;
-        active = true;
         return;
     }
     AdmitOutermost();
@@ -421,7 +396,6 @@ ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
             if ((state.load(std::memory_order_seq_cst) & WRITER_BIT) == 0) {
                 readerUsesSlot = true;
                 readerDepth = 1;
-                active = true;
 #ifdef MRT_TESTABLE_INTERNALS
                 ObserveSlot(SlotEvent::ADMITTED, slot);
 #endif
@@ -443,7 +417,6 @@ ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
         if (state.compare_exchange_weak(observed, observed + 1,
                                         std::memory_order_acquire, std::memory_order_relaxed)) {
             readerDepth = 1;
-            active = true;
 #ifdef MRT_TESTABLE_INTERNALS
             ObserveSlot(SlotEvent::COUNTER_ADMITTED, nullptr);
 #endif
@@ -454,15 +427,8 @@ ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
 
 ElfUnloadQuiescence::ReadScope::~ReadScope()
 {
-    if (!active) {
-        return;
-    }
     CHECK_DETAIL(readerDepth != 0, "ELF unload reader depth underflow");
-    if (--readerDepth != 0 || unloadWriter) {
-        return;
-    }
-    if (fastPathReader) {
-        fastPathReader = false;
+    if (--readerDepth != 0 || RetainsNativeImages() || unloadWriter) {
         return;
     }
     ReleaseOutermost();
@@ -529,7 +495,7 @@ void ElfUnloadQuiescence::CountSlotAdmissions()
 ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
     : writerLock(WriterMutex()), imageIdentity(RegisteredIdentity(imageAddress))
 {
-    CHECK_DETAIL(!NoUnloadMode(), "ELF unload attempted in no-unload mode (CJ_READSCOPE_FAST=1)");
+    CHECK_DETAIL(!RetainsNativeImages(), "ELF unload attempted with process-lifetime image retention");
     CHECK_DETAIL(readerDepth == 0 && !unloadWriter,
                  "ELF unload cannot begin from inside a metadata reader");
     CHECK_DETAIL(imageIdentity != 0, "ELF unload image identity is unavailable for %p",
@@ -764,7 +730,7 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     // loader while dlclose is waiting in an image's fini callback.
     auto image = std::make_shared<ImageAddressMap>();
     image->metadata = imageAddress;
-    if (NoUnloadMode()) {
+    if (RetainsNativeImages()) {
         image->retained = RetainNativeImage(imageAddress);
     }
     image->identity = ResolveImageIdentity(imageAddress);

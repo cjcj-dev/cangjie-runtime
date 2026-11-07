@@ -707,10 +707,11 @@ MRT_EXPORT void* FindCJSymbol(const char* libName, const char* symbolName);
 
 /*
  * @brief Unload Cangjie dynamic shared library.
- * @attention On Linux, CJ_READSCOPE_FAST=1 opts into process-lifetime image retention before the first loader/metadata
- * operation. In that mode a known library is logically closed successfully but remains loaded with its metadata;
- * reopening reuses the retained handle. Missing libraries still fail. On supported glibc systems, native NODELETE pinning also preserves
- * each Cangjie image across direct dlclose; native finalizers still run at process exit.
+ * @attention On native glibc Linux (excluding Android and OHOS), Cangjie images are always retained for the process
+ * lifetime. Closing a known library succeeds but keeps its code, metadata and native references. Reopening retains
+ * another native reference to the same image; closing does not reclaim memory or permit image replacement.
+ * Missing libraries still fail. Native NODELETE pinning also preserves each Cangjie image across direct dlclose;
+ * native finalizers run at process exit. Other platforms retain their native unload behavior.
  * @attention This interface must be used carefully. Make sure there is no global variables and any objects belonging to
  * this shared library are used before calling this API.
  * @param  libName  [IN]  name of Cangjie dynamic shared library.

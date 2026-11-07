@@ -23,14 +23,13 @@ template<class T> static T Api(void* runtime, const char* name)
 
 int main(int argc, char** argv)
 {
-    if (argc != 7) { return 2; }
+    if (argc != 6) { return 2; }
     const char* runtimePath = argv[1];
     const char* plugin = argv[2];
     const char* symbol = argv[3];
-    const bool fast = std::strcmp(argv[4], "1") == 0;
-    const bool separate = std::strcmp(argv[5], "namespace") == 0;
-    const char* lifecycle = argv[6];
-    // No mode query precedes the real first native/public producer. A base
+    const bool separate = std::strcmp(argv[4], "namespace") == 0;
+    const char* lifecycle = argv[5];
+    // No runtime query precedes the real first native/public producer. A base
     // namespace copy is a decoy: it must not satisfy secondary-image checks.
     void* decoy = nullptr;
     if (separate) {
@@ -80,10 +79,6 @@ int main(int argc, char** argv)
     std::puts("TARGET native-close"); std::fflush(stdout);
     if (!Check(dlclose(native) == 0, "native-close")) { return 1; }
     void* retained = dlmopen(ns, plugin, RTLD_NOW | RTLD_NOLOAD);
-    if (!fast) {
-        if (!Check(retained == nullptr, "normal-native-unmapped")) { return 1; }
-        return !inited || std::strcmp(lifecycle, "postfini") == 0 || Check(fini() == E_OK, "runtime-finalize") ? 0 : 1;
-    }
     if (!Check(retained != nullptr, "native-image-retained")) { return 1; }
     link_map* after = nullptr;
     Lmid_t afterNs = LM_ID_BASE;

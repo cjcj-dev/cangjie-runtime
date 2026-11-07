@@ -114,9 +114,6 @@ bool LoaderManager::GetInitStatus() const { return initStatus.load(std::memory_o
 
 void LoaderManager::LoadFile(Uptr address)
 {
-    // Native .init_array callbacks also produce metadata before InitCJRuntime.
-    // Freeze this runtime image before the first registration, not a later reader.
-    (void)ElfUnloadQuiescence::NoUnloadMode();
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
     CheckPackageCompatibility(address);
     // MRT_LibraryOnLoad can be invoked before runtime init
@@ -133,11 +130,11 @@ void LoaderManager::UnloadFile(Uptr address)
     // NODELETE suppresses native close-time fini/unmap, but process exit still
     // invokes fini, including before Init and while the runtime is live. Keep
     // the registered metadata intact and require this image's verified pin.
-    if (ElfUnloadQuiescence::NoUnloadMode()) {
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
         const bool postFini = MRT_CheckRuntimeFinished() && !GetInitStatus();
         const auto image = ElfUnloadQuiescence::RegisteredImage(address);
         CHECK_DETAIL(postFini || (image != nullptr && image->retained),
-                     "ELF unload in no-unload mode: image not retained and runtime not finalized");
+                     "ELF retained-image finalization: image not retained and runtime not finalized");
         return;
     }
     // MRT_LibraryUnLoad can be invoked before runtime init

@@ -30,9 +30,16 @@ class ElfUnloadQuiescence final {
     friend class CJFileLoader;
     friend class LoaderManager;
 public:
-    // Opt-in process-lifetime image retention, fixed before the first metadata
-    // reader or loader operation. See docs/readscope-no-unload.md.
-    static bool NoUnloadMode();
+    // Native capability, not a runtime option. Other loaders still require
+    // reader quiescence until they provide equivalent object/namespace pinning.
+    static constexpr bool RetainsNativeImages()
+    {
+#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+        return true;
+#else
+        return false;
+#endif
+    }
 #ifdef MRT_TESTABLE_INTERNALS
     enum class SlotEvent { LINKED, ADMITTED, COUNTER_ADMITTED, COUNTED, DRAIN_CHECK, DRAINED, RETIRED };
     using SlotObserver = void (*)(SlotEvent, const void*, U64);
@@ -71,7 +78,6 @@ public:
         void AdmitOutermost();
         static void ReleaseOutermost();
 
-        bool active { false };
     };
 
     class UnloadScope final {

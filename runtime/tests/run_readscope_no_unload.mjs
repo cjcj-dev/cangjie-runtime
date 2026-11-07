@@ -9,32 +9,65 @@ const source=path.dirname(fileURLToPath(import.meta.url));
 fs.mkdirSync(out,{recursive:false});
 const environment={...process.env,CANGJIE_HOME:sdk,cjEnableGC:'1',cjHeapSize:'1GB',TMPDIR:out};
 for(const k of ['CJ_READSCOPE_FAST','LD_PRELOAD','LD_AUDIT','CANGJIE_PATH'])delete environment[k];
-environment.LD_LIBRARY_PATH=[runtime,sdk+'/runtime/lib/linux_x86_64_cjnative',sdk+'/tools/lib'].join(':');
+environment.LD_LIBRARY_PATH=[runtime,sdk+'/runtime/lib/linux_x86_64_cjnative',sdk+'/lib/linux_x86_64_cjnative',sdk+'/tools/lib'].join(':');
 const results=[];
-function run(name,exe,args,env=environment,expectedFailure=false) {
+function run(name,exe,args,env=environment,expect={}) {
   const start=new Date().toISOString();
-  const r=spawnSync(exe,args,{env,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024});
+  const r=spawnSync(exe,args,{env,cwd:out,encoding:'utf8',timeout:120000,maxBuffer:16*1024*1024});
   fs.writeFileSync(`${out}/${name}.stdout`,r.stdout??'');
   fs.writeFileSync(`${out}/${name}.stderr`,r.stderr??'');
-  const target=(r.stdout??'').includes('TARGET direct-close-');
-  const guard=(r.stderr??'').includes('ELF unload attempted in no-unload mode')||(r.stdout??'').includes('ELF unload attempted in no-unload mode');
-  const pass=expectedFailure?target&&guard&&(r.signal==='SIGABRT'||r.status===134):r.status===0;
-  results.push({name,exe,args,CJ_READSCOPE_FAST:env.CJ_READSCOPE_FAST??'unset',start,end:new Date().toISOString(),status:r.status,signal:r.signal,error:r.error?.message,expectedFailure,target,guard,pass});
+  const combined=(r.stdout??'')+(r.stderr??'');
+  const assertions=(r.stdout??'').split('\n').filter(s=>s.startsWith('ASSERT ')||s.startsWith('TARGET '));
+  let pass=r.status===0;
+  if(expect.pinFailure)pass=combined.includes('TARGET native-pin-failure')&&combined.includes('ELF no-unload pin: NODELETE promotion failed')&&(r.signal==='SIGABRT'||r.status===134);
+  let fini;
+  if(expect.order){
+    const first=combined.indexOf('calling fini: '+out+'/libreadscopeprobe.so ');
+    const second=combined.indexOf('calling fini: '+out+'/libreadscopeorder.so ');
+    fini={first,second};pass&&=first>=0&&second>=0&&(expect.order==='ab'?second<first:first<second);
+  }
+  if(expect.output)pass&&=(r.stdout??'').includes(expect.output);
+  results.push({name,exe,args,CJ_READSCOPE_FAST:env.CJ_READSCOPE_FAST??'unset',start,end:new Date().toISOString(),status:r.status,signal:r.signal,error:r.error?.message,expect,assertions,fini,pass});
   fs.writeFileSync(out+'/results.json',JSON.stringify(results,null,2)+'\n');
-  console.log(name,JSON.stringify(results.at(-1)));
+  console.log(JSON.stringify(results.at(-1)));
   if(!pass){console.log(r.stdout,r.stderr);process.exit(1);}
   return r.stdout;
 }
-run('compile-plugin',sdk+'/bin/cjc',[source+'/readscope_no_unload_plugin.cj','--output-type=dylib','-o',out+'/libreadscopeprobe.so']);
-const symbols=run('plugin-symbols','nm',['-D','--defined-only',out+'/libreadscopeprobe.so']);
+run('installed-runtime-identity','sha256sum',[runtime+'/libcangjie-runtime.so',sdk+'/bin/cjc']);
+const plugin=out+'/libreadscopeprobe.so';
+// Real normal compiler entry, with the removed selector absent.
+run('compile-plugin',sdk+'/bin/cjc',[source+'/readscope_no_unload_plugin.cj','--output-type=dylib','-o',plugin],{...environment,LD_DEBUG:'libs'});
+const symbols=run('plugin-symbols','nm',['-D','--defined-only',plugin]);
 const symbol=symbols.split('\n').find(s=>/readScopeValue/.test(s))?.trim().split(/\s+/).at(-1);
 if(!symbol)throw Error('managed symbol missing');
-run('compile-harness',process.env.CXX??'clang++',['-std=c++17','-O2','-pthread','-I'+source+'/../src','-I'+source+'/../include',source+'/readscope_no_unload_harness.cpp','-L'+runtime,'-Wl,-rpath,'+runtime,'-lcangjie-runtime','-lboundscheck','-ldl','-o',out+'/harness']);
+fs.writeFileSync(out+'/ordinary.cj','main(): Int64 { println("readscope-default-normal-entry"); return 0 }\n');
+run('compile-ordinary',sdk+'/bin/cjc',[out+'/ordinary.cj','-o',out+'/ordinary'],{...environment,LD_DEBUG:'libs'});
+run('ordinary-default',out+'/ordinary',[],environment,{output:'readscope-default-normal-entry'});
+const flags=['-std=c++17','-O2','-pthread','-I'+source+'/../src','-I'+source+'/../include'];
+for(const [name,file,linked] of [['harness','readscope_no_unload_harness.cpp',true],['first','readscope_first_load_harness.cpp',true],['pinned','readscope_pinned_image_harness.cpp',false]]){
+  run('compile-'+name,process.env.CXX??'clang++',[...flags,source+'/'+file,...(linked?['-L'+runtime,'-Wl,-rpath,'+runtime,'-lcangjie-runtime','-lboundscheck']:[]),'-ldl','-o',out+'/'+name]);
+}
+run('compile-pin-failure',process.env.CXX??'clang++',['-shared','-fPIC',source+'/readscope_pin_failure.cpp','-ldl','-o',out+'/pin-failure.so']);
+fs.mkdirSync(out+'/distinct');fs.copyFileSync(plugin,out+'/distinct/libreadscopeprobe.so');
+fs.writeFileSync(out+'/readscopeorder.cj',fs.readFileSync(source+'/readscope_no_unload_plugin.cj','utf8').replace('package readscopeprobe','package readscopeorder'));
+run('compile-companion',sdk+'/bin/cjc',[out+'/readscopeorder.cj','--output-type=dylib','-o',out+'/libreadscopeorder.so']);
 for(const value of [undefined,'0','1','10']) {
   const env={...environment};if(value!==undefined)env.CJ_READSCOPE_FAST=value;
-  run('lifetime-'+(value??'unset'),out+'/harness',['lifetime',out+'/libreadscopeprobe.so',symbol,value==='1'?'1':'0'],env);
+  const suffix=value??'unset';
+  for(const mode of ['lifetime','direct','preinit-direct','retained'])run(mode+'-'+suffix,out+'/harness',[mode,plugin,symbol],env);
+  for(const mode of ['exit','missing','distinct','public-freeze','native-freeze','live-exit-retained','live-exit-metadata','live-exit-order-ab','live-exit-order-ba']){
+    const extra=mode==='distinct'?out+'/distinct/libreadscopeprobe.so':mode.startsWith('live-exit')?out+'/libreadscopeorder.so':out+'/missing/libreadscopeprobe.so';
+    const order=mode.includes('order-')?mode.slice(-2):undefined;
+    run(mode+'-'+suffix,out+'/first',[mode,plugin,symbol,extra],{...env,LD_DEBUG:'libs'},{order});
+  }
+  for(const namespace of ['base','namespace'])for(const lifecycle of ['never','after','live','postfini','live-exit','public-exit','public-live-exit'])
+    run('pin-'+namespace+'-'+lifecycle+'-'+suffix,out+'/pinned',[runtime+'/libcangjie-runtime.so',plugin,symbol,namespace,lifecycle],env);
+  // Cut the actual native promotion invoked by the public producer. Independent
+  // native-only input proves this injection does not reject every dlopen.
+  run('pin-failure-'+suffix,out+'/pinned',[runtime+'/libcangjie-runtime.so',plugin,symbol,'base','public-exit'],{...env,LD_PRELOAD:out+'/pin-failure.so'},{pinFailure:true});
+  run('pin-restored-'+suffix,out+'/pinned',[runtime+'/libcangjie-runtime.so',plugin,symbol,'base','public-exit'],env);
 }
-for(const mode of ['direct','preinit-direct']) {
-  for(const value of ['0','1'])run(mode+'-'+value,out+'/harness',[mode,out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value});
-}
-for(const value of ['0','1'])run('retained-'+value,out+'/harness',['retained',out+'/libreadscopeprobe.so',symbol,value],{...environment,CJ_READSCOPE_FAST:value});
+fs.writeFileSync(out+'/native-control.cpp','#include <dlfcn.h>\nint main(){auto h=dlopen("libm.so.6",RTLD_NOW);return h?dlclose(h):1;}\n');
+run('compile-native-control',process.env.CXX??'clang++',[out+'/native-control.cpp','-ldl','-o',out+'/native-control']);
+run('pin-cut-independent-control',out+'/native-control',[],{...environment,LD_PRELOAD:out+'/pin-failure.so'});
+fs.writeFileSync(out+'/summary.json',JSON.stringify({processes:results.length,failed:results.filter(r=>!r.pass).map(r=>r.name)},null,2)+'\n');
