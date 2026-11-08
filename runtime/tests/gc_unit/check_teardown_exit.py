@@ -62,6 +62,8 @@ class ABI:
         self.register_type = A64Registers if self.arm else X64Registers
         self.audit_arch = 0xc00000b7 if self.arm else 0xc000003e
         self.futex = 98 if self.arm else 202
+        self.clone = 220 if self.arm else 56
+        self.clone3 = 435
         self.pc_name = 'pc' if self.arm else 'rip'
         self.elf_machine = 183 if self.arm else 62
 
@@ -94,6 +96,124 @@ class ABI:
         if nr == self.futex:
             emit('SYSCALL_ENTRY', tid=tid, length=length, arch=arch, nr=nr, args=args, raw=raw[:length].hex())
         return nr, args
+
+    def try_syscall(self, tid):
+        try:
+            return self.entry(tid)
+        except RuntimeError:
+            return None
+
+
+# glibc nptl/descr.h joinstate: EXITED=0, EXITING=1, JOINABLE=2, DETACHED=3.
+# pthread_clockjoin_ex waits on the CLONE_CHILD_CLEARTID word while it is 2 then 1.
+# Older glibc waits on the tid word with the kernel tid. Same futex shape either way.
+CLONE_CHILD_CLEARTID = 0x00200000
+HELD_WORKER = 'RuntimeWorker#0'
+JOIN_STATE_VALUES = (1, 2)
+NO_CLEAR = object()
+
+
+def join_shaped(params):
+    # glibc shared WAIT_BITSET, optional CLOCK_REALTIME; no timeout; MATCH_ANY.
+    # FUTEX_PRIVATE_FLAG waits are a different operation and never qualify.
+    return (len(params) == 6 and params[1] in (9, 9 | 256)
+            and list(params[3:6]) == [0, 0, 0xffffffff])
+
+
+def decode_clear_uaddr(arm, nr, args, read_blob):
+    """Return the clone3/clone child_tid pointer when CLONE_CHILD_CLEARTID is set."""
+    if nr == 435:
+        if len(args) < 2:
+            raise RuntimeError('short clone3 arguments')
+        uargs, size = args[0], args[1]
+        if size < 32 or size > 256 or not uargs:
+            raise RuntimeError(f'malformed clone3 size={size} uargs={uargs:#x}')
+        blob = read_blob(uargs, 32)
+        if len(blob) != 32:
+            raise RuntimeError('short clone3 args')
+        flags, _pidfd, child_tid, _parent_tid = struct.unpack_from('<4Q', blob)
+    else:
+        clone_nr = 220 if arm else 56
+        if nr != clone_nr:
+            raise RuntimeError(f'not a clone syscall {nr}')
+        if len(args) < 5:
+            raise RuntimeError('short clone arguments')
+        flags = args[0]
+        # x86_64: flags, stack, parent_tid, child_tid, tls.
+        # aarch64: flags, stack, parent_tid, tls, child_tid.
+        child_tid = args[4] if arm else args[3]
+    if (flags & CLONE_CHILD_CLEARTID) == 0:
+        return NO_CLEAR
+    if not child_tid or child_tid % 4:
+        raise RuntimeError(f'clone clear word invalid {child_tid:#x}')
+    return child_tid
+
+
+def note_clone_entry(pending, tid, arm, nr, args, read_blob):
+    if tid in pending:
+        raise RuntimeError('clone entry without event')
+    pending[tid] = decode_clear_uaddr(arm, nr, args, read_blob)
+    return pending[tid]
+
+
+def bind_clear_word(clear_by_tid, child, clear):
+    if clear is NO_CLEAR:
+        return None
+    if child in clear_by_tid or clear in clear_by_tid.values():
+        raise RuntimeError('duplicate clone clear word')
+    clear_by_tid[child] = clear
+    return clear
+
+
+def match_held_worker_join(params, clear_by_tid, comm_of, word_at):
+    """Return the held worker tid, None if this futex is not that join, or raise.
+
+    The address has to be that worker's captured clear word. val may be the
+    kernel tid (tid-word glibc) or 1/2 (joinstate). Any other futex continues.
+    An unknown value on the real clear word fails closed.
+    """
+    if not join_shaped(params):
+        return None
+    uaddr, val = params[0], params[2]
+    owners = [tid for tid, addr in clear_by_tid.items() if addr == uaddr]
+    if len(owners) > 1:
+        raise RuntimeError('ambiguous clone clear word')
+    # IDENTITY_GUARD: only the captured CLONE_CHILD_CLEARTID word can be the held worker.
+    if len(owners) != 1:
+        return None
+    worker = owners[0]
+    if comm_of(worker) != HELD_WORKER:
+        return None
+    actual = word_at(uaddr)
+    if uaddr % 4 or actual != val:
+        raise RuntimeError('join futex value mismatch')
+    if val != worker and val not in JOIN_STATE_VALUES:
+        raise RuntimeError(f'unknown clear-word join value {val}')
+    return worker
+
+
+def peek_bytes(tid, address, size):
+    if address <= 0 or size <= 0 or size > 256:
+        raise RuntimeError(f'bad peek {address:#x} size={size}')
+    start = address & ~7
+    end = (address + size + 7) & ~7
+    out = bytearray()
+    for word in range(start, end, 8):
+        value = trace(PEEKTEXT, tid, word) & ((1 << 64) - 1)
+        out += struct.pack('<Q', value)
+    return bytes(out[address - start:address - start + size])
+
+
+def futex_word(tid, uaddr):
+    memory = trace(PEEKTEXT, tid, uaddr & ~7) & ((1 << 64) - 1)
+    return (memory >> ((uaddr & 7) * 8)) & 0xffffffff
+
+
+def task_comm(pid, tid):
+    target = Path(f'/proc/{pid}/task/{tid}/comm')
+    if not target.exists():
+        return None
+    return target.read_text().strip()
 
 
 def completion_address(elf, pid, abi):
@@ -200,9 +320,10 @@ def main():
     reader = threading.Thread(target=forward_output, daemon=True)
     reader.start()
     owned = {pid}
-    held, joined = None, False
+    held, joined, join_tid = None, False, None
     workers, exits, reaped = set(), set(), set()
     worker_names = {}
+    pending_clear, clear_by_tid = {}, {}
     stage = 'exec-stop'
     def wait(tid=-1):
         who, status = os.waitpid(tid, WALL)
@@ -251,7 +372,16 @@ def main():
                 if child.value in owned:
                     raise RuntimeError('duplicate clone identity')
                 owned.add(child.value)
-                emit('CLONE', parent=tid, child=child.value)
+                if tid in pending_clear:
+                    clear = pending_clear.pop(tid)
+                else:
+                    stopped = abi.try_syscall(tid)
+                    if not stopped or stopped[0] not in (abi.clone, abi.clone3):
+                        raise RuntimeError(f'clone clear word not captured parent={tid} child={child.value}')
+                    clear = decode_clear_uaddr(
+                        abi.arm, stopped[0], stopped[1], lambda addr, size: peek_bytes(tid, addr, size))
+                bound = bind_clear_word(clear_by_tid, child.value, clear)
+                emit('CLONE', parent=tid, child=child.value, clear_uaddr=bound)
                 trace(SYSCALL if tid == pid else CONT, tid)
             elif event == 6:
                 name, _ = task_record(pid, tid)
@@ -272,26 +402,28 @@ def main():
                     trace(CONT, tid)
             elif tid == pid and sig == signal.SIGTRAP | 128:
                 entry = abi.entry(tid)
-                if entry and entry[0] == abi.futex:
+                if entry and entry[0] in (abi.clone, abi.clone3):
+                    clear = note_clone_entry(
+                        pending_clear, tid, abi.arm, entry[0], entry[1],
+                        lambda addr, size: peek_bytes(tid, addr, size))
+                    emit('CLONE_ENTRY', tid=tid, nr=entry[0],
+                         clear_uaddr=None if clear is NO_CLEAR else clear)
+                    trace(SYSCALL, tid)
+                elif entry and entry[0] == abi.futex:
                     params = entry[1]
-                    expected = params[2]
-                    target = Path(f'/proc/{pid}/task/{expected}/comm')
-                    if expected and target.exists() and target.read_text().strip() == 'RuntimeWorker#0':
-                        # glibc 2.39 pthread_join_common -> shared WAIT_BITSET,
-                        # optional CLOCK_REALTIME; no timeout, MATCH_ANY bitset.
-                        if params[1] not in (9, 9 | 256) or params[3:6] != [0, 0, 0xffffffff]:
-                            raise RuntimeError(f'unsupported actual glibc join args={params}')
-                        uaddr = params[0]
-                        memory = trace(PEEKTEXT, pid, uaddr & ~7) & ((1 << 64)-1)
-                        actual = (memory >> ((uaddr & 7)*8)) & 0xffffffff
-                        if uaddr % 4 or actual != expected:
-                            raise RuntimeError('join futex value mismatch')
-                        joined = True
-                        join_tid = expected
-                        emit('JOIN_ABI', tid=expected, uaddr=uaddr, value=actual, args=params, syscall=entry[0])
-                        print(f'CONSTRUCT_JOIN_WAIT tid={expected} syscall={entry[0]}', flush=True)
-                    else:
+                    # Decide at syscall entry. PTRACE_SYSCALL here would block inside
+                    # the join until the held worker is continued.
+                    worker = match_held_worker_join(
+                        params, clear_by_tid, lambda worker_tid: task_comm(pid, worker_tid),
+                        lambda uaddr: futex_word(pid, uaddr))
+                    if worker is None:
                         trace(SYSCALL, tid)
+                    else:
+                        joined = True
+                        join_tid = worker
+                        emit('JOIN_ABI', tid=worker, uaddr=params[0], value=params[2],
+                             args=list(params), syscall=entry[0])
+                        print(f'CONSTRUCT_JOIN_WAIT tid={worker} syscall={entry[0]}', flush=True)
                 else:
                     trace(SYSCALL, tid)
             else:

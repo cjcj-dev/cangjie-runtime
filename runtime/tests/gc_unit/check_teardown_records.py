@@ -9,6 +9,18 @@ TEST = 'RuntimeWorkers.ActivePoolBeforeHarnessShutdown'
 SENTINEL = 'GC_UNIT_OTHER_VM_OKIDOKI ' + TEST
 
 
+def held_clear_join(clones, join, held):
+    """The join uaddr must be the held worker's captured clear word.
+
+    value is the kernel tid on tid-word glibc, or 1/2 on joinstate glibc.
+    """
+    identity = [clone for clone in clones if clone['child'] == held]
+    value = join['value']
+    if (len(identity) != 1 or identity[0].get('clear_uaddr') != join['uaddr']
+            or join['tid'] != held or value not in (held, 1, 2)):
+        raise ValueError('held worker clear-word join missing')
+
+
 def verify(directory, cut=False):
     directory = Path(directory)
     results = {}
@@ -61,8 +73,9 @@ def verify(directory, cut=False):
             # Names establish the product family/multiplicity; kernel TIDs establish
             # identity. Every member must belong to this clone tree and have its
             # own observed PTRACE_EVENT_EXIT with the same TGID/name.
+            clones = records('CLONE')
             owned = {ws['tgid']}
-            for clone in records('CLONE'):
+            for clone in clones:
                 if clone['parent'] not in owned or clone['child'] in owned:
                     raise ValueError(f'{phase}: invalid clone ownership')
                 owned.add(clone['child'])
@@ -114,6 +127,10 @@ def verify(directory, cut=False):
             entries, joins = records('SYSCALL_ENTRY'), records('JOIN_ABI')
             if len(joins) != 1 or not any(r['args'] == joins[0]['args'] and r['nr'] == joins[0]['syscall'] and r['length'] >= 80 for r in entries):
                 raise ValueError(f'{phase}: raw syscall entry/join missing')
+            try:
+                held_clear_join(clones, joins[0], ws['held'])
+            except ValueError as error:
+                raise ValueError(f'{phase}: {error}') from error
             texts, restores = records('BREAKPOINT_TEXT'), records('BREAKPOINT_RESTORED')
             if len(texts) != 1 or len(restores) != 1 or texts[0]['patched'] != texts[0]['readback'] or restores[0]['word'] != texts[0]['original']:
                 raise ValueError(f'{phase}: breakpoint text restore missing')
