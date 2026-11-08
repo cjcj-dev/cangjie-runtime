@@ -50,6 +50,45 @@ func copyToControl(): Bool {
     return true
 }
 
+func expectMessage(checked: Int64, message: String, action: () -> Unit): Bool {
+    try {
+        action()
+    } catch (e: IllegalArgumentException) {
+        println("COLLECTION_MESSAGE_ASSERT case=${checked} illegal=true")
+        return e.message == message
+    } catch (e: IndexOutOfBoundsException) {
+        println("COLLECTION_MESSAGE_ASSERT case=${checked} illegal=false")
+        return e.message == message
+    }
+    return false
+}
+
+func collectionMessageControl(): Bool {
+    let list = ArrayList<Int64>([1, 2, 3])
+    let cases: Array<(String, () -> Unit)> = [
+        ("Invalid index '3': size is '3'.", { => list[3]; () }),
+        ("Invalid index '-1': size is '3'.", { => list.remove(at: -1); () }),
+        ("Invalid index '3': expected 0 to '3'.", { => list[3] = 0 }),
+        ("Invalid index '4': expected 0 to '3'.", { => list.add(0, at: 4) }),
+        ("Invalid range: start '1', end '4', size '3'.", { => list.remove(1..4) }),
+        ("Range start '4' is greater than size '3'.", { => list[4..]; () }),
+        ("Open range end '4' is greater than size '3'.", { => list[0..4]; () }),
+        ("Closed range end '4' is greater than size '3'.", { => list[0..=4]; () }),
+        ("Invalid capacity '-1': expected a non-negative value.", { => ArrayList<Int64>(-1); () }),
+        ("Invalid capacity '-2': expected a non-negative value.", { => HashMap<Int64, Int64>(-2); () }),
+        ("Invalid size '-3': expected a non-negative value.", { => ArrayList<Int64>(-3, { i => i }); () }),
+        ("Invalid take count '-1': expected a non-negative value.", { => list.take(-1); () })
+    ]
+    var checked = 0
+    for ((message, action) in cases) {
+        if (!expectMessage(checked, message, action)) { return false }
+        checked++
+    }
+    if (list.size != 3 || list[0] != 1 || list[2] != 3) { return false }
+    println("COLLECTION_MESSAGE_CONTROL messages=${checked}")
+    return true
+}
+
 main(): Int64 {
     // Wrap the deque before forcing growth through the new addLast path.
     let deque = ArrayDeque<Int64>(8)
@@ -81,6 +120,7 @@ main(): Int64 {
     }
     if (!" \t\u{3000}\n".isBlank() || " \u{3000}x".isBlank()) { return 7 }
     if (!copyToControl()) { return 8 }
+    if (!collectionMessageControl()) { return 9 }
     println("COLLECTION_CONTROL completed=1")
     return 0
 }
