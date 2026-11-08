@@ -58,8 +58,9 @@ ValuePayload::ValuePayload(MAddress address, size_t size, BaseObject* layout, MA
 }
 
 ValuePayload::ValuePayload(MAddress address, size_t size, std::vector<size_t> offsets, Kind kind)
-    : address(address), size(size), kind(kind), offsets(std::move(offsets))
+    : ValuePayload(address, size, kind)
 {
+    for (size_t offset : offsets) { this->offsets.push_back(offset); }
     std::sort(this->offsets.begin(), this->offsets.end());
     this->offsets.erase(std::unique(this->offsets.begin(), this->offsets.end()), this->offsets.end());
 }

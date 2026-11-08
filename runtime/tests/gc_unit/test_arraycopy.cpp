@@ -383,3 +383,48 @@ void CheckReflectionSourceLayout(bool aggregate)
 }
 GC_TEST(AccessBarrier976, ReflectionAggregateSourceLayout) { CheckReflectionSourceLayout(true); }
 GC_TEST(AccessBarrier976, ReflectionReferenceLayoutControl) { CheckReflectionSourceLayout(false); }
+
+// ZGC zBarrierSet.inline.hpp:494-513 visits oops in ascending map order. The
+// layout payload keeps that order both in its inline offsets and after spill.
+namespace {
+void CheckLayoutPayloadOffsets(size_t references)
+{
+    GcHeapFixture heap;
+    constexpr size_t maxWords = 40;
+    const size_t words = 2 * references; // primitive, reference, ...
+    GC_EXPECT_TRUE(words <= maxWords);
+    BaseObject* layout = heap.PlaceObject(heap.heapStart + 1024);
+    GCTib bitmap{};
+    bitmap.tag = SIGN_BIT;
+    for (size_t i = 0; i < references; ++i) { bitmap.tag |= 1ULL << (2 * i + 1); }
+    heap.typeInfo->SetGCTib(bitmap);
+    heap.typeInfo->SetInstanceSize(words * sizeof(zpointer));
+    const MAddress start = reinterpret_cast<MAddress>(layout) + TYPEINFO_PTR_SIZE;
+    const size_t size = words * sizeof(zpointer);
+    for (size_t i = 0; i < references; ++i) {
+        *reinterpret_cast<uintptr_t*>(start + 2 * i * sizeof(zpointer)) = 0x5a00 + i;
+        HeapSlotAt<>(start + (2 * i + 1) * sizeof(zpointer))
+            .StoreColoured(StoreGoodPointer(i % 2 == 0 ? heap.obj0 : heap.obj1));
+    }
+    ValuePayload built(start, size, layout, start);
+    ValuePayload copied = built;
+    ValuePayload source = std::move(copied);
+    bool ordered = built.offsets.size() == references && source.offsets.size() == references;
+    for (size_t i = 0; ordered && i < references; ++i) {
+        ordered = built.offsets[i] == (2 * i + 1) * sizeof(zpointer) && source.offsets[i] == built.offsets[i];
+    }
+    alignas(8) uintptr_t local[maxWords]{};
+    HeapAccess<>::value_copy(source, ValuePayload(reinterpret_cast<MAddress>(local), size));
+    bool copiedValues = true;
+    for (size_t i = 0; i < references; ++i) {
+        copiedValues = copiedValues && local[2 * i] == 0x5a00 + i &&
+            local[2 * i + 1] == reinterpret_cast<uintptr_t>(i % 2 == 0 ? heap.obj0 : heap.obj1);
+    }
+    std::fprintf(stderr, "VALUE_PAYLOAD_OFFSETS_TARGET refs=%zu inline=%zu ordered=%d copied=%d\n",
+                 references, ValuePayload::OffsetList::INLINE_CAPACITY, ordered, copiedValues);
+    GC_EXPECT_TRUE(ordered);
+    GC_EXPECT_TRUE(copiedValues);
+}
+}
+GC_TEST(ValuePayloadOffsets, InlineLayoutOrder) { CheckLayoutPayloadOffsets(ValuePayload::OffsetList::INLINE_CAPACITY); }
+GC_TEST(ValuePayloadOffsets, SpillLayoutOrder) { CheckLayoutPayloadOffsets(ValuePayload::OffsetList::INLINE_CAPACITY + 4); }
