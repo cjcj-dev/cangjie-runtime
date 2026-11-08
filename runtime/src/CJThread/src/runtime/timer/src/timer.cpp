@@ -1060,7 +1060,14 @@ int TimerSchmonCheck(void *pro, unsigned long long now)
     struct Schedule* wakeSchedule = schedule == nullptr ? ScheduleGet() : schedule;
     /* If timer0_deadline is 0, there is no timer in heap. */
     if (timer->timer0Deadline != 0 && now >= timer->timer0Deadline) {
-        if (processor->state == PROCESSOR_RUNNING) {
+        // RUNNING is busy, so an idle processor steals this heap
+        // (processor.cpp ProcessorTimerSteal). PROCESSOR_SYSCALL is the same
+        // shape: the carrier is unbound and cannot run TimerTrigger. With
+        // freeNum > 0, SchmonPreemptSyscall returns (schmon.cpp:44-46) and
+        // this wake is what starts the stealer. freeNum == 0 makes
+        // ProcessorWake return (processor.cpp:901); the single carrier stays
+        // on that retake.
+        if (processor->state == PROCESSOR_RUNNING || processor->state == PROCESSOR_SYSCALL) {
             ProcessorWake(wakeSchedule, nullptr);
         } else if (processor->state == PROCESSOR_IDLE) {
             ProcessorWake(wakeSchedule, processor);

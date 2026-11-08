@@ -1359,6 +1359,12 @@ void *CJThreadGetArg(void);
 int CJThreadResched(void);
 
 /**
+ * @brief True when the caller is a non-cjthread0 task whose mutator is still installed.
+ *        An external thread and cjthread0 are false. Does not log.
+ */
+bool CJThreadHasLiveMutator(void);
+
+/**
  * @brief If many tasks are pending, the current cjthread is stopped and the cjthread is
  * put back to the end of the running queue.
  */

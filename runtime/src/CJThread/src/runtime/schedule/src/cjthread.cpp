@@ -2202,6 +2202,18 @@ void *CJThreadGetMutator(void)
     return cjthread->mutator;
 }
 
+bool CJThreadHasLiveMutator(void)
+{
+    struct CJThread *cjthread = CJThreadGet();
+    // cjthread0 is CJThread0Make and never gets ConstructMutator. An external
+    // caller (FiniCJRuntime) has no cjthread. Neither may enter CJThreadResched:
+    // CJThreadMresched calls PreparedToPark on the mutator.
+    if (cjthread == nullptr || cjthread->isCJThread0 || cjthread->mutator == nullptr) {
+        return false;
+    }
+    return true;
+}
+
 void* GetCJThreadScheduler()
 {
     struct CJThread *cjthread = CJThreadGet();

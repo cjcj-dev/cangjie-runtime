@@ -8,6 +8,7 @@
 
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zPage.hpp"
 #include "CjHeapData.h"
 #include <cerrno>
 #include <cstdint>
@@ -33,15 +34,42 @@
 namespace MapleRuntime {
 static bool g_oomIsTrigged = false;
 
-void CjHeapData::SerializedIdWrapper::Init(size_t maxCapacity, MAddress startAddr)
+namespace {
+// References are serialized after HeapIterator(true).Iterate() has finished. Read every reference word
+// with the load the iterator itself used for that word (zHeapIterator.cpp OopClosure::load_oop; JDK
+// zHeapIterator.cpp:202-209), so an emitted edge is exactly the edge the iterator followed:
+//  - instance fields and struct-array words: AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF resolved per word.
+//    A weak/phantom referent keeps its non-strong, no-keep-alive barrier and reads as null when the
+//    barrier reports it dead.
+//  - object-array elements: AS_NO_KEEPALIVE strong load.
+// HeapSlot::GetTargetObject() strips colour bits without a read barrier. ZGC never heals a slot with
+// null (zBarrier.inline.hpp; JDK zBarrier.inline.hpp:74), so a slot the iterator loaded as null keeps
+// its stale coloured value, and a raw read would serialize an address that is no live object.
+// The dump format has no weak edge kind: referent words are still emitted as ordinary edges.
+BaseObject* LoadFieldForDump(BaseObject* base, RefField<>& field)
+{
+    return HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(base, BaseObject::FieldOffset(base, &field));
+}
+
+BaseObject* LoadArrayElementForDump(HeapSlot<>& element) { return HeapAccess<AS_NO_KEEPALIVE>::oop_load(&element); }
+} // namespace
+
+// Object IDs are emitted only for heap objects: roots are filtered by Heap::IsHeapAddress, and the
+// iterator and field loads yield load-good heap addresses. ZGC places pages anywhere in its virtual
+// reservation, which is ZVirtualToPhysicalRatio (16) times the max capacity and may be split into
+// several segments (zVirtualMemoryManager.cpp; JDK zVirtualMemoryManager.cpp:238), not in
+// [start, start + maxCapacity). A 4-byte ID is the offset from domainStart, so it is lossless only if
+// every offset in [0, domainEnd - domainStart) stays strictly below the u4 form of NULL_OBJECT_ID.
+void CjHeapData::SerializedIdWrapper::Init(MAddress domainStart, MAddress domainEnd)
 {
 #if SIZE_MAX <= UINT32_MAX
-    (void)maxCapacity;
+    (void)domainEnd;
     use4ByteId = true;
 #else
-    use4ByteId = (maxCapacity <= static_cast<size_t>(CjHeapData::HEAP_SIZE_THRESHOLD_4GB));
+    use4ByteId = domainEnd > domainStart &&
+        static_cast<u8>(domainEnd - domainStart) <= static_cast<u8>(static_cast<u4>(CjHeapData::NULL_OBJECT_ID));
 #endif
-    heapStartAddr = use4ByteId ? startAddr : 0;
+    heapStartAddr = use4ByteId ? domainStart : 0;
 }
 
 void CjHeapData::SerializedIdWrapper::WriteId(CjHeapData& heapData, u8 value) const
@@ -88,8 +116,22 @@ void CjHeapData::ProcessHeap()
 
 void CjHeapData::InitSerializedIdWrapper()
 {
-    Heap& heap = Heap::GetHeap();
-    serializedIdWrapper.Init(heap.GetMaxCapacity(), heap.GetStartAddress());
+    // The ID domain is the actual reservation recorded by the page allocator, not the address
+    // envelope [GetStartAddress(), ZAddressOffsetMax) and not the max capacity.
+    MAddress domainStart = 0;
+    MAddress domainEnd = 0;
+    for (const ZPage::ReservedSegment& segment : ZPage::reservedSegments) {
+        if (segment.size == 0) {
+            continue;
+        }
+        if (domainEnd == 0 || segment.start < domainStart) {
+            domainStart = segment.start;
+        }
+        if (segment.End() > domainEnd) {
+            domainEnd = segment.End();
+        }
+    }
+    serializedIdWrapper.Init(domainStart, domainEnd);
 }
 
 void CjHeapData::DumpHeap(bool needStopTheWorld)
@@ -553,7 +595,7 @@ void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
     HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
     std::vector<BaseObject*> elements(arrayLengthVal);
     for (MIndex i = 0; i < arrayLengthVal; ++i) {
-        elements[i] = to_object(arrayContent[i].GetTargetObject());
+        elements[i] = LoadArrayElementForDump(arrayContent[i]);
     }
     AddU4(static_cast<u4>(arrayLengthVal));
     AddU4(obj->GetTypeInfo()->GetUUID());
@@ -578,8 +620,8 @@ void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::vector<BaseObject*> elements;
 
-    RefFieldVisitor visitor = [&elements, &num](RefField<>& arrayContent) {
-        elements.push_back(to_object(arrayContent.GetTargetObject()));
+    RefFieldVisitor visitor = [obj, &elements, &num](RefField<>& arrayContent) {
+        elements.push_back(LoadFieldForDump(obj, arrayContent));
         num++;
     };
 
@@ -698,8 +740,8 @@ void CjHeapData::WriteInstance(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::vector<BaseObject*> elements;
 
-    RefFieldVisitor visitor = [&elements, &num](RefField<>& fieldAddr) {
-        elements.push_back(to_object(fieldAddr.GetTargetObject()));
+    RefFieldVisitor visitor = [obj, &elements, &num](RefField<>& fieldAddr) {
+        elements.push_back(LoadFieldForDump(obj, fieldAddr));
         num++;
     };
 

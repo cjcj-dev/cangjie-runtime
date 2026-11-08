@@ -51,13 +51,12 @@ public:
     using CjHeapDataStackTraceSerialNumber = CjHeapDataID;
     static constexpr CjHeapDataStackTraceSerialNumber kCjHeapDataNullStackTrace = 0;
     const static size_t alignment = 8;
-    static constexpr u8 HEAP_SIZE_THRESHOLD_4GB = 4ULL * 1024 * 1024 * 1024;
     static constexpr u8 NULL_OBJECT_ID = 0xFFFFFFFFFFFFFFFFULL;  // Special ID for null object references
 
     // Encapsulates how cjprof dump records serialize object IDs for the current heap layout.
     class SerializedIdWrapper {
     public:
-        void Init(size_t maxCapacity, MAddress startAddr);
+        void Init(MAddress domainStart, MAddress domainEnd);
         void WriteId(CjHeapData& heapData, u8 value) const;
         bool Use4ByteId() const;
         MAddress GetHeapStartAddr() const;

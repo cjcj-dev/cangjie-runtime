@@ -27,6 +27,7 @@
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zDriver.hpp"
+#include "Common/ScopedObjectAccess.h"
 #include "securec.h"
 namespace MapleRuntime {
 
@@ -412,6 +413,19 @@ bool SignalManager::HandleUnexpectedSIGUSR2(int sig, siginfo_t* info, void* cont
 
 bool SignalManager::HandleUnexpectedSIGUSR1(int sig, siginfo_t* info, void* context)
 {
+    (void)sig;
+    (void)info;
+    (void)context;
+    // os.cpp:419-426 runs the signal thread's heap inspection through
+    // VMThread::execute, which makes that JavaThread safepoint-safe first.
+    // This dispatcher is itself a mutator (SignalStack.cpp DispatchSignals).
+    // WaitForSignal has already left its saferegion, and
+    // MutatorManager::WaitUntilAllMutatorStopped counts every mutator that
+    // is not in one, including the caller. DumpHeap's StopTheWorld would
+    // then wait for this same mutator. User handlers stay outside this
+    // scope: runtime_signal.cj signalHandler is the os.cpp:441 JavaCalls
+    // path and must keep running as a mutator.
+    ScopedEnterSaferegion safe(false);
     Heap::GetHeap().DumpHeap(HeapDumpKind::NORMAL);
     return true;
 }

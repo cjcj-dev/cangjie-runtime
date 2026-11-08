@@ -19,6 +19,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdint>
 #include <initializer_list>
 #include <mutex>
 #include <type_traits>
@@ -26,6 +28,7 @@
 #include "Cangjie.h"
 #include "Base/SysCall.h"
 #include "securec.h"
+#include "schedule.h"
 #include "Common/ScopedObjectAccess.h"
 #include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #ifdef __APPLE__
@@ -50,11 +53,17 @@ static semaphore_t g_signalSemaphore;
 static sem_t g_signalSemaphore;
 #endif
 static CJThreadHandle g_signalDispatcher = nullptr;
+// Set by DispatchSignals on the exit signal, before UserFuncExecutor publishes
+// the future. The joiner may observe it only after that cjthread yields, which
+// is after FLAG_DONE, or while the dispatcher still runs on another processor.
+static std::atomic<bool> g_dispatcherExited{ false };
 static std::mutex g_handlerMutex;
 
 static void NotifySignal(int signal)
 {
-    g_pendingSignals[signal].fetch_add(1, std::memory_order_relaxed);
+    // Lock-free increment plus sem_post. Both stay async-signal-safe.
+    // signals_posix.cpp:359-365.
+    g_pendingSignals[signal].fetch_add(1, std::memory_order_release);
 #ifdef __APPLE__
     semaphore_signal(g_signalSemaphore);
 #else
@@ -62,25 +71,53 @@ static void NotifySignal(int signal)
 #endif
 }
 
+static int TakePendingSignal()
+{
+    for (int signal = 0; signal <= _NSIG; ++signal) {
+        int pending = g_pendingSignals[signal].load(std::memory_order_acquire);
+        if (pending > 0 && g_pendingSignals[signal].compare_exchange_strong(
+                pending, pending - 1, std::memory_order_acq_rel)) {
+            return signal;
+        }
+    }
+    return -1;
+}
+
+// Block until a post is consumed. The carrier is not held across the wait.
+// os.cpp:419-426: the wait itself is safepoint-safe. There is no realtime
+// deadline; CLOCK_REALTIME (F2) left with sem_timedwait.
+static void BlockForSignal()
+{
+    ScopedEnterSaferegion blocked(false);
+    // freeNum > 0: start an idle processor. ProcessorWake returns at
+    // freeNum == 0 (processor.cpp:901), which is the single-carrier case.
+    // SyscallEnter then marks PROCESSOR_SYSCALL and does not switch
+    // (syscall_impl.cpp:33-37). The existing schmon retake uses the 10 ms
+    // interval once the global FIFO or the timer-ready hook has work
+    // (schmon.cpp). StopDispatcher's yield loop is a different path.
+    CJ_WakeIdleProcessorBeforeBlock();
+    SyscallEnter();
+#ifdef __APPLE__
+    while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
+#else
+    while (sem_wait(&g_signalSemaphore) != 0 && errno == EINTR) {}
+#endif
+    SyscallExit();
+}
+
 static int WaitForSignal()
 {
+    // signals_posix.cpp:368-383 waits on a dedicated OS thread. This
+    // dispatcher is a cjthread. An idle processor is started before the wait
+    // (processor.cpp:901). A sole PROCESSOR_SYSCALL carrier is retaken by
+    // schmon, not bound here. A consumed post returns
+    // here so TakePendingSignal observes it; it is not dropped.
     for (;;) {
-        for (int signal = 0; signal <= _NSIG; ++signal) {
-            int pending = g_pendingSignals[signal].load(std::memory_order_relaxed);
-            if (pending > 0 && g_pendingSignals[signal].compare_exchange_strong(
-                pending, pending - 1, std::memory_order_relaxed)) {
-                return signal;
-            }
+        int signal = TakePendingSignal();
+        if (signal >= 0) {
+            return signal;
         }
-        // semaphore.inline.hpp:33-41: only the dispatcher may transition.
-        ScopedEnterSaferegion blocked(false);
-        SyscallEnter();
-#ifdef __APPLE__
-        while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
-#else
-        while (sem_wait(&g_signalSemaphore) != 0 && errno == EINTR) {}
-#endif
-        SyscallExit();
+        BlockForSignal();
     }
 }
 
@@ -236,13 +273,17 @@ void* SignalStack::DispatchSignals(void*)
     // os.cpp:371-380: a dedicated managed task, including an exit signal.
     for (;;) {
         int signal = WaitForSignal();
-        if (signal == _NSIG) { return nullptr; }
+        if (signal == _NSIG) {
+            g_dispatcherExited.store(true, std::memory_order_release);
+            return nullptr;
+        }
         HandlerImpl(signal);
     }
 }
 
 void SignalStack::StartDispatcher()
 {
+    g_dispatcherExited.store(false, std::memory_order_relaxed);
     g_signalDispatcher = RunCJTask(DispatchSignals, nullptr);
     CHECK(g_signalDispatcher != nullptr);
 }
@@ -250,7 +291,19 @@ void SignalStack::StartDispatcher()
 void SignalStack::StopDispatcher()
 {
     if (g_signalDispatcher == nullptr) { return; }
+    // os.cpp:500 posts the exit signal and does not join. The dispatcher may
+    // be inside sem_wait on this carrier, or queued behind the caller.
+    // Do not SyscallEnter here: SyscallExit0 requeues the caller and
+    // processor.cpp:798 calls PreparedToRun with no null check. That reads a
+    // null mutator once TransitMutatorToExit has cleared it.
     NotifySignal(_NSIG);
+    if (CJThreadHasLiveMutator()) {
+        // Yield until _NSIG has been taken and the task has returned.
+        // GetTaskRet then finds the future done.
+        while (!g_dispatcherExited.load(std::memory_order_acquire)) {
+            CJThreadResched();
+        }
+    }
     void* result = nullptr;
     GetTaskRet(g_signalDispatcher, &result);
     ReleaseHandle(g_signalDispatcher);

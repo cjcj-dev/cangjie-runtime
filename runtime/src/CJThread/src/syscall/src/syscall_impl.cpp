@@ -91,6 +91,22 @@ void *SyscallExit0(struct CJThread *cjthread)
     return nullptr;
 }
 
+void CJ_WakeIdleProcessorBeforeBlock(void)
+{
+    struct CJThread *cjthread = CJThreadGet();
+    if (cjthread == nullptr || cjthread->schedule == nullptr || cjthread->thread == nullptr) {
+        return;
+    }
+    struct Schedule *schedule = cjthread->schedule;
+    // processor.cpp:901. An idle processor exists only when freeNum > 0.
+    // freeNum == 0 stays PROCESSOR_SYSCALL. SchmonPreemptSyscall retakes it
+    // (schmon.cpp:39-52). Do not dequeue here: a timer-parked task is not on
+    // the FIFO, and another head can be a GC carrier.
+    if (schedule->schdProcessor.freeNum.load(std::memory_order_relaxed) > 0) {
+        ProcessorWake(schedule, nullptr);
+    }
+}
+
 void SyscallExit(void)
 {
     struct CJThread *cjthread;

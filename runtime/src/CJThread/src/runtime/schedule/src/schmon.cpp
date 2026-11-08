@@ -97,6 +97,27 @@ bool FastSchmonProcessorPreemptCheck(struct Processor *processor)
     return false;
 }
 
+// Work the local runq cannot see, for the existing SYSCALL retake only.
+// The global FIFO counter is the one ProcessorGlobalRead consumes, under
+// schdCJThread.mutex (schedule.cpp:1436). An expired timer is not on that
+// counter. freeNum > 0: TimerSchmonCheck wakes an idle processor and
+// ProcessorTimerSteal runs the heap (timer.cpp). freeNum == 0:
+// ProcessorWake returns (processor.cpp:901) and this retake uses the
+// checkReady hook (timer.cpp TimerCheckReady).
+static bool SyscallRetakeReady(struct Processor *processor, struct Schedule *schedule)
+{
+    ProcessorCheckReadyFunc checkFunc;
+
+    if (ScheduleGlobalQueueCount(schedule) != 0) {
+        return true;
+    }
+    checkFunc = g_scheduleManager.checkReady;
+    if (checkFunc != nullptr) {
+        return checkFunc(processor);
+    }
+    return false;
+}
+
 /* Check whether a processor requires preemption. */
 void SchmonProcessorPreemptCheck(struct Processor *processor, unsigned long long now,  struct Schedule *schedule)
 {
@@ -109,8 +130,19 @@ void SchmonProcessorPreemptCheck(struct Processor *processor, unsigned long long
 
     schedcnt = processor->schedCnt;
     if (processor->obRecord.lastSchedCnt == schedcnt) {
-        int pTime = schedule->schdCJThread.cjthreadNum.load() != 0 || FastSchmonProcessorPreemptCheck(processor) ?
-            PREEMPT_TIME : (PREEMPT_TIME * 100); // 100: When there is few cjthreads waiting, then change preempt time.
+        // cjthreadNum stays 0 on the default scheduler (cjthread.cpp:993-994).
+        // This interval also drives SchmonPreemptRunning, so the extra sources
+        // below apply only after the state is PROCESSOR_SYSCALL.
+        bool localReady = schedule->schdCJThread.cjthreadNum.load() != 0 ||
+            FastSchmonProcessorPreemptCheck(processor);
+        int pTime = localReady ? PREEMPT_TIME : (PREEMPT_TIME * 100); // 100: few cjthreads waiting.
+        if (!localReady && processor->obRecord.lastTime + PREEMPT_TIME < now) {
+            state = atomic_load(&processor->state);
+            if (state == PROCESSOR_SYSCALL && schedule->scheduleType == SCHEDULE_DEFAULT &&
+                SyscallRetakeReady(processor, schedule)) {
+                pTime = PREEMPT_TIME;
+            }
+        }
         if (processor->obRecord.lastTime + pTime < now) {
             // If the thread is executed on the same cjthread for more than 10 ms, preemption is performed.
             state = atomic_load(&processor->state);

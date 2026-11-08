@@ -36,6 +36,9 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "CpuProfiler/CpuProfiler.h"
+#ifndef _WIN64
+#include "Signal/SignalStack.h"
+#endif
 namespace MapleRuntime {
 #ifdef __cplusplus
 extern "C" {
@@ -354,6 +357,12 @@ void* StartMainTask(void* arg, unsigned int len)
     if (rtCode != E_OK) {
         LOG(RTLOG_FATAL, "Finish cj runtime failed for %d\n", rtCode);
     }
+#ifndef _WIN64
+    // Join while this cjthread still has a mutator. TransitMutatorToExit
+    // clears it, and a later schedule resume calls PreparedToRun on that
+    // pointer (processor.cpp:798).
+    SignalStack::StopDispatcher();
+#endif
     MutatorManager::Instance().TransitMutatorToExit();
     ScheduleStop(scheduler);
     CangjieRuntime::FiniAndDelete();
@@ -819,6 +828,16 @@ void MRT_CjRuntimeStart(void* execute)
     CJThreadAttrInit(&attr);
     CJThreadAttrStackSizeSet(&attr, g_initStackSize * KB); // Set main task stack size.
     CJThreadAttrNameSet(&attr, "cangjie");
+#ifndef _WIN64
+    // processor.cpp:891-893: ProcessorWake returns while the scheduler is still
+    // SCHEDULE_INIT. The global run queue is FIFO (schedule.cpp:1427-1430,
+    // processor.cpp:129-131), and a one-processor start runs that head task
+    // before anything else. Queue the dispatcher first so it enters the
+    // saferegion and sem_wait before the main task can request a GC.
+    // InitCJRuntime starts it only on the other public entry, after the
+    // scheduler is already running.
+    SignalStack::StartDispatcher();
+#endif
     CJThreadHandle cjthread = CJThreadNew(scheduler, &attr, StartMainTask, &lwtData, sizeof(LWTData),
             CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     MutatorManager::Instance().SetMainThreadHandle(cjthread);

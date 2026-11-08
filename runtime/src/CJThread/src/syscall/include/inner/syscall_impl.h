@@ -19,6 +19,10 @@ void SyscallEnter(void);
 
 void SyscallExit(void);
 
+// Before a carrier blocks in SyscallEnter: start one idle processor when
+// freeNum > 0 (ProcessorWake returns at freeNum == 0, processor.cpp:901).
+void CJ_WakeIdleProcessorBeforeBlock(void);
+
 /**
  * @brief Non-blocking system call with 3 arguments
  * @par syscall(int number, arg1, arg2, arg3),
