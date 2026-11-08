@@ -328,6 +328,45 @@ static inline void copy_primitive_payload(MAddress src, MAddress dst, size_t siz
     copied += size;
 }
 
+// ZGC zBarrierSet.inline.hpp:494-517 re-reads one value's oop map and applies
+// oop_copy_one per slot. Cangjie has no klass oop map here, so each element
+// currently decodes its component GCTib into OffsetList. One struct-array copy
+// has one component bitmap. Decode that bitmap once at the incoming source
+// address when the relative slots fit in the existing inline buffer. A 17th
+// reference would spill on OffsetList copy, so that call keeps the per-element decode.
+struct InlineElementOffsets {
+    static constexpr size_t kCapacity = ValuePayload::OffsetList::INLINE_CAPACITY;
+    size_t slots[kCapacity]{};
+    size_t count = 0;
+    bool overflows = false;
+};
+
+inline bool ElementStrideReusesOffsets(size_t length, MAddress src, MAddress dst, size_t stride)
+{
+    return length > 0 && src != dst && stride != 0 && stride % sizeof(RefField<>) == 0;
+}
+
+inline bool DecodeInlineElementOffsets(GCTib layout, MAddress address, size_t size, InlineElementOffsets& out)
+{
+    out.count = 0;
+    out.overflows = false;
+    layout.ForEachBitmapWordInRange(address, [&](RefField<>& slot) {
+        if (out.count == InlineElementOffsets::kCapacity) {
+            out.overflows = true;
+            return;
+        }
+        out.slots[out.count++] = reinterpret_cast<MAddress>(&slot) - address;
+    }, address, address + size);
+    return !out.overflows;
+}
+
+inline void CopyInlineElementOffsets(ValuePayload& payload, const InlineElementOffsets& offsets)
+{
+    for (size_t index = 0; index < offsets.count; ++index) {
+        payload.offsets.push_back(offsets.slots[index]);
+    }
+}
+
 template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::struct_copy_one(MArray* layout, MAddress dst, MAddress src)
 {
@@ -342,11 +381,25 @@ template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::struct_arraycopy_in_heap_no_check_cast(
     MArray* layout, MAddress dst, MAddress src, size_t length)
 {
-    // Same direction selection as oop_arraycopy, with the inline-value stride.
+    // Same direction selection as ZGC oop_arraycopy_in_heap_no_check_cast
+    // (zBarrierSet.inline.hpp:395-424). Decode before either loop rewrites src.
     const size_t stride = layout->GetElementSize();
+    InlineElementOffsets shared;
+    const bool reuse = ElementStrideReusesOffsets(length, src, dst, stride) &&
+        DecodeInlineElementOffsets(layout->GetComponentTypeInfo()->GetGCTib(), src, stride, shared);
+    auto copyOne = [&](MAddress destination, MAddress source) {
+        if (!reuse) {
+            struct_copy_one(layout, destination, source);
+            return;
+        }
+        ValuePayload sourcePayload(source, stride, ValuePayload::Kind::Heap);
+        CopyInlineElementOffsets(sourcePayload, shared);
+        ValuePayload destinationPayload(destination, stride, ValuePayload::Kind::Heap);
+        value_copy_in_heap(sourcePayload, destinationPayload);
+    };
     if (src > dst) {
         for (const MAddress end = src + length * stride; src < end; src += stride, dst += stride) {
-            struct_copy_one(layout, dst, src);
+            copyOne(dst, src);
         }
         return;
     }
@@ -355,9 +408,8 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::struct_arraycop
         src += (length - 1) * stride;
         dst += (length - 1) * stride;
         for (; src >= end; src -= stride, dst -= stride) {
-            struct_copy_one(layout, dst, src);
+            copyOne(dst, src);
         }
-        return;
     }
 }
 
@@ -427,10 +479,19 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_arraycopy
         return;
     }
     if (src == dst) { return; }
+    const auto srcKind = Heap::IsHeapAddress(src) ? ValuePayload::Kind::Heap : ValuePayload::Kind::Uncolored;
+    InlineElementOffsets shared;
+    const bool reuse = ElementStrideReusesOffsets(length, src, dst, stride) &&
+        DecodeInlineElementOffsets(layout->GetComponentTypeInfo()->GetGCTib(), src, stride, shared);
     for (size_t i = 0; i < length; ++i) {
         const size_t offset = (src > dst ? i : length - i - 1) * stride;
-        ValuePayload source(src + offset, stride, layout->GetComponentTypeInfo()->GetGCTib(),
-            Heap::IsHeapAddress(src) ? ValuePayload::Kind::Heap : ValuePayload::Kind::Uncolored);
+        if (!reuse) {
+            ValuePayload source(src + offset, stride, layout->GetComponentTypeInfo()->GetGCTib(), srcKind);
+            value_copy_in_heap(source, ValuePayload(dst + offset, stride));
+            continue;
+        }
+        ValuePayload source(src + offset, stride, srcKind);
+        CopyInlineElementOffsets(source, shared);
         value_copy_in_heap(source, ValuePayload(dst + offset, stride));
     }
 }
