@@ -126,7 +126,7 @@ public class LinkedList<T> <: Collection<T> {
 
     public init(size: Int64, initElement: (Int64) -> T) {
         if (size < 0) {
-            throw IllegalArgumentException("Invalid size '${size}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSizeMessage(size))
         }
         for (i in 0..size) {
             addLast(initElement(i))
@@ -268,7 +268,7 @@ public class LinkedList<T> <: Collection<T> {
     @When[env != "ohos"]
     public func step(count: Int64): LinkedList<T> {
         if (count <= 0) {
-            throw IllegalArgumentException("Invalid step count '${count}': expected a positive value.")
+            throw IllegalArgumentException(invalidStepCountMessage(count))
         }
         var result: LinkedList<T> = LinkedList<T>()
         if (size == 0) {
@@ -300,7 +300,7 @@ public class LinkedList<T> <: Collection<T> {
         }
 
         if (count < 0) {
-            throw IllegalArgumentException("Invalid take count '${count}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidTakeCountMessage(count))
         }
         var result: LinkedList<T> = LinkedList<T>()
         let newSize = min(count, _size)
@@ -322,7 +322,7 @@ public class LinkedList<T> <: Collection<T> {
     @When[env != "ohos"]
     public func skip(count: Int64): LinkedList<T> {
         if (count < 0) {
-            throw IllegalArgumentException("Invalid skip count '${count}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSkipCountMessage(count))
         }
         if (size - count <= 0) {
             return LinkedList<T>()

@@ -34,7 +34,7 @@ public class ArrayStack<T> <: Stack<T> {
      */
     public init(capacity: Int64) {
         if (capacity < 0) {
-            throw IllegalArgumentException("Invalid capacity '${capacity}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidCapacityMessage(capacity))
         }
         let cap: Int64 = if (capacity >= DEFAULT_CAPACITY) {
             capacity

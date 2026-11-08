@@ -423,7 +423,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     @Frozen
     public init(capacity: Int64) {
         if (capacity < 0) {
-            throw IllegalArgumentException("Invalid capacity '${capacity}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidCapacityMessage(capacity))
         }
         let bucketSize = capacity + (capacity >> 1)
         buckets = Array<Int64>(tableSizeFor(bucketSize), repeat: -1)
@@ -443,7 +443,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     @Frozen
     public init(size: Int64, initElement: (Int64) -> (K, V)) {
         if (size < 0) {
-            throw IllegalArgumentException("Invalid size '${size}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSizeMessage(size))
         } else {
             buckets = Array<Int64>(tableSizeFor(size), repeat: -1)
             entries = Array<HashMapEntry<K, V>>(size, repeat: HashMapEntry<K, V>())
