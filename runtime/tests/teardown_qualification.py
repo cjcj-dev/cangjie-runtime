@@ -87,7 +87,7 @@ def qualify(args):
                 shutil.copy2(reuse / name, evidence / ('retained-' + name))
         env.update(LD_LIBRARY_PATH=str(library))
     else:
-        build = evidence / 'build'
+        build = evidence.parent / 'native-build'
         need('configure', ['cmake', '-S', source / 'runtime', '-B', build,
              '-DCMAKE_BUILD_TYPE=Release', '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1',
              '-DRUNTIME_TRACE_FLAG=1', '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1',
@@ -106,6 +106,7 @@ def qualify(args):
         shutil.copytree(root, evidence / 'publication')
         library = evidence / 'publication' / library.relative_to(root)
         env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(evidence / 'publication'),
+                   GCV2_RUNTIME_BUILD_DIR=str(build),
                    LD_LIBRARY_PATH=str(library), GC_UNIT_OUT=str(evidence / 'standalone'))
         need('standalone-build-only', ['bash', source / 'runtime/tests/gc_unit/run_standalone.sh'], env)
         if 'GC_UNIT_BUILD_ONLY_DONE tests_executed=0' not in (evidence / 'standalone-build-only.log').read_text():
