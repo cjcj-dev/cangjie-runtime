@@ -116,7 +116,7 @@ public class ArrayList<T> <: List<T> {
         let cap: Int64 = if (capacity >= 0) {
             capacity
         } else {
-            throw IllegalArgumentException("Invalid capacity '${capacity}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidCapacityMessage(capacity))
         }
         myData = Array<T>(cap, repeat: unsafe { zeroValue<T>() })
     }
@@ -134,7 +134,7 @@ public class ArrayList<T> <: List<T> {
     @Frozen
     public init(size: Int64, initElement: (Int64) -> T) {
         if (size < 0) {
-            throw IllegalArgumentException("Invalid size '${size}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSizeMessage(size))
         }
         myData = Array<T>(size, initElement)
         mySize = size
@@ -393,7 +393,7 @@ public class ArrayList<T> <: List<T> {
             return
         }
         if (start < 0 || end < 0 || end > this.mySize) {
-            throw IndexOutOfBoundsException("Invalid range: start '${start}', end '${end}', size '${this.size}'.")
+            throw IndexOutOfBoundsException(invalidRemoveRangeMessage(start, end, this.size))
         }
 
         let moveLen = this.mySize - end
@@ -470,7 +470,7 @@ public class ArrayList<T> <: List<T> {
     @When[env != "ohos"]
     public func step(count: Int64): ArrayList<T> {
         if (count <= 0) {
-            throw IllegalArgumentException("Invalid step count '${count}': expected a positive value.")
+            throw IllegalArgumentException(invalidStepCountMessage(count))
         }
 
         if (mySize <= 0) {
@@ -502,7 +502,7 @@ public class ArrayList<T> <: List<T> {
         }
 
         if (count < 0) {
-            throw IllegalArgumentException("Invalid take count '${count}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidTakeCountMessage(count))
         }
         let newSize = min(count, mySize)
 
@@ -521,7 +521,7 @@ public class ArrayList<T> <: List<T> {
     @When[env != "ohos"]
     public func skip(count: Int64): ArrayList<T> {
         if (count < 0) {
-            throw IllegalArgumentException("Invalid skip count '${count}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSkipCountMessage(count))
         }
         if (count == 0) {
             var newData: Array<T> = myData.clone()
@@ -849,9 +849,9 @@ public class ArrayList<T> <: List<T> {
         }
 
         if (start > size) {
-            throw IndexOutOfBoundsException("Range start '${start}' is greater than size '${size}'.")
+            throw IndexOutOfBoundsException(rangeStartGreaterThanSizeMessage(start, size))
         } else if (range.start < 0) {
-            throw IndexOutOfBoundsException("Range start '${start}' is less than 0.")
+            throw IndexOutOfBoundsException(rangeStartNegativeMessage(start))
         }
 
         let end: Int64
@@ -859,12 +859,12 @@ public class ArrayList<T> <: List<T> {
         if (range.hasEnd) {
             if (range.isClosed) {
                 if (range.end > size) {
-                    throw IndexOutOfBoundsException("Closed range end '${range.end}' is greater than size '${size}'.")
+                    throw IndexOutOfBoundsException(closedRangeEndGreaterThanSizeMessage(range.end, size))
                 }
                 end = range.end + 1
             } else {
                 if (range.end > size) {
-                    throw IndexOutOfBoundsException("Open range end '${range.end}' is greater than size '${size}'.")
+                    throw IndexOutOfBoundsException(openRangeEndGreaterThanSizeMessage(range.end, size))
                 }
                 end = range.end
             }
@@ -873,7 +873,7 @@ public class ArrayList<T> <: List<T> {
         }
 
         if (start > end) {
-            throw IndexOutOfBoundsException("Range start '${start}' is greater than end '${end}'.")
+            throw IndexOutOfBoundsException(rangeStartGreaterThanEndMessage(start, end))
         }
 
         return arr[start..end]
@@ -918,7 +918,7 @@ public class ArrayList<T> <: List<T> {
     @Frozen
     public operator func [](index: Int64, value!: T): Unit {
         if (index >= mySize || index < 0) {
-            throw IndexOutOfBoundsException("Invalid index '${index}': expected 0 to '${mySize}'.")
+            throw IndexOutOfBoundsException(invalidInsertIndexMessage(index, mySize))
         }
         unsafe { myData.setUnchecked(index, value) }
     }
@@ -973,7 +973,7 @@ public class ArrayList<T> <: List<T> {
     @Frozen
     private func checkRange(index: Int64): Unit {
         if (index >= mySize || index < 0) {
-            throw IndexOutOfBoundsException("Invalid index '${index}': size is '${mySize}'.")
+            throw IndexOutOfBoundsException(invalidIndexMessage(index, mySize))
         }
     }
 
@@ -989,7 +989,7 @@ public class ArrayList<T> <: List<T> {
     @Frozen
     private func checkRangeInsert(index: Int64): Unit {
         if (index > mySize || index < 0) {
-            throw IndexOutOfBoundsException("Invalid index '${index}': expected 0 to '${mySize}'.")
+            throw IndexOutOfBoundsException(invalidInsertIndexMessage(index, mySize))
         }
     }
 
@@ -2302,4 +2302,60 @@ extend<T> Array<T> {
             return this.binaryQueryLT(candidate, start + previousOffset, offset - previousOffset, compare)
         }
     }
+}
+
+/*
+ * Cold exception messages shared by collection checks. They are kept out of the
+ * generic, frozen and commonly inlined bodies so each message is expanded once.
+ */
+func invalidCapacityMessage(capacity: Int64): String {
+    "Invalid capacity '${capacity}': expected a non-negative value."
+}
+
+func invalidSizeMessage(size: Int64): String {
+    "Invalid size '${size}': expected a non-negative value."
+}
+
+func invalidStepCountMessage(count: Int64): String {
+    "Invalid step count '${count}': expected a positive value."
+}
+
+func invalidTakeCountMessage(count: Int64): String {
+    "Invalid take count '${count}': expected a non-negative value."
+}
+
+func invalidSkipCountMessage(count: Int64): String {
+    "Invalid skip count '${count}': expected a non-negative value."
+}
+
+private func invalidRemoveRangeMessage(start: Int64, end: Int64, size: Int64): String {
+    "Invalid range: start '${start}', end '${end}', size '${size}'."
+}
+
+private func rangeStartGreaterThanSizeMessage(start: Int64, size: Int64): String {
+    "Range start '${start}' is greater than size '${size}'."
+}
+
+private func rangeStartNegativeMessage(start: Int64): String {
+    "Range start '${start}' is less than 0."
+}
+
+private func closedRangeEndGreaterThanSizeMessage(end: Int64, size: Int64): String {
+    "Closed range end '${end}' is greater than size '${size}'."
+}
+
+private func openRangeEndGreaterThanSizeMessage(end: Int64, size: Int64): String {
+    "Open range end '${end}' is greater than size '${size}'."
+}
+
+private func rangeStartGreaterThanEndMessage(start: Int64, end: Int64): String {
+    "Range start '${start}' is greater than end '${end}'."
+}
+
+private func invalidInsertIndexMessage(index: Int64, size: Int64): String {
+    "Invalid index '${index}': expected 0 to '${size}'."
+}
+
+private func invalidIndexMessage(index: Int64, size: Int64): String {
+    "Invalid index '${index}': size is '${size}'."
 }

@@ -76,7 +76,7 @@ public class TreeMap<K, V> <: OrderedMap<K, V> where K <: Comparable<K> {
      */
     public init(size: Int64, initElement: (Int64) -> (K, V)) {
         if (size < 0) {
-            throw IllegalArgumentException("Invalid size '${size}': expected a non-negative value.")
+            throw IllegalArgumentException(invalidSizeMessage(size))
         } else {
             this.root = Node<K, V>(Node<K, V>.nullNode())
             for (i in 0..size) {
