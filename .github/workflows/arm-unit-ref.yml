@@ -7,6 +7,11 @@ on:
         required: false
         default: false
         type: boolean
+      teardown_hosts_2204_2604:
+        description: Run only native Ubuntu 22.04 and 26.04 teardown qualification for this candidate
+        required: false
+        default: false
+        type: boolean
       root_qualification_1411:
         description: Run only the bounded four-root ARM qualification
         required: false
@@ -30,7 +35,7 @@ permissions:
   contents: read
 jobs:
   unit:
-    if: ${{ !inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 }}
+    if: ${{ !inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 && !inputs.teardown_hosts_2204_2604 }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -293,5 +298,76 @@ jobs:
         if: always()
         with:
           name: teardown-qualification-1426-${{ matrix.host }}-${{ github.run_id }}
+          path: evidence/
+          retention-days: 7
+
+  teardown-hosts-2204-2604:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.teardown_hosts_2204_2604 && !inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-22.04, ubuntu-26.04]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 90
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-2204-2604-${{ matrix.host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate fixed candidate and teardown-only entry
+        env:
+          CANDIDATE: ${{ github.sha }}
+          ELF_REF: ${{ inputs.elf_ref }}
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          test "$ELF_REF" = "$CANDIDATE"
+          test "$PRODUCT_REF" = "$CANDIDATE"
+          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+      - name: Install native tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build binutils libssl-dev libffi-dev gdb
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Capture cache identity and compiler wrappers
+        id: toolchain
+        run: |
+          mkdir -p evidence compiler-bin
+          /usr/bin/clang --version > evidence/clang-version.log
+          cmake --version > evidence/cmake-version.log
+          sccache --version > evidence/sccache-version.log
+          gdb --version > evidence/gdb-version.log
+          python3 --version > evidence/python-version.log
+          ldd --version > evidence/glibc-version.log
+          uname -a > evidence/kernel.log
+          printf 'identity=%s\n' "$(cat evidence/clang-version.log evidence/cmake-version.log evidence/sccache-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+          chmod +x compiler-bin/*
+          echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+          echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: teardown22042604-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+          restore-keys: teardown22042604-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+      - name: Build once and execute finite teardown batch
+        env:
+          CANDIDATE: ${{ github.sha }}
+          TEST_FILTER: ${{ inputs.filter }}
+        run: |
+          ulimit -S -c 0
+          ulimit -H -c 0
+          set +e
+          python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence > evidence/qualification.log 2>&1
+          result=$?
+          printf '%s\n' "$result" > evidence/qualification.rc
+          cat evidence/qualification.log
+          sccache --show-stats > evidence/sccache-final.log 2>&1
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: teardown-hosts-2204-2604-${{ matrix.host }}-${{ github.run_id }}
           path: evidence/
           retention-days: 7
