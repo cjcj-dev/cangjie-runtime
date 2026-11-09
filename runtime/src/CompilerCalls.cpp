@@ -2128,6 +2128,15 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
                      "ReadGeneric memcpy_s failed");
         return;
     }
+    // Keep the native-to-native memcpy_s contract above. For heap-involving
+    // copies the destination wrapper carries the field's value layout, not
+    // the containing object's layout. Reference-free values need no oop map;
+    // reuse the raw backend's atomic segments and overlap handling directly.
+    if (!dstPtr->HasRefField()) {
+        AccessInternal::value_copy_internal(reinterpret_cast<MAddress>(fieldPtr),
+            reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size);
+        return;
+    }
     if (!Heap::IsHeapAddress(dstPtr) && Heap::IsHeapAddress(obj)) {
         HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(fieldPtr), size, obj, reinterpret_cast<MAddress>(fieldPtr)),
         ValuePayload(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size));
