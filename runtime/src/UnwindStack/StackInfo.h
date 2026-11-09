@@ -27,8 +27,13 @@ class Mutator;
 // HotSpot stackFrameStream.hpp and stackWatermark.cpp:44-63.
 class StackFrameStream {
 public:
-    explicit StackFrameStream(const UnwindContext* context = nullptr)
-        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(context), isReliableN2CStub(false)
+    // HotSpot RegisterMap::UpdateMap (registerMap.hpp). SKIP walks the same frames
+    // through the same unwinder but publishes no save locations and decodes no
+    // stack maps; RegisterMap() is then empty and must not be consumed.
+    enum class UpdateMap : bool { SKIP = false, INCLUDE = true };
+    explicit StackFrameStream(const UnwindContext* context = nullptr, UpdateMap update = UpdateMap::INCLUDE)
+        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(context), isReliableN2CStub(false),
+          updateMap(update == UpdateMap::INCLUDE)
     {
         anchorFA = context == nullptr ? GetAnchorFAFromMutatorContext() : context->anchorFA;
     }
@@ -65,6 +70,7 @@ private:
     uint32_t* GetAnchorFAFromMutatorContext() const;
     const UnwindContext* topContext;
     bool isReliableN2CStub;
+    bool updateMap = true;
     UnwindContext current;
     bool done = true;
     RegSlotsMap regSlotsMap;

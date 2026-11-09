@@ -317,7 +317,11 @@ void StackWatermark::before_unwind()
     if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
-    StackFrameStream frames(&owner.GetUnwindContext());
+    // stackWatermark.inline.hpp:90-93 walks with RegisterMap::UpdateMap::skip:
+    // the exposed sender is identified only by frame type and CallerSP, which
+    // the unwinder derives without save locations. Processing (process_one)
+    // keeps its own fully mapped cursor.
+    StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::UpdateMap::SKIP);
     frames.Start();
     while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
     if (frames.IsDone()) { return; }

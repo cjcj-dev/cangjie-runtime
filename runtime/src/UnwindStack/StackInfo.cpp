@@ -214,6 +214,7 @@ void StackFrameStream::Start()
 
 void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
 {
+    if (!updateMap) { return; }
     ElfUnloadQuiescence::ReadScope metadataReader;
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
@@ -276,7 +277,9 @@ void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
 void StackFrameStream::CheckRegisterRoots() const
 {
     const FrameInfo& frame = current.frameInfo;
-    if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
+    // The sender validation of frame_x86.inline.hpp:455-464 runs only when the
+    // map is updated (UpdateMap::skip senders are not validated there either).
+    if (!updateMap || frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
 #ifdef __APPLE__
