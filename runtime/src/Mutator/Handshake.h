@@ -2,9 +2,10 @@
 #define MRT_HANDSHAKE_H
 
 #include <atomic>
-#include <list>
 #include <mutex>
 #include <vector>
+
+#include "FilterQueue.h"
 
 namespace MapleRuntime {
 struct ThreadLocalData;
@@ -41,11 +42,13 @@ private:
 class HandshakeState {
 public:
     explicit HandshakeState(Mutator* handshakee) : handshakee_(handshakee) {}
+    ~HandshakeState();
 
     Mutator* handshakee() const { return handshakee_; }
 
     void add_operation(HandshakeOperation* op);
-    bool has_operation();
+    // HotSpot handshake.hpp:130: a lock-free acquire of the queue head.
+    bool has_operation() { return !queue_.is_empty(); }
     bool operation_pending(HandshakeOperation* op);
     HandshakeOperation* get_op_for_self();
     HandshakeOperation* get_op();
@@ -60,9 +63,21 @@ public:
     bool observed_safe() const { return inSafe_.load(std::memory_order_acquire) != 0; }
 
 private:
+    // HotSpot handshake.hpp:115-122.
+    class MatchOp {
+    public:
+        explicit MatchOp(HandshakeOperation* op) : op_(op) {}
+        bool operator()(HandshakeOperation* op) { return op == op_; }
+
+    private:
+        HandshakeOperation* op_;
+    };
+
     Mutator* const handshakee_;
     std::mutex lock_;
-    std::list<HandshakeOperation*> queue_;
+    // HotSpot handshake.hpp:98-101: adds are lock free; peek, pop and contains
+    // stay serialized by lock_.
+    FilterQueue<HandshakeOperation*> queue_;
     std::atomic<int> inSafe_ = { 1 };
 };
 

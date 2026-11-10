@@ -17,6 +17,9 @@ namespace {
 thread_local HandshakeState nativeHandshakeState{nullptr};
 std::mutex g_cpuProfilePendingLock;
 std::unordered_set<Mutator*> g_cpuProfilePending;
+
+// HotSpot handshake.cpp:495-497.
+bool all_ops_filter(HandshakeOperation*) { return true; }
 }
 
 HandshakeState& Handshake::Current()
@@ -47,39 +50,33 @@ void HandshakeOperation::do_handshake(Mutator* thread)
     pending_.fetch_sub(1, std::memory_order_release);
 }
 
-void HandshakeState::add_operation(HandshakeOperation* op)
+// HotSpot handshake.cpp:507-513. Every operation here is synchronous and
+// owned by its requester, so only the queue nodes are released.
+HandshakeState::~HandshakeState()
 {
-    {
-        std::lock_guard<std::mutex> lock(lock_);
-        queue_.push_back(op);
+    while (has_operation()) {
+        (void)queue_.pop(all_ops_filter);
     }
-    // A logical target may migrate between carriers while the poll is armed.
-    ArmAllThreadPolls();
 }
 
-bool HandshakeState::has_operation()
+void HandshakeState::add_operation(HandshakeOperation* op)
 {
-    std::lock_guard<std::mutex> lock(lock_);
-    return !queue_.empty();
+    // HotSpot handshake.cpp:515-519: adds are done lock free and so is arming.
+    queue_.push(op);
+    // A logical target may migrate between carriers while the poll is armed.
+    ArmAllThreadPolls();
 }
 
 bool HandshakeState::operation_pending(HandshakeOperation* op)
 {
     std::lock_guard<std::mutex> lock(lock_);
-    for (HandshakeOperation* cur : queue_) {
-        if (cur == op) {
-            return true;
-        }
-    }
-    return false;
+    MatchOp mo(op);
+    return queue_.contains(mo);
 }
 
 HandshakeOperation* HandshakeState::get_op_for_self()
 {
-    if (queue_.empty()) {
-        return nullptr;
-    }
-    return queue_.front();
+    return queue_.peek();
 }
 
 HandshakeOperation* HandshakeState::get_op()
@@ -89,12 +86,8 @@ HandshakeOperation* HandshakeState::get_op()
 
 void HandshakeState::remove_op(HandshakeOperation* op)
 {
-    for (auto it = queue_.begin(); it != queue_.end(); ++it) {
-        if (*it == op) {
-            queue_.erase(it);
-            return;
-        }
-    }
+    MatchOp mo(op);
+    (void)queue_.pop(mo);
 }
 
 bool HandshakeState::process_by_self()
@@ -129,7 +122,7 @@ bool HandshakeState::claim_handshake()
     if (!lock_.try_lock()) {
         return false;
     }
-    if (queue_.empty()) {
+    if (queue_.is_empty()) {
         lock_.unlock();
         return false;
     }
