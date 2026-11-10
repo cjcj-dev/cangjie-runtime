@@ -895,6 +895,8 @@ private:
     TypeInfo() = delete;
     ~TypeInfo() = delete;
 
+    // Called only by GetUUIDInReadScope while its caller holds read admission.
+    void InitializeUUIDInReadScope();
     void TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> getInterface = nullptr);
     void TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> getInterface = nullptr);
     // find ExtensionData of this TypeInfo and itf

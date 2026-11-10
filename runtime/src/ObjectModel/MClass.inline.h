@@ -289,13 +289,8 @@ inline U32 TypeInfo::GetUUIDInReadScope()
     if (::MapleRuntime::ENABLE_DEBUG_CHECKS) {
         ElfUnloadQuiescence::AssertReaderActive();
     }
-    if (IsInitialUUID()) {
-        TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
-        std::lock_guard<std::recursive_mutex> lock(manager.tiMutex);
-        if (IsInitialUUID()) {
-            manager.AddTypeInfo(this);
-        }
-        CHECK(!IsInitialUUID());
+    if (UNLIKELY(IsInitialUUID())) {
+        InitializeUUIDInReadScope();
     }
     return uuid;
 }

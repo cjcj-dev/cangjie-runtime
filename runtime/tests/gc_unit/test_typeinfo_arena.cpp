@@ -272,6 +272,35 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, ConcurrentGenericCreation)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
+GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, UUIDColdAndWarmLookup)
+{
+    RuntimeParam param {};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+
+    DYN_TypeInfo type {};
+    type.typeInfoName = "gc.uuid:ColdAndWarmLookup";
+    type.type = TypeKind::TYPE_KIND_INT64;
+    type.instanceSize = sizeof(int64_t);
+    type.align = sizeof(int64_t);
+    auto* ti = reinterpret_cast<TypeInfo*>(&type);
+    auto& manager = TypeInfoManager::GetTypeInfoManager();
+    GC_EXPECT_EQ(type.uuid, 0U);
+    GC_EXPECT_FALSE(manager.ContainsTypeInfo(ti));
+
+    // Both calls enter the product GetUUID symbol, rather than a copy of
+    // its inline implementation in this test executable.
+    const U32 first = ti->GetUUID();
+    GC_EXPECT_NE(first, 0U);
+    GC_EXPECT_EQ(type.uuid, first);
+    GC_EXPECT_TRUE(manager.ContainsTypeInfo(ti));
+    const U32 warm = ti->GetUUID();
+    GC_EXPECT_EQ(warm, first);
+    std::fprintf(stderr, "UUID_LOOKUP_TARGET cold_registered=1 warm_same=1 uuid=%u\n", first);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 // GenericTiDescFastMap::Get is the GetOrCreateTypeInfo hit path. Its slot index is the low bits of
 // the key hash, so aligned metadata addresses must still spread over every slot; otherwise each hit
 // walks a linear-probe run and dereferences every non-matching entry on the way.

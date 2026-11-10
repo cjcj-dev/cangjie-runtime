@@ -185,6 +185,19 @@ void TypeInfo::SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo)
     this->enumDebugInfo = enumDebugInfo;
 }
 
+ATTR_NO_INLINE void TypeInfo::InitializeUUIDInReadScope()
+{
+    // Keep first-use registration, its recursive lock and diagnostics out of
+    // already-registered metadata lookups. The enclosing ReadScope and the
+    // under-lock recheck are the same as in GetUUIDInReadScope's inline body.
+    TypeInfoManager& manager = TypeInfoManager::GetTypeInfoManager();
+    std::lock_guard<std::recursive_mutex> lock(manager.tiMutex);
+    if (IsInitialUUID()) {
+        manager.AddTypeInfo(this);
+    }
+    CHECK(!IsInitialUUID());
+}
+
 void TypeInfo::TryInitMTable()
 {
     ElfUnloadQuiescence::ReadScope reader;
