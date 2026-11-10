@@ -121,8 +121,10 @@ bool HandshakeState::process_by_self()
 
 bool HandshakeState::possibly_can_process()
 {
-    // Rechecked while holding lock_: leave_safe must acquire the same lock
-    // before the owner resumes or migrates into managed execution.
+    // Rechecked while holding lock_ and after claim_handshake saw a queued
+    // operation: an owner whose leave_safe store comes later finds that
+    // operation and waits on lock_ before it resumes or migrates into managed
+    // execution (HotSpot handshake.cpp:707-709).
     return observed_safe();
 }
 
@@ -169,16 +171,12 @@ bool HandshakeState::try_process()
     return true;
 }
 
-void HandshakeState::enter_safe()
+// The thread "cannot possibly continue without getting caught by the mutex"
+// (HotSpot handshake.cpp:707-709). A handshaker that takes lock_ after this
+// returns reads inSafe_ == 0 and declines.
+void HandshakeState::leave_safe_slow()
 {
     std::lock_guard<std::mutex> lock(lock_);
-    inSafe_.store(1, std::memory_order_release);
-}
-
-void HandshakeState::leave_safe()
-{
-    std::lock_guard<std::mutex> lock(lock_);
-    inSafe_.store(0, std::memory_order_release);
 }
 
 namespace {

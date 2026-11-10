@@ -96,6 +96,12 @@ public:
 
     bool is_empty() { return load_first() == nullptr; }
 
+    // A read in the single total order of the seq_cst operations, for a caller
+    // that has just made a seq_cst store to another location and must not miss
+    // a push that precedes it there. The acquire read above gives no such
+    // order: on AArch64 an stlr followed by a plain load is not a barrier.
+    bool is_empty_seq_cst() { return first_.load(std::memory_order_seq_cst) == nullptr; }
+
     // Adds an item to the queue in a MT safe way, re-entrant.
     void push(E data)
     {

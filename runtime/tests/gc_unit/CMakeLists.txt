@@ -36,6 +36,7 @@ set(GC_UNIT_SOURCES
     test_return_frame_slot_root.cpp
     test_return_safepoint_regmap.cpp
     test_handshake_filter_queue.cpp
+    test_handshake_native_transition.cpp
     test_stackmap_base_capture.cpp
     test_empty_stackmap.cpp
     test_stub_register_roots.cpp

@@ -58,9 +58,24 @@ public:
     bool claim_handshake();
     bool possibly_can_process();
 
-    void enter_safe();
-    void leave_safe();
-    bool observed_safe() const { return inSafe_.load(std::memory_order_acquire) != 0; }
+    // HotSpot interfaceSupport.inline.hpp:87-91: entering native is a state
+    // store. A handshaker that still reads the old state only declines.
+    void enter_safe() { inSafe_.store(1, std::memory_order_release); }
+    // HotSpot interfaceSupport.inline.hpp:96-108, sharedRuntime_x86_64.cpp:2466-2480:
+    // publish the unsafe state, then look for a request, both in the single
+    // total order. HotSpot reads the poll word that add_operation armed; this
+    // reads the queue that the poll word stands for. An empty queue means every
+    // later push is followed by a read of inSafe_ == 0 in try_process, and every
+    // earlier operation was removed after it ran. Otherwise a handshaker may
+    // already own lock_ and be executing for this thread, so wait for it.
+    void leave_safe()
+    {
+        inSafe_.store(0, std::memory_order_seq_cst);
+        if (!queue_.is_empty_seq_cst()) {
+            leave_safe_slow();
+        }
+    }
+    bool observed_safe() const { return inSafe_.load(std::memory_order_seq_cst) != 0; }
 
 private:
     // HotSpot handshake.hpp:115-122.
@@ -72,6 +87,8 @@ private:
     private:
         HandshakeOperation* op_;
     };
+
+    void leave_safe_slow();
 
     Mutator* const handshakee_;
     std::mutex lock_;
