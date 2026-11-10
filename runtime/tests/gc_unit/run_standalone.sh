@@ -342,6 +342,7 @@ MAIN_SOURCES=(
   "$SRC/test_unwind_regressions.cpp"
   "$SRC/test_return_frame_slot_root.cpp"
   "$SRC/test_return_safepoint_regmap.cpp"
+  "$SRC/test_handshake_filter_queue.cpp"
   "$SRC/test_stackmap_base_capture.cpp"
   "$SRC/test_empty_stackmap.cpp"
   "$SRC/test_stub_register_roots.cpp"

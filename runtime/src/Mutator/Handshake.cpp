@@ -63,6 +63,13 @@ void HandshakeState::add_operation(HandshakeOperation* op)
 {
     // HotSpot handshake.cpp:515-519: adds are done lock free and so is arming.
     queue_.push(op);
+    // UpdatePollValues disarms its poll word, fences, and rereads the queue
+    // head. HotSpot's conservative cmpxchg in push ends in a full barrier; the
+    // seq_cst compare-exchange here does not order the release store that
+    // arms the poll against that fence. With this fence, a reread that misses
+    // the push comes first in the seq_cst order, so its disarm comes before
+    // the arm below in the poll word's modification order.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     // A logical target may migrate between carriers while the poll is armed.
     ArmAllThreadPolls();
 }
@@ -87,7 +94,9 @@ HandshakeOperation* HandshakeState::get_op()
 void HandshakeState::remove_op(HandshakeOperation* op)
 {
     MatchOp mo(op);
-    (void)queue_.pop(mo);
+    HandshakeOperation* removed = queue_.pop(mo);
+    MRT_ASSERT(removed == op, "handshake operation was not queued");
+    (void)removed;
 }
 
 bool HandshakeState::process_by_self()

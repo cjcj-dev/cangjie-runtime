@@ -97,7 +97,7 @@ GC_TEST(HandshakeFilterQueue, FifoAcrossEmptyAndNonEmpty)
         state.add_operation(&c);
         good = good && state.has_operation() && state.operation_pending(&a) && state.operation_pending(&b) &&
                state.operation_pending(&c);
-        // Remove the oldest (list tail), then the head, around a new add.
+        // Oldest first: a and b leave through the interior unlink, c through the head CAS.
         good = good && state.try_process() && a.is_completed() && !b.is_completed() && !c.is_completed();
         good = good && !state.operation_pending(&a) && state.operation_pending(&b) && state.has_operation();
         good = good && state.try_process() && b.is_completed() && !c.is_completed();

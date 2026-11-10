@@ -16,7 +16,7 @@ public:
 
     explicit SpinYield(unsigned spin_limit = default_spin_limit, unsigned yield_limit = default_yield_limit,
                        unsigned sleep_ns = default_sleep_ns)
-        : spin_limit_(std::thread::hardware_concurrency() > 1 ? spin_limit : 0),
+        : spin_limit_(is_mp() ? spin_limit : 0),
           yield_limit_(yield_limit), sleep_ns_(sleep_ns) {}
 
     void wait()
@@ -30,6 +30,15 @@ public:
     }
 
 private:
+    // HotSpot os.hpp:327-336: os::is_MP() answers from a processor count that
+    // is read once, and an unknown count is treated as MP. Asking the OS in
+    // the constructor would put a system call into every push and pop.
+    static bool is_mp()
+    {
+        static const bool mp = std::thread::hardware_concurrency() != 1;
+        return mp;
+    }
+
     static void spin_pause()
     {
 #if defined(__x86_64__) || defined(__i386__)
@@ -61,6 +70,10 @@ private:
 // The skipping is controlled by using a filter when popping.
 // It also supports lock free pushes, while popping (including contains())
 // needs to be externally serialized.
+// HotSpot's compare_set defaults to memory_order_conservative, a two-way
+// barrier (atomicAccess.hpp:46-47). The compare-exchanges here are seq_cst
+// operations and not fences: a caller that pairs a push with a store to
+// another location, as HandshakeState::add_operation does, fences itself.
 template<class E>
 class FilterQueue {
 private:
