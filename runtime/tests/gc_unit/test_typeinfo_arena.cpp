@@ -19,6 +19,8 @@
 #include <vector>
 
 namespace MapleRuntime {
+extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);
+
 // Test-only access keeps Allocate private in the product API while exercising
 // the same bump/grow transaction used by CreatedTypeInfo.
 class TypeInfoManagerTestAccess {
@@ -289,14 +291,15 @@ GC_RUNTIME_OTHER_VM_TEST(TypeInfoArena, UUIDColdAndWarmLookup)
     GC_EXPECT_EQ(type.uuid, 0U);
     GC_EXPECT_FALSE(manager.ContainsTypeInfo(ti));
 
-    // Both calls enter the product GetUUID symbol, rather than a copy of
-    // its inline implementation in this test executable.
-    const U32 first = ti->GetUUID();
+    // This exported product entry reads the interface UUID before taking its
+    // self-interface return, for both first registration and warm lookup.
+    GC_EXPECT_TRUE(CJ_MCC_GetMethodOuterTI(ti, ti, 0) == ti);
+    const U32 first = type.uuid;
     GC_EXPECT_NE(first, 0U);
     GC_EXPECT_EQ(type.uuid, first);
     GC_EXPECT_TRUE(manager.ContainsTypeInfo(ti));
-    const U32 warm = ti->GetUUID();
-    GC_EXPECT_EQ(warm, first);
+    GC_EXPECT_TRUE(CJ_MCC_GetMethodOuterTI(ti, ti, 0) == ti);
+    GC_EXPECT_EQ(type.uuid, first);
     std::fprintf(stderr, "UUID_LOOKUP_TARGET cold_registered=1 warm_same=1 uuid=%u\n", first);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
