@@ -14,15 +14,21 @@
 #include <mutex>
 #include <thread>
 
+#include "Cangjie.h"
 #include "CangjieRuntime.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/GcStackInfo.h"
+#include "UnwindStack/UnwindCApi.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "UnwindStack/StackGrowStackInfo.h"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 
 extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
@@ -245,6 +251,125 @@ GC_TEST(ReturnSafepointRegMap, PrologueReachesStackGrow)
 {
     PointerChain chain(false);
     chain.CheckGrow();
+}
+
+GC_TEST(ReturnSafepointRegMap, NativeReturnPollCoversAnchor)
+{
+    PointerChain chain(false);
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    auto& watermark = chain.owner.GetStackWatermark();
+    StackWatermarkSet::on_safepoint(chain.owner);
+    UpdatePollValues(tls);
+    const uintptr_t conservativePoll = tls->GetPollWord();
+    // Concurrent root processing may advance the watermark without disarming
+    // the owner's poll. Its previous boundary remains a valid return gate.
+    watermark.process_one();
+    GC_EXPECT_TRUE(watermark.watermark() > conservativePoll);
+    GC_EXPECT_TRUE(MRT_LeaveNative());
+    std::fprintf(stderr, "NATIVE_RETURN_POLL_TARGET covered=1 unchanged=%d\n",
+        tls->GetPollWord() == conservativePoll);
+    GC_EXPECT_EQ(tls->GetPollWord(), conservativePoll);
+
+    // An older published anchor must take the real sender-processing path.
+    auto& top = chain.owner.GetUnwindContext().frameInfo.mFrame;
+    top.SetFA(reinterpret_cast<FrameAddress*>(&chain.frames[11][56]));
+    top.SetIP(chain.desc.pc + 4);
+    const uintptr_t frontier = watermark.last_processed_raw();
+    GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(top.GetFA()) > tls->GetPollWord());
+    GC_EXPECT_TRUE(MRT_EnterSaferegion(false));
+    GC_EXPECT_TRUE(MRT_LeaveNative());
+    std::fprintf(stderr, "NATIVE_RETURN_POLL_TARGET covered=0 advanced=%d\n",
+        watermark.last_processed_raw() > frontier);
+    GC_EXPECT_TRUE(watermark.last_processed_raw() > frontier);
+    GC_EXPECT_EQ(tls->GetPollWord(), watermark.IsDone() ? ThreadLocalData::DisarmedPollWord : watermark.watermark());
+}
+
+GC_TEST(ReturnSafepointRegMap, C2NReturnPollCoversPublishedAnchor)
+{
+    PointerChain chain(false);
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    auto& watermark = chain.owner.GetStackWatermark();
+    StackWatermarkSet::on_safepoint(chain.owner);
+    UpdatePollValues(tls);
+    const uintptr_t conservativePoll = tls->GetPollWord();
+    watermark.process_one();
+    GC_EXPECT_TRUE(watermark.watermark() > conservativePoll);
+    // PointerChain supplies the same published PC/FA/RISKY inputs as the stub;
+    // consume them through the exported C2N return, including context teardown.
+    GC_EXPECT_TRUE(MRT_C2N_Leave(true, 0) == tls);
+    GC_EXPECT_FALSE(chain.owner.InSaferegion());
+    GC_EXPECT_FALSE(chain.owner.GetHandshakeState().observed_safe());
+    GC_EXPECT_EQ(chain.owner.GetUnwindContext().GetUnwindContextStatus(), UnwindContextStatus::RELIABLE);
+    GC_EXPECT_EQ(tls->GetPollWord(), conservativePoll);
+    std::fprintf(stderr, "C2N_BOUND_HANDSHAKE_TARGET covered=1 unchanged=1 active=1\n");
+
+    // The second transition uses the real enter producer and an older anchor.
+    // It must retain sender processing rather than passing the covered gate.
+    auto* anchor = reinterpret_cast<FrameAddress*>(&chain.frames[11][56]);
+    const uintptr_t frontier = watermark.last_processed_raw();
+    GC_EXPECT_TRUE(reinterpret_cast<uintptr_t>(anchor) > tls->GetPollWord());
+    GC_EXPECT_TRUE(MRT_C2N_Enter(chain.desc.pc + 4, anchor, tls));
+    GC_EXPECT_TRUE(chain.owner.InSaferegion());
+    GC_EXPECT_TRUE(chain.owner.GetHandshakeState().observed_safe());
+    GC_EXPECT_TRUE(MRT_C2N_Leave(true, 0) == tls);
+    GC_EXPECT_TRUE(watermark.last_processed_raw() > frontier);
+    GC_EXPECT_FALSE(chain.owner.GetHandshakeState().observed_safe());
+    GC_EXPECT_EQ(tls->GetPollWord(), watermark.IsDone() ? ThreadLocalData::DisarmedPollWord : watermark.watermark());
+    std::fprintf(stderr, "C2N_BOUND_HANDSHAKE_TARGET covered=0 advanced=1 enter_safe=1 leave_safe=1\n");
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ReturnSafepointRegMap, NativeReturnProcessesTargetedHandshake)
+{
+    RuntimeParam parameters{};
+    parameters.heapParam.heapSize = 128 * 1024;
+    parameters.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&parameters), E_OK);
+    auto& manager = MutatorManager::Instance();
+    Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    RegisterCurrentMarkFlushThread();
+    {
+        // Serialize with the real drivers and stop at the product mark-start
+        // pause, before concurrent root processing can consume the new epoch.
+        DriverLocker drivers;
+        auto& young = Heap::GetHeap().young();
+        YoungTypeSetter cycle(young, ZYoungType::minor);
+        young.at_collection_start(nullptr);
+        young.pause_mark_start();
+        GC_EXPECT_FALSE(owner->GetStackWatermark().processing_started());
+        class ObserveEpoch final : public HandshakeClosure {
+        public:
+            ObserveEpoch() : HandshakeClosure("native return epoch") {}
+            void do_thread(Mutator* thread) override
+            {
+                visited = thread->GetStackWatermark().processing_started();
+            }
+            bool visited = false;
+        } closure;
+        HandshakeOperation request(&closure, owner);
+        owner->GetHandshakeState().add_operation(&request);
+        GC_EXPECT_TRUE(tls->IsPollArmed());
+        GC_EXPECT_TRUE(MRT_LeaveNative());
+        std::fprintf(stderr, "NATIVE_RETURN_HANDSHAKE_TARGET visited=%d completed=%d epoch=%d\n",
+            closure.visited, request.is_completed(), owner->GetStackWatermark().processing_started());
+        GC_EXPECT_TRUE(closure.visited);
+        GC_EXPECT_TRUE(request.is_completed());
+        GC_EXPECT_FALSE(tls->IsPollArmed());
+        GC_EXPECT_TRUE(MRT_EnterSaferegion(false));
+
+        // Finish this same product cycle before releasing the drivers and
+        // detaching. Do not leave an artificial phase or epoch in the runtime.
+        young.concurrent_mark();
+        while (!young.pause_mark_end()) { young.concurrent_mark_continue(); }
+        young.concurrent_mark_free();
+        young.concurrent_reset_relocation_set();
+        young.concurrent_select_relocation_set();
+        young.pause_relocate_start();
+        young.concurrent_relocate();
+        young.at_collection_end();
+    }
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_TEST(FramePrologue, DecodesSizeAndSavedSlots)

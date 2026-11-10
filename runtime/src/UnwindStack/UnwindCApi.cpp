@@ -75,7 +75,9 @@ extern "C" bool MRT_C2N_Enter(const uint32_t* pc, void* fa, ThreadLocalData* tlD
 
     // Step 2: EnterSaferegion(updateUnwindContext=false)
     // Since context is already set in GoIntoNativeCode, pass false here
-    return mutator->EnterSaferegion(false);
+    // The supplied TLS names this same current logical owner. No request
+    // processing or scheduler call separates the binding from enter_safe.
+    return mutator->EnterSaferegion(false, &mutator->GetHandshakeState());
 }
 
 extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long stackTop)
@@ -100,7 +102,9 @@ extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long sta
 
     if (safeState) {
         // Step 1: LeaveSaferegion - includes suspension request check
-        MRT_LeaveNative();
+        // Select the same state as Handshake::Current() without rediscovering
+        // it via TLS. It is not retained across ProcessSafepointIfRequested.
+        mutator->LeaveNative(&mutator->GetHandshakeState());
     }
 
     // Step 2: DeleteC2NContext - restore unwind context status to RELIABLE

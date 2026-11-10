@@ -169,7 +169,7 @@ public:
 #endif
 
     // Force current mutator enter saferegion, internal use only.
-    __attribute__((always_inline)) inline void DoEnterSaferegion();
+    __attribute__((always_inline)) inline void DoEnterSaferegion(HandshakeState* boundHandshake = nullptr);
     // Force current mutator leave saferegion, internal use only.
     // interfaceSupport.inline.hpp:213-220: publish the active state with a
     // fence, then release any in-flight lock before processing requests.
@@ -192,18 +192,23 @@ public:
         }
     }
 
-    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(HandshakeState* boundHandshake = nullptr)
     {
-        PublishLeaveSaferegion();
-        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+        PublishLeaveSaferegion(boundHandshake);
+        if (UNLIKELY(HasAnySuspensionRequest() ||
+                     (boundHandshake != nullptr ? boundHandshake->has_operation() : MarkFlushPendingForCurrentThread()))) {
             ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
         ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
-    __attribute__((always_inline)) inline void PublishLeaveSaferegion()
+    __attribute__((always_inline)) inline void PublishLeaveSaferegion(HandshakeState* boundHandshake = nullptr)
     {
-        MarkFlushBeginLeaveSaferegion();
+        if (boundHandshake != nullptr) {
+            boundHandshake->leave_safe();
+        } else {
+            MarkFlushBeginLeaveSaferegion();
+        }
         MutatorLock();
         SetInSaferegion(SAFE_REGION_FALSE);
         MarkFlushEndLeaveSaferegion();
@@ -214,10 +219,17 @@ public:
 
     // If current mutator is not in saferegion, enter and return true
     // If current mutator has been in saferegion, return false
-    __attribute__((always_inline)) inline bool EnterSaferegion(bool updateUnwindContext) noexcept;
+    __attribute__((always_inline)) inline bool EnterSaferegion(bool updateUnwindContext,
+        HandshakeState* boundHandshake = nullptr) noexcept;
     // If current mutator is in saferegion, leave and return true
     // If current mutator has left saferegion, return false
-    __attribute__((always_inline)) inline bool LeaveSaferegion() noexcept;
+    __attribute__((always_inline)) inline bool LeaveSaferegion(HandshakeState* boundHandshake = nullptr) noexcept;
+    // C2N already resolved its logical owner; keep the same transition and
+    // return gate without querying the carrier binding a second time. The optional
+    // handshake is only supplied by C2N from that current binding, and is used
+    // only before request processing can resume or migrate the logical thread.
+    // Unbound entry points retain Handshake::Current(), including its native fallback.
+    __attribute__((always_inline)) inline bool LeaveNative(HandshakeState* boundHandshake = nullptr);
 
     // Called if current mutator should do corresponding task by suspensionFlag value
     void HandleSuspensionRequest();

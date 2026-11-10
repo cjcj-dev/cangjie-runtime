@@ -66,13 +66,7 @@ extern "C" bool MRT_LeaveNative()
     if (mutator == nullptr) {
         return false;
     }
-    const bool transitioned = mutator->LeaveSaferegion();
-    if (transitioned) {
-        // HotSpot javaThread.cpp:1103-1118: process requests before exposing
-        // the caller on return from native code. N2C entry does not unwind.
-        StackWatermarkSet::before_unwind(*mutator);
-    }
-    return transitioned;
+    return mutator->LeaveNative();
 }
 
 extern "C" void MRT_SetGrowFlag(bool flag)
