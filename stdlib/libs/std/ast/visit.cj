@@ -92,6 +92,8 @@ public abstract class Visitor {
 
     protected open func visit(_: TryExpr): Unit {}
 
+    protected open func visit(_: ExclaveExpr): Unit {}
+
     protected open func visit(_: ThrowExpr): Unit {}
 
     protected open func visit(_: OptionalExpr): Unit {}
@@ -127,6 +129,10 @@ public abstract class Visitor {
     protected open func visit(_: EnumDecl): Unit {}
 
     protected open func visit(_: FuncParam): Unit {}
+
+    protected open func visit(_: ThisParam): Unit {}
+
+    protected open func visit(_: ModalInfo): Unit {}
 
     protected open func visit(_: TypeAliasDecl): Unit {}
 
@@ -211,10 +217,5 @@ public abstract class Visitor {
     protected open func visit(_: QuoteToken): Unit {}
 
     protected open func visit(_: MacroExpandParam): Unit {}
-    // Keep new overloads after existing entries to preserve virtual method slots.
-    protected open func visit(_: ExclaveExpr): Unit {}
-    protected open func visit(_: ThisParam): Unit {}
-    protected open func visit(_: ModalInfo): Unit {}
-
 }
 

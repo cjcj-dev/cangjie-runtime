@@ -47,7 +47,6 @@ public func refEq(a: Object @local?, b: Object @local?): Bool {
 @Intrinsic
 public unsafe func zeroValue<T>(): T
 
-@When[env != "ohos"]
 @Intrinsic
 public unsafe func zeroValue2<T>(): T @local!
 

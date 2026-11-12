@@ -3170,8 +3170,12 @@ extend<T> Array<T> {
     }
 }
 
+/**
+ * Compiler limitation: a @local? class instance cannot rebind non-Copyable fields, nor explicitly
+ * convert a `T @local?` value to unmarked.
+ */
 @When[env != "ohos"]
-extend<T> ArrayList<T> {
+extend<T> ArrayList<T> where T <: Copyable {
     @Frozen
     public exclave func clone(this @local?): ArrayList<T> @local? {
         // `myData.clone()` already produced a buffer exclusive to this call; install it directly so

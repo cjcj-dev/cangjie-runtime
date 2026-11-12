@@ -57,7 +57,7 @@ public enum OpenMode <: ToString & Equatable<OpenMode> {
 // FD numbers are indexes into the FD table.
 // Unix/Linux use the Int type for handle, while Windows use HANDLE type.
 // HANDLE is typedef'd void *, which is really just a 32-bit index, only for more opaque.
-public struct FileDescriptor {
+public struct FileDescriptor <: Copyable {
     var _fileHandle: IntNative = InvalidHandle
 
     public prop fileHandle: IntNative {
@@ -73,9 +73,6 @@ public struct FileDescriptor {
         }
     }
 }
-
-@When[env != "ohos"]
-extend FileDescriptor <: Copyable {}
 
 public class File <: Resource & IOStream & Seekable {
     private var _fileInfo: FileInfo
