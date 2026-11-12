@@ -9,7 +9,6 @@
 #define MRT_THREAD_LOCAL_H
 
 #include <cstdint>
-#include "Base/Macros.h"
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"

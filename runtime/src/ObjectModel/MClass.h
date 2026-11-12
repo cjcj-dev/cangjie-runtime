@@ -240,8 +240,7 @@ struct ShortGCTib {
             fieldAddr += sizeof(RefField<>);
         }
     }
-    template<typename Visitor>
-    void ForEachBitmapWordInRange(MAddress baseAddr, const Visitor& visitor, MAddress rangeStart,
+    void ForEachBitmapWordInRange(MAddress baseAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
                                   MAddress rangeEnd) const
     {
         ArchUInt gcInfo = bitmap & (~SIGN_BIT);
@@ -271,9 +270,7 @@ struct StdGCTib {
     // An array of bitmap words. Length is `nBitmapWords`.
     U8 bitmapWords[];
 
-    template<typename Visitor>
-    __attribute__((always_inline)) void VisitRefField(
-        U8& bitmapWord, MAddress& fieldAddr, const Visitor& visitor) const
+    void VisitRefField(U8& bitmapWord, MAddress& fieldAddr, const RefFieldVisitor& visitor) const
     {
         U8 wordBits = bitmapWord & REF_BIT_MASK;
         if (wordBits != 0) {
@@ -310,8 +307,7 @@ struct StdGCTib {
             baseAddr += (sizeof(RefField<>) * REFS_PER_BIT_WORD);
         }
     }
-    template<typename Visitor>
-    void ForEachBitmapWordInRange(MAddress contentAddr, const Visitor& visitor, MAddress rangeStart,
+    void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
                                   MAddress rangeEnd) const
     {
         const U8* bitmaps = bitmapWords;
@@ -366,8 +362,7 @@ union GCTib {
         }
     }
 
-    template<typename Visitor>
-    void ForEachBitmapWordInRange(MAddress contentAddr, const Visitor& visitor, MAddress rangeStart,
+    void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
                                   MAddress rangeEnd) const
     {
 #ifdef __arm__

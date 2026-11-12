@@ -10,10 +10,6 @@ package std.ast
 
 public abstract class Visitor {
     private var breakTraverseFlag = false
-    func isTraversalStopped(): Bool {
-        return breakTraverseFlag
-    }
-
     protected func needBreakTraverse(): Bool {
         if (breakTraverseFlag) {
             breakTraverseFlag = false
@@ -92,8 +88,6 @@ public abstract class Visitor {
 
     protected open func visit(_: TryExpr): Unit {}
 
-    protected open func visit(_: ExclaveExpr): Unit {}
-
     protected open func visit(_: ThrowExpr): Unit {}
 
     protected open func visit(_: OptionalExpr): Unit {}
@@ -129,10 +123,6 @@ public abstract class Visitor {
     protected open func visit(_: EnumDecl): Unit {}
 
     protected open func visit(_: FuncParam): Unit {}
-
-    protected open func visit(_: ThisParam): Unit {}
-
-    protected open func visit(_: ModalInfo): Unit {}
 
     protected open func visit(_: TypeAliasDecl): Unit {}
 

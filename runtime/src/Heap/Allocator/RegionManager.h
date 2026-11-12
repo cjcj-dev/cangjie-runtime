@@ -557,7 +557,6 @@ public:
 
 protected:
     virtual void CheckGC();
-
     static const size_t MAX_UNIT_COUNT_PER_REGION;
     static const size_t HUGE_PAGE;
     inline void TagHugePage(RegionInfo* region, size_t num) const;

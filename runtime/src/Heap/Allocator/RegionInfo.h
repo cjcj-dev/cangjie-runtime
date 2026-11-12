@@ -1468,8 +1468,6 @@ private:
         UnitMetadata metadata;
     };
 
-    static_assert(sizeof(RegionInfo::UnitInfo) == sizeof(UnitMetadata), "unexpected UnitInfo size");
-
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
         ClearFreeSlotList();

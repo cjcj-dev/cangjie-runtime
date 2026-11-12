@@ -82,7 +82,6 @@ func generateTypeAST(tyNode: Option<ASTFormat_Type>): TypeNode {
     astNode.beginPos = Position(begin.fileId, begin.line, begin.column)
     astNode.endPos = Position(end.fileId, end.line, end.column)
     astNode.astKind = astKind
-    astNode.modal = createModalInfo(tyBase.GetModal())
     return astNode
 }
 

@@ -35,7 +35,6 @@ const char* LOG_TYPE_NAMES[LOG_TYPE_NUMBER] = {
 #endif
     "promote",
     "sweep",
-    "local_region",
 };
 
 RTLogLevel LogFile::logLevel = InitLogLevel();
@@ -101,7 +100,6 @@ void LogFile::SetFlags()
 #else
     SetFlagWithEnv("MRT_REPORT", REPORT);
     SetFlagWithEnv("MRT_LOG_CJTHREAD", CJTHREAD);
-    SetFlagWithEnv("MRT_LOG_LOCAL_REGION", LOCAL_REGION);
 #endif
 }
 

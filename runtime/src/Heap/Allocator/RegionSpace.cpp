@@ -119,7 +119,6 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
 #endif
     Heap::OnHeapCreated(reservedStart);
     Heap::OnHeapExtended(reservedEnd);
-    localObjectAllocator = LocalObjectAllocator::InitLocalObjectAllocator();
 }
 
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()

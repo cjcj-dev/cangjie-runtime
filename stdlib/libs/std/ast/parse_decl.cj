@@ -118,7 +118,6 @@ func generateDeclAST(declNode: Option<ASTFormat_Decl>): Decl {
         case "prop_decl" => createPropDecl(decl)
         case "macro_expand_decl" => createMacroExpandDecl(decl)
         case "func_param" => createFuncParam(decl)
-        case "this_param" => createThisParamDecl(decl)
         case "macro_expand_param" => createMacroExpandParam(decl)
         case _ => throw ParseASTException("Unsupported decl node kind: '${astKind}'.")
     }
@@ -354,20 +353,6 @@ func createFuncParam(decl: ASTFormat_Decl): Decl {
     return createFuncParam(decl.GetDeclAsFuncParam(), 0, 1)
 }
 
-func createThisParamDecl(decl: ASTFormat_Decl): Decl {
-    var tp = match (decl.GetDeclAsThisParam()) {
-        case Some(v) => v
-        case None => throw ParseASTException()
-    }
-    var thisTok = Token(TokenKind.THIS).addPosition(tp.GetThisPos())
-    var modal = createModalInfo(tp.GetModal())
-    var comma = Token()
-    if (isValidPosition(tp.GetCommaPos())) {
-        comma = Token(TokenKind.COMMA).addPosition(tp.GetCommaPos())
-    }
-    return ThisParam(thisTok, modal, comma)
-}
-
 func createMacroExpandParam(decl: ASTFormat_Decl): Decl {
     let pm = match (decl.GetDeclAsMacroExpandParam()) {
         case Some(v) => v
@@ -459,25 +444,7 @@ func generateFuncParams(funcBody: ASTFormat_FuncBody): ArrayList<FuncParam> {
     return funcParams
 }
 
-func createThisParam(paramList: ?ASTFormat_FuncParamList): ?ThisParam {
-    var pl = match (paramList) {
-        case Some(v) => v
-        case None => return None<ThisParam>
-    }
-    var tp = match (pl.GetThisParam()) {
-        case Some(v) => v
-        case None => return None<ThisParam>
-    }
-    var thisTok = Token(TokenKind.THIS).addPosition(tp.GetThisPos())
-    var modal = createModalInfo(tp.GetModal())
-    var comma = Token()
-    if (isValidPosition(tp.GetCommaPos())) {
-        comma = Token(TokenKind.COMMA).addPosition(tp.GetCommaPos())
-    }
-    return Some<ThisParam>(ThisParam(thisTok, modal, comma))
-}
-
-func generateCommonFuncDecl(funcDecl: ?ASTFormat_FuncDecl, declNode: Decl) {
+func generateCommonFuncDecl(funcDecl: Option<ASTFormat_FuncDecl>, declNode: Decl) {
     var fd = match (funcDecl) {
         case Some(v) => v
         case None => throw ParseASTException()
@@ -497,11 +464,6 @@ func generateCommonFuncDecl(funcDecl: ?ASTFormat_FuncDecl, declNode: Decl) {
     funcDeclNode.constraintCommas = commaPos
     funcDeclNode.isGenericDecl = isGeneric
     funcDeclNode.isEnumConstruct = fd.GetIsEnumConstruct()
-    funcDeclNode.modal = createModalInfo(fd.GetModal())
-    match (createThisParam(fb.GetParamList())) {
-        case Some(tp) => funcDeclNode.thisParam = Some<ThisParam>(tp)
-        case None => ()
-    }
     return funcDeclNode
 }
 

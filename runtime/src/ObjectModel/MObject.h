@@ -19,7 +19,6 @@ public:
 
     // no need to retrieve object size via class metadata, i.e. GetInstanceSize().
     static MObject* NewObject(TypeInfo* ti, MSize objectSize, AllocType);
-    static MObject* NewLocalObject(TypeInfo* ti, MSize objectSize);
     static MObject* NewPinnedObject(TypeInfo* ti, MSize objectSize);
 
     // inlined functions

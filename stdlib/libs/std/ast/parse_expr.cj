@@ -70,7 +70,6 @@ func generateExprAST(exprNode: Option<ASTFormat_Expr>): Expr {
         case "optional_expr" => createOptionalExpr(expr)
         case "optional_chain_expr" => createOptionalChainExpr(expr)
         case "primitive_type_expr" => createPrimitiveTypeExpr(expr, exprBase)
-        case "exclave_expr" => createExclaveExpr(expr, exprBase)
         case "return_expr" => createReturnExpr(expr)
         case "lit_const_expr" => createLitConstExpr(expr, exprBase)
         case "assign_expr" => createAssignExpr(expr)
@@ -226,9 +225,7 @@ func createCallExpr(expr: ASTFormat_Expr): Expr {
     let argSrc = callExpr.GetArgs()
     var args = ArrayList<Argument>(argSrc.size, {i => createArgument(argSrc[i])})
     var rParen = Token(TokenKind.RPAREN).addPosition(callExpr.GetRightParenPos())
-    var call = CallExpr(childExpr, lParen, args, rParen)
-    call.modal = createModalInfo(callExpr.GetModal())
-    return call
+    return CallExpr(childExpr, lParen, args, rParen)
 }
 
 func createRefExpr(expr: ASTFormat_Expr): Expr {
@@ -643,20 +640,7 @@ func createPrimitiveTypeExpr(expr: ASTFormat_Expr, exprBase: ASTFormat_NodeBase)
     let typeKind = primitiveTypeExpr.GetKind()
     let beginPos = exprBase.GetBegin()
     var kind = Token(TokenKindHelper.getPrimitiveTypeTokenKind(typeKind)).addPosition(beginPos)
-    var primExpr = PrimitiveTypeExpr(kind)
-    primExpr.modal = createModalInfo(primitiveTypeExpr.GetModal())
-    return primExpr
-}
-
-func createExclaveExpr(expr: ASTFormat_Expr, exprBase: ASTFormat_NodeBase): Expr {
-    var exclaveExpr = match (expr.GetExprAsExclaveExpr()) {
-        case Some(v) => v
-        case None => throw ParseASTException()
-    }
-    var exclaveToken = Token(TokenKind.EXCLAVE).addPosition(exclaveExpr.GetExclavePos())
-    var block = generateBlock(exclaveExpr.GetBody())
-    var node = ExclaveExpr(exclaveToken, block)
-    return node
+    return PrimitiveTypeExpr(kind)
 }
 
 func createArrayLiteral(expr: ASTFormat_Expr): Expr {

@@ -11,7 +11,6 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
-#include "Heap/Heap.h"
 namespace MapleRuntime {
 
 class RegionForwardTable {
@@ -137,10 +136,6 @@ public:
 
     BaseObject* FindToVersion(BaseObject* obj) const override
     {
-        // Non-heap (e.g. local) addresses are not in the unit table.
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return nullptr;
-        }
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (fromRegionInfo == nullptr) {
             return nullptr;

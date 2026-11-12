@@ -51,9 +51,7 @@ let decodeStackTraceWrapper = { pcArray: RawArray<UInt64>, j: Int64 =>
 }
 
 protected func getRawStackTrace(): Array<UInt64> {
-    let arr = rawArrayAllocate<UInt64>(1)
-    rawArrayInitByValue(arr, 1, 0)
-    let stackTrace = fillInStackTrace(arr, String.empty.toArray().rawptr)
+    let stackTrace = fillInStackTrace(RawArray<UInt64>(1, repeat: 0), String.empty.toArray().rawptr)
     return Array(stackTrace, 0, arraySize(stackTrace))
 }
 

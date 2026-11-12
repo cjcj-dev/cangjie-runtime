@@ -32,12 +32,6 @@ extern "C" MRT_EXPORT bool MRT_LeaveSaferegion();
 extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
 
 class BaseObject;
-class Mutator;
-
-// Releases per-mutator local object allocator data (regions, caches and
-// metadata). Defined in Mutator.cpp; no-op when the mutator never used local
-// allocation, so it is safe during static teardown of foreign-process threads.
-void ReleaseMutatorLocalAllocatorData(Mutator& mutator);
 
 class Mutator {
 public:
@@ -75,7 +69,6 @@ public:
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
-        localObjectAllocatorData = nullptr;
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -322,7 +315,7 @@ public:
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhaseIDLE();
-    inline void ForwardPendingHeapFinalizers(Collector& collector);
+    inline void ForwardLocalFinalizers(Collector& collector);
     static DerivedPtrVisitor MakePreForwardDerivedVisitor(Collector& collector);
 
     inline void HandleCpuProfile();
@@ -351,7 +344,6 @@ public:
         VisitStackRoots(visitor);
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
-        VisitLocalObjectAllocatorRoots(visitor);
     }
 
     ObjectRef* AddNativeFrameRoot(BaseObject* obj);
@@ -435,13 +427,11 @@ public:
         return obj;
     }
 
-    // Stages newly-created tracing-heap finalizers on the current mutator
-    // before they are transferred to FinalizerProcessor.
-    void AddPendingHeapFinalizer(BaseObject* obj)
+    void AddLocalFinalizer(BaseObject* obj)
     {
         RefField<> tmpField(nullptr);
         Heap::GetBarrier().WriteStaticRef(tmpField, obj);
-        pendingHeapFinalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+        localFinalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
     }
 
     void MutatorLock() { mutatorLock.lock(); }
@@ -511,27 +501,6 @@ public:
 
     void ReleaseForeignThread();
 
-    void StartLocalObjectRegion(FrameAddress* ownerFA = nullptr);
-
-    void EndLocalObjectRegion(FrameAddress* ownerFA = nullptr);
-
-    void EndLocalObjectRegionsForFrame(FrameAddress* ownerFA);
-
-    void AddLocalFinalizer(BaseObject* obj);
-
-    void RemoveLocalFinalizer(BaseObject* obj);
-
-    void AddLocalRoot(BaseObject* obj, RefField<false>* field);
-
-    void VisitLocalObjectAllocatorRoots(const RootVisitor& visitor);
-
-    // Local allocator data is created on first use and retained until mutator reset/exit.
-    bool IsLocalModeEnabled() const { return localObjectAllocatorData != nullptr; }
-
-    void* GetLocalObjectAllocatorData() const { return localObjectAllocatorData; }
-
-    void SetLocalObjectAllocatorData(void* data) { localObjectAllocatorData = data; }
-
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func);
@@ -552,7 +521,7 @@ private:
             }
         }
     }
-    ManagedList<BaseObject*>& GetPendingHeapFinalizers() { return pendingHeapFinalizers; }
+    ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
@@ -586,7 +555,7 @@ private:
     ObjectRef rawObject{ nullptr };
     std::list<ObjectRef> nativeFrameRoots;
 
-    ManagedList<BaseObject*> pendingHeapFinalizers;
+    ManagedList<BaseObject*> localFinalizers;
 
     RSetRegions localRSetRegions;
 public:
@@ -628,9 +597,6 @@ public:
         isRuntimeMutator = true;
     }
 #endif
-
-    // Native local allocator's MutatorData: region snapshots and the active chunk list.
-    void* localObjectAllocatorData = { nullptr };
 };
 
 // This function is mainly used to initialize the context of mutator.
