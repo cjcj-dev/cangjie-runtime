@@ -830,6 +830,13 @@ TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, Ty
         return typeInfoDesc->typeInfo;
     }
     const U32 currentTid = static_cast<U32>(GetTid());
+    // NOTE: currentTid is used as a "who owns this creation" token. GetTid() returns the OS
+    // thread id, which the OS can recycle after a thread exits; in principle a recycled id could
+    // match the `IsIniting() && tid == currentTid` branch for an unrelated new thread and let it
+    // observe a half-initialized typeInfo (offsets/fieldAddr not yet filled). This is not
+    // reachable under the current model because runtime creation aborts on failure and threads
+    // are never force-killed. If this is ever hardened, replace the token with a non-recyclable
+    // one (a thread-local monotonic id, or the Mutator*).
     do {
         if (typeInfoDesc->IsInited()) {
             genericTypeInfoFastMap.Insert(tt, argSize, args, typeInfoDesc, fastMapGeneration);

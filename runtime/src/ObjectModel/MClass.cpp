@@ -246,6 +246,7 @@ void TypeInfo::TryInitMTableNoLock()
         auto desc = tim.GetMTableDesc(tiUUID);
         if (desc == nullptr) {
             ArchUInt bitmap = GetResolveBitmapFromMTableDesc();
+            // Built in the TypeInfoManager arena, so the pointer stays untagged (see AllocateMTableDesc).
             desc = tim.AllocateMTableDesc(bitmap);
             tim.RecordMTableDesc(tiUUID, desc);
         }
