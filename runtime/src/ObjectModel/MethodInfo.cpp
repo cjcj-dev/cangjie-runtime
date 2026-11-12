@@ -7,6 +7,8 @@
 
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
+#include <cinttypes>
+
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectManager.inline.h"
@@ -21,6 +23,12 @@ CJRawArray* CJArray::GetRawArray()
         HeapAccess<>::oop_load(&(HeapSlotAt<false>(slot))) :
         to_object(safe(RootSlotAt(slot).LoadPlain()));
     return reinterpret_cast<CJRawArray*>(array);
+}
+
+static bool IsValidArrayView(const CJArray* view, const CJRawArray* rawArray)
+{
+    // Subtract after checking start so a forged start + length cannot wrap around.
+    return rawArray != nullptr && view->start <= rawArray->len && view->length <= rawArray->len - view->start;
 }
 
 ScopedAllocBuffer::~ScopedAllocBuffer()
@@ -253,8 +261,9 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         if (genericArgsArray == nullptr) {
             return false;
         }
-        CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgsArray)->GetRawArray();
-        if (genericRawArray == nullptr || genericRawArray->len < genericArgCnt) {
+        CJArray* genericView = static_cast<CJArray*>(genericArgsArray);
+        CJRawArray* genericRawArray = genericView->GetRawArray();
+        if (!IsValidArrayView(genericView, genericRawArray) || genericView->length < genericArgCnt) {
             return false;
         }
     }
@@ -269,13 +278,18 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         }
     }
 
-    CJRawArray* cjRawArray = static_cast<CJArray*>(actualArgsArray)->GetRawArray();
-    U64 actualArgCnt = cjRawArray->len;
+    CJArray* actualArgs = static_cast<CJArray*>(actualArgsArray);
+    CJRawArray* cjRawArray = actualArgs->GetRawArray();
+    if (!IsValidArrayView(actualArgs, cjRawArray)) {
+        return false;
+    }
+    // Array slices share raw storage; only the view's range holds actual arguments.
+    U64 actualArgCnt = actualArgs->length;
     if (actualArgCnt != GetNumOfActualParameterInfos()) {
         return false;
     }
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data)) + actualArgs->start;
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(*refField)));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
@@ -341,18 +355,19 @@ TypeInfo* MethodInfo::GetReturnType()
 TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs)
 {
     if (genericTi->IsGeneric() && genericArgs != nullptr) {
-        CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgs)->GetRawArray();
-        if (genericRawArray == nullptr) {
+        CJArray* genericView = static_cast<CJArray*>(genericArgs);
+        CJRawArray* genericRawArray = genericView->GetRawArray();
+        if (!IsValidArrayView(genericView, genericRawArray)) {
             return nullptr;
         }
-        U64 available = genericRawArray->len;
+        U64 available = genericView->length;
         for (U32 idx = 0; idx < genericParametersCnt; ++idx) {
             GenericTypeInfo* genericParamType = GetGenericParameterInfo(idx);
             if (genericTi == genericParamType) {
                 if (idx >= available) {
                     return nullptr;
                 }
-                Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
+                Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data)) + genericView->start * TYPEINFO_PTR_SIZE;
                 TypeInfo* ti = *reinterpret_cast<TypeInfo**>(base + idx * TYPEINFO_PTR_SIZE);
                 return ti;
             }
@@ -500,14 +515,18 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
     // Read rawPtr (ref to CJRawArray) through the GC read barrier instead of a raw
     // cast: if GC concurrently moves the CJRawArray, the raw read would return a
     // stale pointer and all downstream argObj reads would be garbage.
-    CJRawArray* cjRawArray = static_cast<CJArray*>(actualArgsArray)->GetRawArray();
-    U64 actualArgCnt = cjRawArray->len;
+    CJArray* actualArgs = static_cast<CJArray*>(actualArgsArray);
+    CJRawArray* cjRawArray = actualArgs->GetRawArray();
+    CHECK_DETAIL(IsValidArrayView(actualArgs, cjRawArray), "PrepareCJMethodActualArgs: invalid argument view");
+    // Array slices share raw storage; only the view's range holds actual arguments.
+    const U64 viewStart = actualArgs->start;
+    U64 actualArgCnt = actualArgs->length;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     Handle arrayHandle(Mutator::GetMutator(), rawArray);
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
         rawArray = static_cast<MObject*>(arrayHandle());
         auto& refField = HeapSlotAt<false>(reinterpret_cast<Uptr>(rawArray) +
-            offsetof(CJRawArray, data) + actualArgIdx * sizeof(Uptr));
+            offsetof(CJRawArray, data) + (viewStart + actualArgIdx) * sizeof(Uptr));
         ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(refField)));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
@@ -525,9 +544,11 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
 
 void MethodInfo::PrepareCJMethodGenericArgs(ArgValue* argValues, void* genericArgsArray)
 {
-    CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgsArray)->GetRawArray();
-    Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
-    U64 genericArgCnt = genericRawArray->len;
+    CJArray* genericArgs = static_cast<CJArray*>(genericArgsArray);
+    CJRawArray* genericRawArray = genericArgs->GetRawArray();
+    CHECK_DETAIL(IsValidArrayView(genericArgs, genericRawArray), "PrepareCJMethodGenericArgs: invalid argument view");
+    Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data)) + genericArgs->start * TYPEINFO_PTR_SIZE;
+    U64 genericArgCnt = genericArgs->length;
     for (U64 idx = 0; idx < genericArgCnt; ++idx) {
         TypeInfo* ti = *reinterpret_cast<TypeInfo**>(base + idx * TYPEINFO_PTR_SIZE);
         argValues->AddInt64(reinterpret_cast<Uptr>(ti));
@@ -909,10 +930,14 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     HandleMark handleMark(*Mutator::GetMutator());
     ScopedAllocBuffer scopedAllocBuffer;
     ArgValue argValues;
-    CJRawArray* cjRawArray = static_cast<CJArray*>(argsArray)->GetRawArray();
-    U64 actualArgCount = cjRawArray->len;
+    CJArray* args = static_cast<CJArray*>(argsArray);
+    CJRawArray* cjRawArray = args->GetRawArray();
+    CHECK_DETAIL(IsValidArrayView(args, cjRawArray), "ApplyCangjieMethod: invalid argument view");
+    const U64 viewStart = args->start;
+    U64 actualArgCount = args->length;
     if (actualArgCount != parameterCount) {
-        LOG(RTLOG_FATAL, "DynamicMethodInfo: actualArgCount %d != parameterCount %d", actualArgCount, parameterCount);
+        LOG(RTLOG_FATAL, "DynamicMethodInfo: actualArgCount %" PRIu64 " != parameterCount %u",
+            actualArgCount, parameterCount);
     }
 
     size_t retObjSize = MRT_ALIGN(returnType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
@@ -935,7 +960,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     // takes the boxed Any as a reference. Value-parameter unboxing lives on
     // MethodInfo::AddCJArg, used by the named-method apply path only.
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data)) + viewStart;
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCount; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(*refField)));
         argValues.AddReference(argObj);

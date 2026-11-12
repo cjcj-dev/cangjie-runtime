@@ -1562,7 +1562,7 @@ public class CallExpr <: Expr {
 }
 ```
 
-功能：表示函数调用节点节点。
+功能：表示函数调用节点。
 
 一个 [CallExpr](ast_package_classes.md#class-callexpr) 节点包括一个表达式后面紧跟参数列表，例如 `foo(100)`。
 
@@ -5770,18 +5770,18 @@ param.myDump(): FuncParam {
     -identifier: Token {
       value: "a"
       kind: IDENTIFIER
-      pos: 13: 31
+      pos: 15: 31
     }
     -colon: Token {
       value: ":"
       kind: COLON
-      pos: 13: 32
+      pos: 15: 32
     }
     -paramType: PrimitiveType {
       -keyword: Token {
         value: "Int64"
         kind: INT64
-        pos: 13: 34
+        pos: 15: 34
       }
     }
   }
