@@ -915,9 +915,13 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
             auto it = scanned.find(mutator);
             if (active || it == scanned.end() || it->second) { return; }
             mutator->MutatorLock();
-            // Pairs with DoLeaveSaferegion: a parked participant cannot resume
-            // while its saved frames are being inspected by this executor.
+            // Pairs with PublishLeaveSaferegion and HandleSuspensionRequest:
+            // announce before reading the saferegion state, so a parked
+            // participant cannot resume while its saved frames are being
+            // inspected by this executor.
+            mutator->IncObserver();
             if (requireSafe && !mutator->InSaferegion()) {
+                mutator->DecObserver();
                 mutator->MutatorUnlock();
                 return;
             }
@@ -938,6 +942,7 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
             }
             it->second = true;
             --remaining;
+            mutator->DecObserver();
             mutator->MutatorUnlock();
         }
 

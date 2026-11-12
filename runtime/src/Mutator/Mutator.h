@@ -202,6 +202,13 @@ public:
         ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
+    // Same Dekker pair as HandshakeState::leave_safe: publish the unsafe state,
+    // then look for an announced observer, both in the single total order.
+    // Every thread that inspects this mutator under mutatorLock announces
+    // itself (IncObserver) before it reads inSaferegion or the saved frames and
+    // withdraws before unlocking. A zero count means no observer is inside that
+    // section and every later one reads SAFE_REGION_FALSE; otherwise wait for
+    // the current holder by taking the lock, as the unconditional lock did.
     __attribute__((always_inline)) inline void PublishLeaveSaferegion(HandshakeState* boundHandshake = nullptr)
     {
         if (boundHandshake != nullptr) {
@@ -209,10 +216,12 @@ public:
         } else {
             MarkFlushBeginLeaveSaferegion();
         }
-        MutatorLock();
         SetInSaferegion(SAFE_REGION_FALSE);
         MarkFlushEndLeaveSaferegion();
-        MutatorUnlock();
+        if (UNLIKELY(HasObserver())) {
+            MutatorLock();
+            MutatorUnlock();
+        }
     }
 
     __attribute__((always_inline)) inline void RejectInconsistentUnwindTop();
@@ -491,9 +500,11 @@ public:
     void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
     {
         std::lock_guard<std::mutex> lg(mutatorLock);
+        IncObserver();
         if (flushStoreBarrier) {
             gcData.storeBarrierBuffer->Flush();
         }
+        DecObserver();
     }
 
 protected:
@@ -518,7 +529,9 @@ private:
     std::atomic<uint32_t> inSaferegion = { SAFE_REGION_TRUE };
     // Protect observerCnt
     std::mutex observeCntMutex;
-    // Increase when this mutator is observed by some observer
+    // Increase when this mutator is observed by some observer. Observers announce
+    // under mutatorLock before reading inSaferegion; PublishLeaveSaferegion and
+    // HandleSuspensionRequest read it after publishing SAFE_REGION_FALSE.
     std::atomic<size_t> observerCnt = { 0 };
     // context for unwinding stack
     UnwindContext uwContext;

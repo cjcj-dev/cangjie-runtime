@@ -187,3 +187,44 @@ GC_TEST(HandshakeNativeTransition, HandshakerFollowsPublishedState)
     GC_EXPECT_TRUE(op.is_completed());
     GC_EXPECT_FALSE(state.has_operation());
 }
+
+// PublishLeaveSaferegion pairs with an observer that announces itself under
+// MutatorLock before it reads the saferegion state (CjFileLoader image scan,
+// VisitStackRoots). While an announced observer holds the lock, the owner
+// publishes the unsafe state but does not return; an observer that announces
+// after the owner published declines.
+GC_TEST(HandshakeNativeTransition, LeaveWaitsForAnnouncedObserver)
+{
+    NativeTransitionHost host;
+    HandshakeState state(nullptr);
+    Mutator owner;
+    owner.MutatorLock();
+    owner.IncObserver();
+    const bool observerSawSafe = owner.InSaferegion();
+    std::atomic<bool> returned { false };
+    std::thread leaver([&] {
+        owner.PublishLeaveSaferegion(&state);
+        returned.store(true);
+    });
+    while (state.observed_safe()) { std::this_thread::yield(); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const bool returnedWhileObserved = returned.load();
+    owner.DecObserver();
+    owner.MutatorUnlock();
+    leaver.join();
+    owner.MutatorLock();
+    owner.IncObserver();
+    const bool lateObserverSawSafe = owner.InSaferegion();
+    owner.DecObserver();
+    owner.MutatorUnlock();
+    std::fprintf(stderr,
+                 "MUTATOR_LEAVE_OBSERVER saw_safe=%d returned_while_observed=%d returned=%d late_saw_safe=%d "
+                 "count=%zu\n",
+                 observerSawSafe, returnedWhileObserved, returned.load(), lateObserverSawSafe,
+                 owner.GetObserverCount());
+    GC_EXPECT_TRUE(observerSawSafe);
+    GC_EXPECT_FALSE(returnedWhileObserved);
+    GC_EXPECT_TRUE(returned.load());
+    GC_EXPECT_FALSE(lateObserverSawSafe);
+    GC_EXPECT_EQ(owner.GetObserverCount(), static_cast<size_t>(0));
+}
