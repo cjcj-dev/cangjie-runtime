@@ -14,8 +14,23 @@
 package std.collection
 
 public interface MapEntryView<K, V> {
-    prop key: K
-    mut prop value: ?V
+    // The plain forms carry throwing default bodies so that a plain receiver resolves to the plain
+    // member instead of being captured by the @local?/@local! overloads below.
+    @When[env != "ohos"]
+    prop key: K {
+        get() {
+            throw UnimplementedException("Current Type does not implement 'key' property")
+        }
+    }
+    @When[env != "ohos"]
+    mut prop value: ?V {
+        get() {
+            throw UnimplementedException("Current Type does not implement 'value' property")
+        }
+        set(v) {
+            throw UnimplementedException("Current Type does not implement 'value' property")
+        }
+    }
     // The @local?/@local! forms carry throwing default bodies; the plain forms must also carry bodies so
     // that a plain receiver resolves to the plain member instead of being captured by the @local? one.
     @When[env != "ohos"]
@@ -33,6 +48,12 @@ public interface MapEntryView<K, V> {
             throw UnimplementedException("Current Type does not implement 'value' property for its @local! instance")
         }
     }
+
+    @When[env == "ohos"]
+    prop key: K
+
+    @When[env == "ohos"]
+    mut prop value: ?V
 }
 
 public interface ReadOnlyMap<K, V> <: Collection<(K, V)> {
