@@ -15,7 +15,9 @@
 namespace MapleRuntime {
 namespace {
 constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
-constexpr int kMpolMemsAllowed = 2;
+// linux/mempolicy.h MPOL_F_MEMS_ALLOWED (1 << 2): the nodes this process may
+// allocate from. 2 is MPOL_F_ADDR, which needs a mapped address and fails for nullptr.
+constexpr unsigned long kMpolMemsAllowed = 1UL << 2;
 }
 
 void NumaTopology::numa_make_local(void* addr, size_t size, uint32_t numa_id)

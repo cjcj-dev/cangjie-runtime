@@ -434,6 +434,7 @@ MAIN_SOURCES=(
   "$SRC/test_binding_poll.cpp"
   "$SRC/test_thread_smr_reclaim.cpp"
   "$SRC/test_typeinfo_arena.cpp"
+  "$SRC/test_numa_mempolicy.cpp"
 )
 
 PUBLICATION_COMPILE_FLAGS=(

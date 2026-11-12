@@ -127,6 +127,7 @@ set(GC_UNIT_SOURCES
     test_binding_poll.cpp
     test_thread_smr_reclaim.cpp
     test_typeinfo_arena.cpp
+    test_numa_mempolicy.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
