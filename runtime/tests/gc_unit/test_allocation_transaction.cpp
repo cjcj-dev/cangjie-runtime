@@ -70,6 +70,7 @@ struct Account {
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AddressIntactAllocates)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker quiesce;
     const size_t used = manager.GetUsedBytes();
     ZPage* page = Allocate(16 * MB);
     std::fprintf(stderr, "ADDRESS_INTACT_TARGET page=%p used=%zu\n", page, manager.GetUsedBytes());
