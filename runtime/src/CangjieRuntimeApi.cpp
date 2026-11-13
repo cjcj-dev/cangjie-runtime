@@ -692,7 +692,7 @@ class TaskResultWaitScope {
 public:
     void Enter()
     {
-        entered = CJ_EnterTaskResultWait();
+        entered = EnterTaskResultWait();
     }
 
     ~TaskResultWaitScope()
