@@ -14,8 +14,18 @@ extern "C" void CJ_SyscallExit();
 
 // Fault injection is confined to the calling thread and one condvar wait.
 // Other runtime waits always call libc. No product check is bypassed.
-static thread_local bool injectWaitError = false;
-static thread_local bool waitErrorReached = false;
+// This DSO is preloaded before runtime initialization. Do not resolve symbols
+// or allocate dynamic TLS from an interposed startup wait on a worker.
+static thread_local __attribute__((tls_model("initial-exec"))) bool injectWaitError = false;
+static thread_local __attribute__((tls_model("initial-exec"))) bool waitErrorReached = false;
+static int (*realWait)(pthread_cond_t*, pthread_mutex_t*) = nullptr;
+__attribute__((constructor)) static void ResolveWait()
+{
+    realWait = reinterpret_cast<int (*)(pthread_cond_t*, pthread_mutex_t*)>(
+        dlsym(RTLD_NEXT, "pthread_cond_wait"));
+    if (realWait == nullptr) { std::terminate(); }
+    std::fprintf(stderr, "TASK_WAIT_INTERPOSER_READY\n");
+}
 extern "C" int pthread_cond_wait(pthread_cond_t* cv, pthread_mutex_t* mutex)
 {
     if (injectWaitError) {
@@ -23,8 +33,6 @@ extern "C" int pthread_cond_wait(pthread_cond_t* cv, pthread_mutex_t* mutex)
         waitErrorReached = true;
         return EINVAL;
     }
-    static auto realWait = reinterpret_cast<int (*)(pthread_cond_t*, pthread_mutex_t*)>(
-        dlsym(RTLD_NEXT, "pthread_cond_wait"));
     if (realWait == nullptr) { std::terminate(); }
     return realWait(cv, mutex);
 }
