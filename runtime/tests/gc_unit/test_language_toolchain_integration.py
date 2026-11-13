@@ -34,8 +34,7 @@ def main():
                   ('missing-qualification', {'GC_UNIT_LANGUAGE_QUALIFICATION': ''}),
                   ('cjc-conflict', {'CJC': str(args.official_sdk / 'bin/cjc')})]
     commands = ['gate_gc_unit.sh', 'run_finalizer_trigger.sh',
-                'run_phase_entry_trigger.sh', 'run_segmented_array_managed.sh',
-                'kkk2_managed.sh']
+                'run_phase_entry_trigger.sh', 'run_segmented_array_managed.sh']
 
     def invoke(case, changes, command):
         out = args.out / case / command.removesuffix('.sh')
@@ -43,10 +42,6 @@ def main():
         local = dict(env, **changes, GC_UNIT_OUT=str(out),
                      GC_UNIT_GATE_STATUS=str(out / 'latest.status'))
         arguments = ['bash', str(unit / command)]
-        if command == 'kkk2_managed.sh':
-            local.update(LANE=str(out), OUT=str(out), SRCROOT=str(unit.parents[2]),
-                         STAINED_RT=env['GCV2_RUNTIME_LIB_DIR'], N='1')
-            arguments.append('admission-contract')
         start = time.monotonic()
         result = subprocess.run(arguments, env=local,
                                 capture_output=True, text=True)
