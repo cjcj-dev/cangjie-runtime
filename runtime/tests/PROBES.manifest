@@ -1,4 +1,5 @@
 # runtime/tests inventory.
+task_result_wait manual managed C2N future wait normal/timeout/nested/native/error restoration; consume-macro-wait-r1.mjs in backport_compiler_astra_1112; requires paired private SDK and scoped pthread_cond_wait fault injection
 readscope_public_reopen_harness.cpp manual baseline/candidate public load-close-reopen reproduction against their real runtime SO; requires built managed plugin
 readscope_no_unload_harness.cpp manual public C API lifetime and native callback checks; run_readscope_no_unload.mjs with installed product SO and SDK
 readscope_no_unload_plugin.cj manual real managed image for run_readscope_no_unload.mjs
