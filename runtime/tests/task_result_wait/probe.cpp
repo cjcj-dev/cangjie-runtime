@@ -21,10 +21,14 @@ static thread_local __attribute__((tls_model("initial-exec"))) bool waitErrorRea
 static int (*realWait)(pthread_cond_t*, pthread_mutex_t*) = nullptr;
 __attribute__((constructor)) static void ResolveWait()
 {
+    auto unversionedWait = dlsym(RTLD_NEXT, "pthread_cond_wait");
+    // The Linux/glibc consumer must forward the current condvar ABI, not the
+    // GLIBC_2.2.5 compatibility entry also returned by some RTLD_NEXT lookups.
     realWait = reinterpret_cast<int (*)(pthread_cond_t*, pthread_mutex_t*)>(
-        dlsym(RTLD_NEXT, "pthread_cond_wait"));
+        dlvsym(RTLD_NEXT, "pthread_cond_wait", "GLIBC_2.3.2"));
     if (realWait == nullptr) { std::terminate(); }
-    std::fprintf(stderr, "TASK_WAIT_INTERPOSER_READY\n");
+    std::fprintf(stderr, "TASK_WAIT_INTERPOSER_READY version=GLIBC_2.3.2 unversioned_diff=%d\n",
+        unversionedWait != reinterpret_cast<void*>(realWait));
 }
 extern "C" int pthread_cond_wait(pthread_cond_t* cv, pthread_mutex_t* mutex)
 {
