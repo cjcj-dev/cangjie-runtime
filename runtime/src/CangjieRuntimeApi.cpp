@@ -723,7 +723,7 @@ int GetTaskRetWithTimeout(const CJThreadHandle handle, void** ret, int64_t timeo
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     MapleRuntime::Sanitizer::AsanRead(fi, sizeof(FutureImpl));
 #endif
-    // Declare before the lock: success, timeout and exception unwinding must
+    // Declare before the lock: success, timeout and early error returns must
     // release the future mutex before SyscallExit can requeue this cjthread.
     TaskResultWaitScope waitScope;
     std::unique_lock<std::mutex> lck(fi->g_mtx);
