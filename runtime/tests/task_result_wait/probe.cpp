@@ -31,6 +31,7 @@ extern "C" int pthread_cond_wait(pthread_cond_t* cv, pthread_mutex_t* mutex)
 
 static void* Child(void* data)
 {
+    std::fprintf(stderr, "TASK_WAIT_CHILD_ENTER\n");
     const int fd = *static_cast<int*>(data);
     char value = 0;
     return reinterpret_cast<void*>(CJ_SyscallRead(fd, &value, 1) == 1 && value == 'x' ? 42 : 43);
@@ -38,9 +39,11 @@ static void* Child(void* data)
 
 extern "C" int CheckTaskResultWait(int mode)
 {
+    std::fprintf(stderr, "TASK_WAIT_ENTER mode=%d\n", mode);
     int pipefd[2];
     if (pipe(pipefd) != 0) { return 10; }
     auto task = RunCJTask(Child, &pipefd[0]);
+    std::fprintf(stderr, "TASK_WAIT_SUBMITTED mode=%d task=%p\n", mode, task);
     if (task == nullptr) { return 11; }
     void* result = nullptr;
     int status = -1;
@@ -66,6 +69,7 @@ extern "C" int CheckTaskResultWait(int mode)
         native.join();
     }
     const bool pathPassed = status == E_TIMEOUT;
+    std::fprintf(stderr, "TASK_WAIT_FIRST_RETURN mode=%d status=%d\n", mode, status);
     std::thread release([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         if (write(pipefd[1], "x", 1) != 1) { std::terminate(); }
