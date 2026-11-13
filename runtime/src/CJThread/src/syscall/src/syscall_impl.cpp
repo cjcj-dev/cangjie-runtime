@@ -137,7 +137,7 @@ void SyscallExit(void)
 
 // Internal native-future wait entry. The caller must be GC-safe and pair a
 // true result with SyscallExit after releasing the future mutex.
-bool EnterTaskResultWait(void)
+__attribute__((visibility("hidden"))) bool EnterTaskResultWait(void)
 {
     struct CJThread *cjthread = CJThreadGet();
     // External native threads have no cjthread. An already-entered syscall

@@ -24,7 +24,7 @@ void SyscallExit(void);
 void CJ_WakeIdleProcessorBeforeBlock(void);
 
 // True only when this wait acquired a scheduler syscall transition.
-bool EnterTaskResultWait(void);
+__attribute__((visibility("hidden"))) bool EnterTaskResultWait(void);
 
 /**
  * @brief Non-blocking system call with 3 arguments
