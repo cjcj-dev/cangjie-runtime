@@ -419,6 +419,19 @@ MRT_EXPORT enum RTErrorCode SetRuntimeFiniFlag(void);
  * @retval Return the cjthread handle if success. Otherwise, return NULL.
  */
 MRT_EXPORT CJThreadHandle RunCJTask(const CJTaskFunc func, void* args);
+#if defined(__linux__) && defined(__GLIBC__)
+/* Set the current physical carrier's cleaner destructor registrar before its
+ * first managed/native-allocation entry into this runtime. The caller supplies
+ * the __cxa_thread_atexit_impl bound to the libc which owns pthread exit.
+ * Repeated identical registration is allowed; changing an owner is rejected,
+ * including after default registration. Returns 0 on success, 1 for null,
+ * 2 for an owner conflict. Does not attach, allocate or construct the cleaner.
+ * The callback's original runtime DSO remains the destructor's lifetime owner.
+ * This API covers only CleanThreadLocalData, not arbitrary C++ TLS objects. */
+typedef int (*CJThreadCleanerRegistrar)(void (*destructor)(void*), void* object, void* dso);
+MRT_EXPORT int CJ_MRT_SetForeignThreadCleanerRegistrarV1(CJThreadCleanerRegistrar registrar);
+#endif
+
 /*
  * @brief Submit a task to specify Cangjie cjthread scheduler.
  * @par This API will create a Cangjie cjthread and return the cjthread handle.

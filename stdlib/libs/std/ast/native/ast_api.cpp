@@ -10,6 +10,9 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <new>
 
 #include "cangjie/Basic/DiagnosticEmitter.h"
 #include "cangjie/Basic/Print.h"
@@ -52,8 +55,41 @@ struct CJMacroHostCallbacks {
 namespace {
 std::atomic<const CJMacroHostCallbacks*> g_macroHostCallbacks{nullptr};
 
+#if defined(__linux__) && defined(__GLIBC__)
+extern "C" int __cxa_thread_atexit_impl(void (*)(void*), void*, void*);
+using CleanerRegistrar = int (*)(void (*)(void*), void*, void*);
+using SetCleanerOwner = int (*)(CleanerRegistrar);
+std::atomic<SetCleanerOwner> g_hostCleanerOwner{nullptr};
+
+void PrepareHostCleanerOwner()
+{
+    auto setOwner = g_hostCleanerOwner.load(std::memory_order_acquire);
+    if (setOwner != nullptr && setOwner(__cxa_thread_atexit_impl) != 0) {
+        // Never enter the host's N2C stub after a conflicting registration.
+        std::fputs("macro host cleaner registrar conflict before managed entry\n", stderr);
+        std::abort();
+    }
+}
+using NativeTask = void* (*)(void*);
+struct HostTask {
+    NativeTask callback;
+    void* argument;
+};
+void* RunHostTask(void* argument)
+{
+    auto* task = static_cast<HostTask*>(argument);
+    const HostTask saved = *task;
+    delete task;
+    PrepareHostCleanerOwner();
+    return saved.callback(saved.argument);
+}
+#else
+void PrepareHostCleanerOwner() {}
+#endif
+
 const CJMacroHostCallbacks* GetMacroHostCallbacks()
 {
+    PrepareHostCleanerOwner();
     return g_macroHostCallbacks.load(std::memory_order_acquire);
 }
 } // namespace
@@ -66,6 +102,45 @@ extern "C" bool CJ_MacroCall_RegisterHostCallbacks(const CJMacroHostCallbacks* t
     g_macroHostCallbacks.store(table, std::memory_order_release);
     return true;
 }
+
+#if defined(__linux__) && defined(__GLIBC__)
+// Separate versioned native entry: the existing context table remains ABI v1.
+// New isolated hosts must resolve all three entries before exposing a macro.
+extern "C" bool CJ_MacroCall_RegisterCleanerOwnerV1(void* setter)
+{
+    if (setter == nullptr) { return false; }
+    auto expected = static_cast<SetCleanerOwner>(nullptr);
+    const auto requested = reinterpret_cast<SetCleanerOwner>(setter);
+    return g_hostCleanerOwner.compare_exchange_strong(expected, requested,
+        std::memory_order_release, std::memory_order_acquire) || expected == requested;
+}
+
+extern "C" void* CJ_MacroCall_RunHostTaskV1(void* run, void* callback, void* argument)
+{
+    if (run == nullptr || callback == nullptr || g_hostCleanerOwner.load(std::memory_order_acquire) == nullptr) {
+        return nullptr;
+    }
+    auto* task = new (std::nothrow) HostTask{reinterpret_cast<NativeTask>(callback), argument};
+    if (task == nullptr) { return nullptr; }
+    auto submit = reinterpret_cast<void* (*)(NativeTask, void*)>(run);
+    void* handle = submit(RunHostTask, task);
+    if (handle == nullptr) { delete task; }
+    return handle;
+}
+
+struct HostResetNotify {
+    int32_t (*callback)(void*, uint32_t, const uint8_t*, uintptr_t, const uint8_t*, uintptr_t);
+    void* argument;
+};
+extern "C" int32_t CJ_MacroCall_ResetNotifyV1(void* context, uint32_t kind,
+    const uint8_t* type, uintptr_t typeLength, const uint8_t* message, uintptr_t messageLength)
+{
+    if (context == nullptr) { return -1; }
+    PrepareHostCleanerOwner();
+    auto* notify = static_cast<HostResetNotify*>(context);
+    return notify->callback(notify->argument, kind, type, typeLength, message, messageLength);
+}
+#endif
 
 namespace {
 // type is not an independent syntax. diagnosis engine does not provide a proper prompt message.

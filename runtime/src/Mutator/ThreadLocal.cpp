@@ -18,6 +18,12 @@
 #include "Base/SingleWriterSynchronizer.h"
 #include "Common/SuspendibleThreadSet.h"
 #include <mutex>
+#include <new>
+
+#if defined(__linux__) && defined(__GLIBC__)
+extern "C" int __cxa_thread_atexit_impl(void (*)(void*), void*, void*);
+extern "C" void* __dso_handle;
+#endif
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
@@ -28,11 +34,57 @@ MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeo
     0, 0, 0, ThreadLocalData::DisarmedPollWord
 #endif
 };
+#if defined(__linux__) && defined(__GLIBC__)
+namespace {
+using CleanerRegistrar = int (*)(void (*)(void*), void*, void*);
+// POD TLS has no implicit destructor registration in the wrong libc. This
+// state belongs to a physical carrier, not to a migrating Cangjie task.
+struct CleanerStorage {
+    alignas(CleanThreadLocalData) unsigned char bytes[sizeof(CleanThreadLocalData)];
+    CleanerRegistrar registrar;
+    bool initialized;
+};
+thread_local CleanerStorage cleanerStorage{};
+
+void DestroyCleaner(void* object)
+{
+    // Keep the original complete destructor, including foreign scheduler exit,
+    // barrier publication, list grace period and member destruction.
+    static_cast<CleanThreadLocalData*>(object)->~CleanThreadLocalData();
+}
+
+CleanThreadLocalData& GetCleaner()
+{
+    if (!cleanerStorage.initialized) {
+        auto* object = new (cleanerStorage.bytes) CleanThreadLocalData();
+        if (cleanerStorage.registrar == nullptr) {
+            cleanerStorage.registrar = __cxa_thread_atexit_impl;
+        }
+        // The original DSO owns DestroyCleaner and the complete destructor.
+        // The selected libc owns only this carrier's destructor registry.
+        const int status = cleanerStorage.registrar(DestroyCleaner, object, &__dso_handle);
+        CHECK_DETAIL(status == 0, "failed to register carrier cleaner destructor");
+        cleanerStorage.initialized = true;
+    }
+    return *reinterpret_cast<CleanThreadLocalData*>(cleanerStorage.bytes);
+}
+} // namespace
+
+extern "C" MRT_EXPORT int CJ_MRT_SetForeignThreadCleanerRegistrarV1(CleanerRegistrar registrar)
+{
+    if (registrar == nullptr) { return 1; }
+    if (cleanerStorage.registrar != nullptr && cleanerStorage.registrar != registrar) { return 2; }
+    cleanerStorage.registrar = registrar;
+    return 0;
+}
+#else
 thread_local CleanThreadLocalData cleaner;
+static CleanThreadLocalData& GetCleaner() { return cleaner; }
+#endif
 
 ThreadGCData& ThreadLocal::GetNativeGCData()
 {
-    return cleaner.nativeData;
+    return GetCleaner().nativeData;
 }
 
 void ThreadLocalData::SetMutator(Mutator* newMutator)
@@ -106,7 +158,7 @@ void ThreadLocal::FlushCurrentThreadMarkStacks()
 
 void ThreadLocal::InitializeCleaner()
 {
-    (void)cleaner;
+    auto& cleaner = GetCleaner();
     ThreadLocalData* tls = GetThreadLocalData();
     cleaner.AddToList(tls);
     tls->nativeGCData = &cleaner.nativeData;
