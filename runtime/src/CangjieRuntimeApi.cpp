@@ -39,6 +39,9 @@
 #include "SignalManager.h"
 #endif
 #include "schedule.h"
+#include "CJThread/src/runtime/schedule/include/inner/cjthread.h"
+#include "CJThread/src/runtime/schedule/include/inner/threadlocal.h"
+#include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -685,6 +688,36 @@ int NetPollNotifyDel(int fd, void* pd) { return SchdpollNotifyDel(fd, pd); }
 // asan read is in GetTaskRetWithTimeout, so no need to intercept here
 int GetTaskRet(const CJThreadHandle handle, void** ret) { return GetTaskRetWithTimeout(handle, ret, int64_t(0)); }
 
+// C2N makes the mutator GC-safe, but leaves its processor bound. A native
+// future wait must also let the scheduler run the task that completes it.
+class TaskResultWaitScope {
+public:
+    void Enter()
+    {
+        auto* cjthread = CJThreadGet();
+        // External native threads have no cjthread. A caller already inside a
+        // syscall owns the outer transition; SyscallEnter is not reentrant.
+        if (cjthread == nullptr || cjthread->state != CJTHREAD_RUNNING || cjthread->thread == nullptr ||
+            static_cast<Thread*>(cjthread->thread)->processor == nullptr) {
+            return;
+        }
+        CJ_WakeIdleProcessorBeforeBlock();
+        SyscallEnter();
+        entered = true;
+    }
+
+    ~TaskResultWaitScope()
+    {
+        if (entered) {
+            SyscallExit();
+        }
+    }
+
+private:
+    MapleRuntime::ScopedEnterSaferegion safeRegion{false};
+    bool entered = false;
+};
+
 int GetTaskRetWithTimeout(const CJThreadHandle handle, void** ret, int64_t timeout)
 {
     if (handle == nullptr || ret == nullptr) {
@@ -701,6 +734,9 @@ int GetTaskRetWithTimeout(const CJThreadHandle handle, void** ret, int64_t timeo
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     MapleRuntime::Sanitizer::AsanRead(fi, sizeof(FutureImpl));
 #endif
+    // Declare before the lock: success, timeout and exception unwinding must
+    // release the future mutex before SyscallExit can requeue this cjthread.
+    TaskResultWaitScope waitScope;
     std::unique_lock<std::mutex> lck(fi->g_mtx);
     if (fi->flag != FLAG_DONE && fi->flag != FLAG_WAITING) {
         return E_ARGS;
@@ -712,6 +748,7 @@ int GetTaskRetWithTimeout(const CJThreadHandle handle, void** ret, int64_t timeo
         *ret = fi->res;
         return E_OK;
     }
+    waitScope.Enter();
     if (timeout <= 0) {
         fi->cv.wait(lck, [fi] { return fi->flag == FLAG_DONE; });
         *ret = fi->res;
