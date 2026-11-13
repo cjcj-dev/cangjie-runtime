@@ -23,6 +23,9 @@ void SyscallExit(void);
 // freeNum > 0 (ProcessorWake returns at freeNum == 0, processor.cpp:901).
 void CJ_WakeIdleProcessorBeforeBlock(void);
 
+// True only when this wait acquired a scheduler syscall transition.
+bool CJ_EnterTaskResultWait(void);
+
 /**
  * @brief Non-blocking system call with 3 arguments
  * @par syscall(int number, arg1, arg2, arg3),

@@ -135,6 +135,23 @@ void SyscallExit(void)
     errno = savedErrno;
 }
 
+// Internal native-future wait entry. The caller must be GC-safe and pair a
+// true result with SyscallExit after releasing the future mutex.
+bool CJ_EnterTaskResultWait(void)
+{
+    struct CJThread *cjthread = CJThreadGet();
+    // External native threads have no cjthread. An already-entered syscall
+    // belongs to its outer caller: entering twice would dereference a null
+    // processor and exiting twice would steal the outer transition.
+    if (cjthread == nullptr || cjthread->state != CJTHREAD_RUNNING || cjthread->thread == nullptr ||
+        cjthread->thread->processor == nullptr) {
+        return false;
+    }
+    CJ_WakeIdleProcessorBeforeBlock();
+    SyscallEnter();
+    return true;
+}
+
 #ifdef __cplusplus
 }
 #endif

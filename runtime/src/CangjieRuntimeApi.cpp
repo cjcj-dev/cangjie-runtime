@@ -39,8 +39,6 @@
 #include "SignalManager.h"
 #endif
 #include "schedule.h"
-#include "CJThread/src/runtime/schedule/include/inner/cjthread.h"
-#include "CJThread/src/runtime/schedule/include/inner/threadlocal.h"
 #include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -694,16 +692,7 @@ class TaskResultWaitScope {
 public:
     void Enter()
     {
-        auto* cjthread = CJThreadGet();
-        // External native threads have no cjthread. A caller already inside a
-        // syscall owns the outer transition; SyscallEnter is not reentrant.
-        if (cjthread == nullptr || cjthread->state != CJTHREAD_RUNNING || cjthread->thread == nullptr ||
-            static_cast<Thread*>(cjthread->thread)->processor == nullptr) {
-            return;
-        }
-        CJ_WakeIdleProcessorBeforeBlock();
-        SyscallEnter();
-        entered = true;
+        entered = CJ_EnterTaskResultWait();
     }
 
     ~TaskResultWaitScope()
