@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <dlfcn.h>
-#include <pthread.h>
+#include <condition_variable>
 #include <system_error>
 #include <thread>
 #include <unistd.h>
@@ -12,33 +12,33 @@ extern "C" int CJ_SyscallRead(int, void*, size_t);
 extern "C" void CJ_SyscallEnter();
 extern "C" void CJ_SyscallExit();
 
-// Fault injection is confined to the calling thread and one condvar wait.
-// Other runtime waits always call libc. No product check is bypassed.
-// This DSO is preloaded before runtime initialization. Do not resolve symbols
-// or allocate dynamic TLS from an interposed startup wait on a worker.
+// Fault injection is confined to this thread's next C++ condition-variable
+// wait. Other waits forward to the exact version consumed by this runtime.
+// Resolve before worker startup and avoid lazy dynamic TLS in the interposer.
 static thread_local __attribute__((tls_model("initial-exec"))) bool injectWaitError = false;
 static thread_local __attribute__((tls_model("initial-exec"))) bool waitErrorReached = false;
-static int (*realWait)(pthread_cond_t*, pthread_mutex_t*) = nullptr;
+using WaitFunction = void (*)(std::condition_variable*, std::unique_lock<std::mutex>&);
+static WaitFunction realWait = nullptr;
 __attribute__((constructor)) static void ResolveWait()
 {
-    auto unversionedWait = dlsym(RTLD_NEXT, "pthread_cond_wait");
-    // The Linux/glibc consumer must forward the current condvar ABI, not the
-    // GLIBC_2.2.5 compatibility entry also returned by some RTLD_NEXT lookups.
-    realWait = reinterpret_cast<int (*)(pthread_cond_t*, pthread_mutex_t*)>(
-        dlvsym(RTLD_NEXT, "pthread_cond_wait", "GLIBC_2.3.2"));
+    realWait = reinterpret_cast<WaitFunction>(dlvsym(RTLD_NEXT,
+        "_ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE", "GLIBCXX_3.4.30"));
     if (realWait == nullptr) { std::terminate(); }
-    std::fprintf(stderr, "TASK_WAIT_INTERPOSER_READY version=GLIBC_2.3.2 unversioned_diff=%d\n",
-        unversionedWait != reinterpret_cast<void*>(realWait));
+    std::fprintf(stderr, "TASK_WAIT_INTERPOSER_READY version=GLIBCXX_3.4.30\n");
 }
-extern "C" int pthread_cond_wait(pthread_cond_t* cv, pthread_mutex_t* mutex)
+
+void std::condition_variable::wait(std::unique_lock<std::mutex>& lock)
 {
     if (injectWaitError) {
         injectWaitError = false;
         waitErrorReached = true;
-        return EINVAL;
+        // Inject at the throwing C++ boundary. Returning EINVAL from pthread
+        // wait is only asserted by release libstdc++ and does not throw.
+        std::fprintf(stderr, "TASK_WAIT_INJECTED_EXCEPTION\n");
+        throw std::system_error(EINVAL, std::generic_category(), "task wait injection");
     }
     if (realWait == nullptr) { std::terminate(); }
-    return realWait(cv, mutex);
+    realWait(this, lock);
 }
 
 static void* Child(void* data)
