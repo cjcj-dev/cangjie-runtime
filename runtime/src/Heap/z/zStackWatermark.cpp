@@ -503,6 +503,9 @@ void ZStackWatermark::start_processing_impl(void* context)
     }
     if (owner.GetGCData().storeBarrierBuffer != nullptr) { owner.GetGCData().storeBarrierBuffer->on_new_phase(); }
     StackWatermark::start_processing_impl(context);
+    // StackWatermark::start_processing_impl creates no frames iterator outside a
+    // managed context, so no managed frame can hold a head field: close now.
+    if (!owner.IsManagedContext()) { close_stack(context); }
 }
 
 void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
