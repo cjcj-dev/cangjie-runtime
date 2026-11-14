@@ -35,6 +35,8 @@ endif()
 
 find_program(CMAKE_AR llvm-ar REQUIRED)
 find_program(CMAKE_RANLIB llvm-ranlib REQUIRED)
+# Standard-library dylibs deliver their DWARF as .dSYM bundles (see MakeCJNATIVEStdSharedLib.cmake).
+find_program(CANGJIE_DSYMUTIL NAMES dsymutil llvm-dsymutil REQUIRED)
 set(MAKE_SO_STACK_PROTECTOR_OPTION)
 set(LLVM_BUILD_C_COMPILER ${CMAKE_C_COMPILER})
 set(LLVM_BUILD_CXX_COMPILER ${CMAKE_CXX_COMPILER})

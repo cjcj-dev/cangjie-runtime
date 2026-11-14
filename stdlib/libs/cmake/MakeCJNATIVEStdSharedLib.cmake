@@ -355,11 +355,18 @@ function(make_cangjie_lib target_name)
             ${CANGJIE_LIBRARY_CANGJIE_STD_LIB_DEPENDS}
             ${CANGJIE_LIBRARY_CANGJIE_STD_LIB_INDIRECT_DEPENDS})
 
+        set(dsym_command)
+        if(DARWIN)
+            # Mach-O links do not copy DWARF into the output; they reference the input objects through a
+            # debug map. Deliver the standard library's DWARF as the native .dSYM built from this dylib.
+            set(dsym_command COMMAND ${CANGJIE_DSYMUTIL} ${target_lib_full_name} -o ${target_lib_full_name}.dSYM)
+        endif()
         add_custom_command(
             OUTPUT ${target_lib_full_name}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib/${output_std_cj_lib_dir}
             COMMAND ${CMAKE_COMMAND} -E env ${set_env_path} ${clang_compiler} ${CANGJIE_LIBRARY_OBJECTS} ${force_link_archives_option}
                     ${CANGJIE_LIBRARY_FLAGS}  ${link_std_libraries_flag} ${flags_to_compile} -o ${target_lib_full_name}
+            ${dsym_command}
             DEPENDS
                 ${resolved_depends}
                 ${CANGJIE_LIBRARY_OBJECTS}
@@ -377,6 +384,9 @@ function(make_cangjie_lib target_name)
 
     if(CANGJIE_LIBRARY_IS_SHARED)
         install(FILES ${target_lib_full_name} DESTINATION runtime/lib/${output_cj_lib_dir})
+        if(DARWIN)
+            install(DIRECTORY ${target_lib_full_name}.dSYM DESTINATION runtime/lib/${output_cj_lib_dir})
+        endif()
         if(target_name STREQUAL "std-regex" AND NOT OHOS)
             # On OHOS, libpcre2.z.so is provided by the ROM; do not ship libpcre2-8.so.
             file(GLOB PCRE2_DYNAMIC_LIB

@@ -8,6 +8,17 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/boundscheck-v1.1.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
+# Standard-library native (C/C++) objects carry DWARF in every build type, like the Cangjie objects
+# compiled by add_cangjie_library. -g leaves the build type's optimization flags unchanged and only
+# applies to targets defined in this directory tree (std FFI objects/archives and stdFFI).
+add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-g>")
+# The toolchain files link every Release/MinSizeRel shared library with ${STRIP_FLAG}. Standard-library
+# shared outputs keep their DWARF and symbol table; a final binary decides through its own -g whether
+# DWARF is linked in. Third-party libraries outside this directory keep the toolchain flags.
+separate_arguments(std_shared_linker_flags UNIX_COMMAND "${CMAKE_SHARED_LINKER_FLAGS}")
+list(REMOVE_ITEM std_shared_linker_flags "${STRIP_FLAG}")
+list(JOIN std_shared_linker_flags " " CMAKE_SHARED_LINKER_FLAGS)
+
 set(BACKEND "cjnative")
 if(CANGJIELIB_IS_CJNATIVE_BACKEND)
     set(BACKEND "cjnative")
@@ -32,11 +43,8 @@ if(CANGJIE_CODEGEN_CJNATIVE_BACKEND AND NOT TRIPLE STREQUAL "arm-linux-ohos" AND
     set(libname stdFFI)
     add_library(${libname} SHARED ${CANGJIE_CORE_FFI_SRC})
     separate_arguments(LINK_FLAGS_LIST NATIVE_COMMAND "${LINK_FLAGS}")
-    if(CMAKE_BUILD_TYPE MATCHES Release)
-        target_link_options(${libname} PRIVATE ${LINK_FLAGS_LIST} ${STRIP_FLAG} ${useld})
-    else()
-        target_link_options(${libname} PRIVATE ${LINK_FLAGS_LIST} ${useld})
-    endif()
+    # stdFFI is a standard-library output: it keeps its DWARF in every build type, so it is not linked with -s.
+    target_link_options(${libname} PRIVATE ${LINK_FLAGS_LIST} ${useld})
     target_link_directories(${libname} PRIVATE ${CMAKE_BINARY_DIR}/lib
         PRIVATE ${CMAKE_BINARY_DIR}/lib/${TARGET_TRIPLE_DIRECTORY_PREFIX}_${CJNATIVE_BACKEND}
         PRIVATE ${CMAKE_BINARY_DIR}/runtime/lib/${TARGET_TRIPLE_DIRECTORY_PREFIX}_${CJNATIVE_BACKEND})
@@ -99,5 +107,13 @@ if(CANGJIE_CODEGEN_CJNATIVE_BACKEND AND NOT TRIPLE STREQUAL "arm-linux-ohos" AND
     endif()
     set(tmpdir "lib")
     install(TARGETS ${libname} DESTINATION lib)
+    if(DARWIN)
+        # Mach-O links keep DWARF in the object files and only reference them from a debug map, so the
+        # dylib's debug information is delivered as the native .dSYM bundle built from that new dylib.
+        add_custom_command(TARGET ${libname} POST_BUILD
+            COMMAND ${CANGJIE_DSYMUTIL} $<TARGET_FILE:${libname}> -o $<TARGET_FILE:${libname}>.dSYM
+            VERBATIM)
+        install(DIRECTORY $<TARGET_FILE:${libname}>.dSYM DESTINATION lib)
+    endif()
 endif()
 
