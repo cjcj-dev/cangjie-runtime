@@ -292,6 +292,9 @@ public:
     // Get startProc and lsdaStart by parsing the ip.
     void ResolveProcInfo();
     uintptr_t CallerSP() const;
+    // Upper bound of the stack a managed frame owns: its caller's SP after the
+    // call returns, or 0 when this is not a managed frame or no contract exists.
+    uintptr_t ManagedFrameEnd() const;
 
     // print this frame symbol
     virtual void PrintFrameInfo(uint32_t frameIdx = 0) const;

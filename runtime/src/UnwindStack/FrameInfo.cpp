@@ -15,6 +15,11 @@
 #include "Exception/EhFrameInfo.h"
 #include "Loader/ElfUnloadQuiescence.h"
 
+#ifdef _WIN64
+#include "Common/Runtime.h"
+#include "UnwindWin.h"
+#endif
+
 #include <cstdarg>
 #include <cstring>
 
@@ -59,6 +64,27 @@ uintptr_t FrameInfo::CallerSP() const
     }
 #else
     // No return poll ABI has been supplied for these compiler targets.
+    return 0;
+#endif
+}
+
+// The same caller SP the exception unwinder restores before resuming a landing
+// pad in this frame's caller (Exception/EhFrameInfo.h RestoreToCallerContext);
+// it is not a guessed frame size and does not feed the return-poll SP above.
+uintptr_t FrameInfo::ManagedFrameEnd() const
+{
+    if (GetFrameType() != FrameType::MANAGED || mFrame.GetFA() == nullptr) { return 0; }
+#if defined(_WIN64)
+    // UnwindWin.cpp GetCallerRsp: FA is the pushed-RBP/return-address pair.
+    return GetCallerRsp(Runtime::Current().GetWinModuleManager(), mFrame);
+#elif defined(__x86_64__) || (defined(__aarch64__) && defined(__APPLE__))
+    // EhFrameInfo.h: rsp = rbp + 16; Apple arm64 keeps its saves below x29
+    // (PrologueRegisterClosure::COEF = -8), so sp = x29 + 16 as well.
+    return reinterpret_cast<uintptr_t>(mFrame.GetFA()) + sizeof(FrameAddress);
+#elif defined(__aarch64__)
+    // EhFrameInfo.h: x29 + 16 + even(saves above the frame record) words.
+    return CallerSP();
+#else
     return 0;
 #endif
 }

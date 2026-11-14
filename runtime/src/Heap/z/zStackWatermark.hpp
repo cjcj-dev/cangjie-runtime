@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <unordered_set>
+#include <vector>
 #include "Common/StackType.h"
 #include "Common/BaseObject.h"
 #include "StackMap/StackMapTypeDef.h"
@@ -72,9 +72,11 @@ public:
 protected:
     virtual void start_processing_impl(void* context);
     virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) = 0;
-    // Physical root slots already healed in the current frames-iterator segment,
-    // or nullptr outside one. Owned by StackWatermarkFramesIterator.
-    std::unordered_set<const void*>* heal_segment() const { return healSegment; }
+    // Expanded stack fields still waiting for their owner frame's turn. A frames
+    // iterator segment may not end while any remain.
+    virtual bool has_pending_fields() const { return false; }
+    // The frames iterator reached the end of the stack.
+    virtual void close_stack() {}
     void update_watermark();
     void yield_processing();
     std::mutex lock;
@@ -85,7 +87,6 @@ private:
     bool is_frame_safe(const FrameInfo& frame) const;
     std::atomic<uintptr_t> waterMark { 0 };
     std::unique_ptr<StackWatermarkFramesIterator> iterator;
-    std::unordered_set<const void*>* healSegment = nullptr;
     friend class StackWatermarkFramesIterator;
 };
 
@@ -115,6 +116,14 @@ private:
     void process_head(void* context);
     void start_processing_impl(void* context) override;
     void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;
+    bool has_pending_fields() const override { return !pendingFields.empty(); }
+    void close_stack() override;
+    void assign_field(void* slot, uintptr_t end);
+    // Fields reached by expanding a stack object, physically owned by a managed
+    // frame that has not been processed yet in this epoch.
+    std::vector<void*> pendingFields;
+    // ManagedFrameEnd of the youngest managed frame processed in this epoch.
+    uintptr_t processedEnd = 0;
 };
 
 class StackWatermarkSet {
