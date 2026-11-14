@@ -1431,9 +1431,12 @@ void CheckMajorCurrentRemset(unsigned workers)
 // non-blocking capacity makes the worker compact the page into itself, so
 // F(A)=q lies inside the same forwarding range with no entry of its own.
 DerivedBaseMapImage aliasLeafMapImage;
-void InitializeAliasLeafMap(unsigned offset, unsigned width, unsigned bitmap)
+// A second linked function: the managed caller of the fixture frame. Its own map
+// decides whether the owner frame also names the field of its stack object.
+DerivedBaseMapImage aliasLeafCallerMapImage;
+void InitializeAliasLeafMap(unsigned offset, unsigned width, unsigned bitmap,
+    DerivedBaseMapImage& image = aliasLeafMapImage)
 {
-    auto& image = aliasLeafMapImage;
     std::memset(&image, 0, sizeof(image));
     image.descriptorOffset = reinterpret_cast<char*>(&image.stackMapOffset) -
         reinterpret_cast<char*>(&image.descriptorOffset);
@@ -1513,6 +1516,11 @@ void AliasLeafWatch(Mutator& mutator, const char* when, uintptr_t* frame)
 // shape 0: two aliases + distinct leaf + direct leaf (row fp-32, 5-bit 0b11101).
 // shape 1: direct leaf only, one-bit row at fp-32 (the derivedBaseMap encoding).
 // shape 2: direct leaf only, same 5-bit row as shape 0 with bitmap 0b00001.
+// shape 3: two managed frames. The callee's aliases name the stack object owned by
+//          its caller; the caller's own map also names that object's field (as the
+//          typed Packet owner field is named at the callback PC) and its aliases.
+// shape 4: two managed frames, callee-only: the caller's map names only an empty
+//          slot, so the caller-owned field is reachable through the callee alone.
 void RunAliasLeaf(bool inPlace, unsigned shape)
 {
     CreateStandaloneHeap(1024);
@@ -1550,17 +1558,34 @@ void RunAliasLeaf(bool inPlace, unsigned shape)
     // The mutator predates the relocate-start flip, so its frame colour is old.
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    const bool twoFrame = shape == 3 || shape == 4;
     if (shape == 1) { InitializeAliasLeafMap(224, 1, 1); }
     else if (shape == 2) { InitializeAliasLeafMap(224, 5, 1); }
     else { InitializeAliasLeafMap(224, 5, 29); }
-    alignas(16) uintptr_t frame[10] = {};
-    BaseObject* stackObject = reinterpret_cast<BaseObject*>(&frame[3]);
+    if (shape == 3) { InitializeAliasLeafMap(224, 5, 29, aliasLeafCallerMapImage); }
+    else if (shape == 4) { InitializeAliasLeafMap(224, 5, 4, aliasLeafCallerMapImage); }
+    // frame[0..9] is the fixture (callee) frame, fp = &frame[8]. For two-frame
+    // shapes frame[10..19] is its managed caller, fp = &frame[18]; the callee's
+    // FrameAddress links to it (MachineFrame::UnwindToCallerMachineFrame).
+    alignas(16) uintptr_t frame[20] = {};
+    const size_t owner = twoFrame ? 13 : 3;
+    const size_t leafIndex = owner + 1;
+    BaseObject* stackObject = reinterpret_cast<BaseObject*>(&frame[owner]);
     stackObject->SetClassInfo(fx.typeInfo);
     frame[0] = reinterpret_cast<uintptr_t>(stackObject);
     frame[1] = reinterpret_cast<uintptr_t>(stackObject);
     frame[2] = reinterpret_cast<uintptr_t>(other);
-    frame[4] = reinterpret_cast<uintptr_t>(from);
+    frame[leafIndex] = reinterpret_cast<uintptr_t>(from);
     frame[7] = reinterpret_cast<uintptr_t>(aliasLeafMapImage.pc) + 9;
+    if (twoFrame) {
+        frame[8] = reinterpret_cast<uintptr_t>(&frame[18]);
+        frame[9] = reinterpret_cast<uintptr_t>(aliasLeafCallerMapImage.pc);
+        frame[17] = reinterpret_cast<uintptr_t>(aliasLeafCallerMapImage.pc) + 9;
+        if (shape == 3) {
+            frame[10] = reinterpret_cast<uintptr_t>(stackObject);
+            frame[11] = reinterpret_cast<uintptr_t>(stackObject);
+        }
+    }
     auto& context = mutator->GetUnwindContext();
     context.frameInfo.mFrame.SetIP(aliasLeafMapImage.pc);
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[8]));
@@ -1618,11 +1643,12 @@ void RunAliasLeaf(bool inPlace, unsigned shape)
     AliasLeafStage(6);
     AliasLeafWatch(*mutator, "post", frame);
     const bool intact = q != 0 && reinterpret_cast<BaseObject*>(q)->GetTypeInfo() == fx.typeInfo;
-    const bool result = producer && frame[4] == q && intact && (shape != 0 || (frame[2] == fb &&
-        frame[0] == reinterpret_cast<uintptr_t>(stackObject) && frame[1] == frame[0] &&
-        stackObject->GetTypeInfo() == fx.typeInfo));
+    const bool aliasesIntact = frame[0] == reinterpret_cast<uintptr_t>(stackObject) && frame[1] == frame[0] &&
+        (shape != 3 || (frame[10] == frame[0] && frame[11] == frame[0]));
+    const bool result = producer && frame[leafIndex] == q && intact && ((shape != 0 && !twoFrame) ||
+        (frame[2] == fb && aliasesIntact && stackObject->GetTypeInfo() == fx.typeInfo));
     std::fprintf(stderr, "ALIAS_LEAF_TARGET shape=%u inplace_arm=%u producer=%u leaf=%zx expected=%zx leafB=%zx expectedB=%zx "
-        "alias0=%zx alias1=%zx intact=%u result=%u\n", shape, unsigned(inPlace), unsigned(producer), frame[4], q, frame[2],
+        "alias0=%zx alias1=%zx intact=%u result=%u\n", shape, unsigned(inPlace), unsigned(producer), frame[leafIndex], q, frame[2],
         fb, frame[0], frame[1], unsigned(intact), unsigned(result));
     mutator->SetManagedContext(false);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -1657,6 +1683,21 @@ GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, DirectSlotCopiedControl)
 GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, DirectSlotWideRowInPlaceControl)
 {
     CheckAliasLeaf(true, 2);
+}
+// Cross-frame: the callee frame exposes a stack object physically owned by its
+// managed caller, whose own map names the same field.
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CrossFrameAliasedLeafHealsOnce)
+{
+    CheckAliasLeaf(true, 3);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CrossFrameCopiedAliasedLeafControl)
+{
+    CheckAliasLeaf(false, 3);
+}
+// Callee-only: the caller-owned field is a root only through the callee's alias.
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CrossFrameCalleeOnlyLeafControl)
+{
+    CheckAliasLeaf(true, 4);
 }
 #endif
 
