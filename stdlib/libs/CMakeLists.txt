@@ -108,12 +108,11 @@ if(CANGJIE_CODEGEN_CJNATIVE_BACKEND AND NOT TRIPLE STREQUAL "arm-linux-ohos" AND
     set(tmpdir "lib")
     install(TARGETS ${libname} DESTINATION lib)
     if(DARWIN)
-        # Mach-O links keep DWARF in the object files and only reference them from a debug map, so the
-        # dylib's debug information is delivered as the native .dSYM bundle built from that new dylib.
-        add_custom_command(TARGET ${libname} POST_BUILD
-            COMMAND ${CANGJIE_DSYMUTIL} $<TARGET_FILE:${libname}> -o $<TARGET_FILE:${libname}>.dSYM
-            VERBATIM)
-        install(DIRECTORY $<TARGET_FILE:${libname}>.dSYM DESTINATION lib)
+        # stdFFI's DWARF is delivered as its .dSYM bundle, a declared output of its own edge that
+        # depends on the linked dylib (see CangjieStdDsym.cmake).
+        cangjie_std_target_dsym(${libname} stdffi_dylib stdffi_dsym_outputs)
+        add_custom_target(${libname}-dsym ALL DEPENDS ${stdffi_dsym_outputs})
+        install(DIRECTORY ${stdffi_dylib}.dSYM DESTINATION lib)
     endif()
 endif()
 

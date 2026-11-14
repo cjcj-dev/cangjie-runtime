@@ -5,6 +5,8 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+include(CangjieStdDsym)
+
 macro(to_link_library_option lib_name)
     if(DARWIN)
         set(${lib_name} -l${${lib_name}})
@@ -355,27 +357,25 @@ function(make_cangjie_lib target_name)
             ${CANGJIE_LIBRARY_CANGJIE_STD_LIB_DEPENDS}
             ${CANGJIE_LIBRARY_CANGJIE_STD_LIB_INDIRECT_DEPENDS})
 
-        set(dsym_command)
-        if(DARWIN)
-            # Mach-O links do not copy DWARF into the output; they reference the input objects through a
-            # debug map. Deliver the standard library's DWARF as the native .dSYM built from this dylib.
-            set(dsym_command COMMAND ${CANGJIE_DSYMUTIL} ${target_lib_full_name} -o ${target_lib_full_name}.dSYM)
-        endif()
         add_custom_command(
             OUTPUT ${target_lib_full_name}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib/${output_std_cj_lib_dir}
             COMMAND ${CMAKE_COMMAND} -E env ${set_env_path} ${clang_compiler} ${CANGJIE_LIBRARY_OBJECTS} ${force_link_archives_option}
                     ${CANGJIE_LIBRARY_FLAGS}  ${link_std_libraries_flag} ${flags_to_compile} -o ${target_lib_full_name}
-            ${dsym_command}
             DEPENDS
                 ${resolved_depends}
                 ${CANGJIE_LIBRARY_OBJECTS}
                 boundscheck
             COMMENT "Generating ${target_lib_full_name}")
 
+        set(dsym_outputs)
+        if(DARWIN)
+            # The dylib's DWARF is delivered as its .dSYM bundle, a declared output of its own edge.
+            cangjie_std_dsym(dsym_outputs ${target_lib_full_name} DEPENDS ${target_lib_full_name})
+        endif()
         add_custom_target(
             ${target_name} ALL
-            DEPENDS ${target_lib_full_name})
+            DEPENDS ${target_lib_full_name} ${dsym_outputs})
 
         set_target_properties(${target_name} PROPERTIES CJ_LIB_OUTPUT_FILE ${target_lib_full_name})
     else()
