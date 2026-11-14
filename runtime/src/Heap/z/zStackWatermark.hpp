@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include "Common/StackType.h"
 #include "Common/BaseObject.h"
 #include "StackMap/StackMapTypeDef.h"
@@ -71,6 +72,9 @@ public:
 protected:
     virtual void start_processing_impl(void* context);
     virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) = 0;
+    // Physical root slots already healed in the current frames-iterator segment,
+    // or nullptr outside one. Owned by StackWatermarkFramesIterator.
+    std::unordered_set<const void*>* heal_segment() const { return healSegment; }
     void update_watermark();
     void yield_processing();
     std::mutex lock;
@@ -81,6 +85,7 @@ private:
     bool is_frame_safe(const FrameInfo& frame) const;
     std::atomic<uintptr_t> waterMark { 0 };
     std::unique_ptr<StackWatermarkFramesIterator> iterator;
+    std::unordered_set<const void*>* healSegment = nullptr;
     friend class StackWatermarkFramesIterator;
 };
 

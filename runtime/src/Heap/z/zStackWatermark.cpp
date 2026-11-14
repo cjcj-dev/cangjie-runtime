@@ -16,6 +16,26 @@
 
 namespace MapleRuntime {
 
+// One segment is one uninterrupted run of the frames iterator under the
+// watermark lock: it ends where process_one stops or process_all yields, and
+// both happen only once covers_stack_target holds. process_frame feeds every
+// heap-reference slot, stack-pointer slot and stack-pointer register of a frame
+// (StackPtrMap::VisitSlot, StackMap.h) to stackTarget, so a frame whose map
+// names a stack object owned by a more distant caller is always processed in
+// the same segment as that owner frame, and both lie below the watermark the
+// segment publishes (hence below every later old watermark: one frame colour).
+class HealSegmentBinding {
+public:
+    HealSegmentBinding(std::unordered_set<const void*>*& slot, std::unordered_set<const void*>& healed)
+        : slot(slot), previous(slot) { slot = &healed; }
+    ~HealSegmentBinding() { slot = previous; }
+    HealSegmentBinding(const HealSegmentBinding&) = delete;
+    HealSegmentBinding& operator=(const HealSegmentBinding&) = delete;
+private:
+    std::unordered_set<const void*>*& slot;
+    std::unordered_set<const void*>* previous;
+};
+
 // runtime/stackWatermark.cpp:44-153. The stream owns its register locations,
 // and caller/callee identify the two processed frames guarding the frontier.
 class StackWatermarkFramesIterator {
@@ -27,6 +47,8 @@ public:
     uintptr_t callee() const { return calleeSP; }
     void process_one(void* context)
     {
+        std::unordered_set<const void*> healed;
+        HealSegmentBinding segment(owner.healSegment, healed);
         uintptr_t stackTarget = 0;
         while (has_next()) {
             const FrameInfo frame = *cursor.CurrentFrame();
@@ -43,6 +65,8 @@ public:
     }
     void process_all(void* context)
     {
+        std::unordered_set<const void*> healed;
+        HealSegmentBinding segment(owner.healSegment, healed);
         unsigned processed = 0;
         uintptr_t stackTarget = 0;
         while (has_next()) {
@@ -56,6 +80,8 @@ public:
                 set_watermark(frame.mFrame.GetSP());
                 if (++processed >= 5 && covers_stack_target(stackTarget)) {
                     processed = 0;
+                    // The lock is dropped: the next frames form a new segment.
+                    healed.clear();
                     owner.yield_processing();
                 }
             }
@@ -66,6 +92,8 @@ public:
     // watermark write land between the healed slot and the bytes that are copied.
     void process_all_no_yield(void* context)
     {
+        std::unordered_set<const void*> healed;
+        HealSegmentBinding segment(owner.healSegment, healed);
         while (has_next()) {
             const FrameInfo frame = *cursor.CurrentFrame();
             const bool barrier = has_barrier(frame);
@@ -419,10 +447,16 @@ void ZStackWatermark::save_old_watermark()
 // field. After the first heal the slot holds a load-good address, and an
 // in-place relocated target can still lie inside the old forwarding range
 // with no entry of its own, so reinterpreting it as an old-colour from
-// address is not a legal barrier input. Heal each physical slot once.
-static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_set<RootSlot*>& healed, RootSlot& slot)
+// address is not a legal barrier input. Heal each physical slot once. A callee
+// map may also name a stack object owned by its caller (value-type sret and
+// struct arguments); ZGC never needs this because each oop location belongs to
+// the one frame that names it. Here the owner frame may name the same field
+// again, so the set spans the iterator segment (HealSegmentBinding), which
+// always contains both frames and gives them one colour. Whichever frame visits
+// first heals the slot; callee-only roots are still healed by the callee.
+static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_set<const void*>& healed, RootSlot& slot)
 {
-    if (!healed.insert(&slot).second) {
+    if (!healed.insert(static_cast<const void*>(&slot)).second) {
         return;
     }
     static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
@@ -431,7 +465,7 @@ static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_se
 void ZStackWatermark::process_head(void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_head_color());
-    std::unordered_set<RootSlot*> healed;
+    std::unordered_set<const void*> healed;
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) { HealOnce(closure, healed, slot); });
     };
@@ -457,7 +491,8 @@ void ZStackWatermark::start_processing_impl(void* context)
 void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
-    std::unordered_set<RootSlot*> healed;
+    std::unordered_set<const void*> local;
+    std::unordered_set<const void*>& healed = heal_segment() != nullptr ? *heal_segment() : local;
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) { HealOnce(closure, healed, slot); });
     };
