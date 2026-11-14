@@ -59,6 +59,9 @@
 #include "gc_unittest.hpp"
 
 #include "Heap/z/zAccess.hpp"
+#include "UnwindStack/StackInfo.h"
+#include "StackMap/StackMap.h"
+#include "ObjectModel/MFuncdesc.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -1428,7 +1431,7 @@ void CheckMajorCurrentRemset(unsigned workers)
 // non-blocking capacity makes the worker compact the page into itself, so
 // F(A)=q lies inside the same forwarding range with no entry of its own.
 DerivedBaseMapImage aliasLeafMapImage;
-void InitializeAliasLeafMap()
+void InitializeAliasLeafMap(unsigned offset, unsigned width, unsigned bitmap)
 {
     auto& image = aliasLeafMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -1454,8 +1457,8 @@ void InitializeAliasLeafMap()
     var(0); var(0);
     // Row 1 at fp-64, bitmap 0b10111: alias fp-64, alias fp-56, leaf B fp-48,
     // direct leaf fp-32 (field of the stack object at fp-40). Row 2 is unused.
-    var(2); var(8); var(5);
-    put(192, 8); put(23, 5); put(240, 8); put(1, 5);
+    var(2); var(8); var(width);
+    put(offset, 8); put(bitmap, width); put(240, 8); put(1, width);
     var(0); var(0);
     var(1); put(2, 2);
 }
@@ -1466,7 +1469,49 @@ void AliasLeafStage(int stage)
     std::fprintf(stderr, "ALIAS_LEAF_STAGE %d epoch=%x\n", stage, *ZPointerStoreGoodMaskLowOrderBitsAddr);
     std::fflush(stderr);
 }
-void RunAliasLeaf(bool inPlace)
+// Read-only consumer evidence: watermark state, the frame the product cursor
+// exposes, and the slot set its stack map decodes to (no closure is invoked).
+void AliasLeafWatch(Mutator& mutator, const char* when, uintptr_t* frame)
+{
+    auto& wm = mutator.GetStackWatermark();
+    ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+    std::fprintf(stderr, "ALIAS_LEAF_WM %s packed=%x wm_epoch=%llx done=%u started=%u global=%x poll=%u managed=%u "
+        "bound=%u watermark=%zx\n", when, wm.PackedState(), static_cast<unsigned long long>(wm.GetEpoch()),
+        unsigned(wm.IsDone()), unsigned(wm.processing_started()), StackWatermark::epoch_id(), unsigned(tls->IsPollArmed()),
+        unsigned(mutator.IsManagedContext()), unsigned(tls->mutator == &mutator), wm.watermark());
+    StackFrameStream frames(&mutator.GetUnwindContext(), StackFrameStream::UpdateMap::SKIP);
+    frames.Start();
+    for (int i = 0; !frames.IsDone() && i < 4; ++i, frames.Next()) {
+        const FrameInfo& f = frames.Current();
+        ElfUnloadQuiescence::ReadScope reader;
+        const uintptr_t start = reinterpret_cast<uintptr_t>(f.GetStartProc());
+        const bool desc = MFuncDesc::GetFuncDesc(start) != nullptr;
+        unsigned valid = 0;
+        std::string slots;
+        if (desc) {
+            HeapReferenceMap map = StackMapBuilder(start, reinterpret_cast<uintptr_t>(f.mFrame.GetIP()),
+                reinterpret_cast<uintptr_t>(f.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+            valid = map.IsValid() ? 1 : 0;
+            if (valid != 0) {
+                RootVisitor record = [&](ObjectRef& slot) {
+                    char text[32];
+                    std::snprintf(text, sizeof(text), " %td", reinterpret_cast<uintptr_t*>(&slot) - frame);
+                    slots += text;
+                };
+                map.VisitSlotRoots(record, nullptr);
+            }
+        }
+        std::fprintf(stderr, "ALIAS_LEAF_FRAME %s i=%d type=%d ip=%p fa=%p start=%zx desc=%u valid=%u slots=[%s]\n", when, i,
+            static_cast<int>(f.GetFrameType()), static_cast<const void*>(f.mFrame.GetIP()),
+            static_cast<const void*>(f.mFrame.GetFA()), start, unsigned(desc), valid, slots.c_str());
+    }
+    std::fprintf(stderr, "ALIAS_LEAF_SLOTS %s f0=%zx f1=%zx f2=%zx f4=%zx\n", when, frame[0], frame[1], frame[2], frame[4]);
+    std::fflush(stderr);
+}
+// shape 0: two aliases + distinct leaf + direct leaf (row fp-64, 5-bit 0b10111).
+// shape 1: direct leaf only, one-bit row at fp-32 (the derivedBaseMap encoding).
+// shape 2: direct leaf only, same 5-bit row as shape 0 with bitmap 0b10000.
+void RunAliasLeaf(bool inPlace, unsigned shape)
 {
     CreateStandaloneHeap(1024);
     ZStat::Initialize();
@@ -1503,7 +1548,9 @@ void RunAliasLeaf(bool inPlace)
     // The mutator predates the relocate-start flip, so its frame colour is old.
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    InitializeAliasLeafMap();
+    if (shape == 1) { InitializeAliasLeafMap(224, 1, 1); }
+    else if (shape == 2) { InitializeAliasLeafMap(192, 5, 16); }
+    else { InitializeAliasLeafMap(192, 5, 23); }
     alignas(16) uintptr_t frame[10] = {};
     BaseObject* stackObject = reinterpret_cast<BaseObject*>(&frame[3]);
     stackObject->SetClassInfo(fx.typeInfo);
@@ -1559,36 +1606,51 @@ void RunAliasLeaf(bool inPlace)
                  : (!inPlaceObserved && qOwner != forwarding));
     // safepointMechanism.cpp:150-160: real request-processing entry; the
     // stack watermark processes this managed frame through StackFrameCursor.
+    AliasLeafWatch(*mutator, "pre", frame);
     ArmThreadPoll(ThreadLocal::GetThreadLocalData());
     HandleSafepoint(ThreadLocal::GetThreadLocalData());
     AliasLeafStage(6);
+    AliasLeafWatch(*mutator, "post", frame);
     const bool intact = q != 0 && reinterpret_cast<BaseObject*>(q)->GetTypeInfo() == fx.typeInfo;
-    const bool result = producer && frame[4] == q && frame[2] == fb &&
+    const bool result = producer && frame[4] == q && intact && (shape != 0 || (frame[2] == fb &&
         frame[0] == reinterpret_cast<uintptr_t>(stackObject) && frame[1] == frame[0] &&
-        stackObject->GetTypeInfo() == fx.typeInfo && intact;
-    std::fprintf(stderr, "ALIAS_LEAF_TARGET inplace_arm=%u producer=%u leaf=%zx expected=%zx leafB=%zx expectedB=%zx "
-        "alias0=%zx alias1=%zx intact=%u result=%u\n", unsigned(inPlace), unsigned(producer), frame[4], q, frame[2],
+        stackObject->GetTypeInfo() == fx.typeInfo));
+    std::fprintf(stderr, "ALIAS_LEAF_TARGET shape=%u inplace_arm=%u producer=%u leaf=%zx expected=%zx leafB=%zx expectedB=%zx "
+        "alias0=%zx alias1=%zx intact=%u result=%u\n", shape, unsigned(inPlace), unsigned(producer), frame[4], q, frame[2],
         fb, frame[0], frame[1], unsigned(intact), unsigned(result));
     mutator->SetManagedContext(false);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
-void CheckAliasLeaf(bool inPlace)
+void CheckAliasLeaf(bool inPlace, unsigned shape)
 {
-    const AbortCapture outcome = CaptureAbort([&] { RunAliasLeaf(inPlace); });
+    const AbortCapture outcome = CaptureAbort([&] { RunAliasLeaf(inPlace, shape); });
     std::fprintf(stderr, "%s", outcome.output.c_str());
     const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
         outcome.output.find("result=1") != std::string::npos;
-    std::fprintf(stderr, "ALIAS_LEAF_OUTCOME_ASSERT inplace_arm=%u status=%d completed=%u\n",
-        unsigned(inPlace), outcome.status, unsigned(completed));
+    std::fprintf(stderr, "ALIAS_LEAF_OUTCOME_ASSERT shape=%u inplace_arm=%u status=%d completed=%u\n",
+        shape, unsigned(inPlace), outcome.status, unsigned(completed));
     GC_EXPECT_TRUE(completed);
 }
 GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, InPlaceAliasedLeafHealsOnce)
 {
-    CheckAliasLeaf(true);
+    CheckAliasLeaf(true, 0);
 }
 GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CopiedAliasedLeafControl)
 {
-    CheckAliasLeaf(false);
+    CheckAliasLeaf(false, 0);
+}
+// Positive controls first: one direct slot through the same producer and consumer.
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, DirectSlotInPlaceControl)
+{
+    CheckAliasLeaf(true, 1);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, DirectSlotCopiedControl)
+{
+    CheckAliasLeaf(false, 1);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, DirectSlotWideRowInPlaceControl)
+{
+    CheckAliasLeaf(true, 2);
 }
 #endif
 
