@@ -1455,8 +1455,10 @@ void InitializeAliasLeafMap(unsigned offset, unsigned width, unsigned bitmap)
     var(0); var(1); var(0);
     put(0, 32); put(1, 2); put(0, 1); put(0, 1); // slot row 1, no derived entry, untagged
     var(0); var(0);
-    // Row 1 at fp-64, bitmap 0b10111: alias fp-64, alias fp-56, leaf B fp-48,
-    // direct leaf fp-32 (field of the stack object at fp-40). Row 2 is unused.
+    // The product decodes bit i of a row as offset - 8*i (r7 ALIAS_LEAF_FRAME:
+    // the former fp-64 row 0b10111 named frame[0], [-1], [-2], [-4]). Row 1 at
+    // fp-32: bit0 direct leaf fp-32 (field of the stack object at fp-40, which is
+    // not a root), bit2 leaf B fp-48, bits 3/4 the two aliases. Row 2 is unused.
     var(2); var(8); var(width);
     put(offset, 8); put(bitmap, width); put(240, 8); put(1, width);
     var(0); var(0);
@@ -1508,9 +1510,9 @@ void AliasLeafWatch(Mutator& mutator, const char* when, uintptr_t* frame)
     std::fprintf(stderr, "ALIAS_LEAF_SLOTS %s f0=%zx f1=%zx f2=%zx f4=%zx\n", when, frame[0], frame[1], frame[2], frame[4]);
     std::fflush(stderr);
 }
-// shape 0: two aliases + distinct leaf + direct leaf (row fp-64, 5-bit 0b10111).
+// shape 0: two aliases + distinct leaf + direct leaf (row fp-32, 5-bit 0b11101).
 // shape 1: direct leaf only, one-bit row at fp-32 (the derivedBaseMap encoding).
-// shape 2: direct leaf only, same 5-bit row as shape 0 with bitmap 0b10000.
+// shape 2: direct leaf only, same 5-bit row as shape 0 with bitmap 0b00001.
 void RunAliasLeaf(bool inPlace, unsigned shape)
 {
     CreateStandaloneHeap(1024);
@@ -1549,8 +1551,8 @@ void RunAliasLeaf(bool inPlace, unsigned shape)
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     if (shape == 1) { InitializeAliasLeafMap(224, 1, 1); }
-    else if (shape == 2) { InitializeAliasLeafMap(192, 5, 16); }
-    else { InitializeAliasLeafMap(192, 5, 23); }
+    else if (shape == 2) { InitializeAliasLeafMap(224, 5, 1); }
+    else { InitializeAliasLeafMap(224, 5, 29); }
     alignas(16) uintptr_t frame[10] = {};
     BaseObject* stackObject = reinterpret_cast<BaseObject*>(&frame[3]);
     stackObject->SetClassInfo(fx.typeInfo);
@@ -1564,6 +1566,10 @@ void RunAliasLeaf(bool inPlace, unsigned shape)
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[8]));
     context.anchorFA = nullptr;
     mutator->SetManagedContext(true);
+    // Mutator::VisitHeapRootSlots expands a slot only when Mutator::IsStackAddr
+    // (Mutator.cpp:438) places its value inside this thread's stack bounds.
+    mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(frame));
+    mutator->SetStackSize(sizeof(frame));
     AliasLeafStage(2);
 
     std::vector<ZPage*> occupied;
