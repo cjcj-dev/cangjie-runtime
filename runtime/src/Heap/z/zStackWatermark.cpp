@@ -12,6 +12,8 @@
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 
+#include <unordered_set>
+
 namespace MapleRuntime {
 
 // runtime/stackWatermark.cpp:44-153. The stream owns its register locations,
@@ -408,13 +410,30 @@ void ZStackWatermark::save_old_watermark()
     oldWatermarks[newest] = previous;
 }
 
+// oopMap.inline.hpp:89-110 (OopMapDo::iterate_oops_do) hands each oop
+// location of a frame to the closure exactly once; ZUncoloredRoot::barrier
+// (zUncoloredRoot.inline.hpp:34-70) then requires that location to still hold
+// an address coloured by the frame colour. Cangjie stack maps may reach one
+// physical heap slot several times in a frame: through two stack-map slots
+// naming the same stack object and through a direct entry for that object's
+// field. After the first heal the slot holds a load-good address, and an
+// in-place relocated target can still lie inside the old forwarding range
+// with no entry of its own, so reinterpreting it as an old-colour from
+// address is not a legal barrier input. Heal each physical slot once.
+static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_set<RootSlot*>& healed, RootSlot& slot)
+{
+    if (!healed.insert(&slot).second) {
+        return;
+    }
+    static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
+}
+
 void ZStackWatermark::process_head(void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_head_color());
+    std::unordered_set<RootSlot*> healed;
     RootVisitor roots = [&](RootSlot& root) {
-        owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
-        });
+        owner.VisitHeapRootSlots(root, [&](RootSlot& slot) { HealOnce(closure, healed, slot); });
     };
     owner.VisitExceptionRoots(roots);
     owner.VisitNativeFrameRoots(roots);
@@ -438,12 +457,18 @@ void ZStackWatermark::start_processing_impl(void* context)
 void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
+    std::unordered_set<RootSlot*> healed;
     RootVisitor roots = [&](RootSlot& root) {
+        owner.VisitHeapRootSlots(root, [&](RootSlot& slot) { HealOnce(closure, healed, slot); });
+    };
+    // oopMap.cpp:412-421 (ProcessDerivedOop) re-reads the unhealed base for
+    // every derived entry, so each derived word is a fresh old-colour input.
+    RootVisitor derivedRoots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
         });
     };
-    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots);
+    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(derivedRoots);
     StackFrameCursor::ProcessFrame(frame, registers, roots, owner, &derived, false);
 }
 
