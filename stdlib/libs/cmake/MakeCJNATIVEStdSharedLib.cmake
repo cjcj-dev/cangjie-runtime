@@ -230,13 +230,9 @@ function(make_cangjie_lib target_name)
         if(DARWIN AND CANGJIE_LIBRARY_ALLOW_UNDEFINED)
             list(APPEND flags_to_compile "-undefined" "suppress" "-flat_namespace")
         endif()
-        # For bep, in debug mode, we cannot have the symbol of object's absolute path
+        # Standard shared libraries keep their DWARF in every build type, so they are not linked with -s.
         if(NOT DARWIN)
-            if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES RelWithDebInfo)
-                list(APPEND flags_to_compile "-g")
-            else()
-                list(APPEND flags_to_compile "-s")
-            endif()
+            list(APPEND flags_to_compile "-g")
         endif()
 
         if(CANGJIE_LIBRARY_IS_SHARED)

@@ -130,6 +130,12 @@ function(add_cangjie_library target_name)
             list(APPEND cangjie_compile_flags "--apc=1")
         endif()
     else()
+        # Standard libraries carry DWARF in every build type; a final binary keeps it only when its
+        # own link is invoked with -g. Release/MinSizeRel keep their trimmed source paths.
+        list(APPEND cangjie_compile_flags "-g")
+        if(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
+            list(APPEND cangjie_compile_flags "--apc=1")
+        endif()
        if(NOT CANGJIE_BUILD_STDLIB_WITH_COVERAGE)
             list(APPEND cangjie_compile_flags "--trimpath")
             list(APPEND cangjie_compile_flags "${CMAKE_SOURCE_DIR}/libs/")
