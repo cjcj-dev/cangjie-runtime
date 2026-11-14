@@ -76,7 +76,7 @@ protected:
     // iterator segment may not end while any remain.
     virtual bool has_pending_fields() const { return false; }
     // The frames iterator reached the end of the stack.
-    virtual void close_stack() {}
+    virtual void close_stack(void*) {}
     void update_watermark();
     void yield_processing();
     std::mutex lock;
@@ -117,11 +117,15 @@ private:
     void start_processing_impl(void* context) override;
     void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;
     bool has_pending_fields() const override { return !pendingFields.empty(); }
-    void close_stack() override;
-    void assign_field(void* slot, uintptr_t end);
-    // Fields reached by expanding a stack object, physically owned by a managed
-    // frame that has not been processed yet in this epoch.
-    std::vector<void*> pendingFields;
+    void close_stack(void* context) override;
+    void assign_field(void* slot, uintptr_t end, bool head);
+    // Fields reached by expanding a stack object that no processed managed frame
+    // holds yet; head marks fields reached from head (native/exception) roots.
+    struct PendingField {
+        void* slot;
+        bool head;
+    };
+    std::vector<PendingField> pendingFields;
     // ManagedFrameEnd of the youngest managed frame processed in this epoch.
     uintptr_t processedEnd = 0;
 };

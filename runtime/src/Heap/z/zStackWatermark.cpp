@@ -40,7 +40,7 @@ public:
                 if (covers_stack_target(stackTarget)) { break; }
             }
         }
-        if (!has_next()) { owner.close_stack(); }
+        if (!has_next()) { owner.close_stack(context); }
     }
     void process_all(void* context)
     {
@@ -61,7 +61,7 @@ public:
                 }
             }
         }
-        if (!has_next()) { owner.close_stack(); }
+        if (!has_next()) { owner.close_stack(context); }
     }
     // continuationFreezeThaw.cpp:595-598 flushes every frame that the copy will
     // publish. yield_processing (stackWatermark.cpp:225) would let a concurrent
@@ -79,7 +79,7 @@ public:
                 set_watermark(frame.mFrame.GetSP());
             }
         }
-        if (!has_next()) { owner.close_stack(); }
+        if (!has_next()) { owner.close_stack(context); }
     }
     void rebase(intptr_t offset)
     {
@@ -433,8 +433,11 @@ void ZStackWatermark::save_old_watermark()
 // object (value-type sret, struct arguments) is healed in the turn of the
 // managed frame that physically holds it, [.., ManagedFrameEnd), with that
 // frame's colour and after its derived entries captured their bases. Fields of
-// a frame not yet processed wait in pendingFields; a field below a processed
-// frame or with no owner on the stack is fatal, never healed with a guess.
+// a frame not yet processed wait in pendingFields. A field that head roots
+// reach and that no managed frame holds (below a managed frame's SP when that
+// is known, or past the last one) is held by native code: the head heals it
+// with the head colour, as it heals the native roots themselves. A field that
+// a frame reaches and no frame holds, or one below a processed frame, is fatal.
 static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_set<const void*>& healed, RootSlot& slot)
 {
     if (!healed.insert(static_cast<const void*>(&slot)).second) {
@@ -443,22 +446,27 @@ static void HealOnce(StackWatermarkProcessOopClosure& closure, std::unordered_se
     static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
 }
 
-void ZStackWatermark::assign_field(void* slot, uintptr_t end)
+void ZStackWatermark::assign_field(void* slot, uintptr_t end, bool head)
 {
     const uintptr_t at = reinterpret_cast<uintptr_t>(slot);
     if (at < processedEnd) {
         LOG(RTLOG_FATAL, "stack field %p lies below processed managed frame end %p", slot,
             reinterpret_cast<void*>(processedEnd));
     }
-    if (at >= end) { pendingFields.push_back(slot); }
+    if (at >= end) { pendingFields.push_back(PendingField { slot, head }); }
 }
 
-void ZStackWatermark::close_stack()
+void ZStackWatermark::close_stack(void* context)
 {
-    if (!pendingFields.empty()) {
-        LOG(RTLOG_FATAL, "%zu expanded stack fields have no managed owner frame, first %p", pendingFields.size(),
-            pendingFields.front());
+    StackWatermarkProcessOopClosure closure(context, prev_head_color());
+    std::unordered_set<const void*> healed;
+    for (const PendingField& field : pendingFields) {
+        if (!field.head) {
+            LOG(RTLOG_FATAL, "expanded stack field %p has no managed owner frame", field.slot);
+        }
+        HealOnce(closure, healed, *static_cast<RootSlot*>(field.slot));
     }
+    pendingFields.clear();
 }
 
 void ZStackWatermark::process_head(void* context)
@@ -472,7 +480,7 @@ void ZStackWatermark::process_head(void* context)
             if (&slot == &root) {
                 HealOnce(closure, healed, slot);
             } else {
-                assign_field(static_cast<void*>(&slot), 0);
+                assign_field(static_cast<void*>(&slot), 0, true);
             }
         });
     };
@@ -503,7 +511,7 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
     const uintptr_t end = frame.ManagedFrameEnd();
     std::unordered_set<const void*> healed;
     auto field = [&](RootSlot& slot) {
-        assign_field(static_cast<void*>(&slot), end);
+        assign_field(static_cast<void*>(&slot), end, false);
         if (reinterpret_cast<uintptr_t>(&slot) < end) { HealOnce(closure, healed, slot); }
     };
     RootVisitor roots = [&](RootSlot& root) {
@@ -532,12 +540,20 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
     if (end == 0) { return; }
     // After this frame's derived entries and roots: fields that younger frames
     // or head roots reached inside this frame.
+    // The frame's SP, when the unwinder published one, is its lower bound: a
+    // head field below it lies in native code between managed frames.
+    const uintptr_t low = frame.mFrame.GetSP();
+    StackWatermarkProcessOopClosure headClosure(context, prev_head_color());
+    std::unordered_set<const void*> headHealed;
     size_t kept = 0;
-    for (void* slot : pendingFields) {
-        if (reinterpret_cast<uintptr_t>(slot) < end) {
-            HealOnce(closure, healed, *static_cast<RootSlot*>(slot));
+    for (const PendingField& field : pendingFields) {
+        const uintptr_t at = reinterpret_cast<uintptr_t>(field.slot);
+        if (at >= end) {
+            pendingFields[kept++] = field;
+        } else if (field.head && low != 0 && at < low) {
+            HealOnce(headClosure, headHealed, *static_cast<RootSlot*>(field.slot));
         } else {
-            pendingFields[kept++] = slot;
+            HealOnce(closure, healed, *static_cast<RootSlot*>(field.slot));
         }
     }
     pendingFields.resize(kept);
