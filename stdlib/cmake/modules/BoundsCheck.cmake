@@ -39,6 +39,13 @@ set(CMAKE_C_FLAGS "${SECURE_CFLAG_FOR_SHARED_LIBRARY} ${WARNING_FLAGS}")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g")
 set(CMAKE_C_FLAGS_RELEASE "-D_FORTIFY_SOURCE=2 -O2")
 set(CMAKE_C_FLAGS_DEBUG "-O0 -g")
+# boundscheck is built and shipped with the standard library, so like the std's own native code it
+# keeps DWARF in every build type: -g leaves the build type's optimization flags unchanged, and its
+# shared library is not stripped (a final binary decides through its own -g whether DWARF is linked).
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g")
+separate_arguments(boundscheck_shared_linker_flags UNIX_COMMAND "${CMAKE_SHARED_LINKER_FLAGS}")
+list(REMOVE_ITEM boundscheck_shared_linker_flags "${STRIP_FLAG}")
+list(JOIN boundscheck_shared_linker_flags " " CMAKE_SHARED_LINKER_FLAGS)
 
 if(CLANG_TARGET_TRIPLE)
     # We add --target option for clang only since gcc does not support --target option.
@@ -71,4 +78,4 @@ add_library(boundscheck SHARED ${SRC_FILE})
 add_library(boundscheck-static STATIC ${SRC_FILE})
 target_include_directories(boundscheck PRIVATE ./include)
 target_include_directories(boundscheck-static PRIVATE ./include)
-target_link_options(boundscheck PRIVATE ${SECURE_LDFLAG_FOR_SHARED_LIBRARY} ${STRIP_FLAG})
+target_link_options(boundscheck PRIVATE ${SECURE_LDFLAG_FOR_SHARED_LIBRARY})

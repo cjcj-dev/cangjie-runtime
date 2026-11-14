@@ -37,6 +37,10 @@ execute_process(
         -DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}
         -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
         -DCUSTOM_WARNING_SETTINGS=${CUSTOM_WARNING_SETTINGS}
+        # pcre2 ships with the standard library and keeps DWARF like the std's own native code. The
+        # toolchain file overrides CMAKE_C_FLAGS/CMAKE_SHARED_LINKER_FLAGS inside pcre2's project, so
+        # the debug policy is applied right after its project() call.
+        -DCMAKE_PROJECT_INCLUDE=${CMAKE_CURRENT_LIST_DIR}/Pcre2KeepDebug.cmake
         -DPCRE2_STATIC_PIC=ON
         -DBUILD_SHARED_LIBS=ON
         -DPCRE2_BUILD_PCRE2GREP=OFF
@@ -122,6 +126,10 @@ if(OHOS)
         list(APPEND RELINK_FLAGS --sysroot=${CANGJIE_TARGET_SYSROOT})
     endif()
     separate_arguments(RELINK_LINKER_FLAGS NATIVE_COMMAND "${CMAKE_SHARED_LINKER_FLAGS}")
+    # The ROM-compatible libpcre2.z.so keeps DWARF like libpcre2-8.so (see Pcre2KeepDebug.cmake).
+    if(STRIP_FLAG)
+        list(REMOVE_ITEM RELINK_LINKER_FLAGS "${STRIP_FLAG}")
+    endif()
     execute_process(
         COMMAND ${CMAKE_C_COMPILER}
             ${RELINK_FLAGS}
