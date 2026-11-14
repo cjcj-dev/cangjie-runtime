@@ -1418,6 +1418,180 @@ void CheckMajorCurrentRemset(unsigned workers)
     GC_EXPECT_TRUE(updated);
 }
 
+#if defined(__x86_64__) && defined(__linux__)
+// zStackWatermark.cpp ZStackWatermark::process hands every stack-map entry of a
+// frame to one closure with one frame colour. Cangjie maps can reach one
+// physical leaf twice: two slots naming the same headered stack object
+// (Mutator::VisitHeapRootSlots expands each) plus the leaf's own slot. ZGC
+// OopMapDo::iterate_oops_do (oopMap.inline.hpp:89-110) visits each location
+// once. Producer is the real in-place path (zRelocate.cpp:502-537): exhausted
+// non-blocking capacity makes the worker compact the page into itself, so
+// F(A)=q lies inside the same forwarding range with no entry of its own.
+DerivedBaseMapImage aliasLeafMapImage;
+void InitializeAliasLeafMap()
+{
+    auto& image = aliasLeafMapImage;
+    std::memset(&image, 0, sizeof(image));
+    image.descriptorOffset = reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset);
+    image.stackMapOffset = reinterpret_cast<char*>(image.bits) - reinterpret_cast<char*>(&image.stackMapOffset);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
+    size_t bit = 0;
+    auto put = [&](uint32_t value, unsigned width) {
+        for (unsigned i = 0; i < width; ++i, ++bit) {
+            image.bits[bit / 8] |= ((value >> i) & 1u) << (bit % 8);
+        }
+    };
+    auto var = [&](uint32_t value) {
+        if (value <= 11) { put(value, 4); }
+        else { put(12, 4); put(value, 8); }
+    };
+    var(0); var(2); var(0); // same header as InitializeDerivedBaseMap(false)
+    var(1); var(0); var(2); var(0); var(1);
+    if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
+    var(0); var(1); var(0);
+    put(0, 32); put(1, 2); put(0, 1); put(0, 1); // slot row 1, no derived entry, untagged
+    var(0); var(0);
+    // Row 1 at fp-64, bitmap 0b10111: alias fp-64, alias fp-56, leaf B fp-48,
+    // direct leaf fp-32 (field of the stack object at fp-40). Row 2 is unused.
+    var(2); var(8); var(5);
+    put(192, 8); put(23, 5); put(240, 8); put(1, 5);
+    var(0); var(0);
+    var(1); put(2, 2);
+}
+
+void AliasLeafStage(int stage)
+{
+    // StackWatermark::epoch_id() (zStackWatermark.cpp:149-152) reads these bits.
+    std::fprintf(stderr, "ALIAS_LEAF_STAGE %d epoch=%x\n", stage, *ZPointerStoreGoodMaskLowOrderBitsAddr);
+    std::fflush(stderr);
+}
+void RunAliasLeaf(bool inPlace)
+{
+    CreateStandaloneHeap(1024);
+    ZStat::Initialize();
+    GcHeapFixture& fx = ProductFixture();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), 1);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    ZPage* source = ResetDeliveryUnit(fx, 5);
+    source->reset(PageAge::eden);
+    BaseObject* dead = fx.PlaceObject(source->GetRegionStart());
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart() + dead->GetSize());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    ZPage* companion = ResetDeliveryUnit(fx, 4);
+    companion->reset(PageAge::eden);
+    BaseObject* deadB = fx.PlaceObject(companion->GetRegionStart());
+    BaseObject* other = fx.PlaceObject(companion->GetRegionStart() + deadB->GetSize());
+    companion->SetRegionAllocPtr(reinterpret_cast<MAddress>(other) + other->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(companion, other));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {source, companion}));
+    AliasLeafStage(1);
+    // As CheckMajorCurrentRemset: heap fields hold a coloured null, never raw 0,
+    // before the relocation worker copies and scans them.
+    for (BaseObject* object : {from, other}) {
+        *reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(object) + sizeof(BaseObject)) =
+            StoreGoodPointer(nullptr);
+    }
+    ZForwarding* forwarding = ZGeneration::generation(source->generation_id())->forwarding(source->GetRegionStart());
+    ZForwarding* forwardingB = ZGeneration::generation(companion->generation_id())->forwarding(companion->GetRegionStart());
+    GC_EXPECT_TRUE(forwarding != nullptr && forwardingB != nullptr);
+
+    // The mutator predates the relocate-start flip, so its frame colour is old.
+    MutatorManager& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    InitializeAliasLeafMap();
+    alignas(16) uintptr_t frame[10] = {};
+    BaseObject* stackObject = reinterpret_cast<BaseObject*>(&frame[3]);
+    stackObject->SetClassInfo(fx.typeInfo);
+    frame[0] = reinterpret_cast<uintptr_t>(stackObject);
+    frame[1] = reinterpret_cast<uintptr_t>(stackObject);
+    frame[2] = reinterpret_cast<uintptr_t>(other);
+    frame[4] = reinterpret_cast<uintptr_t>(from);
+    frame[7] = reinterpret_cast<uintptr_t>(aliasLeafMapImage.pc) + 9;
+    auto& context = mutator->GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(aliasLeafMapImage.pc);
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[8]));
+    context.anchorFA = nullptr;
+    mutator->SetManagedContext(true);
+    AliasLeafStage(2);
+
+    std::vector<ZPage*> occupied;
+    if (inPlace) {
+        // Exhaust actual non-blocking capacity (as ExerciseRelocationWait782):
+        // the worker's target allocation then fails and the page is compacted
+        // into itself by start_in_place_relocation. No allocation hook.
+        ZAllocationFlags flags;
+        flags.set_non_blocking();
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags)) {
+            occupied.push_back(page);
+        }
+    }
+    young.Workers()->set_active();
+    AliasLeafStage(3);
+    {
+        // zGeneration.cpp:514-522: the real relocate-start pause body (flip,
+        // phase, relocation tasks) at a stopped world, so mutator stacks are
+        // left for their watermark to process lazily.
+        ScopedStopTheWorld stopped("alias leaf relocate-start");
+        young.relocate_start();
+    }
+    AliasLeafStage(4);
+    young.relocate().relocate(&young.relocation_set());
+    AliasLeafStage(5);
+    // Read the product's winning addresses; never plant a forwarding result.
+    const uintptr_t q = forwarding->find(reinterpret_cast<MAddress>(from));
+    const uintptr_t fb = forwardingB->find(reinterpret_cast<MAddress>(other));
+    const bool inPlaceObserved = forwarding->in_place();
+    ZForwarding* const qOwner = q == 0 ? nullptr : ZGeneration::young()->forwarding(q);
+    const uintptr_t fq = qOwner == nullptr ? 0 : qOwner->find(q);
+    const bool retained = forwarding->retain_page(young.relocate().queue());
+    if (retained) forwarding->release_page();
+    std::fprintf(stderr, "ALIAS_LEAF_PRODUCER inplace_arm=%u in_place=%u from=%zx q=%zx same_range=%u f_q=%zx "
+        "retain=%u other=%zx f_other=%zx occupied=%zu\n", unsigned(inPlace), unsigned(inPlaceObserved),
+        reinterpret_cast<uintptr_t>(from), q, unsigned(qOwner == forwarding), fq, unsigned(retained),
+        reinterpret_cast<uintptr_t>(other), fb, occupied.size());
+    const bool producer = q != 0 && !retained && fb != 0 &&
+        (inPlace ? (inPlaceObserved && q != reinterpret_cast<uintptr_t>(from) && qOwner == forwarding && fq == 0)
+                 : (!inPlaceObserved && qOwner != forwarding));
+    // safepointMechanism.cpp:150-160: real request-processing entry; the
+    // stack watermark processes this managed frame through StackFrameCursor.
+    ArmThreadPoll(ThreadLocal::GetThreadLocalData());
+    HandleSafepoint(ThreadLocal::GetThreadLocalData());
+    AliasLeafStage(6);
+    const bool intact = q != 0 && reinterpret_cast<BaseObject*>(q)->GetTypeInfo() == fx.typeInfo;
+    const bool result = producer && frame[4] == q && frame[2] == fb &&
+        frame[0] == reinterpret_cast<uintptr_t>(stackObject) && frame[1] == frame[0] &&
+        stackObject->GetTypeInfo() == fx.typeInfo && intact;
+    std::fprintf(stderr, "ALIAS_LEAF_TARGET inplace_arm=%u producer=%u leaf=%zx expected=%zx leafB=%zx expectedB=%zx "
+        "alias0=%zx alias1=%zx intact=%u result=%u\n", unsigned(inPlace), unsigned(producer), frame[4], q, frame[2],
+        fb, frame[0], frame[1], unsigned(intact), unsigned(result));
+    mutator->SetManagedContext(false);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+void CheckAliasLeaf(bool inPlace)
+{
+    const AbortCapture outcome = CaptureAbort([&] { RunAliasLeaf(inPlace); });
+    std::fprintf(stderr, "%s", outcome.output.c_str());
+    const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
+        outcome.output.find("result=1") != std::string::npos;
+    std::fprintf(stderr, "ALIAS_LEAF_OUTCOME_ASSERT inplace_arm=%u status=%d completed=%u\n",
+        unsigned(inPlace), outcome.status, unsigned(completed));
+    GC_EXPECT_TRUE(completed);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, InPlaceAliasedLeafHealsOnce)
+{
+    CheckAliasLeaf(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CopiedAliasedLeafControl)
+{
+    CheckAliasLeaf(false);
+}
+#endif
+
 GC_RUNTIME_OTHER_VM_TEST(RemapYoungRoots1039, MajorUpdatesCurrentRemsetSingleWorker)
 {
     CheckMajorCurrentRemset(1);
