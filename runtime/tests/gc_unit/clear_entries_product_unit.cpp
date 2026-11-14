@@ -1699,6 +1699,236 @@ GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, CrossFrameCalleeOnlyLeafContr
 {
     CheckAliasLeaf(true, 4);
 }
+// Owner-order regressions (review R1/R2). Same real in-place producer, linked
+// metadata images, StackFrameCursor and ArmThreadPoll+HandleSafepoint as
+// RunAliasLeaf; finish_processing is the real consumer that completes a
+// partially processed stack. Only the frame chain differs.
+// kind 0 (R1): the callee exposes, through two aliases, the stack object S
+//   owned by its caller; the caller's map names S's field as the base of a
+//   derived entry (the InitializeDerivedBaseMap encoding: base fp-24, derived
+//   fp-16). oopMap.cpp:412-415 requires every derived entry to see its base
+//   before the base is healed. Expect base=q and derived=q+8.
+// kind 1: kind 0 without the callee aliases (positive derived control).
+// kind 2 (R2): G -> M1 -> M2 -> M3 -> H, G/M1/M2/M3 with a return poll, so the
+//   three start_processing process_one segments end inside the chain. G names
+//   its own stack object X whose field holds &Y, a stack object in H; H's map
+//   names Y's field. Expect Y.field=q (healed once, never q -> 0).
+// kind 3: kind 2 with G naming nothing (positive far-owner control).
+DerivedBaseMapImage ownerDerivedImage;
+DerivedBaseMapImage ownerChainImages[5];
+void InitializeOwnerDerivedMap(DerivedBaseMapImage& image)
+{
+    std::memset(&image, 0, sizeof(image));
+    image.descriptorOffset = reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset);
+    image.stackMapOffset = reinterpret_cast<char*>(image.bits) - reinterpret_cast<char*>(&image.stackMapOffset);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
+    size_t bit = 0;
+    auto put = [&](uint32_t value, unsigned width) {
+        for (unsigned i = 0; i < width; ++i, ++bit) {
+            image.bits[bit / 8] |= ((value >> i) & 1u) << (bit % 8);
+        }
+    };
+    auto var = [&](uint32_t value) {
+        if (value <= 11) { put(value, 4); }
+        else { put(12, 4); put(value, 8); }
+    };
+    // Bit for bit InitializeDerivedBaseMap(false).
+    var(0); var(2); var(0);
+    var(1); var(0); var(2); var(0); var(1);
+    if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
+    var(0); var(1); var(0);
+    put(0, 32); put(1, 2); put(1, 1); put(0, 1);
+    var(0); var(0);
+    var(2); var(8); var(1);
+    put(232, 8); put(1, 1); put(240, 8); put(1, 1);
+    var(0); var(0);
+    var(1); put(2, 2);
+}
+void RunOwnerOrder(bool inPlace, unsigned kind)
+{
+    CreateStandaloneHeap(1024);
+    ZStat::Initialize();
+    GcHeapFixture& fx = ProductFixture();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), 1);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    ZPage* source = ResetDeliveryUnit(fx, 5);
+    source->reset(PageAge::eden);
+    BaseObject* dead = fx.PlaceObject(source->GetRegionStart());
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart() + dead->GetSize());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    ZPage* companion = ResetDeliveryUnit(fx, 4);
+    companion->reset(PageAge::eden);
+    BaseObject* deadB = fx.PlaceObject(companion->GetRegionStart());
+    BaseObject* other = fx.PlaceObject(companion->GetRegionStart() + deadB->GetSize());
+    companion->SetRegionAllocPtr(reinterpret_cast<MAddress>(other) + other->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(companion, other));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {source, companion}));
+    for (BaseObject* object : {from, other}) {
+        *reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(object) + sizeof(BaseObject)) =
+            StoreGoodPointer(nullptr);
+    }
+    ZForwarding* forwarding = ZGeneration::generation(source->generation_id())->forwarding(source->GetRegionStart());
+    ZForwarding* forwardingB = ZGeneration::generation(companion->generation_id())->forwarding(companion->GetRegionStart());
+    GC_EXPECT_TRUE(forwarding != nullptr && forwardingB != nullptr);
+
+    MutatorManager& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    const bool chain = kind >= 2;
+    const size_t count = chain ? 5 : 2;
+    DerivedBaseMapImage* images[5] = {};
+    if (!chain) {
+        // Callee row fp-32: bit2 leaf B (frame[2]), bits 3/4 aliases (frame[1], frame[0]).
+        InitializeAliasLeafMap(224, 5, 29, ownerChainImages[0]);
+        InitializeOwnerDerivedMap(ownerDerivedImage);
+        images[0] = &ownerChainImages[0];
+        images[1] = &ownerDerivedImage;
+    } else {
+        InitializeAliasLeafMap(224, 5, 8, ownerChainImages[0]); // G: frame[1]
+        for (size_t k = 1; k < 4; ++k) { InitializeAliasLeafMap(224, 5, 4, ownerChainImages[k]); } // empty slot
+        InitializeAliasLeafMap(224, 5, 1, ownerChainImages[4]); // H: fp-32 = frame[44]
+        for (size_t k = 0; k < 5; ++k) { images[k] = &ownerChainImages[k]; }
+        // MFuncDesc::HasReturnPoll (returnPollFlag bit 0): has_barrier frames.
+        for (size_t k = 0; k < 4; ++k) { ownerChainImages[k].returnPollFlag = 1; }
+    }
+    // Frame k occupies frame[10k .. 10k+9], fp = &frame[10k+8]; each FrameAddress
+    // links to the next managed caller (MachineFrame::UnwindToCallerMachineFrame).
+    alignas(16) uintptr_t frame[50] = {};
+    for (size_t k = 0; k < count; ++k) {
+        frame[10 * k + 7] = reinterpret_cast<uintptr_t>(images[k]->pc) + 9;
+        if (k + 1 < count) {
+            frame[10 * k + 8] = reinterpret_cast<uintptr_t>(&frame[10 * (k + 1) + 8]);
+            frame[10 * k + 9] = reinterpret_cast<uintptr_t>(images[k + 1]->pc);
+        }
+    }
+    BaseObject* owned = nullptr;  // S (R1) or Y (R2): the stack object of the oldest frame
+    BaseObject* nested = nullptr; // X (R2) in G
+    size_t field = 0;
+    if (!chain) {
+        owned = reinterpret_cast<BaseObject*>(&frame[14]);
+        owned->SetClassInfo(fx.typeInfo);
+        field = 15;                // caller fp-24: S's field, the derived base
+        frame[15] = reinterpret_cast<uintptr_t>(from);
+        frame[16] = reinterpret_cast<uintptr_t>(from) + 8; // caller fp-16: derived
+        frame[2] = reinterpret_cast<uintptr_t>(other);
+        if (kind == 0) {
+            frame[0] = reinterpret_cast<uintptr_t>(owned);
+            frame[1] = reinterpret_cast<uintptr_t>(owned);
+        }
+    } else {
+        owned = reinterpret_cast<BaseObject*>(&frame[43]);
+        owned->SetClassInfo(fx.typeInfo);
+        field = 44;
+        frame[44] = reinterpret_cast<uintptr_t>(from);
+        nested = reinterpret_cast<BaseObject*>(&frame[3]);
+        nested->SetClassInfo(fx.typeInfo);
+        frame[4] = reinterpret_cast<uintptr_t>(owned);
+        if (kind == 2) { frame[1] = reinterpret_cast<uintptr_t>(nested); }
+    }
+    auto& context = mutator->GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(images[0]->pc);
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[8]));
+    context.anchorFA = nullptr;
+    mutator->SetManagedContext(true);
+    mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(frame));
+    mutator->SetStackSize(sizeof(frame));
+
+    std::vector<ZPage*> occupied;
+    if (inPlace) {
+        ZAllocationFlags flags;
+        flags.set_non_blocking();
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags)) {
+            occupied.push_back(page);
+        }
+    }
+    young.Workers()->set_active();
+    {
+        ScopedStopTheWorld stopped("owner order relocate-start");
+        young.relocate_start();
+    }
+    young.relocate().relocate(&young.relocation_set());
+    const uintptr_t q = forwarding->find(reinterpret_cast<MAddress>(from));
+    const uintptr_t fb = forwardingB->find(reinterpret_cast<MAddress>(other));
+    const bool inPlaceObserved = forwarding->in_place();
+    ZForwarding* const qOwner = q == 0 ? nullptr : ZGeneration::young()->forwarding(q);
+    const uintptr_t fq = qOwner == nullptr ? 0 : qOwner->find(q);
+    const bool retained = forwarding->retain_page(young.relocate().queue());
+    if (retained) forwarding->release_page();
+    std::fprintf(stderr, "OWNER_ORDER_PRODUCER kind=%u inplace_arm=%u in_place=%u from=%zx q=%zx same_range=%u f_q=%zx "
+        "retain=%u other=%zx f_other=%zx occupied=%zu\n", kind, unsigned(inPlace), unsigned(inPlaceObserved),
+        reinterpret_cast<uintptr_t>(from), q, unsigned(qOwner == forwarding), fq, unsigned(retained),
+        reinterpret_cast<uintptr_t>(other), fb, occupied.size());
+    const bool producer = q != 0 && !retained && fb != 0 &&
+        (inPlace ? (inPlaceObserved && q != reinterpret_cast<uintptr_t>(from) && qOwner == forwarding && fq == 0)
+                 : (!inPlaceObserved && qOwner != forwarding));
+    auto& wm = mutator->GetStackWatermark();
+    ArmThreadPoll(ThreadLocal::GetThreadLocalData());
+    HandleSafepoint(ThreadLocal::GetThreadLocalData());
+    const uintptr_t mid = wm.watermark();
+    const unsigned midDone = unsigned(wm.IsDone());
+    const uintptr_t midField = frame[field];
+    wm.finish_processing(nullptr);
+    std::fprintf(stderr, "OWNER_ORDER_WM kind=%u inplace_arm=%u after_safepoint watermark=%zx done=%u field=%zx "
+        "frame_sp=[%zx %zx %zx %zx %zx] after_finish watermark=%zx done=%u\n", kind, unsigned(inPlace), mid, midDone,
+        midField, reinterpret_cast<uintptr_t>(&frame[0]), reinterpret_cast<uintptr_t>(&frame[10]),
+        reinterpret_cast<uintptr_t>(&frame[20]), reinterpret_cast<uintptr_t>(&frame[30]),
+        reinterpret_cast<uintptr_t>(&frame[40]), wm.watermark(), unsigned(wm.IsDone()));
+    const bool intact = q != 0 && reinterpret_cast<BaseObject*>(q)->GetTypeInfo() == fx.typeInfo &&
+        owned->GetTypeInfo() == fx.typeInfo && (nested == nullptr || nested->GetTypeInfo() == fx.typeInfo);
+    bool shapeOk = false;
+    if (!chain) {
+        shapeOk = frame[16] == q + 8 && frame[2] == fb &&
+            (kind != 0 || (frame[0] == reinterpret_cast<uintptr_t>(owned) && frame[1] == frame[0]));
+    } else {
+        shapeOk = frame[4] == reinterpret_cast<uintptr_t>(owned) &&
+            (kind != 2 || frame[1] == reinterpret_cast<uintptr_t>(nested));
+    }
+    const bool result = producer && frame[field] == q && intact && shapeOk;
+    std::fprintf(stderr, "OWNER_ORDER_TARGET kind=%u inplace_arm=%u producer=%u field=%zx expected=%zx derived=%zx "
+        "expectedDerived=%zx leafB=%zx expectedB=%zx intact=%u shape=%u result=%u\n", kind, unsigned(inPlace),
+        unsigned(producer), frame[field], q, chain ? 0 : frame[16], chain ? 0 : q + 8, frame[2], fb, unsigned(intact),
+        unsigned(shapeOk), unsigned(result));
+    mutator->SetManagedContext(false);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+void CheckOwnerOrder(bool inPlace, unsigned kind)
+{
+    const AbortCapture outcome = CaptureAbort([&] { RunOwnerOrder(inPlace, kind); });
+    std::fprintf(stderr, "%s", outcome.output.c_str());
+    const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
+        outcome.output.find("result=1") != std::string::npos;
+    std::fprintf(stderr, "OWNER_ORDER_OUTCOME_ASSERT kind=%u inplace_arm=%u status=%d completed=%u\n",
+        kind, unsigned(inPlace), outcome.status, unsigned(completed));
+    GC_EXPECT_TRUE(completed);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R1CallerDerivedBaseExposedByCalleeInPlace)
+{
+    CheckOwnerOrder(true, 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R1CallerDerivedBaseExposedByCalleeCopied)
+{
+    CheckOwnerOrder(false, 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R1CallerDerivedBaseControlInPlace)
+{
+    CheckOwnerOrder(true, 1);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R2NestedFarOwnerAcrossReturnPollsInPlace)
+{
+    CheckOwnerOrder(true, 2);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R2NestedFarOwnerAcrossReturnPollsCopied)
+{
+    CheckOwnerOrder(false, 2);
+}
+GC_RUNTIME_OTHER_VM_TEST(StackRootIdempotence1114, R2FarOwnerControlInPlace)
+{
+    CheckOwnerOrder(true, 3);
+}
 #endif
 
 GC_RUNTIME_OTHER_VM_TEST(RemapYoungRoots1039, MajorUpdatesCurrentRemsetSingleWorker)
