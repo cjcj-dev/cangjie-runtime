@@ -7,9 +7,10 @@ changes all have the same behavior. There is no per-runtime startup selection.
 No public function signature, runtime parameter layout, calling convention or
 TLS model changes.
 
-ReadScopes maintain their thread-local depth and `AssertReaderActive` contract,
-while bypassing reader slot/counter admission and release on this platform.
-There is no per-reader fast/slow state. GC barriers and assertions remain active.
+On a retaining loader, ReadScope construction/destruction and reader assertions
+are inline no-ops: the verified process-lifetime publication invariant replaces
+the TLS-depth token. No query-side admission is performed. Table version guards,
+initialization publication and GC barriers remain unchanged.
 
 The platform choice follows the actual native implementation: `dladdr1`,
 `dlinfo` and namespace-aware `dlmopen(..., RTLD_NOLOAD | RTLD_NODELETE)` on glibc.
@@ -34,9 +35,11 @@ resource-release operations where provided; replacing/reloading a plugin image
 requires a new process. Runtime finalization leaves the image catalog resident
 and does not enable unloading. It still stops the managed runtime, so retained
 metadata alone does not authorize managed calls after `FiniCJRuntime`.
-`TypeInfoManager::Fini` still frees runtime-generated method tables and typeinfo
-allocation arenas. Those generated objects do not acquire process lifetime merely
-because the original image and its native metadata remain mapped.
+`TypeInfoManager::Fini` also preserves published runtime-generated method tables
+and TypeInfo allocation arenas on a retaining loader. Native pinning alone would
+not protect this dependency closure: image TypeInfos can point into those arenas.
+Runtime reinitialization remains prohibited; retained metadata does not authorize
+managed execution after finalization.
 
 Process exit invokes native finalizers. The runtime's fini callback requires a
 verified pin for that registered image or completed runtime finalization. It
@@ -49,7 +52,10 @@ runtime-managed macro handles call `UnloadCJLibrary`. Both now retain Cangjie
 images by default on supported Linux. Pinning only the runtime SO would not
 protect plugin metadata, so each metadata producer pins its own image.
 
-Other platforms keep physical unload and the required admission, reader slots,
+The all-platform process-lifetime policy is the required product target. Until
+their exact-image retention producers are implemented and verified, this stage
+does not qualify the other platforms. Their current source still keeps physical
+unload and the required admission, reader slots,
 counters, pending-task checks, unlink/rendezvous/purge and metadata cleanup.
 They lack this implementation's verified native namespace pinning; unconditional
 NODELETE is not portable. These are platform capabilities, not debug or fallback

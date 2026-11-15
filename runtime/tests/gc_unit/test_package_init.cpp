@@ -1618,7 +1618,15 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLifetimeControlsTypePublication)
         Target("retained-publication-cache-valid", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
         Target("retained-publication-early-mtable-valid", earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
         Target("retained-publication-late-mtable-valid", lateTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
+        const auto publishedShape = manager.GetTypeInfoIndexShape();
+        auto* publishedTable = lateTi->GetMTableDesc();
         Target("publication-runtime-finish", FiniCJRuntime() == E_OK);
+        // Native finalizers can still hold the published metadata closure.
+        // No managed execution or allocation is permitted after runtime Fini.
+        Target("retained-published-index-after-runtime-fini",
+               manager.GetTypeInfoIndexShape() == publishedShape && publishedShape.first != 0);
+        Target("retained-published-mtable-after-runtime-fini",
+               publishedTable->mTable.count(interfaceUUID) == 1);
         return;
     }
     auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();

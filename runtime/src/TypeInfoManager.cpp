@@ -175,6 +175,14 @@ void TypeInfoManager::Init()
 
 void TypeInfoManager::Fini()
 {
+    // Published method tables and generated TypeInfos contain image metadata
+    // pointers, and image TypeInfos in turn retain pointers into this arena.
+    // Native image retention alone cannot preserve that dependency closure.
+    // The manager is immortal and runtime reinitialization is forbidden, so
+    // leave the published closure intact through native process finalization.
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(allocationMutex);
     // release resources
     registeredTypeInfos.clear();
