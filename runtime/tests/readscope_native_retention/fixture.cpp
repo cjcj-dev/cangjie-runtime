@@ -49,5 +49,9 @@ extern "C" __declspec(dllexport) int ReadScopeValue() { return 37; }
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
 {
     char value[2] {};
+    if (reason == DLL_PROCESS_ATTACH &&
+        GetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_EXCEPTION", value, 2) != 0) {
+        RaiseException(0xe042434a, 0, 0, nullptr);
+    }
     return reason != DLL_PROCESS_ATTACH || GetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", value, 2) == 0;
 }

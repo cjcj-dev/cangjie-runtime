@@ -7,29 +7,67 @@
 #include "Cangjie.h"
 namespace {
 uintptr_t observed = 0;
-void Check(const char* name, bool pass)
+bool Report(const char* name, bool pass)
 {
     std::printf("TARGET %s executed=1 pass=%d\n", name, pass);
     std::fflush(stdout);
+    return pass;
+}
+void Check(const char* name, bool pass)
+{
+    Report(name, pass);
     if (!pass) { std::exit(1); }
+}
+HMODULE LoadWithExceptionObservation(const char* path, bool* caught)
+{
+    HMODULE result = nullptr;
+    __try {
+        result = LoadLibraryA(path);
+    } __except (GetExceptionCode() == 0xe042434a ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        *caught = true;
+    }
+    return result;
 }
 }
 extern "C" __declspec(dllexport) void ReadScopeObserve(uintptr_t address) { observed = address; }
 int main(int argc, char** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-    if (argc != 3) { return 2; }
-    const bool rollback = std::strcmp(argv[2], "native-failure") == 0;
-    if (rollback) { SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", "1"); }
-    HMODULE first = LoadLibraryA(argv[1]);
+    if (argc != 4) { return 2; }
+    const bool exception = std::strcmp(argv[2], "native-exception") == 0;
+    const bool reuse = std::strcmp(argv[2], "native-reuse") == 0;
+    const bool rollback = exception || reuse || std::strcmp(argv[2], "native-failure") == 0;
+    if (exception) {
+        SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_EXCEPTION", "1");
+    } else if (rollback) {
+        SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", "1");
+    }
+    bool caught = false;
+    HMODULE first = LoadWithExceptionObservation(argv[1], &caught);
     if (rollback) {
         Check("native-attach-rejected", first == nullptr);
+        if (exception) { Check("native-exception-observed", caught); }
         Check("native-constructor-reached", observed != 0);
+        const uintptr_t failedMetadata = observed;
         MEMORY_BASIC_INFORMATION memory {};
-        Check("native-pin-survives-post-registration-rollback",
-              VirtualQuery(reinterpret_cast<const void*>(observed), &memory, sizeof(memory)) != 0 &&
-              memory.State == MEM_COMMIT && memory.Type == MEM_IMAGE);
-        return 0;
+        bool safe = Report("native-pin-survives-post-registration-rollback",
+            VirtualQuery(reinterpret_cast<const void*>(failedMetadata), &memory, sizeof(memory)) != 0 &&
+            memory.State == MEM_COMMIT && memory.Type == MEM_IMAGE);
+        std::printf("NATIVE_ROLLBACK metadata=%p allocation=%p state=%lu type=%lu exception=%d\n",
+                    reinterpret_cast<void*>(failedMetadata), memory.AllocationBase,
+                    static_cast<unsigned long>(memory.State), static_cast<unsigned long>(memory.Type), caught);
+        if (reuse) {
+            SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", nullptr);
+            observed = 0;
+            HMODULE second = LoadLibraryA(argv[3]);
+            Check("independent-native-load-after-rollback", second != nullptr && observed != 0);
+            std::printf("NATIVE_REUSE old_metadata=%p new_metadata=%p same_address=%d\n",
+                        reinterpret_cast<void*>(failedMetadata), reinterpret_cast<void*>(observed),
+                        failedMetadata == observed);
+            safe &= Report("failed-image-address-not-reassigned", failedMetadata != observed);
+            Check("independent-native-close", FreeLibrary(second) != 0);
+        }
+        return safe ? 0 : 1;
     }
     Check("native-load", first != nullptr);
     using Counter = unsigned (*)();
