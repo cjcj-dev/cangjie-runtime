@@ -4,6 +4,10 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#ifdef _WIN64
+#include <windows.h>
+#endif
+
 #ifdef __OHOS__
 #include <cstring>
 #include <dlfcn.h>
@@ -119,6 +123,14 @@ void LoaderManager::LoadFile(Uptr address)
 
 void LoaderManager::LoadFileRetainedV1(Uptr address, NativeImageRetainerV1 retainer)
 {
+#ifdef _WIN64
+    // A CRT constructor runs before the native entry point has succeeded.
+    // Old producers have no completion cookie; only the process main image
+    // can be confirmed later by formal Init. DLLs require the paired entry ABI.
+    CHECK_DETAIL(retainer == nullptr, "Windows image registration: ELF callback is invalid");
+    BeginNativeImage(address, nullptr);
+    return;
+#endif
     // Native pinning must not acquire the platform loader lock underneath
     // loadedImgsMtx: the opposite order already exists in native constructors.
     // CreateFileRefFromAddr reuses this retained map when it builds the catalog.
@@ -133,8 +145,154 @@ void LoaderManager::LoadFileRetainedV1(Uptr address, NativeImageRetainerV1 retai
     }
 }
 
+#ifdef _WIN64
+void* LoaderManager::BeginNativeImage(Uptr address, void** cookieSlot)
+{
+    // No ImageAddressMap, BaseFile, roots, compatibility or TypeInfo registry
+    // exists yet. A failed attach may leave retained bytes, never a catalog.
+    const Uptr identity = ElfUnloadQuiescence::ResolveImageIdentity(address);
+    CHECK_DETAIL(identity != 0, "CJ pending image: no native identity");
+    CHECK_DETAIL(cookieSlot == nullptr ||
+                     (reinterpret_cast<Uptr>(cookieSlot) % alignof(void*) == 0 &&
+                      ElfUnloadQuiescence::ResolveImageIdentity(reinterpret_cast<Uptr>(cookieSlot)) == identity),
+                 "CJ pending image: cookie is not image-local");
+    ElfUnloadQuiescence::RetainUnpublishedNativeImage(address);
+    auto record = std::make_unique<NativeImageRegistration>();
+    record->metadata = address;
+    record->identity = identity;
+    record->cookieSlot = cookieSlot;
+    void* cookie = record.get();
+    std::lock_guard<std::mutex> lock(nativeImagesMtx);
+    nativeImages.push_back(std::move(record));
+    if (cookieSlot != nullptr) { *cookieSlot = cookie; }
+    return cookie;
+}
+
+void LoaderManager::CompleteNativeImage(void* cookie, bool succeeded)
+{
+    std::lock_guard<std::mutex> lock(nativeImagesMtx);
+    for (auto& record : nativeImages) {
+        if (record.get() != cookie) { continue; }
+        // Rejected/aborted instances are sticky. Completion never registers
+        // metadata while under the native loader lock.
+        if (record->state == NativeImageState::PENDING) {
+            record->state = succeeded ? NativeImageState::READY : NativeImageState::FAILED;
+        }
+        return;
+    }
+    CHECK_DETAIL(false, "CJ native attach: unknown instance cookie");
+}
+
+void LoaderManager::DetachNativeImage(void* cookie)
+{
+    std::lock_guard<std::mutex> lock(nativeImagesMtx);
+    for (auto& record : nativeImages) {
+        if (record.get() != cookie) { continue; }
+        if (record->state == NativeImageState::PENDING || record->state == NativeImageState::READY) {
+            record->state = NativeImageState::FAILED;
+        }
+        // Published process-owned storage is retained at normal exit as well.
+        return;
+    }
+    CHECK_DETAIL(false, "CJ native detach: unknown instance cookie");
+}
+
+void LoaderManager::CommitReadyNativeImages(void* onlyHandle)
+{
+    // Constructor/entry/fini callbacks never take this lock. Serialize the slow
+    // publication transaction without holding nativeImagesMtx across OS calls.
+    std::lock_guard<std::mutex> publicationLock(nativePublicationMtx);
+    std::vector<NativeImageRegistration*> ready;
+    const Uptr mainImage = reinterpret_cast<Uptr>(GetModuleHandleA(nullptr));
+    {
+        std::lock_guard<std::mutex> lock(nativeImagesMtx);
+        for (auto& record : nativeImages) {
+            if (onlyHandle != nullptr && record->identity != reinterpret_cast<Uptr>(onlyHandle)) { continue; }
+            // The main executable has no DLL attach wrapper. Formal runtime
+            // Init is its explicit post-native-startup commit boundary.
+            if (onlyHandle == nullptr && record->identity == mainImage &&
+                record->state == NativeImageState::PENDING) {
+                record->state = NativeImageState::READY;
+            }
+            if (record->state == NativeImageState::READY) { ready.push_back(record.get()); }
+        }
+    }
+    for (auto* record : ready) {
+        // Do not acquire the OS loader lock underneath nativeImagesMtx or the
+        // catalog lock: constructors/fini enter with the opposite ordering.
+        HMODULE module = nullptr;
+        const bool retained = GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_PIN,
+                                   reinterpret_cast<LPCSTR>(record->metadata), &module) != 0 &&
+                              reinterpret_cast<Uptr>(module) == record->identity;
+        {
+            std::lock_guard<std::mutex> nativeLock(nativeImagesMtx);
+            if (record->state != NativeImageState::READY) { continue; }
+            // After pinning the current mapping, verify the per-construction
+            // token rather than trusting a reused base/metadata address.
+            MEMORY_BASIC_INFORMATION slotMemory {};
+            const bool sameSlot = retained && (record->cookieSlot == nullptr ||
+                (VirtualQuery(record->cookieSlot, &slotMemory, sizeof(slotMemory)) != 0 &&
+                 slotMemory.State == MEM_COMMIT && slotMemory.AllocationBase == module &&
+                 (slotMemory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) == 0 &&
+                 reinterpret_cast<Uptr>(record->cookieSlot) - reinterpret_cast<Uptr>(slotMemory.BaseAddress) <=
+                     slotMemory.RegionSize - sizeof(void*) && *record->cookieSlot == record));
+            if (!retained || !sameSlot) {
+                record->state = NativeImageState::FAILED;
+                continue;
+            }
+            record->state = NativeImageState::COMMITTING;
+        }
+        // Native attach has completed and the exact instance is pinned. Never
+        // make a loader API call while holding the constructor's record lock.
+        ElfUnloadQuiescence::LinkImage(record->metadata);
+        {
+            std::lock_guard<std::mutex> catalogLock(loadedImgsMtx);
+            CheckPackageCompatibility(record->metadata);
+            if (GetInitStatus()) { RegisterLoadFile(record->metadata); }
+            else { AddPreLoadedImageMetaAddr(record->metadata); }
+        }
+        std::lock_guard<std::mutex> nativeLock(nativeImagesMtx);
+        record->state = NativeImageState::PUBLISHED;
+    }
+}
+
+bool LoaderManager::CommitNativeImageForHandle(void* handle)
+{
+    CommitReadyNativeImages(handle);
+    std::lock_guard<std::mutex> lock(nativeImagesMtx);
+    bool hasCJRegistration = false;
+    for (const auto& record : nativeImages) {
+        if (record->identity != reinterpret_cast<Uptr>(handle)) { continue; }
+        hasCJRegistration = true;
+        // A new, independently confirmed instance at a reused base does not
+        // inherit an old failed cookie's state. Only a committed generation
+        // can grant CJ discovery, never the handle by itself.
+        if (record->state == NativeImageState::PUBLISHED) { return true; }
+    }
+    // Preserve loading of non-CJ native libraries: they own no CJ metadata.
+    return !hasCJRegistration;
+}
+#endif
+
 void LoaderManager::UnloadFile(Uptr address)
 {
+#ifdef _WIN64
+    // Legacy failed constructors never acquired publication rights. Do not
+    // apply a later generation's fini to a paired cookie at the same address.
+    {
+        std::lock_guard<std::mutex> lock(nativeImagesMtx);
+        bool unpublished = false;
+        for (auto& record : nativeImages) {
+            if (record->metadata == address && record->cookieSlot == nullptr &&
+                record->state != NativeImageState::PUBLISHED) {
+                record->state = NativeImageState::FAILED;
+                unpublished = true;
+            }
+        }
+        if (unpublished) { return; }
+    }
+#endif
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
     // NODELETE suppresses native close-time fini/unmap, but process exit still
     // invokes fini, including before Init and while the runtime is live. Keep
@@ -198,6 +356,9 @@ bool LoaderManager::LibInit(const char* libName) const
 
 void LoaderManager::LoadPreLoadedImages()
 {
+#ifdef _WIN64
+    CommitReadyNativeImages();
+#endif
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
     for (auto it = preLoadedImages.rbegin(); it != preLoadedImages.rend(); it++) {
         RegisterLoadFile(*it);

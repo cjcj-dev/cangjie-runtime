@@ -67,6 +67,25 @@ extern "C" MRT_EXPORT void MRT_LibraryOnLoadRetainedV1(
     LoaderManager::GetInstance()->LoadFileRetainedV1(address, retainer);
 }
 
+#ifdef _WIN64
+extern "C" MRT_EXPORT void* MRT_LibraryOnLoadPendingV1(uint64_t address, bool enableGC, void** cookieSlot)
+{
+    (void)enableGC;
+    CHECK_DETAIL(address != 0 && cookieSlot != nullptr, "CJ native pending v1: missing image state");
+    return LoaderManager::GetInstance()->BeginNativeImage(address, cookieSlot);
+}
+
+extern "C" MRT_EXPORT void MRT_LibraryNativeAttachV1(void* cookie, bool succeeded)
+{
+    if (cookie != nullptr) { LoaderManager::GetInstance()->CompleteNativeImage(cookie, succeeded); }
+}
+
+extern "C" MRT_EXPORT void MRT_LibraryNativeDetachV1(void* cookie)
+{
+    if (cookie != nullptr) { LoaderManager::GetInstance()->DetachNativeImage(cookie); }
+}
+#endif
+
 extern "C" MRT_EXPORT void MRT_LibraryUnLoad(uint64_t address)
 {
     if (address == 0 || LoaderManager::GetReleaseStatus()) {

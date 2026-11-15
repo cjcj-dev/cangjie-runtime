@@ -757,6 +757,13 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
     // With native pinning the returned reference remains process-owned.
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
+#ifdef _WIN64
+        if (!LoaderManager::GetInstance()->CommitNativeImageForHandle(handler)) {
+            LOG(RTLOG_ERROR, "CJ library has no successful native-entry instance: %s", libName);
+            binLoadApi.binUnload(handler);
+            return nullptr;
+        }
+#endif
         BaseFile* file = GetBaseFile(baseName);
         if (file != nullptr && file->HasLoadFailed()) {
             // A retained failed image stays failed. Its native reference and

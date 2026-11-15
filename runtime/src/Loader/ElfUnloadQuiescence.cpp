@@ -852,6 +852,15 @@ ElfUnloadQuiescence::PurgeAuthorizationScope::~PurgeAuthorizationScope()
     purgeAdmission = previousAdmission;
 }
 
+#ifdef _WIN64
+void ElfUnloadQuiescence::RetainUnpublishedNativeImage(Uptr imageAddress)
+{
+    void* reference = nullptr;
+    CHECK_DETAIL(RetainNativeImage(imageAddress, nullptr, reference),
+                 "CJ pending image: native storage retention failed");
+}
+#endif
+
 std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::LinkImage(Uptr imageAddress)
 {
     return LinkImage(imageAddress, nullptr);

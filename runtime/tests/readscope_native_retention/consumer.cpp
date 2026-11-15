@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "Cangjie.h"
+extern "C" void* CJ_MCC_GetPackageByQualifiedName(const char*);
 namespace {
 uintptr_t observed = 0;
 unsigned exceptionEvents = 0, detachEvents = 0;
@@ -68,17 +69,35 @@ int main(int argc, char** argv)
         std::printf("NATIVE_ROLLBACK metadata=%p allocation=%p state=%lu type=%lu exception=%d\n",
                     reinterpret_cast<void*>(failedMetadata), memory.AllocationBase,
                     static_cast<unsigned long>(memory.State), static_cast<unsigned long>(memory.Type), caught);
+        Check("failed-package-not-visible-before-runtime-init",
+              CJ_MCC_GetPackageByQualifiedName("readscope.failed") == nullptr);
+        SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", nullptr);
+        SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_EXCEPTION", nullptr);
+        observed = 0;
+        HMODULE second = LoadLibraryA(argv[3]);
+        Check("independent-native-load-after-rollback", second != nullptr && observed != 0);
+        const uintptr_t successfulMetadata = observed;
         if (reuse) {
-            SetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", nullptr);
-            observed = 0;
-            HMODULE second = LoadLibraryA(argv[3]);
-            Check("independent-native-load-after-rollback", second != nullptr && observed != 0);
             std::printf("NATIVE_REUSE old_metadata=%p new_metadata=%p same_address=%d\n",
-                        reinterpret_cast<void*>(failedMetadata), reinterpret_cast<void*>(observed),
-                        failedMetadata == observed);
-            safe &= Report("failed-image-address-not-reassigned", failedMetadata != observed);
-            Check("independent-native-close", FreeLibrary(second) != 0);
+                        reinterpret_cast<void*>(failedMetadata), reinterpret_cast<void*>(successfulMetadata),
+                        failedMetadata == successfulMetadata);
+            safe &= Report("failed-image-address-not-reassigned", failedMetadata != successfulMetadata);
         }
+        Check("successful-package-pending-before-runtime-init",
+              CJ_MCC_GetPackageByQualifiedName("readscope.success") == nullptr);
+        RuntimeParam parameter {};
+        Check("runtime-init-after-native-failure", InitCJRuntime(&parameter) == E_OK);
+        Check("failed-package-not-published-after-runtime-init",
+              CJ_MCC_GetPackageByQualifiedName("readscope.failed") == nullptr);
+        Check("independent-success-package-published",
+              CJ_MCC_GetPackageByQualifiedName("readscope.success") != nullptr);
+        Check("independent-public-load", LoadCJLibrary(argv[3]) == E_OK);
+        Check("independent-public-symbol", FindCJSymbol(argv[3], "ReadScopeValue") != nullptr);
+        Check("independent-logical-close", UnloadCJLibrary(argv[3]) == E_OK);
+        Check("failed-package-stays-undiscoverable",
+              CJ_MCC_GetPackageByQualifiedName("readscope.failed") == nullptr);
+        Check("independent-native-close", FreeLibrary(second) != 0);
+        Check("runtime-fini-after-native-failure", FiniCJRuntime() == E_OK);
         return safe ? 0 : 1;
     }
     Check("native-load", first != nullptr);

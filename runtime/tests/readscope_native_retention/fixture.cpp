@@ -3,12 +3,28 @@
 // A real native CRT constructor enters the same metadata producer as Cjstart.
 #include <windows.h>
 #include <cstdio>
+#include <cstring>
+#include "ObjectModel/PackageInfo.h"
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
 using namespace MapleRuntime;
-extern "C" void MRT_LibraryOnLoad(uint64_t, bool);
-extern "C" void MRT_LibraryUnLoad(uint64_t);
+extern "C" void* MRT_LibraryOnLoadPendingV1(uint64_t, bool, void**);
+extern "C" void MRT_LibraryNativeDetachV1(void*);
+extern "C" { void* __CJ_NativeRegistrationV1 = nullptr; }
 namespace {
 CJFileHeader header {};
+// Serialized empty package emitted through the real PACKINFO table. Its ABI
+// is checked against PackageInfo; public reflection queries must discover the
+// successful image and must never discover the failed native instance.
+struct alignas(16) EmptyPackage {
+    PackageInfo* related = nullptr;
+    U32 typeInfos = 0, templates = 0, methods = 0, fields = 0;
+    U8 valid = 1, reserved[7] {};
+    DataRefOffset64<char> module {}, name {}, version {};
+    void* slots[2] {};
+} package;
+static_assert(sizeof(package) == ((sizeof(PackageInfo) + 15) & ~size_t(15)), "package metadata layout");
+U32 packageSize = sizeof(package);
+U64 packageAddress = reinterpret_cast<U64>(&package);
 U32 bytes = sizeof(header), zeroSize = 0, flagsSize = sizeof(CJGCFlagsTable);
 U64 zeroAddress = 0, sdkVersionPointer = 0, sdkVersionAddress = 0, flagsAddress = 0;
 CJGCFlagsTable flags { 1, 1, 0 };
@@ -26,18 +42,28 @@ struct NativeLifecycle {
         header.cJSDKVersionPtr = &sdkVersionPointer;
         for (auto& table : header.tables) { table = { &zeroAddress, &zeroSize }; }
         header.tables[GC_FLAGS_TABLE] = { &flagsAddress, &flagsSize };
+        char modulePath[MAX_PATH] {};
+        HMODULE module = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<const char*>(&header), &module);
+        GetModuleFileNameA(module, modulePath, MAX_PATH);
+        const char* name = std::strstr(modulePath, "companion") != nullptr ? "readscope.success" : "readscope.failed";
+        package.name.refOffset = reinterpret_cast<Sptr>(name) - reinterpret_cast<Sptr>(&package.name);
+        package.module.refOffset = reinterpret_cast<Sptr>(name) - reinterpret_cast<Sptr>(&package.module);
+        package.version.refOffset = reinterpret_cast<Sptr>(version) - reinterpret_cast<Sptr>(&package.version);
+        header.tables[PACKINFO_TABLE] = { &packageAddress, &packageSize };
         using Observe = void (*)(uintptr_t);
         auto observe = reinterpret_cast<Observe>(GetProcAddress(GetModuleHandleA(nullptr), "ReadScopeObserve"));
         if (observe != nullptr) { observe(reinterpret_cast<uintptr_t>(&header)); }
-        MRT_LibraryOnLoad(reinterpret_cast<uint64_t>(&header), true);
+        MRT_LibraryOnLoadPendingV1(reinterpret_cast<uint64_t>(&header), true, &__CJ_NativeRegistrationV1);
         ++initializations;
-        std::fprintf(stderr, "READSCOPE_FIXTURE_INIT count=%u\n", initializations);
+        std::fprintf(stderr, "READSCOPE_FIXTURE_INIT count=%u package=%s\n", initializations, package.name.GetDataRef());
     }
     ~NativeLifecycle()
     {
         ++finalizations;
-        std::fprintf(stderr, "READSCOPE_FIXTURE_FINI count=%u\n", finalizations);
-        MRT_LibraryUnLoad(reinterpret_cast<uint64_t>(&header));
+        std::fprintf(stderr, "READSCOPE_FIXTURE_FINI count=%u package=%s\n", finalizations, package.name.GetDataRef());
+        MRT_LibraryNativeDetachV1(__CJ_NativeRegistrationV1);
     }
 } lifecycle;
 }

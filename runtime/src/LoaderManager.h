@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <map>
+#include <memory>
 #include "ObjectModel/RefField.h"
 #include <vector>
 
@@ -58,6 +59,13 @@ public:
     void LoadFile(Uptr address);
     void LoadFileRetainedV1(Uptr address, NativeImageRetainerV1 retainer);
     void UnloadFile(Uptr address);
+#ifdef _WIN64
+    // The cookie belongs to one constructor invocation, not to an address/path.
+    void* BeginNativeImage(Uptr address, void** cookieSlot);
+    void CompleteNativeImage(void* cookie, bool succeeded);
+    void DetachNativeImage(void* cookie);
+    bool CommitNativeImageForHandle(void* handle);
+#endif
     void* LoadCJLibrary(const char* libName) const;
 #ifdef INTERPRETER_ENABLED
     void* LoadInterpreter(const char* libName) const;
@@ -88,6 +96,20 @@ public:
 private:
 #ifdef __OHOS__
     void RegisterLoadFunc();
+#endif
+#ifdef _WIN64
+    enum class NativeImageState { PENDING, READY, COMMITTING, PUBLISHED, FAILED };
+    struct NativeImageRegistration {
+        Uptr metadata;
+        Uptr identity;
+        void** cookieSlot;
+        NativeImageState state { NativeImageState::PENDING };
+    };
+    void CommitReadyNativeImages(void* onlyHandle = nullptr);
+    // Never free/reuse cookies: an old callback cannot name a later instance.
+    std::mutex nativeImagesMtx;
+    std::mutex nativePublicationMtx;
+    std::vector<std::unique_ptr<NativeImageRegistration>> nativeImages;
 #endif
     StaticRootTable _static_roots;
     static bool isReleased;

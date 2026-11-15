@@ -15,7 +15,8 @@ __CJ_Init_Start:                        # @__CJ_Init_Start
     leaq  __CJMetadataStart(%rip), %rcx
     movq (%rcx), %rcx
     movl  $1, %edx
-    callq MRT_LibraryOnLoad
+    leaq __CJ_NativeRegistrationV1(%rip), %r8
+    callq MRT_LibraryOnLoadPendingV1
     addq  $40, %rsp
     retq
     .seh_endproc
@@ -32,9 +33,8 @@ __CJ_Fini_End:                        # @__CJ_Fini_End
     subq  $40, %rsp
     .seh_stackalloc 40
     .seh_endprologue
-    leaq  __CJMetadataStart(%rip), %rcx
-    movq (%rcx), %rcx
-    callq MRT_LibraryUnLoad
+    movq __CJ_NativeRegistrationV1(%rip), %rcx
+    callq MRT_LibraryNativeDetachV1
     addq  $40, %rsp
     retq
     .seh_endproc
@@ -88,3 +88,11 @@ __CJ_Fini_End:                        # @__CJ_Fini_End
     .quad __CJReflectGISize
     .quad __CJTypeExt
     .quad __CJTypeExtSize
+
+    // Each mapped construction gets a new runtime-owned cookie. This slot is
+    // validated only after exact native retention, never on the query path.
+    .bss
+    .p2align 3
+    .globl __CJ_NativeRegistrationV1
+__CJ_NativeRegistrationV1:
+    .quad 0

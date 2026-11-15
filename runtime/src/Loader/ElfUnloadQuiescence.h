@@ -206,6 +206,10 @@ public:
     // and dladdr result may both have disappeared by the time close commits.
     static void CommitImageClosing(Uptr imageIdentity);
     static bool IsImageClosing(Uptr imageAddress);
+#ifdef _WIN64
+    // Retain storage without publishing it in the address/metadata directory.
+    static void RetainUnpublishedNativeImage(Uptr imageAddress);
+#endif
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress, NativeImageRetainerV1 retainer);
     static void UnlinkImage(Uptr imageAddress);

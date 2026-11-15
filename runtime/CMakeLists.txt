@@ -681,6 +681,11 @@ endif()
 
 if (WINDOWS_FLAG MATCHES 1)
     add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/x86_64_windows/Cjstart.S)
+    # Separate from cjstart.o: executables must not acquire a reference to the
+    # DLL CRT entry. The paired compiler links this object only for DLL output.
+    add_library(cjstartdllentry OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/x86_64_windows/CjDllEntry.S)
+    install(PROGRAMS $<TARGET_OBJECTS:cjstartdllentry>
+            RENAME cjstartdllentry.o DESTINATION lib/${TARGET_ARCH})
     add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Windows/Section.cpp)
 elseif (MACOS_FLAG MATCHES 1)
     add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Macos/Section.cpp)
