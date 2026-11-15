@@ -40,6 +40,7 @@ set(GC_UNIT_SOURCES
     test_stackmap_base_capture.cpp
     test_empty_stackmap.cpp
     test_stub_register_roots.cpp
+    test_stack_grow_null_base.cpp
     test_gctibzero.cpp
     test_field_iterator.cpp
     test_pinroot.cpp
