@@ -178,3 +178,5 @@ readscope_loader_detection_failure.cpp manual LD_PRELOAD self-map/LMID fault inj
 reflection_nested_stable_stack_product.cj manual installed private runtime nested direct/reflection four-arm regression with small growable CJThread stack
 reflection_stable_boundaries_product.cj manual private installed runtime exception reentry dynamic FunctionTypeInfo outer and native callback after capacity growth
 reflection_stable_callback.cpp manual native helper for reflection_stable_boundaries_product.cj; live native holder control
+
+c2n_nofp manual paired GNU Linux x86-64 backend/runtime private install; public CJ calls, native XMM clobber, GC progress, callback exception/root controls; performance not measured
