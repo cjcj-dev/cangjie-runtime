@@ -30,6 +30,7 @@ static_assert(sizeof(EmptyPackage) == ((sizeof(PackageInfo) + 15) & ~size_t(15))
 struct ImageMetadata {
     CJFileHeader header {};
     CJGCFlagsTable flags { 1, 1, 0 };
+    const char* sdkVersion = "0.0.1";
     alignas(16) EmptyPackage package {};
 } metadata;
 unsigned initializations = 0, finalizations = 0;
@@ -40,6 +41,9 @@ struct NativeLifecycle {
         const char* version = "0.0.1";
         metadata.header.magic = 0x12345678;
         metadata.header.cJFileSize = sizeof(metadata);
+        // CJFile::GetSDKVersion reads an in-image pointer slot, even when
+        // version mismatch checks are disabled by the product configuration.
+        metadata.header.cJSDKVersionOffset = offsetof(ImageMetadata, sdkVersion);
         metadata.header.tables[GC_FLAGS_TABLE] = { offsetof(ImageMetadata, flags), sizeof(metadata.flags) };
         metadata.header.tables[PACKINFO_TABLE] = { offsetof(ImageMetadata, package), sizeof(metadata.package) };
         auto& package = metadata.package;
