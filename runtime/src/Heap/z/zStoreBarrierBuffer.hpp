@@ -67,6 +67,32 @@ public:
     static constexpr size_t current_offset() { return offsetof(StoreBarrierBuffer, current); }
 };
 
+// Paired with StoreBarrierBufferABI in LLVM CJBarrierLowering.cpp. current
+// follows std::mutex, whose representation is platform-dependent. Only the
+// x86_64 Linux GNU LP64 target uses this fixed table; other targets continue
+// to load the five exported layout values from CompilerCalls.cpp.
+#if defined(__linux__) && defined(__GLIBC__) && defined(__x86_64__) && !defined(__ILP32__)
+namespace StoreBarrierBufferABI {
+constexpr size_t Current = 824;
+constexpr size_t Buffer = 0;
+constexpr size_t EntrySize = 16;
+constexpr size_t EntryP = 0;
+constexpr size_t EntryPrev = 8;
+} // namespace StoreBarrierBufferABI
+static_assert(sizeof(void*) == 8 && sizeof(size_t) == 8 && sizeof(uintptr_t) == 8 &&
+              sizeof(zpointer) == 8, "compiler store buffer LP64 ABI");
+static_assert(StoreBarrierBuffer::current_offset() == StoreBarrierBufferABI::Current,
+              "compiler store buffer current ABI");
+static_assert(StoreBarrierBuffer::buffer_offset() == StoreBarrierBufferABI::Buffer,
+              "compiler store buffer entries ABI");
+static_assert(sizeof(StoreBarrierEntry) == StoreBarrierBufferABI::EntrySize,
+              "compiler store buffer entry size ABI");
+static_assert(StoreBarrierEntry::p_offset() == StoreBarrierBufferABI::EntryP,
+              "compiler store buffer entry p ABI");
+static_assert(StoreBarrierEntry::prev_offset() == StoreBarrierBufferABI::EntryPrev,
+              "compiler store buffer entry prev ABI");
+#endif
+
 } // namespace MapleRuntime
 
 #include "Heap/z/zStoreBarrierBuffer.inline.hpp"
