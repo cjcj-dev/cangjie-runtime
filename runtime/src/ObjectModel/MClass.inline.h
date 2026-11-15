@@ -286,7 +286,7 @@ inline U16 TypeInfo::GetValidInheritNum() const
 
 inline U32 TypeInfo::GetUUIDInReadScope()
 {
-    if (::MapleRuntime::ENABLE_DEBUG_CHECKS) {
+    if constexpr (::MapleRuntime::ENABLE_DEBUG_CHECKS && !ElfUnloadQuiescence::RetainsNativeImages()) {
         ElfUnloadQuiescence::AssertReaderActive();
     }
     if (UNLIKELY(IsInitialUUID())) {

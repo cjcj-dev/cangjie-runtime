@@ -171,7 +171,9 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     gcStackInfo.VisitStackRoots(func, mutator);
 }
 
@@ -188,7 +190,9 @@ void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, con
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator, young);
 }
 
@@ -201,7 +205,9 @@ void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPt
     StackGrowStackInfo stackInfo(&topFrame);
     stackInfo.SetProcessingOwner(&mutator);
     stackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     stackInfo.RecordStackPtrs(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, mutator);
 }
 
