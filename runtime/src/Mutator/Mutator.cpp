@@ -672,6 +672,17 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             StorePlain(newBase, to_zaddress(raw(oldBase) + stackOffset));
             RebaseDerived(newDerivedSlot, newBase, offset);
         }
+        // HotSpot handles hold oops (handles.inline.hpp:38-56), but a Cangjie native
+        // frame also roots the fields of a value record it owns on this stack
+        // (ScopedAllocBuffer::HoldValueRecord). The copy moved those fields, so each
+        // such root follows them like the stack-map slots above; IsStackAddr still
+        // describes the old stack until MRT_FreeOldStack.
+        for (ObjectRef& root : nativeFrameRoots) {
+            const uintptr_t value = raw(root.LoadPlain());
+            if (IsStackAddr(value)) {
+                StorePlain(root, to_zaddress(value + stackOffset));
+            }
+        }
 
         // continuationFreezeThaw.cpp:323-350 republishes the complete frame
         // anchor when stack ownership changes. CJThread copies a native stack

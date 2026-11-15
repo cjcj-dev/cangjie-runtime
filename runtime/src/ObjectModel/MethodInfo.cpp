@@ -15,6 +15,7 @@
 #include "ObjectManager.inline.h"
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.h"
+#include "schedule.h"
 
 namespace MapleRuntime {
 CJRawArray* CJArray::GetRawArray()
@@ -125,6 +126,19 @@ void ScopedAllocBuffer::HoldValueRecord(TypeInfo* type, void* record)
     type->GetGCTib().ForEachRootSlot(reinterpret_cast<MAddress>(record), [&](RootSlot& field) {
         (void)Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(&field));
     });
+}
+
+// CJ_MCC_C2NStub checks that the stack arguments it copies end above
+// CJThreadStackGuardGet() before it enters native code, and raises the ordinary
+// StackOverflowError otherwise (MCC_ThrowStackOverflowError). The value records
+// are the same kind of caller-owned stack area and get the same check before
+// any of them is touched. This frame starts just below the caller's stack pointer.
+__attribute__((noinline)) bool ScopedAllocBuffer::ValueRecordsFitStack(size_t bytes)
+{
+    const uintptr_t guard = reinterpret_cast<uintptr_t>(CJThreadStackGuardGet());
+    if (guard == 0) { return true; } // the OS thread stack of an exclusive schedule is not checked
+    const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+    return sp > guard && sp - guard > bytes;
 }
 
 // Copy a boxed value's payload into a value record in its uncolored form
@@ -862,6 +876,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     // The value records stay in this frame until ApplyCJMethodImpl returns,
     // like the alloca a compiled caller passes (ScopedAllocBuffer::ValueRecordFootprint).
     const size_t valueRecordBytes = ValueRecordBytes(instanceObj != nullptr, reflectVersion, actualArgs);
+    if (valueRecordBytes != 0 && !ScopedAllocBuffer::ValueRecordsFitStack(valueRecordBytes)) {
+        ExceptionManager::StackOverflow(valueRecordBytes > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(valueRecordBytes),
+                                        __builtin_return_address(0));
+        return returnPending();
+    }
     scopedAllocBuffer.AttachValueRecords(valueRecordBytes == 0 ? nullptr : __builtin_alloca(valueRecordBytes),
                                          valueRecordBytes);
     if (HasSRet()) {
@@ -934,7 +953,13 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
         *sretSlot = sretHandle();
     }
+    // A callee that grows the CJThread stack copies this frame with its value
+    // records (Mutator::FixExtendedStack), and the native frame roots follow the
+    // copy. A raw record address this frame reads afterwards moves by the copy
+    // offset, which is the stack-base delta (CJThreadStackAdjust, MRT_FreeOldStack).
+    const uintptr_t stackBaseBefore = Mutator::GetMutator()->GetStackBaseAddr();
     Value ret = ApplyCJMethodImpl(&argValues, sretSlot, receiver, returnsReceiver, returnsUnit);
+    const uintptr_t stackMoved = Mutator::GetMutator()->GetStackBaseAddr() - stackBaseBefore;
 
     if (ExceptionManager::HasPendingException()) {
         // Let native argument/receiver roots unwind normally before the
@@ -964,7 +989,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
         ((reflectVersion == 0) ? declaringTi->IsGenericTypeInfo() : declaringTi->IsUnknownSize())))) {
         return receiver();
     } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
-        ret.ref = instanceObj;
+        ret.ref = instanceObj == nullptr ? nullptr :
+            reinterpret_cast<ObjRef>(reinterpret_cast<uintptr_t>(instanceObj) + stackMoved);
         void* any = RetValueToAny(ret, sretSlot == nullptr ? nullptr : *sretSlot, declaringTi);
         MemoryFree(sretSlot == nullptr ? nullptr : *sretSlot);
         MemoryFree(sretSlot);

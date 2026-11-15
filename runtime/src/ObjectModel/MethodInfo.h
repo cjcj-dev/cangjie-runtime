@@ -70,6 +70,7 @@ public:
     // The storage is the calling native frame on the CJThread stack.
     void AttachValueRecords(void* storage, size_t size);
     void* TakeValueRecord(size_t size);
+    static bool ValueRecordsFitStack(size_t bytes);
     void HoldValueRecord(TypeInfo* type, void* record);
     void* StageValueRecord(TypeInfo* type, BaseObject* box);
     static size_t ValueRecordFootprint(size_t size);
