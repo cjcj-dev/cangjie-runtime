@@ -21,6 +21,26 @@ const ref=run('source-ref',['git','-C',path.dirname(runtime),'rev-parse','HEAD']
 run('configure',['cmake','-S',runtime,'-B',build,'-G','Ninja','-DWINDOWS_FLAG=1','-DCOPYGC_FLAG=1','-DDOPRA_FLAG=1','-DCMAKE_BUILD_TYPE=Release','-DRUNTIME_TRACE_FLAG=1','-DCJ_SDK_VERSION=0.0.1','-DDISABLE_VERSION_CHECK=1','-DCMAKE_C_COMPILER='+tool('clang'),'-DCMAKE_CXX_COMPILER='+tool('clang++'),'-DCMAKE_ASM_COMPILER='+tool('clang'),'-DCMAKE_AR_PATH='+tool('llvm-ar'),'-DCMAKE_MAKE_PROGRAM='+tool('ninja'),'-DWINDOWS_RUNTIME_OBJCOPY='+bfd('objcopy'),'-DWINDOWS_RUNTIME_OBJDUMP='+bfd('objdump'),'-DCMAKE_C_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCMAKE_CXX_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCJ_RUNTIME_COMMIT='+ref,'-DMRT_GC_UNIT_TESTS=OFF','-DCMAKE_INSTALL_PREFIX='+install]);
 run('build',['cmake','--build',build,'--parallel','2']);run('install',['cmake','--install',build]);
 function files(root){return fs.readdirSync(root,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(path.join(root,e.name)):[path.join(root,e.name)]);}
+if(process.env.READSCOPE_TARGET_INPUTS_ONLY==='true'){
+  // A normal producer-only dependency job, not a repeat of the five lifecycle
+  // cases. Preserve its whole normal installation and the generated import
+  // archive; earlier uploads retained only DLLs and cannot supply startup.
+  const installed=files(install),imports=files(build).filter(p=>/cangjie-runtime\.dll\.a$/i.test(p));
+  assert.equal(imports.length,1);
+  for(const name of ['cjstart.o','cjstartdllentry.o','section.o','libcangjie-runtime.a']){
+    assert.equal(installed.filter(p=>path.basename(p)===name).length,1,name);
+  }
+  const target=path.join(out,'target-inputs');fs.mkdirSync(target);
+  fs.copyFileSync(imports[0],path.join(target,path.basename(imports[0])));
+  const observations={};
+  for(const name of ['crt2.o','dllcrt2.o','libclang_rt.builtins-x86_64.a','libucrt.a','libmsvcrt.a']){
+    observations[name]=run('toolchain-'+name.replaceAll('.','-'),[tool('clang'),'-print-file-name='+name]).trim();
+  }
+  fs.writeFileSync(path.join(out,'target-inputs.json'),JSON.stringify({ref,platform:process.platform,host:os.version(),
+    installed:installed.map(p=>({path:p,sha256:sha(p)})),normalBuildImport:{path:imports[0],sha256:sha(imports[0])},
+    toolchainQueries:observations,scope:'normal native runtime dependency production only; five prior lifecycle cases NOT_RUN; no public compiler DLL or cross-CRT/SDK qualification'},null,2));
+  process.exit(0);
+}
 const libraries=files(install).filter(p=>/cangjie-runtime\.dll$/i.test(p)),imports=files(build).filter(p=>/cangjie-runtime\.dll\.a$/i.test(p));assert.equal(libraries.length,1);assert.equal(imports.length,1);const lib=path.dirname(libraries[0]);
 const entries=files(install).filter(p=>p.endsWith(path.sep+'cjstartdllentry.o'));assert.equal(entries.length,1);
 const headers=[runtime+'/src',runtime+'/src/Loader/BinaryFile',runtime+'/include',runtime+'/src/CJThread/src/runtime/schedule/include',runtime+'/third_party/third_party_bounds_checking_function/include',runtime+'/src/os/Windows',...files(build).filter(p=>p.endsWith(path.sep+'log.h')).map(p=>path.dirname(p))];

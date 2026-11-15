@@ -6,11 +6,15 @@ on:
         description: Build the fixed runtime and exercise native image lifetime entry/rollback.
         type: boolean
         default: false
+      readscope_target_inputs:
+        description: Normal installed runtime/startup/import prerequisites only; no lifecycle repetitions.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   windows:
-    if: ${{ !inputs.readscope_lifetime }}
+    if: ${{ !inputs.readscope_lifetime && !inputs.readscope_target_inputs }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -42,7 +46,7 @@ jobs:
             ${{ runner.temp }}/runtime-windows/*.cmake
             ${{ runner.temp }}/runtime-windows/product/*
   readscope-lifetime:
-    if: ${{ inputs.readscope_lifetime }}
+    if: ${{ inputs.readscope_lifetime != inputs.readscope_target_inputs }}
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -74,6 +78,7 @@ jobs:
       - name: Normal runtime production and native lifecycle consumer
         env:
           READSCOPE_CLANG64: ${{ steps.readscope-msys.outputs.msys2-location }}/clang64/bin
+          READSCOPE_TARGET_INPUTS_ONLY: ${{ inputs.readscope_target_inputs }}
         shell: pwsh
         run: node runtime/tests/readscope_native_retention/native.mjs
       - uses: actions/upload-artifact@v4
@@ -88,5 +93,7 @@ jobs:
             ${{ runner.temp }}/readscope-native/*.exe
             ${{ runner.temp }}/readscope-native/install/runtime/lib/**/*.dll
             ${{ runner.temp }}/readscope-native/install/lib/windows_x86_64_cjnative/**
+            ${{ runner.temp }}/readscope-native/install/include/**
+            ${{ runner.temp }}/readscope-native/target-inputs/**
             ${{ runner.temp }}/readscope-native/install/include/**
           if-no-files-found: error
