@@ -23,7 +23,12 @@ for(const [arch,flag] of [['x86_64','2'],['aarch64','1']]){
  run(arch+'-configure',['cmake','-S',runtime,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DANDROID_FLAG='+flag,'-DANDROID_ROOT='+ndk+'/toolchains','-DCMAKE_ANDROID_API=31','-DOHOS_FLAG=0','-DWINDOWS_FLAG=0','-DCOPYGC_FLAG=1','-DDOPRA_FLAG=1','-DRUNTIME_TRACE_FLAG=1','-DCJ_SDK_VERSION=0.0.1','-DDISABLE_VERSION_CHECK=1','-DCMAKE_C_COMPILER='+cc,'-DCMAKE_CXX_COMPILER='+cc+'++','-DCMAKE_ASM_COMPILER='+cc,'-DCMAKE_C_COMPILER_LAUNCHER=sccache','-DCMAKE_CXX_COMPILER_LAUNCHER=sccache','-DCMAKE_INSTALL_PREFIX='+install,'-DCJ_RUNTIME_COMMIT='+ref,'-DMRT_GC_UNIT_TESTS=OFF']);
  run(arch+'-build',['cmake','--build',build,'--parallel','2']);run(arch+'-install',['cmake','--install',build]);
  const members=files(install),libraries=members.filter(p=>p.endsWith('/libcangjie-runtime.so')),start=members.filter(p=>p.endsWith('/cjstart.o'));assert.equal(libraries.length,1);assert.equal(start.length,1);
- run(arch+'-startup-relocs',[tools+'/llvm-readelf','-sWr',start[0]]);run(arch+'-startup-machine',[tools+'/llvm-objdump','-dr',start[0]]);
+ const startupSymbols=run(arch+'-startup-relocs',[tools+'/llvm-readelf','-sWr',start[0]]);run(arch+'-startup-machine',[tools+'/llvm-objdump','-dr',start[0]]);
+ // The installed CJ producer calls the direct MRT symbol, not its CJ_MRT alias.
+ // A successful shared fixture link alone permits an unresolved import.
+ assert(/UND\s+MRT_LibraryOnLoadRetainedV1\s*$/m.test(startupSymbols),'normal startup consumes the V1 entry');
+ const exported=run(arch+'-runtime-exports',[tools+'/llvm-readelf','--dyn-syms','--wide',libraries[0]]);
+ assert(/FUNC\s+GLOBAL\s+DEFAULT\s+\d+\s+MRT_LibraryOnLoadRetainedV1(?:@@?\S+)?\s*$/m.test(exported),'installed runtime defines the direct V1 entry');
  const machineMembers=['src/ObjectModel/CMakeFiles/ObjectModel.dir/MClass.cpp.o','src/CMakeFiles/cangjie-runtime.dir/StackManager.cpp.o','src/CMakeFiles/runtime.dir/StackManager.cpp.o'];
  fs.writeFileSync(out+'/'+arch+'-machine-members.json',JSON.stringify(machineMembers,null,2));
  for(const [index,member] of machineMembers.entries()){const object=build+'/'+member;assert(fs.statSync(object).isFile(),member);const body=run(arch+'-'+index+'-'+path.basename(object)+'-machine',[tools+'/llvm-objdump','-dr',object]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),member);}
