@@ -4,7 +4,11 @@ import fs from 'node:fs';import path from 'node:path';import assert from 'node:a
 assert.equal(process.platform,'linux');
 const here=path.dirname(fileURLToPath(import.meta.url)),runtime=path.resolve(here,'../..'),out=path.join(process.env.RUNNER_TEMP,'readscope-android');fs.mkdirSync(out);
 const android=process.env.ANDROID_HOME;assert(android&&path.isAbsolute(android));const ndkVersion='27.3.13750724',ndk=path.join(android,'ndk',ndkVersion),toolchain=path.join(ndk,'toolchains/llvm/prebuilt/linux-x86_64'),tools=toolchain+'/bin',adb=android+'/platform-tools/adb';
-const env={...process.env,CANGJIE_BUILD_JOBS:'2',CMAKE_BUILD_PARALLEL_LEVEL:'2',GC_UNIT_GATE_SKIP:'1',SCCACHE_GHA_ENABLED:'true',TMPDIR:out};
+// Keep the Java AVD producer and native emulator on the same private paths.
+// Runner defaults for the SDK/user/emulator homes need not agree.
+const androidUser=out+'/.android',avdHome=androidUser+'/avd';fs.mkdirSync(avdHome,{recursive:true});
+const env={...process.env,ANDROID_SDK_HOME:out,ANDROID_USER_HOME:androidUser,ANDROID_EMULATOR_HOME:androidUser,ANDROID_AVD_HOME:avdHome,CANGJIE_BUILD_JOBS:'2',CMAKE_BUILD_PARALLEL_LEVEL:'2',GC_UNIT_GATE_SKIP:'1',SCCACHE_GHA_ENABLED:'true',TMPDIR:out};
+fs.writeFileSync(out+'/avd-paths.json',JSON.stringify({ANDROID_SDK_HOME:out,ANDROID_USER_HOME:androidUser,ANDROID_EMULATOR_HOME:androidUser,ANDROID_AVD_HOME:avdHome}));
 const rows=[],save=()=>fs.writeFileSync(out+'/commands.json',JSON.stringify(rows,null,2));
 function run(name,args,{input,expected=0,timeout=2700000}={}){const row={name,args,cwd:out,started:new Date().toISOString(),expected};rows.push(row);save();const a=fs.openSync(out+'/'+name+'.stdout','wx'),b=fs.openSync(out+'/'+name+'.stderr','wx'),r=spawnSync(args[0],args.slice(1),{cwd:out,env,input,stdio:[input===undefined?'ignore':'pipe',a,b],timeout});fs.closeSync(a);fs.closeSync(b);Object.assign(row,{rc:r.status,signal:r.signal,error:r.error?.message,ended:new Date().toISOString()});save();console.log(name,row.rc,row.signal);if(expected!==null){assert.equal(r.status,expected,name);assert.equal(r.signal,null,name);}return fs.readFileSync(out+'/'+name+'.stdout','utf8');}
 function files(p){return fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(p+'/'+e.name):[p+'/'+e.name]);}
@@ -29,7 +33,10 @@ fs.writeFileSync(out+'/identity.json',JSON.stringify({ref,ndkVersion,built,scope
 const x64=built[0],lib=path.dirname(x64.runtime.path),headers=[runtime+'/src',runtime+'/include',runtime+'/src/Loader/BinaryFile',runtime+'/src/CJThread/src/runtime/schedule/include',runtime+'/third_party/third_party_bounds_checking_function/include',...files(x64.build).filter(p=>p.endsWith('/log.h')).map(p=>path.dirname(p))],common=[tools+'/x86_64-linux-android31-clang++','-std=gnu++17','-O2',...headers.map(p=>'-I'+p)];
 run('fixture-link',[...common,'-shared','-fPIC','-Wl,-Bsymbolic-functions',here+'/elf-fixture.cpp','-L'+lib,'-lcangjie-runtime','-ldl','-o',out+'/fixture.so']);
 run('consumer-link',[...common,here+'/elf-consumer.cpp','-L'+lib,'-lcangjie-runtime','-ldl','-o',out+'/consumer']);
-run('create-avd',[android+'/cmdline-tools/latest/bin/avdmanager','create','avd','--name','readscope-lifetime','--package','system-images;android-31;google_apis;x86_64','--device','pixel_2'],{input:'no\n'});
+run('create-avd',[android+'/cmdline-tools/latest/bin/avdmanager','create','avd','--name','readscope-lifetime','--path',avdHome+'/readscope-lifetime.avd','--package','system-images;android-31;google_apis;x86_64','--device','pixel_2'],{input:'no\n'});
+assert(fs.statSync(avdHome+'/readscope-lifetime.ini').isFile(),'AVD registration exists before emulator launch');
+run('list-avds',[android+'/cmdline-tools/latest/bin/avdmanager','list','avd']);
+const emulatorAvds=run('emulator-list-avds',[android+'/emulator/emulator','-list-avds']);assert(emulatorAvds.split(/\r?\n/).includes('readscope-lifetime'),'native emulator sees the created AVD');
 const log=fs.openSync(out+'/emulator.stdout','wx'),err=fs.openSync(out+'/emulator.stderr','wx'),emulator=spawn(android+'/emulator/emulator',['-avd','readscope-lifetime','-port','5554','-no-window','-no-audio','-no-boot-anim','-no-snapshot','-gpu','swiftshader_indirect','-memory','2048'],{env,stdio:['ignore',log,err]});let killed=false;const emulatorExit=new Promise(resolve=>{emulator.on('error',error=>resolve({error:error.message}));emulator.on('close',(rc,signal)=>resolve({rc,signal}));});
 try{
  run('wait-device',[adb,'-s','emulator-5554','wait-for-device'],{timeout:180000});const deadline=Date.now()+240000;let boot=false;
