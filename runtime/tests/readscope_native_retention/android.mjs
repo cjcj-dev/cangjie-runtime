@@ -20,7 +20,9 @@ for(const [arch,flag] of [['x86_64','2'],['aarch64','1']]){
  run(arch+'-build',['cmake','--build',build,'--parallel','2']);run(arch+'-install',['cmake','--install',build]);
  const members=files(install),libraries=members.filter(p=>p.endsWith('/libcangjie-runtime.so')),start=members.filter(p=>p.endsWith('/cjstart.o'));assert.equal(libraries.length,1);assert.equal(start.length,1);
  run(arch+'-startup-relocs',[tools+'/llvm-readelf','-sWr',start[0]]);run(arch+'-startup-machine',[tools+'/llvm-objdump','-dr',start[0]]);
- for(const leaf of ['MClass.cpp.o','StackManager.cpp.o']){const objects=files(build).filter(p=>p.endsWith('/'+leaf));assert.equal(objects.length,1);const body=run(arch+'-'+leaf+'-machine',[tools+'/llvm-objdump','-dr',objects[0]]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),leaf);}
+ const machineMembers=['src/ObjectModel/CMakeFiles/ObjectModel.dir/MClass.cpp.o','src/CMakeFiles/cangjie-runtime.dir/StackManager.cpp.o','src/CMakeFiles/runtime.dir/StackManager.cpp.o'];
+ fs.writeFileSync(out+'/'+arch+'-machine-members.json',JSON.stringify(machineMembers,null,2));
+ for(const [index,member] of machineMembers.entries()){const object=build+'/'+member;assert(fs.statSync(object).isFile(),member);const body=run(arch+'-'+index+'-'+path.basename(object)+'-machine',[tools+'/llvm-objdump','-dr',object]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),member);}
  built.push({arch,ref,runtime:{path:libraries[0],sha256:hash(libraries[0])},startup:{path:start[0],sha256:hash(start[0])},build,install});
 }
 fs.writeFileSync(out+'/identity.json',JSON.stringify({ref,ndkVersion,built,scope:'normal two-architecture Android cross production; only x86_64 emulator lifecycle; AArch64 target execution and Debug/O0 NOT_RUN; finite metadata fixture, not generated CJ library/SDK'},null,2));

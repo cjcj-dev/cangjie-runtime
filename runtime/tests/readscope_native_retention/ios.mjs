@@ -12,7 +12,11 @@ run('normal-build',['python3',runtime+'/build.py','build','--target',target,'--b
 run('normal-install',['python3',runtime+'/build.py','install','--prefix',out+'/install'],{cwd:runtime});
 const install=out+'/install',libraries=files(install).filter(p=>p.endsWith('/libcangjie-runtime.dylib'));assert.equal(libraries.length,1);const library=libraries[0],lib=path.dirname(library),build=runtime+'/CMakebuild',product={ref,target,sdk,sdkPath,arch,runtime:{path:library,sha256:hash(library)},deviceExecution:'NOT_RUN',DebugO0:'NOT_RUN',scope:'normal iOS build/install; finite simulator native lifecycle only, not actual iOS hardware or generated CJ SDK'};
 fs.writeFileSync(out+'/identity.json',JSON.stringify(product,null,2));run('runtime-load-commands',['xcrun','otool','-L',library]);
-for(const leaf of ['MClass.cpp.o','StackManager.cpp.o']){const objects=files(build).filter(p=>p.endsWith('/'+leaf));assert.equal(objects.length,1);const body=run(leaf+'-machine',['xcrun','llvm-objdump','-dr',objects[0]]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),leaf);}
+// src/CMakeLists.txt builds StackManager separately for COMPILE_DYNAMIC and
+// the static runtime object target on iOS. Inspect both normal graph members.
+const machineMembers=['src/ObjectModel/CMakeFiles/ObjectModel.dir/MClass.cpp.o','src/CMakeFiles/cangjie-runtime.dir/StackManager.cpp.o','src/CMakeFiles/runtime.dir/StackManager.cpp.o'];
+fs.writeFileSync(out+'/machine-members.json',JSON.stringify(machineMembers,null,2));
+for(const [index,member] of machineMembers.entries()){const object=build+'/'+member;assert(fs.statSync(object).isFile(),member);const body=run(index+'-'+path.basename(object)+'-machine',['xcrun','llvm-objdump','-dr',object]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),member);}
 if(simulator){
  assert.equal(process.arch==='arm64'?'arm64':'x86_64',arch,'simulator must match native runner architecture');
  const headers=[runtime+'/src',runtime+'/include',runtime+'/src/Loader/BinaryFile',runtime+'/src/CJThread/src/runtime/schedule/include',runtime+'/third_party/third_party_bounds_checking_function/include',...files(build).filter(p=>p.endsWith('/log.h')).map(p=>path.dirname(p))],common=[clang+'++','-std=gnu++17','-O2','-target',arch+'-apple-ios13.0-simulator','-isysroot',sdkPath,...headers.map(p=>'-I'+p)],fixture=out+'/fixture.dylib',consumer=out+'/consumer';
