@@ -47,7 +47,6 @@ jobs:
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: 'true'
-      READSCOPE_CLANG64: C:/msys64/clang64/bin
     steps:
       - uses: actions/checkout@v4
       - name: Fetch the fixed bounds source with Git
@@ -62,6 +61,7 @@ jobs:
           git -C $bounds checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: msys2/setup-msys2@v2
+        id: readscope-msys
         with:
           msystem: CLANG64
           update: false
@@ -71,6 +71,8 @@ jobs:
             mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
       - uses: mozilla-actions/sccache-action@v0.0.10
       - name: Normal runtime production and native lifecycle consumer
+        env:
+          READSCOPE_CLANG64: ${{ steps.readscope-msys.outputs.msys2-location }}/clang64/bin
         shell: pwsh
         run: node runtime/tests/readscope_native_retention/native.mjs
       - uses: actions/upload-artifact@v4
