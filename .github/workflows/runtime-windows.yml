@@ -10,11 +10,23 @@ on:
         description: Normal installed runtime/startup/import prerequisites only; no lifecycle repetitions.
         type: boolean
         default: false
+      readscope_std_consumer:
+        description: Consume frozen normal std/public CJ DLL arms only; no runtime production.
+        type: boolean
+        default: false
+      std_asset_url:
+        description: Exact temporary prerelease asset URL for the frozen DLL arms.
+        type: string
+        default: ''
+      std_asset_sha256:
+        description: Preapproved SHA256 of that asset.
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
   windows:
-    if: ${{ !inputs.readscope_lifetime && !inputs.readscope_target_inputs }}
+    if: ${{ !inputs.readscope_std_consumer && !inputs.readscope_lifetime && !inputs.readscope_target_inputs }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -46,7 +58,7 @@ jobs:
             ${{ runner.temp }}/runtime-windows/*.cmake
             ${{ runner.temp }}/runtime-windows/product/*
   readscope-lifetime:
-    if: ${{ inputs.readscope_lifetime != inputs.readscope_target_inputs }}
+    if: ${{ !inputs.readscope_std_consumer && inputs.readscope_lifetime != inputs.readscope_target_inputs }}
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -96,4 +108,35 @@ jobs:
             ${{ runner.temp }}/readscope-native/install/include/**
             ${{ runner.temp }}/readscope-native/target-inputs/**
             ${{ runner.temp }}/readscope-native/install/include/**
+          if-no-files-found: error
+  readscope-std-consumer:
+    if: ${{ inputs.readscope_std_consumer }}
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        id: std-msys
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Verify frozen inputs and consume normal DLLs
+        shell: pwsh
+        env:
+          READSCOPE_CLANG64: ${{ steps.std-msys.outputs.msys2-location }}/clang64/bin
+          READSCOPE_STD_ASSET_URL: ${{ inputs.std_asset_url }}
+          READSCOPE_STD_ASSET_SHA256: ${{ inputs.std_asset_sha256 }}
+          READSCOPE_OTHER_LIFETIME: ${{ inputs.readscope_lifetime }}
+          READSCOPE_OTHER_PRODUCER: ${{ inputs.readscope_target_inputs }}
+        run: node stdlib/tests/windows_shared_entry_runner.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-std-consumer
+          path: ${{ runner.temp }}/readscope-std-consumer/
           if-no-files-found: error
