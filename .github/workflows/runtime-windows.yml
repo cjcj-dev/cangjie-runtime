@@ -87,4 +87,6 @@ jobs:
             ${{ runner.temp }}/readscope-native/*.dll
             ${{ runner.temp }}/readscope-native/*.exe
             ${{ runner.temp }}/readscope-native/install/runtime/lib/**/*.dll
+            ${{ runner.temp }}/readscope-native/install/lib/windows_x86_64_cjnative/**
+            ${{ runner.temp }}/readscope-native/install/include/**
           if-no-files-found: error
