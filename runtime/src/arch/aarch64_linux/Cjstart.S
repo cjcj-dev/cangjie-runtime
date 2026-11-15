@@ -42,6 +42,7 @@ __CJ_ImageRetainV1:
     .cfi_startproc
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     paciasp
+    .cfi_negate_ra_state
 #endif
     str     x30, [sp, #-16]!
     .cfi_def_cfa_offset 16
@@ -51,6 +52,7 @@ __CJ_ImageRetainV1:
     .cfi_restore w30
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     autiasp
+    .cfi_negate_ra_state
 #endif
     .cfi_def_cfa_offset 0
     ret
