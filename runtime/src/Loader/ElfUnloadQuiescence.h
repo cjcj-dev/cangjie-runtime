@@ -30,11 +30,11 @@ class ElfUnloadQuiescence final {
     friend class CJFileLoader;
     friend class LoaderManager;
 public:
-    // Native capability, not a runtime option. Other loaders still require
-    // reader quiescence until they provide equivalent object/namespace pinning.
+    // Native capability, not a runtime option. Staged platform producers must
+    // establish exact-image retention before their readers can bypass admission.
     static constexpr bool RetainsNativeImages()
     {
-#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#if defined(_WIN64) || (defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__))
         return true;
 #else
         return false;

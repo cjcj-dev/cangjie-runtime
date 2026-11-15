@@ -114,6 +114,10 @@ bool LoaderManager::GetInitStatus() const { return initStatus.load(std::memory_o
 
 void LoaderManager::LoadFile(Uptr address)
 {
+    // Native pinning must not acquire the platform loader lock underneath
+    // loadedImgsMtx: the opposite order already exists in native constructors.
+    // CreateFileRefFromAddr reuses this retained map when it builds the catalog.
+    ElfUnloadQuiescence::LinkImage(address);
     std::lock_guard<std::mutex> lck(loadedImgsMtx);
     CheckPackageCompatibility(address);
     // MRT_LibraryOnLoad can be invoked before runtime init

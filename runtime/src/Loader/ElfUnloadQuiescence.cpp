@@ -198,7 +198,24 @@ ReaderSlot* CurrentReaderSlot()
 // address, then use the handle's LMID for NODELETE promotion.
 bool RetainNativeImage(Uptr metadata)
 {
-#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#if defined(_WIN64)
+    // Pin the module owning this address, not a pathname which could resolve
+    // to a second image. This Kernel32 call neither loads a DLL nor executes
+    // another initializer. It must precede runtime catalog locks, including
+    // when entered from the native CRT constructor under the loader lock.
+    MEMORY_BASIC_INFORMATION memory {};
+    CHECK_DETAIL(VirtualQuery(reinterpret_cast<const void*>(metadata), &memory, sizeof(memory)) != 0 &&
+                     memory.Type == MEM_IMAGE && memory.AllocationBase != nullptr,
+                 "CJ image pin: metadata has no native module");
+    HMODULE module = nullptr;
+    CHECK_DETAIL(GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                     reinterpret_cast<LPCSTR>(metadata), &module) != 0 &&
+                     reinterpret_cast<void*>(module) == memory.AllocationBase,
+                 "CJ image pin: exact native module retention failed");
+    // The pinned module's static dependency references stay owned by it. Do
+    // not FreeLibrary this handle: PIN is a process-lifetime native policy.
+    return true;
+#elif defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
     Dl_info info {};
     void* extra = nullptr;
     CHECK_DETAIL(dladdr1(reinterpret_cast<void*>(metadata), &info, &extra, RTLD_DL_LINKMAP) != 0 && extra != nullptr,
@@ -725,6 +742,7 @@ ElfUnloadQuiescence::PurgeAuthorizationScope::~PurgeAuthorizationScope()
 
 std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::LinkImage(Uptr imageAddress)
 {
+    if (auto existing = RegisteredImage(imageAddress)) { return existing; }
     // Capture once while the image is being registered, before runtime locks.
     // Dependency Begin and pending checks must not call into the platform
     // loader while dlclose is waiting in an image's fini callback.
@@ -810,6 +828,11 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     CHECK_DETAIL(image->Contains(imageAddress), "registered image must contain its metadata");
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
+    // Concurrent native registration may have retained the same immutable
+    // image while our platform queries ran without runtime catalog locks.
+    for (const auto& existing : maps.images) {
+        if (existing->metadata == imageAddress) { return existing; }
+    }
     maps.images.push_back(image);
     for (auto& slot : linkedImages) {
         Uptr observed = slot.load(std::memory_order_acquire);

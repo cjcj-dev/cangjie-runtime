@@ -1027,7 +1027,14 @@ void FailedManagedInitBody()
 }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, RetainedFailedInitializerIsNotReopened)
 {
+    metadata.namedType.typeInfoName = "gc.lock:RetainedFailedOwner";
+    secondaryMetadata.namedType.typeInfoName = "gc.lock:RetainedIndependentOwner";
     Init();
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* failedTi = reinterpret_cast<TypeInfo*>(&metadata.namedType);
+    loader->RecordTypeInfo(failedTi);
+    Target("failed-libinit-original-type-discoverable",
+           loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == failedTi);
     packageBody = FailedManagedInitBody;
     std::atomic<bool> done { false };
     Start([](void* argument) {
@@ -1037,9 +1044,21 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RetainedFailedInitializerIsNotReopened)
         Target("failed-libinit-second-entry-rejected", !manager->LibInit("package-init-main"));
         Target("failed-libinit-body-not-reexecuted", failedInitBodyCalls.load(std::memory_order_relaxed) == 1);
         Target("failed-libinit-no-pending-exception-leak", !ExceptionManager::HasPendingException());
+        auto* loader = static_cast<CJFileLoader*>(manager->GetLoader());
+        Target("failed-libinit-type-no-longer-discoverable",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == nullptr);
         secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageB);
         RegisterMetadata(secondaryMetadata, "retained-independent-init");
-        Target("failed-libinit-independent-image-initializes", manager->LibInit("retained-independent-init"));
+        Target("failed-libinit-independent-metadata-owner-initializes", manager->LibInit("retained-independent-init"));
+        // Both headers are in the same native executable. Successful ownership
+        // of that image must not republish the failed header's metadata range.
+        loader->RecordTypeInfo(reinterpret_cast<TypeInfo*>(&metadata.namedType));
+        Target("failed-libinit-shared-image-does-not-republish-failed-owner",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == nullptr);
+        auto* independentTi = reinterpret_cast<TypeInfo*>(&secondaryMetadata.namedType);
+        loader->RecordTypeInfo(independentTi);
+        Target("failed-libinit-independent-type-remains-discoverable",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedIndependentOwner") == independentTi);
         static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
     }, &done);
     Target("failed-libinit-consumer-completed", Await(done));

@@ -636,6 +636,11 @@ bool CJFileLoader::CanPublishAddress(const void* address) const
     // discovery set, changed under this same catalog lock by UnlinkLoadedFile.
     auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
     if (image == nullptr) { return true; } // Runtime-allocated metadata.
+    // Several metadata owners may share one native image. An independent
+    // owner's success cannot republish the failed owner's metadata range.
+    for (BaseFile* file : loadedFiles) {
+        if (file->HasLoadFailed() && file->IsAddrInCJFile(reinterpret_cast<Uptr>(address))) { return false; }
+    }
     return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
         return file->GetImageAddressMap().identity == image->identity && !file->HasLoadFailed();
     });
