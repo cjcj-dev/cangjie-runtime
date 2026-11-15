@@ -2,10 +2,13 @@
 export function classifyExit({stdout, stderr, logcat, adbRc, adbSignal, adbError, mode, remoteRuntime}) {
   const starts = [...stdout.matchAll(/^EXIT_EVENT pid=(\d+) realtime=([\d.]+) name=start result=0$/gm)];
   const pid = starts.length === 1 ? Number(starts[0][1]) : null;
+  // logcat may round/truncate realtime to milliseconds; the native marker has
+  // nanoseconds. Do not discard a same-PID fatal in the marker's first ms.
+  const firstMillisecond = starts.length === 1 ? Math.floor(Number(starts[0][2]) * 1000) / 1000 : null;
   const rows = logcat.split(/\r?\n/).filter(line => {
     // adb logcat -v epoch: realtime PID TID priority tag : message.
     const match = line.match(/^\s*([\d.]+)\s+(\d+)\s+(\d+)\s+([VDIWEF])\s/);
-    return pid !== null && match && Number(match[2]) === pid && Number(match[1]) >= Number(starts[0][2]);
+    return pid !== null && match && Number(match[2]) === pid && Number(match[1]) >= firstMillisecond;
   });
   const internalFatal = /FORTIFY:|Fatal signal\s+\d+|\bSIGABRT\b|\bSIGSEGV\b|Abort message:/.test(stderr + '\n' + rows.join('\n'));
   const marker = name => new RegExp(`^EXIT_EVENT pid=${pid} realtime=[\\d.]+ name=${name} result=0$`, 'm').test(stdout);

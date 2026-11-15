@@ -9,6 +9,7 @@ assert(!classifyExit({...input, logcat: fatal}).pass);
 assert(classifyExit({...input, logcat: fatal}).internalFatal);
 assert(classifyExit({...input, logcat: fatal.replaceAll('1456', '2456')}).pass);
 assert(classifyExit({...input, logcat: fatal.replaceAll('103.', '099.')}).pass);
+assert(!classifyExit({...input, stdout: input.stdout.replace('realtime=100.000000000', 'realtime=100.000999999'), logcat: fatal.replaceAll('103.', '100.')}).pass);
 assert(!classifyExit({...input, stdout: ''}).pass);
 assert(!classifyExit({...input, mode: 'fini'}).pass);
 assert(!classifyExit({...input, adbRc: null, adbSignal: 'SIGTERM'}).pass);
