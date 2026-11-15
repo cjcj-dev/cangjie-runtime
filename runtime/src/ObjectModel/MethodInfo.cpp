@@ -8,6 +8,7 @@
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include <cinttypes>
+#include <cstddef>
 
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
@@ -33,7 +34,7 @@ static bool IsValidArrayView(const CJArray* view, const CJRawArray* rawArray)
 
 ScopedAllocBuffer::~ScopedAllocBuffer()
 {
-    // Free off-heap struct snapshots created by AddCJArg via ReadStruct.
+    // Free the malloc'd snapshots created by CopyNativeStruct.
     for (void* buf : argBuffers) {
         if (buf != nullptr) {
             free(buf);
@@ -79,6 +80,64 @@ void ScopedAllocBuffer::RefreshNativeStructs()
     for (const auto& field : nativeFields) {
         StorePlain(*field.first, from_object(field.second()));
     }
+}
+
+// A by-value parameter is a pointer to a plain record that the caller owns:
+// cjc passes its own alloca, and the callee loads the references without a
+// barrier (CJBarrierLowering.cpp hasProvenNonHeapDestination, address space 0).
+// The GC expands a root that names such a record only on the CJThread stack
+// (Mutator::VisitHeapRootSlots, IsStackAddr), and ZStackWatermark heals the
+// native-held fields that head roots reach. A reflective call is the caller,
+// so the record lives in its native frame and HoldValueRecord names each of
+// its references with a native frame root; a heap box payload (coloured
+// words) or malloc'd memory (never expanded) is not such a record.
+size_t ScopedAllocBuffer::ValueRecordFootprint(size_t size)
+{
+    return MRT_ALIGN(size, alignof(std::max_align_t));
+}
+
+void ScopedAllocBuffer::AttachValueRecords(void* storage, size_t size)
+{
+    CHECK_DETAIL(valueRecordsLeft == 0 && (size == 0 || storage != nullptr), "value records attached twice");
+    valueRecords = reinterpret_cast<uintptr_t>(storage);
+    valueRecordsLeft = size;
+}
+
+void* ScopedAllocBuffer::TakeValueRecord(size_t size)
+{
+    const size_t footprint = ValueRecordFootprint(size);
+    CHECK_DETAIL(footprint <= valueRecordsLeft, "value record %zu exceeds the reserved %zu bytes", footprint,
+                 valueRecordsLeft);
+    void* record = reinterpret_cast<void*>(valueRecords);
+    CHECK_DETAIL(memset_s(record, footprint, 0, footprint) == EOK, "value record clear failed");
+    valueRecords += footprint;
+    valueRecordsLeft -= footprint;
+    return record;
+}
+
+// Head processing heals each named field in place, before the call and while
+// the callee runs (zStackWatermark.cpp process_head, 8bf7d1a6ee), as it does
+// for any native-held stack field; a Handle to the referent would leave the
+// record itself stale after a relocation inside the callee.
+void ScopedAllocBuffer::HoldValueRecord(TypeInfo* type, void* record)
+{
+    if (record == nullptr || !type->HasRefField()) { return; }
+    type->GetGCTib().ForEachRootSlot(reinterpret_cast<MAddress>(record), [&](RootSlot& field) {
+        (void)Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(&field));
+    });
+}
+
+// Copy a boxed value's payload into a value record in its uncolored form
+// (ValuePayload::Kind::Uncolored) and root its references in place.
+void* ScopedAllocBuffer::StageValueRecord(TypeInfo* type, BaseObject* box)
+{
+    const MSize size = type->GetInstanceSize();
+    void* record = TakeValueRecord(size);
+    const MAddress payload = reinterpret_cast<MAddress>(box) + TYPEINFO_PTR_SIZE;
+    HeapAccess<>::value_copy(ValuePayload(payload, size, box, payload),
+                             ValuePayload(reinterpret_cast<MAddress>(record), size));
+    HoldValueRecord(type, record);
+    return record;
 }
 
 void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
@@ -402,6 +461,57 @@ TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, v
     return nullptr;
 }
 
+MSize MethodInfo::ValueRecordSize(TypeInfo* argType)
+{
+    switch (argType->GetType()) {
+        case TypeKind::TYPE_KIND_TUPLE:
+        case TypeKind::TYPE_KIND_STRUCT:
+        case TypeKind::TYPE_KIND_VARRAY:
+            return argType->GetInstanceSize();
+        default:
+            return 0;
+    }
+}
+
+// The receiver branches of ApplyCJMethod.
+bool MethodInfo::PassesValueReceiver(U8 reflectVersion)
+{
+    // When a struct is passed as 'this' parameter and its size is unknown at compile time,
+    // passed 'this' is a struct object itself
+    // For backward compatibility, version 0 uses IsGenericTypeInfo() for judgment.
+    // This logic does not cover all scenarios, version > 0 fixes this issue.
+    return (declaringTi->IsStruct() &&
+        ((reflectVersion == 0) ? !declaringTi->IsGenericTypeInfo() : !declaringTi->IsUnknownSize())) ||
+        ((declaringTi->IsEnum() || declaringTi->IsTempEnum()) && !declaringTi->IsEnumKind1());
+}
+
+bool MethodInfo::ConstructsValueReceiver(U8 reflectVersion)
+{
+    return IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct() &&
+        !((reflectVersion == 0) ? declaringTi->IsGenericTypeInfo() : declaringTi->IsUnknownSize());
+}
+
+// Bytes of every value record ApplyCJMethod passes: its receiver and each
+// non-generic value argument that AddCJArg stages.
+size_t MethodInfo::ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const void* actualArgs)
+{
+    size_t bytes = 0;
+    if (hasReceiver ? PassesValueReceiver(reflectVersion) : ConstructsValueReceiver(reflectVersion)) {
+        const MSize size = declaringTi->GetInstanceSize();
+        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+    }
+    if (actualArgs == nullptr) { return bytes; }
+    const U64 actualArgCnt = static_cast<const CJArray*>(actualArgs)->length;
+    for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
+        ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
+        TypeInfo* argType = actualParameterInfo->GetType();
+        if (argType->IsGeneric() || actualParameterInfo->IsGeneric()) { continue; }
+        const MSize size = ValueRecordSize(argType);
+        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+    }
+    return bytes;
+}
+
 void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                           ScopedAllocBuffer& allocBuffer)
 {
@@ -471,36 +581,13 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_VARRAY: {
-            MSize typeSize = argType->GetInstanceSize();
-            if (typeSize == 0) {
+            if (ValueRecordSize(argType) == 0) {
                 argValues->AddInt64(0);
                 break;
             }
-            void* dst = nullptr;
-            if (argType->HasRefField()) {
-                MSize objSize = MRT_ALIGN(typeSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-                ObjRef structArgObj = ObjectManager::NewObject(argType, objSize, AllocType::MOVEABLE_OBJECT);
-                if (structArgObj == nullptr) {
-                    ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected struct argument");
-                    return;
-                }
-                argObj = static_cast<MObject*>(argumentHandle());
-                Handle structHandle(Mutator::GetMutator(), structArgObj);
-                dst = reinterpret_cast<void*>(reinterpret_cast<Uptr>(structArgObj) + TYPEINFO_PTR_SIZE);
-                void* snapshot = MemoryAlloc(1, typeSize);
-                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE), typeSize, argObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE)),
-        ValuePayload(reinterpret_cast<MAddress>(snapshot), typeSize));
-                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(snapshot), typeSize),
-        ValuePayload(reinterpret_cast<MAddress>(dst), typeSize, structArgObj, reinterpret_cast<MAddress>(dst)));
-                MemoryFree(snapshot);
-                argValues->AddHandle(structHandle, TYPEINFO_PTR_SIZE);
-            } else {
-                dst = MemoryAlloc(1, typeSize);
-                allocBuffer.GetArgBuffers().push_back(dst);
-                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE), typeSize, argObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE)),
-        ValuePayload(reinterpret_cast<MAddress>(dst), typeSize));
-            }
-            if (!argType->HasRefField()) { argValues->AddInt64(reinterpret_cast<Uptr>(dst)); }
+            // A value parameter is a pointer to the caller's uncolored record,
+            // never to the coloured payload of a heap box (ScopedAllocBuffer::ValueRecordFootprint).
+            argValues->AddInt64(reinterpret_cast<Uptr>(allocBuffer.StageValueRecord(argType, argObj)));
             break;
         }
         default:
@@ -753,12 +840,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
         genericArgs = &genericSnapshot;
     }
     ScopedAllocBuffer scopedAllocBuffer;
-    // Off-heap struct snapshots created by AddCJArg via ReadStruct; freed after
-    // ApplyCJMethodImpl returns since the cjc setter consumes them synchronously.
-    std::vector<void*>& argBuffers = scopedAllocBuffer.GetArgBuffers();
     ArgValue argValues;
     void** sretSlot = nullptr;
-    bool ownsNativeReceiver = false;
     const auto returnPending = [&]() -> void* {
         // ThrowPendingException schedules a managed transfer, but returns in
         // C++. Release native storage before the outer boundary transfers;
@@ -767,7 +850,6 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             if (HasSRetNotGeneric() || HasSRetWithKnowGenericStruct()) { MemoryFree(*sretSlot); }
             MemoryFree(sretSlot);
         }
-        if (ownsNativeReceiver) { MemoryFree(instanceObj); }
         return nullptr;
     };
     TypeInfo* retType = GetReturnType();
@@ -777,6 +859,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (declaringTi != nullptr) {
         reflectVersion = declaringTi->GetReflectionVersion();
     }
+    // The value records stay in this frame until ApplyCJMethodImpl returns,
+    // like the alloca a compiled caller passes (ScopedAllocBuffer::ValueRecordFootprint).
+    const size_t valueRecordBytes = ValueRecordBytes(instanceObj != nullptr, reflectVersion, actualArgs);
+    scopedAllocBuffer.AttachValueRecords(valueRecordBytes == 0 ? nullptr : __builtin_alloca(valueRecordBytes),
+                                         valueRecordBytes);
     if (HasSRet()) {
         if (retType->IsGeneric()) {
             retType = GetActualTypeFromGenericType(reinterpret_cast<GenericTypeInfo*>(retType), genericArgs);
@@ -790,24 +877,12 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     }
     instanceObj = static_cast<MObject*>(receiver());
     if (instanceObj != nullptr) {
-        // When a struct is passed as 'this' parameter and its size is unknown at compile time,
-        // passed 'this' is a struct object itself
-        // For backward compatibility, version 0 uses IsGenericTypeInfo() for judgment.
-        // This logic does not cover all scenarios, version > 0 fixes this issue.
-        if ((declaringTi->IsStruct() &&
-            ((reflectVersion == 0) ? !declaringTi->IsGenericTypeInfo() : !declaringTi->IsUnknownSize())) ||
-            ((declaringTi->IsEnum() || declaringTi->IsTempEnum()) && !declaringTi->IsEnumKind1())) {
+        if (PassesValueReceiver(reflectVersion)) {
             MSize thisSize = declaringTi->GetInstanceSize();
             if (thisSize == 0) {
                 argValues.AddInt64(0);
             } else {
-                void* thisDst = MemoryAlloc(1, thisSize);
-                PRINT_FATAL_IF(thisDst == nullptr, "ApplyCJMethod struct this MemoryAlloc failed");
-                argBuffers.push_back(thisDst);
-                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE), thisSize, instanceObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE)),
-        ValuePayload(reinterpret_cast<MAddress>(thisDst), thisSize));
-                scopedAllocBuffer.HoldNativeStruct(declaringTi, thisDst);
-                argValues.AddInt64(reinterpret_cast<Uptr>(thisDst));
+                argValues.AddInt64(reinterpret_cast<Uptr>(scopedAllocBuffer.StageValueRecord(declaringTi, instanceObj)));
             }
         } else {
             argValues.AddHandle(receiver);
@@ -824,9 +899,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             }
             receiver = Handle(Mutator::GetMutator(), instanceObj);
             argValues.AddHandle(receiver);
-        } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
-            instanceObj = reinterpret_cast<ObjRef>(MemoryAlloc(1, declaringTi->GetInstanceSize()));
-            ownsNativeReceiver = true;
+        } else if (ConstructsValueReceiver(reflectVersion)) {
+            const MSize size = declaringTi->GetInstanceSize();
+            instanceObj = size == 0 ? nullptr : reinterpret_cast<ObjRef>(scopedAllocBuffer.TakeValueRecord(size));
+            // The initializer stores references into this record before it returns.
+            scopedAllocBuffer.HoldValueRecord(declaringTi, instanceObj);
             argValues.AddInt64(reinterpret_cast<Uptr>(instanceObj));
             argValues.AddReference(nullptr); // add bp
         }
@@ -889,7 +966,6 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
         ret.ref = instanceObj;
         void* any = RetValueToAny(ret, sretSlot == nullptr ? nullptr : *sretSlot, declaringTi);
-        MemoryFree(instanceObj);
         MemoryFree(sretSlot == nullptr ? nullptr : *sretSlot);
         MemoryFree(sretSlot);
         return any;

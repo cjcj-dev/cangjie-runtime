@@ -66,9 +66,18 @@ public:
     void* CopyNativeStruct(TypeInfo* type, MAddress source);
     void HoldNativeStruct(TypeInfo* type, void* value);
     void RefreshNativeStructs();
+    // By-value records that a reflective call passes to managed code by pointer.
+    // The storage is the calling native frame on the CJThread stack.
+    void AttachValueRecords(void* storage, size_t size);
+    void* TakeValueRecord(size_t size);
+    void HoldValueRecord(TypeInfo* type, void* record);
+    void* StageValueRecord(TypeInfo* type, BaseObject* box);
+    static size_t ValueRecordFootprint(size_t size);
 private:
     std::vector<void*> argBuffers;
     std::vector<std::pair<RootSlot*, Handle>> nativeFields;
+    uintptr_t valueRecords = 0;
+    size_t valueRecordsLeft = 0;
 };
 
 class ATTR_PACKED(4) MethodInfo {
@@ -107,6 +116,10 @@ private:
     void PrepareCJMethodGenericArgs(ArgValue* argValues, void *genericArgsArray);
     void AddCJArg(ArgValue* argValues, TypeInfo* argType, ObjRef argObj,
                   ScopedAllocBuffer& allocBuffer);
+    static MSize ValueRecordSize(TypeInfo* argType);
+    bool PassesValueReceiver(U8 reflectVersion);
+    bool ConstructsValueReceiver(U8 reflectVersion);
+    size_t ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const void* actualArgs);
     bool IsStaticMethod() { return static_cast<bool>(modifier & MODIFIER_STATIC); }
     bool HasSRet();
     bool HasSRetNotGeneric() { return static_cast<bool>(modifier & MODIFIER_HAS_SRET0); }

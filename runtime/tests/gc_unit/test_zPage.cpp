@@ -1076,6 +1076,7 @@ GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Type) { CheckAnnotation(4); }
 
 #include "ObjectManager.inline.h"
 #include "Heap/z/zRootsIterator.hpp"
+#include "Heap/z/zAccess.hpp"
 namespace MapleRuntime {
 extern "C" void* MCC_ApplyCJStaticMethod(MethodInfo*, void*, TypeInfo*);
 }
@@ -1106,11 +1107,15 @@ struct ArgumentResult {
     TypeInfo* receiverType = nullptr;
     uintptr_t receiverBefore = 0;
     uintptr_t receiverAfter = 0;
-    uintptr_t argumentBefore = 0;
-    uintptr_t argumentAfter = 0;
+    uintptr_t argumentWord = 0;
+    uintptr_t argumentWordAfter = 0;
+    uintptr_t referentBefore = 0;
+    uintptr_t referentAfter = 0;
     uintptr_t returned = 0;
     U64 sourceRoot = 0;
+    U64 referentRoot = 0;
     bool called = false;
+    bool argumentOnStack = false;
     bool argumentValue = false;
     bool retainedValue = false;
 };
@@ -1120,20 +1125,28 @@ extern "C" void InitializeReflectedReceiver(MObject* receiver, void* argument, T
     auto& r = *argumentResult;
     r.called = true;
     r.receiverBefore = reinterpret_cast<uintptr_t>(receiver);
-    r.argumentBefore = argument == nullptr ? 0 : reinterpret_cast<uintptr_t>(argument) - TYPEINFO_PTR_SIZE;
     if (receiver != nullptr) { receiver->Store<U64>(TYPEINFO_PTR_SIZE, 584); }
-    if (argument != nullptr) { r.argumentValue = static_cast<U64*>(argument)[1] == 581; }
+    auto& exportRoots = Heap::GetHeap().cross_vm().export_roots();
+    if (argument != nullptr) {
+        // A value parameter is the caller's uncolored record on the CJThread
+        // stack (ScopedAllocBuffer::StageValueRecord), not a heap box payload.
+        r.argumentOnStack = Mutator::GetMutator()->IsStackAddr(reinterpret_cast<uintptr_t>(argument));
+        r.argumentWord = static_cast<uintptr_t*>(argument)[0];
+        r.referentBefore = reinterpret_cast<uintptr_t>(exportRoots.GetExportRoot(r.referentRoot));
+        r.argumentValue = static_cast<U64*>(argument)[1] == 581;
+    }
     CollectSparsePages();
-    auto* source = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(r.sourceRoot);
+    auto* referent = exportRoots.GetExportRoot(r.referentRoot);
+    r.referentAfter = reinterpret_cast<uintptr_t>(referent);
+    // The runtime names the record's reference with a native frame root, so
+    // the collection heals the record word itself while this callee runs.
+    if (argument != nullptr) { r.argumentWordAfter = static_cast<uintptr_t*>(argument)[0]; }
+    r.retainedValue = referent != nullptr && reinterpret_cast<U64*>(referent)[1] == 583;
     Mutator::GetMutator()->VisitMutatorRoots([&](RootSlot& root) {
         auto* object = to_object(safe(root.LoadPlain()));
-        if (object == nullptr) { return; }
+        if (object == nullptr || Mutator::GetMutator()->IsStackAddr(reinterpret_cast<uintptr_t>(object))) { return; }
         if (object->GetTypeInfo() == r.receiverType) {
             r.receiverAfter = reinterpret_cast<uintptr_t>(object);
-        }
-        if (object != source && object->GetTypeInfo() == r.argumentType) {
-            r.argumentAfter = reinterpret_cast<uintptr_t>(object);
-            r.retainedValue = reinterpret_cast<U64*>(object)[2] == 581;
         }
     });
 }
@@ -1144,9 +1157,9 @@ void* RunArguments(void* context)
     auto* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     HandleMark mark(*mutator);
-    alignas(TypeInfo) static unsigned char storage[4][sizeof(TypeInfo)]{};
-    TypeInfo* type[4];
-    for (unsigned i = 0; i < 4; ++i) {
+    alignas(TypeInfo) static unsigned char storage[5][sizeof(TypeInfo)]{};
+    TypeInfo* type[5];
+    for (unsigned i = 0; i < 5; ++i) {
         type[i] = reinterpret_cast<TypeInfo*>(storage[i]);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage[i]), sizeof(TypeInfo));
     }
@@ -1156,10 +1169,15 @@ void* RunArguments(void* context)
     type[1]->SetType(TypeKind::TYPE_KIND_CLASS); type[1]->SetInstanceSize(8);
     type[2]->SetType(TypeKind::TYPE_KIND_UNIT); type[2]->SetInstanceSize(0);
     type[3]->SetType(TypeKind::TYPE_KIND_RAWARRAY); type[3]->SetComponentTypeInfo(type[1]);
+    type[4]->SetType(TypeKind::TYPE_KIND_CLASS); type[4]->SetInstanceSize(8);
     r.argumentType = type[0]; r.receiverType = type[1];
+    auto* referent = MCC_NewObject(type[4], 16);
+    referent->Store<U64>(TYPEINFO_PTR_SIZE, 583);
+    r.referentRoot = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(referent);
     auto* source = MCC_NewObject(type[0], 24);
     source->Store<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr), 581);
     r.sourceRoot = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(source);
+    HeapAccess<>::oop_store(&(source->GetRefField(TYPEINFO_PTR_SIZE)), referent);
     auto* array = ObjectManager::NewObjArray(1, type[3]);
     array->SetRefElement(0, source);
     ParameterInfo parameter{}; parameter.SetType(type[0]);
@@ -1175,6 +1193,7 @@ void* RunArguments(void* context)
     StorePlain(RootSlotAt(&args.rawPtr), from_object(array)); args.length = 1;
     r.returned = reinterpret_cast<uintptr_t>(MCC_ApplyCJStaticMethod(&method, &args, nullptr));
     Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(r.sourceRoot);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(r.referentRoot);
     return nullptr;
 }
 }
@@ -1189,11 +1208,15 @@ GC_RUNTIME_OTHER_VM_TEST(NativeArgumentHandle, CallbackRetainsReceiverAndArgumen
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
     ReleaseHandle(task);
-    std::fprintf(stderr, "ARGUMENT_HANDLE_TARGET called=%d receiver=%zx/%zx returned=%zx argument=%zx/%zx value=%d retained=%d\n",
-        result.called, result.receiverBefore, result.receiverAfter, result.returned,
-        result.argumentBefore, result.argumentAfter, result.argumentValue, result.retainedValue);
-    GC_EXPECT_TRUE(result.called && result.argumentBefore != 0 && result.argumentAfter != 0 &&
-        result.argumentBefore != result.argumentAfter && result.argumentValue && result.retainedValue);
+    std::fprintf(stderr, "ARGUMENT_HANDLE_TARGET called=%d receiver=%zx/%zx returned=%zx stack=%d word=%zx/%zx "
+        "referent=%zx/%zx value=%d retained=%d\n",
+        result.called, result.receiverBefore, result.receiverAfter, result.returned, result.argumentOnStack,
+        result.argumentWord, result.argumentWordAfter, result.referentBefore, result.referentAfter,
+        result.argumentValue, result.retainedValue);
+    GC_EXPECT_TRUE(result.called && result.argumentOnStack && result.argumentValue && result.referentBefore != 0 &&
+        result.argumentWord == result.referentBefore && result.referentAfter != 0 &&
+        result.referentBefore != result.referentAfter && result.argumentWordAfter == result.referentAfter &&
+        result.retainedValue);
     GC_EXPECT_TRUE(result.receiverBefore != 0 && result.receiverAfter != 0 &&
         result.receiverBefore != result.receiverAfter && result.returned == result.receiverAfter);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
