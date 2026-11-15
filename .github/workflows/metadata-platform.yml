@@ -6,11 +6,15 @@ on:
         description: Normal Android production and finite x64 emulator image lifecycle only.
         type: boolean
         default: false
+      readscope_linux_arm64:
+        description: Normal native ARM64 production and finite image lifecycle only.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   prepare:
-    if: ${{ !inputs.readscope_android }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +66,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
-    if: ${{ !inputs.readscope_android && always() && !cancelled() }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 && always() && !cancelled() }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -122,7 +126,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
   pac-capability:
-    if: ${{ !inputs.readscope_android }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -176,4 +180,34 @@ jobs:
             ${{ runner.temp }}/readscope-android/*.stderr
             ${{ runner.temp }}/readscope-android/x86_64/install/**
             ${{ runner.temp }}/readscope-android/aarch64/install/**
+          if-no-files-found: error
+
+  readscope-linux-arm64:
+    if: ${{ inputs.readscope_linux_arm64 }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native tools and fixed bounds source
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm cmake ninja-build
+          git init runtime/third_party/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+          git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Normal native production and finite lifecycle
+        run: ulimit -S -c 0 && ulimit -H -c 0 && node runtime/tests/readscope_native_retention/linux-arm64.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-linux-arm64
+          path: |
+            ${{ runner.temp }}/readscope-linux-arm64/*.json
+            ${{ runner.temp }}/readscope-linux-arm64/*.stdout
+            ${{ runner.temp }}/readscope-linux-arm64/*.stderr
+            ${{ runner.temp }}/readscope-linux-arm64/install/**
           if-no-files-found: error
