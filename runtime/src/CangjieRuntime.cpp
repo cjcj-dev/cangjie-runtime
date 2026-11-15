@@ -57,6 +57,16 @@ extern "C" MRT_EXPORT void MRT_PreInitializePackage(uint64_t address)
     loaderManager->PreInitializePackage(address);
 }
 
+extern "C" MRT_EXPORT void MRT_LibraryOnLoadRetainedV1(
+    uint64_t address, bool enableGC, NativeImageRetainerV1 retainer)
+{
+    (void)enableGC;
+    ScopedEntryTrace trace("CJRT_LOAD_LIBRARY_RETAINED_V1");
+    if (address == 0) { return; }
+    CHECK_DETAIL(retainer != nullptr, "native image retention v1: missing image-local callback");
+    LoaderManager::GetInstance()->LoadFileRetainedV1(address, retainer);
+}
+
 extern "C" MRT_EXPORT void MRT_LibraryUnLoad(uint64_t address)
 {
     if (address == 0 || LoaderManager::GetReleaseStatus()) {
@@ -318,6 +328,9 @@ __asm__(".global _CJ_MRT_LibraryUnLoad\n\t.set _CJ_MRT_LibraryUnLoad, _MRT_Libra
 extern "C" MRT_EXPORT void CJ_MRT_PreInitializePackage(uint64_t address);
 __asm__(".global _CJ_MRT_PreInitializePackage\n\t.set _CJ_MRT_PreInitializePackage, _MRT_PreInitializePackage");
 #else
+extern "C" MRT_EXPORT void CJ_MRT_LibraryOnLoadRetainedV1(
+    uint64_t address, bool enableGC, NativeImageRetainerV1 retainer)
+    __attribute__((alias("MRT_LibraryOnLoadRetainedV1")));
 extern "C" MRT_EXPORT void CJ_MRT_LibraryOnLoad(uint64_t address, bool enableGC)
     __attribute__((alias("MRT_LibraryOnLoad")));
 extern "C" MRT_EXPORT void CJ_MRT_LibraryUnLoad(uint64_t address) __attribute__((alias("MRT_LibraryUnLoad")));

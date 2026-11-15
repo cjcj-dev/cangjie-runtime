@@ -1716,6 +1716,68 @@ GC_TEST(PackageInit, UnattachedNativeUnavailable)
     GC_EXPECT_EQ(Begin(P(), U(), 0, &token), Code(Result::Unavailable));
     GC_EXPECT_TRUE(token == nullptr);
 }
+namespace MapleRuntime {
+extern "C" void MRT_LibraryOnLoadRetainedV1(uint64_t, bool, NativeImageRetainerV1);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLocalRetentionV1)
+{
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("v1-native-open", library != nullptr);
+    auto metadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto retainer = reinterpret_cast<NativeImageRetainerV1>(dlsym(library, "__CJ_ImageRetainV1"));
+    auto wrongInstance = reinterpret_cast<NativeImageRetainerV1>(dlsym(library, "PackageInitImageWrongInstance"));
+    auto calls = reinterpret_cast<unsigned int (*)()>(dlsym(library, "PackageInitImageRetainCalls"));
+    Target("v1-native-symbols", metadata && retainer && wrongInstance && calls);
+    const Uptr address = reinterpret_cast<Uptr>(metadata());
+    // Before positive registration: a retained map is intentionally reusable,
+    // and would make these invalid callbacks irrelevant on a subsequent call.
+    for (int mode = 0; mode != 2; ++mode) {
+        int output[2];
+        Target("v1-negative-pipe", pipe(output) == 0);
+        const pid_t child = fork();
+        Target("v1-negative-fork", child >= 0);
+        if (child == 0) {
+            close(output[0]);
+            (void)dup2(output[1], STDERR_FILENO);
+            close(output[1]);
+            std::fprintf(stderr, "V1_REJECT_TARGET mode=%d entered\n", mode);
+            MRT_LibraryOnLoadRetainedV1(address, true,
+                mode == 0 ? reinterpret_cast<NativeImageRetainerV1>(&dlopen) : wrongInstance);
+            std::_Exit(77);
+        }
+        close(output[1]);
+        std::string transcript;
+        char bytes[1024];
+        ssize_t count;
+        while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+        close(output[0]);
+        int status = 0;
+        Target("v1-negative-wait", waitpid(child, &status, 0) == child);
+        const char* message = mode == 0 ? "callback is not owned by metadata image" :
+            "lookup resolved another image instance";
+        const bool reached = transcript.find("V1_REJECT_TARGET") != std::string::npos &&
+            transcript.find(message) != std::string::npos;
+        std::fprintf(stderr, "V1_REJECT mode=%d raw_status=%d target=%d\n", mode, status, reached);
+        Target("v1-wrong-identity-rejected", reached && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    }
+    Init();
+    MRT_LibraryOnLoadRetainedV1(address, true, retainer);
+    Target("v1-both-native-lookup-and-promotion", calls() == 2);
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* file = loader->GetBaseFileByMetaAddr(address);
+    Target("v1-entry-publishes-owner", file != nullptr);
+    Target("v1-native-close", dlclose(library) == 0);
+    Target("v1-native-close-keeps-metadata", loader->GetBaseFileByMetaAddr(address) == file && metadata() != nullptr);
+    void* reopened = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
+    Target("v1-reopen-same-native-instance", reopened != nullptr &&
+        dlsym(reopened, "__CJ_ImageRetainV1") == reinterpret_cast<void*>(retainer));
+    MRT_LibraryOnLoadRetainedV1(address, true, retainer);
+    Target("v1-registration-reuse-no-repin", calls() == 2 && loader->GetBaseFileByMetaAddr(address) == file);
+    Target("v1-reopen-close", dlclose(reopened) == 0);
+    Target("v1-runtime-finish", FiniCJRuntime() == E_OK);
+}
+
 GC_TEST(PackageInit, RetainedMetadataRejectsIndependentPurge)
 {
     if (!ElfUnloadQuiescence::RetainsNativeImages()) { return; }

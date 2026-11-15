@@ -19,7 +19,13 @@ __CJ_Init_Start:                        // @__CJ_Init_Start
     adrp    x0, __CJMetadataStart
     add     x0, x0, :lo12:__CJMetadataStart
     mov     w1, #1
+#if defined(__ANDROID__) || defined(__OHOS__)
+    adrp    x2, __CJ_ImageRetainV1
+    add     x2, x2, :lo12:__CJ_ImageRetainV1
+    bl      MRT_LibraryOnLoadRetainedV1
+#else
     bl      MRT_LibraryOnLoad
+#endif
     ldr     x30, [sp], #16          // 8-byte Folded Reload
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     autiasp
@@ -28,6 +34,29 @@ __CJ_Init_Start:                        // @__CJ_Init_Start
 .Lfunc_end12:
     .size   __CJ_Init_Start, .Lfunc_end12-__CJ_Init_Start
     .cfi_endproc
+#if defined(__ANDROID__) || defined(__OHOS__)
+    .globl __CJ_ImageRetainV1
+    .protected __CJ_ImageRetainV1
+    .type __CJ_ImageRetainV1,@function
+__CJ_ImageRetainV1:
+    .cfi_startproc
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    paciasp
+#endif
+    str     x30, [sp, #-16]!
+    .cfi_def_cfa_offset 16
+    .cfi_offset w30, -16
+    bl      dlopen
+    ldr     x30, [sp], #16
+    .cfi_restore w30
+#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
+    autiasp
+#endif
+    .cfi_def_cfa_offset 0
+    ret
+    .size __CJ_ImageRetainV1, .-__CJ_ImageRetainV1
+    .cfi_endproc
+#endif
 
     .section        .init_array.0,"aw",@init_array
     .p2align        3

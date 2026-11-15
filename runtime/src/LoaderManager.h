@@ -18,6 +18,7 @@
 #include "Base/CString.h"
 #include "ObjectModel/MClass.h"
 #include "Loader/ILoader.h"
+#include "Loader/NativeImageRetention.h"
 
 namespace MapleRuntime {
 class StaticRootTable {
@@ -55,6 +56,7 @@ public:
     void RegisterLoadFile(Uptr address) const;
     void UnregisterLoadFile(Uptr address) const;
     void LoadFile(Uptr address);
+    void LoadFileRetainedV1(Uptr address, NativeImageRetainerV1 retainer);
     void UnloadFile(Uptr address);
     void* LoadCJLibrary(const char* libName) const;
 #ifdef INTERPRETER_ENABLED

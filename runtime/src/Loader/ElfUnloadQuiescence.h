@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include "Base/Types.h"
+#include "Loader/NativeImageRetention.h"
 
 namespace MapleRuntime {
 
@@ -34,7 +35,7 @@ public:
     // establish exact-image retention before their readers can bypass admission.
     static constexpr bool RetainsNativeImages()
     {
-#if defined(_WIN64) || (defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__))
+#if defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
         return true;
 #else
         return false;
@@ -203,6 +204,7 @@ public:
     static void CommitImageClosing(Uptr imageIdentity);
     static bool IsImageClosing(Uptr imageAddress);
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
+    static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress, NativeImageRetainerV1 retainer);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
 #ifdef __APPLE__
