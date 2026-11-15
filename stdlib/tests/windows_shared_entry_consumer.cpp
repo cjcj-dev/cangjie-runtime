@@ -41,7 +41,7 @@ int main(int argc, char** argv)
     Check("std-native-load-control", core != nullptr);
     Check("std-native-identity-control", GetModuleHandleA(argv[1]) == core);
     Modules();
-    // With only the helper entry-object edge cut, native loading still works,
+    // With only the helper CRT-entry selection cut, native loading still works,
     // but this public publication boundary must reject the pending std image.
     Check("std-public-commit", LoadCJLibrary(argv[1]) == E_OK);
     Check("std-core-package-published", CJ_MCC_GetPackageByQualifiedName("std.core") != nullptr);
