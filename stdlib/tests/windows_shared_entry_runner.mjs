@@ -98,7 +98,10 @@ try { foreach($e in $z.Entries) {
     assert.equal(manifest.runtimeCommit, '550a133e766020273e3fb7b1220cdd770573c491');
     assert.equal(manifest.compilerCommit, 'a3bd5dc2c1372c34f35aef69279934fc72ff4fea');
     assert.equal(manifest.stdCommit, '8b7e0f88a1746eb656a046883d435fc8f5ee4146');
-    assert.equal(manifest.headerSha256, fileHash(path.join(repo, 'runtime/src/Cangjie.h')));
+    // Git's Windows checkout and the Linux cross producer differ only in CRLF.
+    // Keep the installed raw hash in the manifest; compare the exact LF text.
+    const headerText = fs.readFileSync(path.join(repo, 'runtime/src/Cangjie.h'), 'utf8').replaceAll('\r\n', '\n');
+    assert.equal(manifest.headerTextLFSha256, createHash('sha256').update(headerText).digest('hex'));
     assert.deepEqual(Object.keys(manifest.files).sort(), entries.map(e => e.name).filter(n => n !== 'manifest.json').sort());
     for (const [name, hash] of Object.entries(manifest.files)) {
         validateMember(name); assert(/^[0-9a-f]{64}$/.test(hash)); assert.equal(fileHash(path.join(extracted, name)), hash, name);
