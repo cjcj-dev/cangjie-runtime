@@ -444,8 +444,36 @@ bool Mutator::IsStackAddr(uintptr_t addr)
     }
 }
 
+// One stack-map derived pair seen before FixExtendedStack rewrites the copy.
+void Mutator::RecordStackDerived(std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots,
+                                 BasePtrType basePtr, DerivedSlot& derivedPtr, uintptr_t movedLow)
+{
+    const zaddress_unsafe derivedValue = derivedPtr.LoadDerived();
+    if (!IsStackAddr(raw(derivedValue))) {
+        return;
+    }
+    // A stack-local record receiver is passed with $BP = null (codegen
+    // GetUntrackedFuncArgBasePtr; ApplyCJMethod's "add bp"), so its derived word
+    // is the raw record address, not an interior pointer of a GC base. HotSpot
+    // never hands a null-base pair to a GC closure (oopMap.inline.hpp:82, which
+    // zStackWatermark.cpp:214 iterates) and copies it bitwise with the frame
+    // (stackChunkOop.cpp:179,194). CJThreadStackAdjust instead memmoves
+    // [sp, old base) to another address, so a raw address into the moved part
+    // follows the copy like a stack-pointer root: recorded as its own base at
+    // offset 0, the rebase below stores derived + stackOffset and never writes
+    // the caller's null $BP. Any other stack derived pointer keeps its base CHECK.
+    if (is_null(basePtr) && raw(derivedValue) >= movedLow && raw(derivedValue) < GetStackBaseAddr()) {
+        derivedSlots.emplace_back(&derivedPtr, derivedValue, 0);
+        return;
+    }
+    CHECK_DETAIL(!is_null(basePtr) && raw(derivedValue) >= raw(basePtr),
+                 "stack derived pointer must have a non-null base at or below it");
+    derivedSlots.emplace_back(&derivedPtr, basePtr, raw(derivedValue) - raw(basePtr));
+}
+
 void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
-                              std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots)
+                              std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots,
+                              uintptr_t movedLow)
 {
     // The pointer on the stack to be fixed has two sources:
     //     1. the non-escaped heap pointer (from heap stackmap), these pointer are assigned to the stack.
@@ -469,13 +497,8 @@ void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
     };
     // Preserve the pair before stack movement; the only later write is RebaseDerived(newBase, offset).
     DerivedPtrVisitor derivedPtrVisitor =
-        [&derivedSlots, this](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        const zaddress_unsafe derivedValue = derivedPtr.LoadDerived();
-        if (IsStackAddr(raw(derivedValue))) {
-            CHECK_DETAIL(!is_null(basePtr) && raw(derivedValue) >= raw(basePtr),
-                         "stack derived pointer must have a non-null base at or below it");
-            derivedSlots.emplace_back(&derivedPtr, basePtr, raw(derivedValue) - raw(basePtr));
-        }
+        [&derivedSlots, movedLow, this](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        RecordStackDerived(derivedSlots, basePtr, derivedPtr, movedLow);
     };
     StackManager::VisitStackPtrMap(uwContext, traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, *this);
 
@@ -646,7 +669,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // Visits the stackmap and records all pointers to be fixed to the resSet.
         std::set<RootSlot*> rootSlots;
         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>> derivedSlots;
-        RecordStackPtrs(rootSlots, derivedSlots);
+        // CJThreadStackAdjust copied [its sp, old base); this frame is above that sp.
+        const uintptr_t movedLow = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+        RecordStackPtrs(rootSlots, derivedSlots, movedLow);
 
         // Publish the shifted watermark before dropping its lock. VisitStackRoots
         // takes MutatorLock and then the watermark lock, so this lock cannot be
@@ -668,7 +693,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             DerivedSlot& newDerivedSlot =
                 DerivedSlotAt(reinterpret_cast<MAddress>(oldDerivedSlot) + stackOffset);
             RootSlot newBase;
-            // Both the base and derived location moved by the same stack offset.
+            // Both the base and derived location moved by the same stack offset
+            // (a null-$BP record is its own base at offset 0).
             StorePlain(newBase, to_zaddress(raw(oldBase) + stackOffset));
             RebaseDerived(newDerivedSlot, newBase, offset);
         }

@@ -107,7 +107,10 @@ public:
 
     bool IsStackAddr(uintptr_t addr);
     void RecordStackPtrs(std::set<RootSlot*>& rootSlots,
-                         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots);
+                         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots,
+                         uintptr_t movedLow);
+    void RecordStackDerived(std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots,
+                            BasePtrType basePtr, DerivedSlot& derivedPtr, uintptr_t movedLow);
     intptr_t FixExtendedStack(intptr_t frameBase = 0, uint32_t adjustedSize = 0, void* ip = nullptr);
 
     void InitTid()
