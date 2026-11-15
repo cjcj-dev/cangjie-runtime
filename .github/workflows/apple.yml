@@ -27,6 +27,7 @@ on:
           - ios-stdlib-configure
           - readscope-lifetime
           - readscope-ios
+          - readscope-ios-intel
         default: all
 
 permissions:
@@ -640,22 +641,20 @@ jobs:
           if-no-files-found: error
 
   readscope-ios:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'readscope-ios' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.job == 'readscope-ios' || inputs.job == 'readscope-ios-intel') }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: ios-aarch64
-          - runner: macos-15
-            target: ios-simulator-aarch64
-          - runner: macos-15-intel
-            target: ios-simulator-x86_64
+        include: ${{ fromJSON(inputs.job == 'readscope-ios-intel' && '[{"runner":"macos-15-intel","target":"ios-simulator-x86_64"}]' || '[{"runner":"macos-15","target":"ios-aarch64"},{"runner":"macos-15","target":"ios-simulator-aarch64"},{"runner":"macos-15-intel","target":"ios-simulator-x86_64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: 'true'
       READSCOPE_IOS_TARGET: ${{ matrix.target }}
+      READSCOPE_SIM_SDK_VERSION: ${{ inputs.job == 'readscope-ios-intel' && '18.5' || '' }}
+      READSCOPE_SIM_RUNTIME: ${{ inputs.job == 'readscope-ios-intel' && 'com.apple.CoreSimulator.SimRuntime.iOS-18-5' || '' }}
+      READSCOPE_SIM_BUILD: ${{ inputs.job == 'readscope-ios-intel' && '22F77' || '' }}
+      READSCOPE_SIM_DEVICE: ${{ inputs.job == 'readscope-ios-intel' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: mozilla-actions/sccache-action@v0.0.10
