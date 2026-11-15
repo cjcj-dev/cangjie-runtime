@@ -41,6 +41,14 @@ not protect this dependency closure: image TypeInfos can point into those arenas
 Runtime reinitialization remains prohibited; retained metadata does not authorize
 managed execution after finalization.
 
+A failed managed initializer keeps its registered native identity and root
+ownership, but subsequent load, initialization and symbol lookup fail. Its
+package names and type lookup cache entries are withdrawn without freeing any
+published storage. Existing addresses remain valid storage, not a permission to
+execute an unsuccessfully initialized library. Independent metadata owners in
+the same native image do not republish the failed owner's metadata range.
+Explicit TypeInfo/GenericDesc purge is rejected on retaining loaders.
+
 Process exit invokes native finalizers. The runtime's fini callback requires a
 verified pin for that registered image or completed runtime finalization. It
 accepts never-initialized and initialized normal exit without purging metadata.
@@ -52,7 +60,17 @@ runtime-managed macro handles call `UnloadCJLibrary`. Both now retain Cangjie
 images by default on supported Linux. Pinning only the runtime SO would not
 protect plugin metadata, so each metadata producer pins its own image.
 
-The all-platform process-lifetime policy is the required product target. Until
+The all-platform process-lifetime policy is the required product target. The
+Windows source stage uses exact-address `GetModuleHandleEx(FROM_ADDRESS | PIN)`
+before loader catalog locks; its native constructor, initialization rollback,
+dependency and process-exit behavior still require native runner verification.
+In particular, ordinary PIN documentation is not proof that it survives a
+post-constructor DllMain failure. This stage is not Windows acceptance or a
+release qualification. The explicit `readscope_lifetime` input of the existing
+Windows runtime workflow provides the normal product build and native fixture;
+it has not been executed by this change. The fixture deliberately fails native
+attach after the real metadata registration callback as an independent boundary.
+Apple, Android and OHOS retention producers remain incomplete. Until
 their exact-image retention producers are implemented and verified, this stage
 does not qualify the other platforms. Their current source still keeps physical
 unload and the required admission, reader slots,
