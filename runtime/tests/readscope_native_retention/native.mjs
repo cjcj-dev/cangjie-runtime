@@ -31,7 +31,7 @@ for(const mode of ['preinit','runtime-fini','native-failure','native-exception',
   const output=run(mode,[exe,dll,mode,companion],{PATH:lib+path.delimiter+env.PATH},null),row=rows.at(-1),stderr=fs.readFileSync(path.join(out,mode+'.stderr'),'utf8');
   const initCount=(stderr.match(/READSCOPE_FIXTURE_INIT count=1/g)||[]).length,finiCount=(stderr.match(/READSCOPE_FIXTURE_FINI count=1/g)||[]).length;
   const pass=row.rc===0&&!row.signal&&!row.error&&output.includes('TARGET ')&&initCount>0&&(mode.startsWith('native-')||initCount===1&&finiCount===1);
-  cases.push({mode,pass,rc:row.rc,signal:row.signal,initCount,finiCount,exceptionWithoutDetach:mode==='native-exception'?(output.includes('native-exception-observed executed=1 pass=1')&&finiCount===0?'OBSERVED':'NOT_EXERCISED'):null,addressReuse:mode==='native-reuse'?(output.includes('same_address=1')?'OBSERVED':'NOT_OBSERVED'):null});
+  cases.push({mode,pass,rc:row.rc,signal:row.signal,initCount,finiCount,exceptionWithoutDetach:mode==='native-exception'?(output.includes('native-exception-observed executed=1 pass=1')&&output.includes('native-exception-no-detach executed=1 pass=1')&&finiCount===0?'OBSERVED':'NOT_EXERCISED'):null,addressReuse:mode==='native-reuse'?(output.includes('same_address=1')?'OBSERVED':'NOT_OBSERVED'):null});
   fs.writeFileSync(path.join(out,'lifecycle-summary.json'),JSON.stringify(cases,null,2));
 }
 process.exitCode=cases.every(c=>c.pass)?0:1;

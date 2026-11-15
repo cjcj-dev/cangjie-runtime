@@ -7,6 +7,7 @@
 #include "Cangjie.h"
 namespace {
 uintptr_t observed = 0;
+unsigned exceptionEvents = 0, detachEvents = 0;
 bool Report(const char* name, bool pass)
 {
     std::printf("TARGET %s executed=1 pass=%d\n", name, pass);
@@ -30,6 +31,11 @@ HMODULE LoadWithExceptionObservation(const char* path, bool* caught)
 }
 }
 extern "C" __declspec(dllexport) void ReadScopeObserve(uintptr_t address) { observed = address; }
+extern "C" __declspec(dllexport) void ReadScopeObserveNativeEvent(unsigned event)
+{
+    if (event == 1) { ++exceptionEvents; }
+    if (event == 2) { ++detachEvents; }
+}
 int main(int argc, char** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -44,9 +50,15 @@ int main(int argc, char** argv)
     }
     bool caught = false;
     HMODULE first = LoadWithExceptionObservation(argv[1], &caught);
+    const DWORD loadError = first == nullptr ? GetLastError() : ERROR_SUCCESS;
     if (rollback) {
         Check("native-attach-rejected", first == nullptr);
-        if (exception) { Check("native-exception-observed", caught); }
+        if (exception) {
+            std::printf("NATIVE_EXCEPTION raised=%u detach=%u caller_caught=%d load_error=%lu\n",
+                        exceptionEvents, detachEvents, caught, static_cast<unsigned long>(loadError));
+            Check("native-exception-observed", exceptionEvents == 1);
+            Check("native-exception-no-detach", detachEvents == 0);
+        }
         Check("native-constructor-reached", observed != 0);
         const uintptr_t failedMetadata = observed;
         MEMORY_BASIC_INFORMATION memory {};

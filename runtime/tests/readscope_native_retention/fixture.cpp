@@ -48,9 +48,16 @@ extern "C" __declspec(dllexport) int ReadScopeValue() { return 37; }
 // native loader failure can only occur before metadata registration.
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
 {
+    // The loader may consume an attach exception instead of delivering it to
+    // the caller's SEH frame. Observe native events in host-owned storage,
+    // which remains valid even if the failed image is unmapped.
+    using Event = void (*)(unsigned);
+    auto event = reinterpret_cast<Event>(GetProcAddress(GetModuleHandleA(nullptr), "ReadScopeObserveNativeEvent"));
+    if (reason == DLL_PROCESS_DETACH && event != nullptr) { event(2); }
     char value[2] {};
     if (reason == DLL_PROCESS_ATTACH &&
         GetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_EXCEPTION", value, 2) != 0) {
+        if (event != nullptr) { event(1); }
         RaiseException(0xe042434a, 0, 0, nullptr);
     }
     return reason != DLL_PROCESS_ATTACH || GetEnvironmentVariableA("READSCOPE_NATIVE_ATTACH_FAIL", value, 2) == 0;
