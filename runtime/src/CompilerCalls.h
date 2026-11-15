@@ -117,6 +117,8 @@ extern "C" MRT_EXPORT int32_t __ccc_personality_v0();
 
 // Add prefix "CJ_" to MCC_*.
 extern "C" MRT_EXPORT void CJ_MCC_C2NStub(...);
+// Paired GNU Linux x86-64 backend only; retains the ordinary C2N protocol.
+extern "C" MRT_EXPORT void CJ_MCC_C2NStubNoFP(...);
 extern "C" MRT_EXPORT void CJ_MCC_N2CStub(...);
 extern "C" MRT_EXPORT void CJ_MCC_StackGrowStub(...);
 extern "C" MRT_EXPORT void* CJ_MCC_ExclusiveScope(...);

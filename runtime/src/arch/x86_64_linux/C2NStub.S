@@ -4,6 +4,14 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// Only the GNU LP64 ABI has a qualified producer for the NoFP entry.
+#if defined(__linux__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#include <features.h>
+#if defined(__GLIBC__) && !defined(__ILP32__)
+#define C2N_HAS_NOFP 1
+#endif
+#endif
+
 // stub need to be 16-byte aligned, so we should use (8 * even numbers)
 #define C2NStubFrameSize           (8 * 30)
 
@@ -70,16 +78,37 @@
 
     .text
     .align 2
+#ifdef C2N_HAS_NOFP
+    // This prefix has its own initial-state FDE. Both entries reach the same
+    // framed body/FDE and the same canonical unwindPCForC2NStub.
+    .global CJ_MCC_C2NStubNoFP
+    .type CJ_MCC_C2NStubNoFP, @function
+CJ_MCC_C2NStubNoFP:
+    .cfi_startproc
+    movl    $1, %r10d
+    jmp     .L_c2n_common
+    .cfi_endproc
+    .size CJ_MCC_C2NStubNoFP, .-CJ_MCC_C2NStubNoFP
+#endif
     .global CJ_MCC_C2NStub
     .type CJ_MCC_C2NStub, @function
 CJ_MCC_C2NStub:
     .cfi_startproc
+#ifdef C2N_HAS_NOFP
+    xorl    %r10d, %r10d
+.L_c2n_common:
+#endif
     pushq   %rbp
     .cfi_def_cfa_offset 16
     .cfi_offset %rbp, -16
     movq    %rsp, %rbp
     .cfi_def_cfa_register %rbp
     subq    $C2NStubFrameSize, %rsp
+#ifdef C2N_HAS_NOFP
+    // Disjoint from the enter-safe byte and saved rsp. OHOS uses this slot
+    // for its stack-top flag and never exposes the NoFP entry.
+    movl    %r10d, -228(%rbp)
+#endif
 
     movq    %r15, -8(%rbp)
     movq    %r14, -16(%rbp)
@@ -100,6 +129,10 @@ CJ_MCC_C2NStub:
     movq    %r8,   -80(%rbp)
     movq    %r9,   -88(%rbp)
     movq    %rax,  -96(%rbp)
+#ifdef C2N_HAS_NOFP
+    cmpl    $0, -228(%rbp)
+    jne     .L_c2n_args_saved
+#endif
     movapd  %xmm0, -112(%rbp)
     movapd  %xmm1, -128(%rbp)
     movapd  %xmm2, -144(%rbp)
@@ -108,6 +141,9 @@ CJ_MCC_C2NStub:
     movapd  %xmm5, -192(%rbp)
     movapd  %xmm6, -208(%rbp)
     movapd  %xmm7, -224(%rbp)
+#ifdef C2N_HAS_NOFP
+.L_c2n_args_saved:
+#endif
 
     callq   CJ_CJThreadStackGuardGet
     // rbx = cpStackSize
@@ -173,6 +209,10 @@ unwindPCForC2NStub:
     movq    -80(%rbp),  %r8
     movq    -88(%rbp),  %r9
     movq    -96(%rbp),  %rax
+#ifdef C2N_HAS_NOFP
+    cmpl    $0, -228(%rbp)
+    jne     .L_c2n_args_restored
+#endif
     movapd  -112(%rbp), %xmm0
     movapd  -128(%rbp), %xmm1
     movapd  -144(%rbp), %xmm2
@@ -181,6 +221,9 @@ unwindPCForC2NStub:
     movapd  -192(%rbp), %xmm5
     movapd  -208(%rbp), %xmm6
     movapd  -224(%rbp), %xmm7
+#ifdef C2N_HAS_NOFP
+.L_c2n_args_restored:
+#endif
 
     callq   *%r12
 
@@ -189,8 +232,15 @@ unwindPCForC2NStub:
     // xmm0-xmm1 are used to return floating point arguments
     movq    %rdx,  -48(%rbp)
     movq    %rax,  -56(%rbp)
+#ifdef C2N_HAS_NOFP
+    cmpl    $0, -228(%rbp)
+    jne     .L_c2n_result_saved
+#endif
     movapd  %xmm0, -80(%rbp)
     movapd  %xmm1, -96(%rbp)
+#ifdef C2N_HAS_NOFP
+.L_c2n_result_saved:
+#endif
 
     // Restore the value of rsp before coping arg6, arg7...
     movq    -240(%rbp), %rsp
@@ -205,8 +255,15 @@ unwindPCForC2NStub:
     // set potential return value
     movq    -48(%rbp), %rdx
     movq    -56(%rbp), %rax
+#ifdef C2N_HAS_NOFP
+    cmpl    $0, -228(%rbp)
+    jne     .L_c2n_result_restored
+#endif
     movapd  -80(%rbp), %xmm0
     movapd  -96(%rbp), %xmm1
+#ifdef C2N_HAS_NOFP
+.L_c2n_result_restored:
+#endif
 
     // delete callee&cpStackSize, Restore the caller stack.
 .L_stack_check:
