@@ -44,9 +44,10 @@ int main(int argc, char** argv)
     // With only the helper CRT-entry selection cut, native loading still works,
     // but this public publication boundary must reject the pending std image.
     Check("std-public-commit", LoadCJLibrary(argv[1]) == E_OK);
-    Check("std-core-package-published", CJ_MCC_GetPackageByQualifiedName("std.core") != nullptr);
     RuntimeParam parameter {};
     Check("runtime-init", InitCJRuntime(&parameter) == E_OK);
+    // A successful pre-init commit queues metadata; Init registers its package.
+    Check("std-core-package-published", CJ_MCC_GetPackageByQualifiedName("std.core") != nullptr);
     Check("public-cjc-dll-load", LoadCJLibrary(argv[2]) == E_OK);
     using Value = int (*)();
     auto value = reinterpret_cast<Value>(FindCJSymbol(argv[2], "ReadScopeStdProducerValue"));
