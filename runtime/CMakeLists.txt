@@ -804,8 +804,15 @@ if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
         install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
             "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib" -x)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
-            "bin/cjfilt" -x)
+        if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
+            # CMake installs iOS executables as bundles, including simulator
+            # targets. Postprocess the installed executable inside that bundle.
+            install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+                "bin/$<TARGET_BUNDLE_DIR_NAME:cjfilt>/$<TARGET_FILE_NAME:cjfilt>" -x)
+        else()
+            install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+                "bin/cjfilt" -x)
+        endif()
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
         install_runtime_postprocess(cangjie-trace "${STRIP_PROGRAM}"
