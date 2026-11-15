@@ -67,13 +67,25 @@ public:
 
     class ReadScope final {
     public:
-        explicit ReadScope(ReaderKind kind = ReaderKind::GENERIC);
-        ~ReadScope();
+        explicit ReadScope(ReaderKind kind = ReaderKind::GENERIC)
+        {
+            if (!RetainsNativeImages()) {
+                Enter(kind);
+            }
+        }
+        ~ReadScope()
+        {
+            if (!RetainsNativeImages()) {
+                Exit();
+            }
+        }
 
         ReadScope(const ReadScope&) = delete;
         ReadScope& operator=(const ReadScope&) = delete;
 
     private:
+        void Enter(ReaderKind kind);
+        static void Exit();
         // Outermost admission and release; nested scopes never reach them.
         void AdmitOutermost();
         static void ReleaseOutermost();
@@ -200,9 +212,17 @@ public:
     static bool IsPurgeAuthorized(Uptr imageAddress);
     static bool HasCallerPurgeProtection();
     static bool CallerProtectionHasPendingForImage(Uptr imageAddress);
-    static void AssertReaderActive();
+    static void AssertReaderActive()
+    {
+        // Published metadata has the same lifetime as its retained image.
+        // A loader that can reclaim it must still admit a real reader.
+        if (!RetainsNativeImages()) {
+            CheckReaderActive();
+        }
+    }
 
 private:
+    static void CheckReaderActive();
     static constexpr U64 WRITER_BIT = U64 { 1 } << 63;
     static constexpr U64 READER_MASK = ~WRITER_BIT;
 

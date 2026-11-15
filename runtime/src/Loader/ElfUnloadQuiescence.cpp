@@ -373,13 +373,13 @@ Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
     return image->identity;
 }
 
-ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
+void ElfUnloadQuiescence::ReadScope::Enter(ReaderKind kind)
 {
     (void)kind;
     // Nested scopes only bump the thread-local depth. Keep that path a small
     // leaf: GetMTable/IsSubType walks enter nested scopes far more often than
     // outermost ones, and the admission protocol below needs a large frame.
-    if (RetainsNativeImages() || readerDepth != 0 || unloadWriter) {
+    if (readerDepth != 0 || unloadWriter) {
         ++readerDepth;
         return;
     }
@@ -425,10 +425,10 @@ ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
     }
 }
 
-ElfUnloadQuiescence::ReadScope::~ReadScope()
+void ElfUnloadQuiescence::ReadScope::Exit()
 {
     CHECK_DETAIL(readerDepth != 0, "ELF unload reader depth underflow");
-    if (--readerDepth != 0 || RetainsNativeImages() || unloadWriter) {
+    if (--readerDepth != 0 || unloadWriter) {
         return;
     }
     ReleaseOutermost();
@@ -898,7 +898,7 @@ bool ElfUnloadQuiescence::CallerProtectionHasPendingForImage(Uptr imageAddress)
     return purgeAdmission->HasPendingForImage(imageAddress);
 }
 
-void ElfUnloadQuiescence::AssertReaderActive()
+void ElfUnloadQuiescence::CheckReaderActive()
 {
     CHECK_DETAIL(readerDepth != 0, "ELF metadata must be consumed inside a reader scope");
 }

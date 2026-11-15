@@ -1609,7 +1609,10 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLifetimeControlsTypePublication)
     if (ElfUnloadQuiescence::RetainsNativeImages()) {
         Target("publication-native-close", dlclose(library) == 0);
         Target("publication-metadata-still-linked", loader->GetBaseFileByMetaAddr(address) == file);
-        ElfUnloadQuiescence::ReadScope retainedReader;
+        // LinkImage verified the native pin before publication. Its metadata
+        // remains readable after direct close without a TLS reader token.
+        ElfUnloadQuiescence::AssertReaderActive();
+        Target("retained-uuid-without-reader-token", ti->GetUUIDInReadScope() == interfaceUUID);
         loader->RecordTypeInfo(ti);
         lateTi->AddMTable(ti, ed);
         Target("retained-publication-cache-valid", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
