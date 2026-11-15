@@ -1296,29 +1296,37 @@ extern "C" U32 MCC_GetMethodModifier(MethodInfo* methodInfo) { return methodInfo
 
 extern "C" bool MCC_MethodEntryPointIsNull(MethodInfo* methodInfo) { return methodInfo->MethodEntryPointIsNull(); }
 
+// The CJ_MCC_ApplyCJ* stubs that can grow the stack arm one attempt (MRT_ArmEntryStackGrow).
+static bool TakeEntryStackGrowArm()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    return mutator != nullptr && mutator->TakeEntryStackGrowArm();
+}
+
 extern "C" void* MCC_ApplyCJInstanceMethod(MethodInfo* methodInfo, ObjRef obj, void* args)
 {
+    const bool entryGrowArmed = TakeEntryStackGrowArm();
     if (methodInfo == nullptr) {
         DynamicMethodInfo mthInfo(obj);
         return mthInfo.ApplyCangjieMethod(args);
     }
-    return methodInfo->ApplyCJMethod(obj, nullptr, args, nullptr);
+    return methodInfo->ApplyCJMethod(obj, nullptr, args, nullptr, entryGrowArmed);
 }
 
 extern "C" void* MCC_ApplyCJStaticMethod(MethodInfo* methodInfo, void* args, TypeInfo* thisTi)
 {
-    return methodInfo->ApplyCJMethod(nullptr, nullptr, args, thisTi);
+    return methodInfo->ApplyCJMethod(nullptr, nullptr, args, thisTi, TakeEntryStackGrowArm());
 }
 
 extern "C" void* MCC_ApplyCJGenericInstanceMethod(MethodInfo* methodInfo, ObjRef obj, void* genericArgs, void* args)
 {
-    return methodInfo->ApplyCJMethod(obj, genericArgs, args, nullptr);
+    return methodInfo->ApplyCJMethod(obj, genericArgs, args, nullptr, TakeEntryStackGrowArm());
 }
 
 extern "C" void* MCC_ApplyCJGenericStaticMethod(MethodInfo* methodInfo, void* genericArgs,
                                                 void* args, TypeInfo* thisTi)
 {
-    return methodInfo->ApplyCJMethod(nullptr, genericArgs, args, thisTi);
+    return methodInfo->ApplyCJMethod(nullptr, genericArgs, args, thisTi, TakeEntryStackGrowArm());
 }
 
 extern "C" U32 MCC_GetNumOfActualParameters(MethodInfo* methodInfo)

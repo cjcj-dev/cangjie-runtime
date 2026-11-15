@@ -112,6 +112,32 @@ public:
     void RecordStackDerived(std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots,
                             BasePtrType basePtr, DerivedSlot& derivedPtr, uintptr_t movedLow);
     intptr_t FixExtendedStack(intptr_t frameBase = 0, uint32_t adjustedSize = 0, void* ip = nullptr);
+    // Reflection entry growth, driven by the CJ_MCC_ApplyCJ* stub (CalleeSavedStub.S).
+    void ArmEntryStackGrow()
+    {
+        entryGrowArmed = true;
+        entryGrowRequiredLow = 0;
+        entryGrowReceiver = nullptr;
+    }
+    bool TakeEntryStackGrowArm()
+    {
+        const bool armed = entryGrowArmed;
+        entryGrowArmed = false;
+        return armed;
+    }
+    void RequestEntryStackGrow(uintptr_t requiredLow, BaseObject* receiver)
+    {
+        entryGrowRequiredLow = requiredLow;
+        entryGrowReceiver = receiver;
+    }
+    uintptr_t TakeEntryStackGrowRequest()
+    {
+        const uintptr_t requiredLow = entryGrowRequiredLow;
+        entryGrowRequiredLow = 0;
+        entryGrowArmed = false;
+        return requiredLow;
+    }
+    intptr_t GrowStackForEntry(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots, bool hasReceiver);
 
     void InitTid()
     {
@@ -565,6 +591,12 @@ private:
 
     uintptr_t stackBaseAddr = 0;
     uintptr_t stackTopAddr = 0;
+    // Reflection entry growth state (GrowStackForEntry). Thread-private; no safepoint
+    // separates the request in ApplyCJMethod from its use in GrowStackForEntry.
+    bool entryGrowArmed = false;
+    uintptr_t entryGrowRequiredLow = 0;
+    BaseObject* entryGrowReceiver = nullptr;
+    uintptr_t nativeGrowRequiredLow = 0;
     uintptr_t stackSize = 0;
 
     std::atomic<CpuProfileState> cpuProfileState = { NO_CPUPROFILE };

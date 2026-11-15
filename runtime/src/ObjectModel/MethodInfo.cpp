@@ -141,6 +141,14 @@ __attribute__((noinline)) bool ScopedAllocBuffer::ValueRecordsFitStack(size_t by
     return sp > guard && sp - guard > bytes;
 }
 
+// The highest guard ValueRecordsFitStack(bytes) accepts at the same call depth
+// (guard < sp - bytes), or zero when no stack can hold the records.
+__attribute__((noinline)) uintptr_t ScopedAllocBuffer::ValueRecordsLowestAddress(size_t bytes)
+{
+    const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+    return sp > bytes ? sp - bytes - 1 : 0;
+}
+
 // Copy a boxed value's payload into a value record in its uncolored form
 // (ValuePayload::Kind::Uncolored) and root its references in place.
 void* ScopedAllocBuffer::StageValueRecord(TypeInfo* type, BaseObject* box)
@@ -835,7 +843,8 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
     LOG(RTLOG_FATAL, "unreachable!!!");
 }
 
-void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTypeInfo)
+void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTypeInfo,
+                                bool entryGrowArmed)
 {
     HandleMark handleMark(*Mutator::GetMutator());
     Handle receiver(Mutator::GetMutator(), instanceObj);
@@ -877,6 +886,15 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     // like the alloca a compiled caller passes (ScopedAllocBuffer::ValueRecordFootprint).
     const size_t valueRecordBytes = ValueRecordBytes(instanceObj != nullptr, reflectVersion, actualArgs);
     if (valueRecordBytes != 0 && !ScopedAllocBuffer::ValueRecordsFitStack(valueRecordBytes)) {
+        // Entered through the CJ_MCC_ApplyCJ* stub: nothing above outlives this frame, so
+        // the stub may grow the stack and enter once more (Mutator::GrowStackForEntry).
+        // That second entry is unarmed and keeps this guard as its final check.
+        const uintptr_t requiredLow =
+            entryGrowArmed ? ScopedAllocBuffer::ValueRecordsLowestAddress(valueRecordBytes) : 0;
+        if (requiredLow != 0) {
+            Mutator::GetMutator()->RequestEntryStackGrow(requiredLow, receiver());
+            return returnPending();
+        }
         ExceptionManager::StackOverflow(valueRecordBytes > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(valueRecordBytes),
                                         __builtin_return_address(0));
         return returnPending();

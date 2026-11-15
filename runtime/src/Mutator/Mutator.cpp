@@ -34,6 +34,8 @@
 #include "Base/LogFile.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "Heap/z/zRootsIterator.hpp"
+#include "Common/Handle.h"
 
 namespace MapleRuntime {
 extern "C" uintptr_t MRT_GetThreadLocalData()
@@ -115,6 +117,32 @@ extern "C" void MRT_FreeOldStack(intptr_t offset)
     mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGet()));
     mutator->SetStackSize(CJThreadStackSizeGet());
     mutator->SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGet()));
+}
+
+// CJ_MCC_ApplyCJ* (CalleeSavedStub.S) arms one entry attempt; ApplyCJMethod may then ask
+// for growth instead of raising StackOverflowError at its value-record guard.
+extern "C" void MRT_ArmEntryStackGrow()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->ArmEntryStackGrow();
+    }
+}
+
+extern "C" uintptr_t MRT_TakeEntryStackGrowRequest()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    return mutator == nullptr ? 0 : mutator->TakeEntryStackGrowRequest();
+}
+
+extern "C" intptr_t MRT_EntryStackGrow(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots,
+                                       uintptr_t hasReceiver)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator == nullptr) {
+        return 0;
+    }
+    return mutator->GrowStackForEntry(frameBase, requiredLow, argSlots, hasReceiver != 0);
 }
 
 extern "C" void MRT_SetStackGrow(bool enableStackScale)
@@ -557,7 +585,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // failed, and a caller that asked for a stack check must still get its
         // exception.
         if (stackBaseAddr == 0) {
-            if (frameBase != 0) {
+            // The reflection entry (GrowStackForEntry) raises at its own guard on a zero answer.
+            if (frameBase != 0 && nativeGrowRequiredLow == 0) {
 #ifdef INTERPRETER_ENABLED
                 // The interpreter branch below logs its own failure; keep that visible
                 // here too, without the frame dereference and doubling loop that only
@@ -624,6 +653,33 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
                 return 0;
             }
 #endif // INTERPRETER_ENABLED
+        } else if (nativeGrowRequiredLow != 0) {
+            // Reflection entry (GrowStackForEntry): the published context is the C2R stub frame
+            // at frameBase, below it only this call. requiredLow is the lowest address the value
+            // records need above the guard, measured by ApplyCJMethod at its guard. The new guard
+            // is top + reserved (CJThreadStackAttrInit), so size like the managed branch:
+            // base - requiredLow + reserved <= newSize. A zero answer makes the retried entry
+            // raise StackOverflowError at that same guard.
+            const uintptr_t requiredLow = nativeGrowRequiredLow;
+            const uintptr_t reserved = CJThreadStackReversedGet();
+            if (requiredLow >= stackBaseAddr || stackBaseAddr - requiredLow > SIZE_MAX - reserved) {
+                flush.End();
+                return 0;
+            }
+            const size_t minSize = (stackBaseAddr - requiredLow) + reserved;
+            size_t newSize = stackSize;
+            do {
+                if (newSize == 0 || newSize > CJTHREAD_MAX_STACK_SIZE || newSize > SIZE_MAX / 2) {
+                    flush.End();
+                    return 0;
+                }
+                newSize += newSize;
+            } while (newSize < minSize);
+            stackOffset = CJThreadStackGrow(newSize);
+            if (stackOffset == -1 || stackOffset == 0) {
+                flush.End();
+                return 0;
+            }
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
@@ -743,6 +799,40 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         return stackOffset;
     }
     return 0;
+}
+
+// The CJ_MCC_ApplyCJ* stub calls this after its C++ entry returned with a growth request,
+// so no C++ frame is live above the stub. Its frame and the managed frames move like a
+// managed-callee growth (FixExtendedStack). The stub's four saved argument registers are
+// the only other native-held words: pointer arguments into the old stack follow the copy,
+// and the receiver comes from a Handle, valid across any safepoint the move passes.
+intptr_t Mutator::GrowStackForEntry(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots, bool hasReceiver)
+{
+    constexpr size_t argSlotCount = 4;  // rdi, rsi, rdx, rcx of the C++ entry
+    constexpr size_t receiverSlot = 1;  // ObjRef obj of the instance entries
+    HandleMark handleMark(*this);
+    Handle receiver;
+    if (hasReceiver) {
+        receiver = Handle(this, entryGrowReceiver);
+    }
+    entryGrowReceiver = nullptr;
+    nativeGrowRequiredLow = requiredLow;
+    const intptr_t stackOffset = FixExtendedStack(static_cast<intptr_t>(frameBase), 0, nullptr);
+    nativeGrowRequiredLow = 0;
+    if (stackOffset == 0) {
+        return 0;
+    }
+    // IsStackAddr still describes the old stack until MRT_FreeOldStack.
+    uintptr_t* moved = reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(argSlots) + stackOffset);
+    for (size_t i = 0; i < argSlotCount; ++i) {
+        if (IsStackAddr(moved[i])) {
+            moved[i] += stackOffset;
+        }
+    }
+    if (hasReceiver) {
+        moved[receiverSlot] = reinterpret_cast<uintptr_t>(receiver());
+    }
+    return stackOffset;
 }
 
 // Headered Cangjie stack object (TypeInfo in the first word) vs headerless
