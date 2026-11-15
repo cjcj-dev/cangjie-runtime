@@ -176,3 +176,5 @@ readscope_loader_detection_harness.cpp manual public load failure and restoratio
 readscope_loader_detection_failure.cpp manual LD_PRELOAD self-map/LMID fault injection at actual loader dependency
 
 reflection_nested_stable_stack_product.cj manual installed private runtime nested direct/reflection four-arm regression with small growable CJThread stack
+reflection_stable_boundaries_product.cj manual private installed runtime exception reentry dynamic FunctionTypeInfo outer and native callback after capacity growth
+reflection_stable_callback.cpp manual native helper for reflection_stable_boundaries_product.cj; live native holder control

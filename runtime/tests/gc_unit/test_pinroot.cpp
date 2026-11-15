@@ -966,6 +966,21 @@ bool CJThreadStackSizeForLow(size_t, uintptr_t, uintptr_t, size_t, size_t*);
 void CJ_CJThreadFree(struct CJThread*, bool);
 }
 
+static void ExpectStackPermission(uintptr_t address, const char* expected)
+{
+    FILE* f = std::fopen("/proc/self/maps", "r");
+    GC_EXPECT_TRUE(f != nullptr);
+    bool found = false; char line[512];
+    while (std::fgets(line, sizeof(line), f)) {
+        unsigned long low, high; char perm[5];
+        if (std::sscanf(line, "%lx-%lx %4s", &low, &high, perm) == 3 && low <= address && address < high) {
+            GC_EXPECT_TRUE(std::strncmp(perm, expected, 3) == 0);
+            found = true; break;
+        }
+    }
+    std::fclose(f); GC_EXPECT_TRUE(found);
+}
+
 // Record only this reservation, not an inventory of the process or machine.
 static void DumpStackReservation(const char* phase, uintptr_t base)
 {
@@ -1026,10 +1041,12 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, PermissionFailureKeepsOldCapacity)
     const int failure = errno;
     GC_EXPECT_EQ(result, -1); GC_EXPECT_EQ(failure, EPERM);
     GC_EXPECT_EQ(delta, intptr_t{0});
-    GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(t), top);
-    GC_EXPECT_EQ(CJ_CJThreadStackBaseAddrGetByCJThrd(t), base);
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(t) == top);
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(t) == base);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(t), initial);
     GC_EXPECT_EQ(top[0], 45); GC_EXPECT_EQ(base[-64], 47);
+    ExpectStackPermission(denied, "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top), "rw-");
     DumpStackReservation("permission-failure",reinterpret_cast<uintptr_t>(base));
     ThreadLocal::SetCJThread(saved);
     CJ_CJThreadFree(t, false);
@@ -1073,6 +1090,7 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     auto* base = static_cast<char*>(CJ_CJThreadStackBaseAddrGetByCJThrd(thread));
     auto* top = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
     GC_EXPECT_TRUE(initial < 2*1024*1024);
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top)-1, "---");
     DumpStackReservation("initial",reinterpret_cast<uintptr_t>(base));
     ThreadLocal::SetCJThread(thread);
     top[0] = 37;
@@ -1080,15 +1098,17 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     intptr_t delta = 99;
     GC_EXPECT_EQ(CJThreadTryStackGrow(initial*2, &delta), 1);
     GC_EXPECT_EQ(delta, intptr_t{0});
-    GC_EXPECT_EQ(CJ_CJThreadStackBaseAddrGetByCJThrd(thread), base);
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(thread) == base);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(thread), initial*2);
     GC_EXPECT_EQ(top[0], 37);
     GC_EXPECT_EQ(base[-64], 41);
     auto* grown = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
     grown[0] = 43;
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown)-1, "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown), "rw-");
     DumpStackReservation("grown",reinterpret_cast<uintptr_t>(base));
     GC_EXPECT_EQ(CJThreadTryStackGrow(SIZE_MAX, &delta), -1);
-    GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(thread), grown);
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(thread) == grown);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(thread), initial*2);
     ThreadLocal::SetCJThread(reinterpret_cast<struct CJThread*>(savedThread));
     ThreadLocal::SetMutator(savedMutator);
@@ -1104,10 +1124,12 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     ThreadLocal::SetCJThread(nullptr);
     auto* reused = reinterpret_cast<struct CJThread*>(
         CJ_CJThreadNew(scheduler, nullptr, GrowCopyUnused, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0));
-    GC_EXPECT_EQ(reused, thread);
-    GC_EXPECT_EQ(CJ_CJThreadStackBaseAddrGetByCJThrd(reused), base);
-    GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(reused), top);
+    GC_EXPECT_TRUE(reused == thread);
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(reused) == base);
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(reused) == top);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(reused), initial);
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown), "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top), "rw-");
     DumpStackReservation("reused",reinterpret_cast<uintptr_t>(base));
     unsigned char resident = 0;
     GC_EXPECT_EQ(mincore(grown, getpagesize(), &resident), 0); // reserved, not released

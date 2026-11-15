@@ -713,7 +713,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 
         if (stackOffset == 0) {
             // BeginGrowFlush above still processed the roots/colour transition.
-            // No byte or frame moved, but the usable range and guard did grow.
+            // No byte or frame moved, but retain the pending-field completion
+            // check and watermark state maintenance even for zero displacement.
+            flush.Shift(0);
             UpdatePollValues(ThreadLocal::GetThreadLocalData());
             flush.End();
             MutatorLock();
