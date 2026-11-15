@@ -347,6 +347,7 @@ MAIN_SOURCES=(
   "$SRC/test_stackmap_base_capture.cpp"
   "$SRC/test_empty_stackmap.cpp"
   "$SRC/test_stub_register_roots.cpp"
+  "$SRC/test_stack_grow_null_base.cpp"
   "$SRC/test_gctibzero.cpp"
   "$SRC/test_field_iterator.cpp"
   "$SRC/test_pinroot.cpp"
