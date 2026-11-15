@@ -36,8 +36,10 @@ int main(int argc, char** argv)
     auto init = reinterpret_cast<Counter>(GetProcAddress(first, "ReadScopeInitCount"));
     auto fini = reinterpret_cast<Counter>(GetProcAddress(first, "ReadScopeFiniCount"));
     Check("actual-native-constructor", observed != 0 && init != nullptr && fini != nullptr && init() == 1 && fini() == 0);
-    void* publicHandle = LoadCJLibrary(argv[1]);
-    Check("public-load-same-native-identity", publicHandle == first);
+    Check("public-load", LoadCJLibrary(argv[1]) == E_OK);
+    Check("public-load-same-native-identity",
+          FindCJSymbol(argv[1], "ReadScopeValue") ==
+              reinterpret_cast<void*>(GetProcAddress(first, "ReadScopeValue")));
     Check("unknown-close-rejected", UnloadCJLibrary("readscope-no-such-library.dll") != 0);
     Check("logical-close", UnloadCJLibrary(argv[1]) == 0);
     Check("external-native-close", FreeLibrary(first) != 0);
