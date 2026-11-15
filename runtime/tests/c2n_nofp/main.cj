@@ -1,6 +1,8 @@
 import std.runtime.*
 
 foreign {
+    func NoFPContext(): Int32
+    func FPContext(control: Float64): Int32
     func NoFPZero(): Int64
     func NoFPOne(x: Int64): Int64
     func NoFPSix(a: Int64,b: Int64,c: Int64,d: Int64,e: Int64,f: Int64): Int64
@@ -58,6 +60,8 @@ func progress(control: Bool): Unit {
     println("NOFP_PROGRESS control=${control}")
 }
 main(args: Array<String>): Int64 {
+    requireNoFP(unsafe { FPContext(1.25) } == 7, "fp-control-canonical-pc-safe-frame")
+    requireNoFP(unsafe { NoFPContext() } == 7, "nofp-canonical-pc-safe-frame")
     progress(true)
     progress(false)
     requireNoFP(liveFloating(1.25) == 6.25, "live-fp-across-clobber")
