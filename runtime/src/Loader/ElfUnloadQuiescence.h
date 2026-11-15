@@ -12,6 +12,7 @@
 #include <vector>
 #include <shared_mutex>
 #include <unordered_set>
+#include <type_traits>
 
 #include "Base/Types.h"
 #include "Loader/NativeImageRetention.h"
@@ -71,6 +72,13 @@ public:
 
     class ReadScope final {
     public:
+#if defined(__APPLE__) || defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
+        // Trivial even in Debug/O0: an empty user-provided inline constructor
+        // can still become a call when inlining is disabled. Publication has
+        // already retained the complete metadata dependency closure here.
+        ReadScope() = default;
+        ~ReadScope() = default;
+#else
         explicit ReadScope(ReaderKind kind = ReaderKind::GENERIC)
         {
             if (!RetainsNativeImages()) {
@@ -83,6 +91,7 @@ public:
                 Exit();
             }
         }
+#endif
 
         ReadScope(const ReadScope&) = delete;
         ReadScope& operator=(const ReadScope&) = delete;
@@ -253,6 +262,12 @@ private:
     static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
     static Uptr RegisteredIdentity(Uptr metadata);
 };
+
+// This is a structural build obligation, not an optimization-level assumption.
+static_assert(!ElfUnloadQuiescence::RetainsNativeImages() ||
+                  (std::is_trivially_default_constructible<ElfUnloadQuiescence::ReadScope>::value &&
+                   std::is_trivially_destructible<ElfUnloadQuiescence::ReadScope>::value),
+              "process-lifetime metadata reads must not construct or destroy a reader token");
 
 } // namespace MapleRuntime
 
