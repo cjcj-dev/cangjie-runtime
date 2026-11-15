@@ -34,6 +34,8 @@
 #include "Base/LogFile.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "Heap/z/zRootsIterator.hpp"
+#include "Common/Handle.h"
 
 namespace MapleRuntime {
 extern "C" uintptr_t MRT_GetThreadLocalData()
@@ -77,6 +79,13 @@ extern "C" void MRT_SetGrowFlag(bool flag)
     LOG(RTLOG_ERROR, "Set flag of GROWStack faild.");
 }
 
+// N2C protects native address stability, not the user's capacity policy or
+// the exception raiser's recursion guard. Stable stacks need no relocation pin.
+extern "C" void MRT_SetNativeStackPin(bool enableStackGrow)
+{
+    if (!CJThreadHasStableStack()) { MRT_SetStackGrow(enableStackGrow); }
+}
+
 extern "C" intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip)
 {
     // arm32 only do stack check and try to throw StackOverFlow Expection.
@@ -115,6 +124,32 @@ extern "C" void MRT_FreeOldStack(intptr_t offset)
     mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGet()));
     mutator->SetStackSize(CJThreadStackSizeGet());
     mutator->SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGet()));
+}
+
+// CJ_MCC_ApplyCJ* (CalleeSavedStub.S) arms one entry attempt; ApplyCJMethod may then ask
+// for growth instead of raising StackOverflowError at its value-record guard.
+extern "C" void MRT_ArmEntryStackGrow()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->ArmEntryStackGrow();
+    }
+}
+
+extern "C" uintptr_t MRT_TakeEntryStackGrowRequest()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    return mutator == nullptr ? 0 : mutator->TakeEntryStackGrowRequest();
+}
+
+extern "C" intptr_t MRT_EntryStackGrow(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots,
+                                       uintptr_t hasReceiver)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator == nullptr) {
+        return 0;
+    }
+    return mutator->GrowStackForEntry(frameBase, requiredLow, argSlots, hasReceiver != 0);
 }
 
 extern "C" void MRT_SetStackGrow(bool enableStackScale)
@@ -557,7 +592,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // failed, and a caller that asked for a stack check must still get its
         // exception.
         if (stackBaseAddr == 0) {
-            if (frameBase != 0) {
+            // The reflection entry (GrowStackForEntry) raises at its own guard on a zero answer.
+            if (frameBase != 0 && nativeGrowRequiredLow == 0) {
 #ifdef INTERPRETER_ENABLED
                 // The interpreter branch below logs its own failure; keep that visible
                 // here too, without the frame dereference and doubling loop that only
@@ -587,7 +623,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             StackWatermark& owner;
             bool ended = false;
         } flush(stackWatermark);
-        intptr_t stackOffset;
+        intptr_t stackOffset = 0;
+        const auto grow = [&](size_t size) { return CJThreadTryStackGrow(size, &stackOffset) == 1; };
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.
         // Check whether the stack expansion meets the requirements.
@@ -597,8 +634,7 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         bool isInInterpreter = StackManager::IsInterpreterCodeAddr(currentIp);
 #endif
         if (frameBase == 0) {
-            stackOffset = CJThreadStackGrow(CJTHREAD_MAX_STACK_SIZE);
-            if (stackOffset == 0 || stackOffset == -1) {
+            if (!grow(CJTHREAD_MAX_STACK_SIZE)) {
                 return 0;
             }
 #ifdef INTERPRETER_ENABLED
@@ -609,14 +645,13 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             const uintptr_t* stubFrameBase = reinterpret_cast<const uintptr_t*>(frameBase);
             uintptr_t interpFrameBase = *stubFrameBase;
 
-            size_t requiredSp = interpFrameBase - GetFrameSize(interpFrameBase);
-            size_t newSize = stackSize + stackSize;
-            while (stackBaseAddr - requiredSp > newSize - CJThreadStackReversedGet()) {
-                newSize += newSize;
-            }
+            const size_t interpFrameSize = GetFrameSize(interpFrameBase);
+            const uintptr_t requiredSp = interpFrameSize < interpFrameBase ? interpFrameBase - interpFrameSize : 0;
+            size_t newSize = 0;
+            const bool valid = CJThreadStackSizeForLow(stackSize, stackBaseAddr, requiredSp,
+                                                      CJThreadStackReversedGet(), &newSize);
             DLOG(INTERPRETER, "   try to grow stack size: %zu -> %zu", stackSize, newSize);
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
+            if (!valid || !grow(newSize)) {
                 DLOG(INTERPRETER, "       stack overflow at %p", ip);
                 // The managed raiser may process a new watermark epoch on this stack.
                 flush.End();
@@ -624,6 +659,19 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
                 return 0;
             }
 #endif // INTERPRETER_ENABLED
+        } else if (nativeGrowRequiredLow != 0) {
+            // Reflection entry (GrowStackForEntry): the published context is the C2R stub frame
+            // at frameBase, below it only this call. requiredLow is the lowest address the value
+            // records need above the guard, measured by ApplyCJMethod at its guard. The new guard
+            // is top + reserved (CJThreadStackAttrInit), so size like the managed branch:
+            // base - requiredLow + reserved <= newSize. A zero answer makes the retried entry
+            // raise StackOverflowError at that same guard.
+            size_t newSize = 0;
+            if (!CJThreadStackSizeForLow(stackSize, stackBaseAddr, nativeGrowRequiredLow,
+                                         CJThreadStackReversedGet(), &newSize) || !grow(newSize)) {
+                flush.End();
+                return 0;
+            }
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
@@ -653,17 +701,29 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #elif defined(__arm__)
             uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
 #endif
-            size_t newSize = stackSize + stackSize;
-            while (stackBaseAddr - callerSp > newSize - CJThreadStackReversedGet()) {
-                newSize += newSize;
-            }
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
+            size_t newSize = 0;
+            if (!CJThreadStackSizeForLow(stackSize, stackBaseAddr, callerSp, CJThreadStackReversedGet(), &newSize) ||
+                !grow(newSize)) {
                 // No stack switch follows failure; release before entering managed code.
                 flush.End();
                 ExceptionManager::StackOverflow(adjustedSize, ip);
                 return 0;
             }
+        }
+
+        if (stackOffset == 0) {
+            // BeginGrowFlush above still processed the roots/colour transition.
+            // No byte or frame moved, but retain the pending-field completion
+            // check and watermark state maintenance even for zero displacement.
+            flush.Shift(0);
+            UpdatePollValues(ThreadLocal::GetThreadLocalData());
+            flush.End();
+            MutatorLock();
+            SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGet()));
+            SetStackSize(CJThreadStackSizeGet());
+            SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGet()));
+            MutatorUnlock();
+            return 0;
         }
 
         // Visits the stackmap and records all pointers to be fixed to the resSet.
@@ -743,6 +803,40 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         return stackOffset;
     }
     return 0;
+}
+
+// The CJ_MCC_ApplyCJ* stub calls this after its C++ entry returned with a growth request,
+// only the current entry has returned; outer native frames can still be live.
+// Linux stable capacity growth never moves these frames. Other platforms retain
+// their existing entry policy and relocation contract. The stub's four saved argument registers are
+// the only other native-held words: pointer arguments into the old stack follow the copy,
+// and the receiver comes from a Handle, valid across any safepoint the move passes.
+intptr_t Mutator::GrowStackForEntry(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots, bool hasReceiver)
+{
+    constexpr size_t argSlotCount = 4;  // rdi, rsi, rdx, rcx of the C++ entry
+    constexpr size_t receiverSlot = 1;  // ObjRef obj of the instance entries
+    HandleMark handleMark(*this);
+    Handle receiver;
+    if (hasReceiver) {
+        receiver = Handle(this, entryGrowReceiver);
+    }
+    entryGrowReceiver = nullptr;
+    nativeGrowRequiredLow = requiredLow;
+    const intptr_t stackOffset = FixExtendedStack(static_cast<intptr_t>(frameBase), 0, nullptr);
+    nativeGrowRequiredLow = 0;
+    // Zero is a valid successful displacement. Even on failure, the root flush
+    // may have healed the receiver: reload it before the guarded reentry.
+    // IsStackAddr still describes the old stack until MRT_FreeOldStack.
+    uintptr_t* moved = reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(argSlots) + stackOffset);
+    for (size_t i = 0; i < argSlotCount; ++i) {
+        if (stackOffset != 0 && IsStackAddr(moved[i])) {
+            moved[i] += stackOffset;
+        }
+    }
+    if (hasReceiver) {
+        moved[receiverSlot] = reinterpret_cast<uintptr_t>(receiver());
+    }
+    return stackOffset;
 }
 
 // Headered Cangjie stack object (TypeInfo in the first word) vs headerless

@@ -28,6 +28,12 @@ extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include <ucontext.h>
 #include <cerrno>
 #include <sys/mman.h>
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -852,6 +858,9 @@ struct GrowCopyObserved {
     uintptr_t slot;
     uintptr_t sp;
     uintptr_t base;
+    uintptr_t baseAfter;
+    size_t sizeBefore;
+    size_t sizeAfter;
     uintptr_t watermark;
     uintptr_t publishedFA;
     uintptr_t publishedSP;
@@ -909,16 +918,17 @@ static void GrowCopyBody()
     g_growCopy.before = younger[2];
     g_growCopy.oldFA = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
     g_growCopy.oldSP = context.frameInfo.mFrame.GetSP();
+    g_growCopy.sizeBefore = g_growMutator->GetStackSize();
     const intptr_t offset = MRT_StackGrow(0, 0, nullptr);
+    g_growCopy.sizeAfter = g_growMutator->GetStackSize();
+    g_growCopy.baseAfter = g_growMutator->GetStackBaseAddr();
     g_growCopy.offset = offset;
     g_growCopy.publishedFA = reinterpret_cast<uintptr_t>(context.frameInfo.mFrame.GetFA());
     g_growCopy.publishedSP = context.frameInfo.mFrame.GetSP();
     g_growCopy.publishedAnchor = reinterpret_cast<uintptr_t>(context.anchorFA);
     g_growCopy.oldAfter = younger[2];
-    if (offset != 0) {
-        g_growCopy.copied = *reinterpret_cast<uintptr_t*>(
-            static_cast<uintptr_t>(static_cast<intptr_t>(g_growCopy.slot) + offset));
-    }
+    g_growCopy.copied = *reinterpret_cast<uintptr_t*>(
+        static_cast<uintptr_t>(static_cast<intptr_t>(g_growCopy.slot) + offset));
     g_growCopy.watermark = g_growMutator->GetStackWatermark().watermark();
     g_growCopy.done = g_growMutator->GetStackWatermark().IsDone();
 }
@@ -947,6 +957,192 @@ private:
     MutatorManager manager;
     Concurrency concurrency;
 };
+
+
+#if !defined(__OHOS__) && !defined(__ANDROID__)
+extern "C" {
+int CJThreadTryStackGrow(size_t, intptr_t*);
+bool CJThreadStackSizeForLow(size_t, uintptr_t, uintptr_t, size_t, size_t*);
+void CJ_CJThreadFree(struct CJThread*, bool);
+}
+
+static void ExpectStackPermission(uintptr_t address, const char* expected)
+{
+    FILE* f = std::fopen("/proc/self/maps", "r");
+    GC_EXPECT_TRUE(f != nullptr);
+    bool found = false; char line[512];
+    while (std::fgets(line, sizeof(line), f)) {
+        unsigned long low, high; char perm[5];
+        if (std::sscanf(line, "%lx-%lx %4s", &low, &high, perm) == 3 && low <= address && address < high) {
+            GC_EXPECT_TRUE(std::strncmp(perm, expected, 3) == 0);
+            found = true; break;
+        }
+    }
+    std::fclose(f); GC_EXPECT_TRUE(found);
+}
+
+// Record only this reservation, not an inventory of the process or machine.
+static void DumpStackReservation(const char* phase, uintptr_t base)
+{
+    const uintptr_t low = base - 1024UL*1024*1024 - getpagesize();
+    FILE* f = std::fopen("/proc/self/smaps", "r");
+    GC_EXPECT_TRUE(f != nullptr);
+    char line[512]; bool selected = false; size_t maps = 0, rss = 0, bytes = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+        unsigned long a, b; char perm[5];
+        if (std::sscanf(line, "%lx-%lx %4s", &a, &b, perm) == 3) {
+            selected = a < base && b > low;
+            if (selected) { ++maps; bytes += std::min<uintptr_t>(b,base)-std::max<uintptr_t>(a,low);
+                std::fprintf(stderr, "STABLE_MAP %s %s", phase, line); }
+        } else if (selected) {
+            size_t kb;
+            if (std::sscanf(line, "Rss: %zu kB", &kb) == 1) rss += kb;
+        }
+    }
+    std::fclose(f);
+    std::fprintf(stderr, "STABLE_COST %s reservation_bytes=%zu overlapping_vmas=%zu vma_rss_kib=%zu\n",phase,bytes,maps,rss);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(StableStack, PermissionFailureKeepsOldCapacity)
+{
+    GrowCopyRuntime runtime(8);
+    (void)CJ_ScheduleGetTlsHookRegister(reinterpret_cast<GrowTlsHook>(MRT_GetThreadLocalData));
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    auto* saved = tls->cjthread;
+    void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    auto* t = reinterpret_cast<struct CJThread*>(CJ_CJThreadNew(scheduler, nullptr, GrowCopyUnused,
+                                     nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0));
+    GC_EXPECT_TRUE(t != nullptr);
+    const size_t initial = CJ_CJThreadStackSizeGetByCJThrd(t);
+    auto* top = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(t));
+    auto* base = static_cast<char*>(CJ_CJThreadStackBaseAddrGetByCJThrd(t));
+    const uintptr_t denied = reinterpret_cast<uintptr_t>(top) - initial;
+    // One kernel permission call fails deterministically, without exhausting VA
+    // or replacing any product function. Rollback PROT_NONE remains permitted.
+    sock_filter ins[] = {
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,nr)),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, SYS_mprotect, 0, 7),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[0])),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, static_cast<uint32_t>(denied), 0, 5),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[0])+4),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, static_cast<uint32_t>(denied>>32), 0, 3),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[2])),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, PROT_READ|PROT_WRITE, 0, 1),
+      BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ERRNO|EPERM),
+      BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW)
+    };
+    sock_fprog filter{static_cast<unsigned short>(sizeof(ins)/sizeof(ins[0])), ins};
+    GC_EXPECT_EQ(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), 0);
+    GC_EXPECT_EQ(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &filter), 0);
+    ThreadLocal::SetCJThread(t);
+    top[0] = 45; base[-64] = 47;
+    intptr_t delta = 99; errno = 0;
+    const int result = CJThreadTryStackGrow(initial*2, &delta);
+    const int failure = errno;
+    GC_EXPECT_EQ(result, -1); GC_EXPECT_EQ(failure, EPERM);
+    GC_EXPECT_EQ(delta, intptr_t{0});
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(t) == top);
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(t) == base);
+    GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(t), initial);
+    GC_EXPECT_EQ(top[0], 45); GC_EXPECT_EQ(base[-64], 47);
+    ExpectStackPermission(denied, "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top), "rw-");
+    DumpStackReservation("permission-failure",reinterpret_cast<uintptr_t>(base));
+    ThreadLocal::SetCJThread(saved);
+    CJ_CJThreadFree(t, false);
+    std::fprintf(stderr,"STABLE_PERMISSION_FAILURE rc=%d errno=%d unchanged=%zu\n",result,failure,initial);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(StableStack, BoundedSizing)
+{
+    constexpr size_t mib = 1024 * 1024;
+    constexpr uintptr_t base = uintptr_t{8} * 1024 * mib;
+    size_t size = 123;
+    GC_EXPECT_TRUE(CJThreadStackSizeForLow(768*mib, base, base-800*mib, 0, &size));
+    GC_EXPECT_EQ(size, 1024*mib);
+    GC_EXPECT_TRUE(CJThreadStackSizeForLow(768*mib, base, base-1024*mib, 0, &size));
+    GC_EXPECT_EQ(size, 1024*mib);
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(768*mib, base, base-1024*mib-1, 0, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(0, base, base-1, 0, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(64*1024, base, 0, 0, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(64*1024, base, base, 0, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(64*1024, base, base+1, 0, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(64*1024, base, 1, SIZE_MAX, &size));
+    GC_EXPECT_TRUE(!CJThreadStackSizeForLow(SIZE_MAX, base, base-1, 0, &size));
+    std::fprintf(stderr, "STABLE_SIZING max/max+1/768->800->1024/low/overflow executed\n");
+}
+
+// This test uses the scheduler's real allocation, permission, cache and release
+// paths. The carrier is inactive; it never substitutes a fabricated stack for a
+// running mutator. The independent StackGrowCopy tests exercise GC publication.
+GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
+{
+    GrowCopyRuntime runtime(8);
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    (void)CJ_ScheduleGetTlsHookRegister(reinterpret_cast<GrowTlsHook>(MRT_GetThreadLocalData));
+    void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    auto* savedThread = tls->cjthread;
+    auto* savedMutator = ThreadLocal::GetMutator();
+    auto* thread = reinterpret_cast<struct CJThread*>(
+        CJ_CJThreadNew(scheduler, nullptr, GrowCopyUnused, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0));
+    GC_EXPECT_TRUE(thread != nullptr);
+    const size_t initial = CJ_CJThreadStackSizeGetByCJThrd(thread);
+    auto* base = static_cast<char*>(CJ_CJThreadStackBaseAddrGetByCJThrd(thread));
+    auto* top = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
+    GC_EXPECT_TRUE(initial < 2*1024*1024);
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top)-1, "---");
+    DumpStackReservation("initial",reinterpret_cast<uintptr_t>(base));
+    ThreadLocal::SetCJThread(thread);
+    top[0] = 37;
+    base[-64] = 41;
+    intptr_t delta = 99;
+    GC_EXPECT_EQ(CJThreadTryStackGrow(initial*2, &delta), 1);
+    GC_EXPECT_EQ(delta, intptr_t{0});
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(thread) == base);
+    GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(thread), initial*2);
+    GC_EXPECT_EQ(top[0], 37);
+    GC_EXPECT_EQ(base[-64], 41);
+    auto* grown = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
+    grown[0] = 43;
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown)-1, "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown), "rw-");
+    DumpStackReservation("grown",reinterpret_cast<uintptr_t>(base));
+    GC_EXPECT_EQ(CJThreadTryStackGrow(SIZE_MAX, &delta), -1);
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(thread) == grown);
+    GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(thread), initial*2);
+    ThreadLocal::SetCJThread(reinterpret_cast<struct CJThread*>(savedThread));
+    ThreadLocal::SetMutator(savedMutator);
+    // A foreign thread uses the ordinary cross-scheduler cache path. Its
+    // scheduler owns an OS stack, and must never acquire a growable reservation.
+    std::thread returning([&] {
+        Concurrency foreign;
+        foreign.Init(ConcurrencyParam{1024, 1024, 1}, SCHEDULE_FOREIGN_THREAD);
+        CJ_CJThreadFree(thread, true);
+    });
+    returning.join();
+    // Force the public CJThreadNew GLOBAL_BUF selection without starting it.
+    ThreadLocal::SetCJThread(nullptr);
+    auto* reused = reinterpret_cast<struct CJThread*>(
+        CJ_CJThreadNew(scheduler, nullptr, GrowCopyUnused, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0));
+    GC_EXPECT_TRUE(reused == thread);
+    GC_EXPECT_TRUE(CJ_CJThreadStackBaseAddrGetByCJThrd(reused) == base);
+    GC_EXPECT_TRUE(CJ_CJThreadStackAddrGetByCJThrd(reused) == top);
+    GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(reused), initial);
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(grown), "---");
+    ExpectStackPermission(reinterpret_cast<uintptr_t>(top), "rw-");
+    DumpStackReservation("reused",reinterpret_cast<uintptr_t>(base));
+    unsigned char resident = 0;
+    GC_EXPECT_EQ(mincore(grown, getpagesize(), &resident), 0); // reserved, not released
+    CJ_CJThreadFree(reused, false);
+    errno = 0;
+    GC_EXPECT_EQ(mincore(top, getpagesize(), &resident), -1);
+    GC_EXPECT_EQ(errno, ENOMEM);
+    ThreadLocal::SetCJThread(reinterpret_cast<struct CJThread*>(savedThread));
+    ThreadLocal::SetMutator(savedMutator);
+    std::fprintf(stderr, "STABLE_CAPACITY_CACHE_RELEASE initial=%zu grown=%zu base=%p reused=%p\n",
+                 initial, initial*2, base, reused);
+}
+#endif
 
 static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false, bool checkReleased = false)
 {
@@ -1040,7 +1236,15 @@ static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false, bo
         static_cast<long>(g_growCopy.offset), g_growCopy.before, g_growCopy.oldAfter, g_growCopy.copied,
         static_cast<uintptr_t>(relocated), g_growCopy.slot, g_growCopy.sp, g_growCopy.base,
         g_growCopy.watermark, g_growCopy.done ? 1 : 0);
+#if !defined(__OHOS__) && !defined(__ANDROID__)
+    GC_EXPECT_EQ(g_growCopy.offset, intptr_t{0});
+    GC_EXPECT_EQ(g_growCopy.baseAfter, g_growCopy.base);
+    GC_EXPECT_TRUE(g_growCopy.sizeAfter > g_growCopy.sizeBefore);
+    std::fprintf(stderr, "STABLE_GROW before=%zu after=%zu base=%#zx\n",
+                 g_growCopy.sizeBefore, g_growCopy.sizeAfter, g_growCopy.baseAfter);
+#else
     GC_EXPECT_TRUE(g_growCopy.offset != 0);
+#endif
     GC_EXPECT_EQ(g_growCopy.before, reinterpret_cast<uintptr_t>(objects[0][0]));
     GC_EXPECT_TRUE(g_growCopy.slot > g_growCopy.sp && g_growCopy.slot < g_growCopy.base);
     GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
@@ -1075,8 +1279,14 @@ static void CheckGrowCopiesHealedFrameRoot(bool checkPublishedAnchor = false, bo
         });
         std::fprintf(stderr, "GROW_RELEASED_ANCHOR_TARGET executed=1 mincore_rc=%d errno=%d "
                              "new_slot=%#zx visited=%zu\n", mapped, mapError, newSlot, visited);
+#if !defined(__OHOS__) && !defined(__ANDROID__)
+        // Zero displacement never releases the active reservation. The same
+        // healed root must remain visitable after the normal stub cleanup call.
+        GC_EXPECT_EQ(mapped, 0);
+#else
         GC_EXPECT_EQ(mapped, -1);
         GC_EXPECT_EQ(mapError, ENOMEM);
+#endif
         GC_EXPECT_EQ(visited, 1u);
     }
     (void)parked->EnterSaferegion(false);

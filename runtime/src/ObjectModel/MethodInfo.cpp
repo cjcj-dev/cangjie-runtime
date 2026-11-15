@@ -94,7 +94,9 @@ void ScopedAllocBuffer::RefreshNativeStructs()
 // words) or malloc'd memory (never expanded) is not such a record.
 size_t ScopedAllocBuffer::ValueRecordFootprint(size_t size)
 {
-    return MRT_ALIGN(size, alignof(std::max_align_t));
+    constexpr size_t alignment = alignof(std::max_align_t);
+    if (size > SIZE_MAX - (alignment - 1)) { return SIZE_MAX; }
+    return MRT_ALIGN(size, alignment);
 }
 
 void ScopedAllocBuffer::AttachValueRecords(void* storage, size_t size)
@@ -139,6 +141,14 @@ __attribute__((noinline)) bool ScopedAllocBuffer::ValueRecordsFitStack(size_t by
     if (guard == 0) { return true; } // the OS thread stack of an exclusive schedule is not checked
     const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
     return sp > guard && sp - guard > bytes;
+}
+
+// The highest guard ValueRecordsFitStack(bytes) accepts at the same call depth
+// (guard < sp - bytes), or zero when no stack can hold the records.
+__attribute__((noinline)) uintptr_t ScopedAllocBuffer::ValueRecordsLowestAddress(size_t bytes)
+{
+    const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+    return sp > bytes ? sp - bytes - 1 : 0;
 }
 
 // Copy a boxed value's payload into a value record in its uncolored form
@@ -512,7 +522,11 @@ size_t MethodInfo::ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const v
     size_t bytes = 0;
     if (hasReceiver ? PassesValueReceiver(reflectVersion) : ConstructsValueReceiver(reflectVersion)) {
         const MSize size = declaringTi->GetInstanceSize();
-        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+        if (size != 0) {
+            const size_t footprint = ScopedAllocBuffer::ValueRecordFootprint(size);
+            if (footprint > SIZE_MAX - bytes) { return SIZE_MAX; }
+            bytes += footprint;
+        }
     }
     if (actualArgs == nullptr) { return bytes; }
     const U64 actualArgCnt = static_cast<const CJArray*>(actualArgs)->length;
@@ -521,7 +535,11 @@ size_t MethodInfo::ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const v
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric() || actualParameterInfo->IsGeneric()) { continue; }
         const MSize size = ValueRecordSize(argType);
-        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+        if (size != 0) {
+            const size_t footprint = ScopedAllocBuffer::ValueRecordFootprint(size);
+            if (footprint > SIZE_MAX - bytes) { return SIZE_MAX; }
+            bytes += footprint;
+        }
     }
     return bytes;
 }
@@ -835,7 +853,8 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
     LOG(RTLOG_FATAL, "unreachable!!!");
 }
 
-void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTypeInfo)
+void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTypeInfo,
+                                bool entryGrowArmed)
 {
     HandleMark handleMark(*Mutator::GetMutator());
     Handle receiver(Mutator::GetMutator(), instanceObj);
@@ -877,6 +896,15 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     // like the alloca a compiled caller passes (ScopedAllocBuffer::ValueRecordFootprint).
     const size_t valueRecordBytes = ValueRecordBytes(instanceObj != nullptr, reflectVersion, actualArgs);
     if (valueRecordBytes != 0 && !ScopedAllocBuffer::ValueRecordsFitStack(valueRecordBytes)) {
+        // Return the current entry before guarded reentry. Outer native frames
+        // may remain alive: fixed-address capacity growth preserves their addresses.
+        // That second entry is unarmed and keeps this guard as its final check.
+        const uintptr_t requiredLow =
+            entryGrowArmed ? ScopedAllocBuffer::ValueRecordsLowestAddress(valueRecordBytes) : 0;
+        if (requiredLow != 0) {
+            Mutator::GetMutator()->RequestEntryStackGrow(requiredLow, receiver());
+            return returnPending();
+        }
         ExceptionManager::StackOverflow(valueRecordBytes > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(valueRecordBytes),
                                         __builtin_return_address(0));
         return returnPending();

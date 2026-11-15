@@ -178,7 +178,7 @@ CJ_MCC_N2CStub:
     movq    %rax, %r15
 
     movq    $0, %rdi
-    callq   MRT_SetStackGrow@PLT
+    callq   MRT_SetNativeStackPin@PLT
 
     // Prepare arg0 to arg5.
     movq    -112(%rbp), %rdi
@@ -211,7 +211,7 @@ unwindPCForN2CStub:
     movapd  %xmm1, -160(%rbp)
 
     movq    $1, %rdi
-    callq   MRT_SetStackGrow@PLT
+    callq   MRT_SetNativeStackPin@PLT
 
     // restore topContext from n2cStub stot
     movq    %rbp, %rdi

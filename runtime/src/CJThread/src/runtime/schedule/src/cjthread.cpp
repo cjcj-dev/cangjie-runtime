@@ -155,6 +155,16 @@ void CJThreadStackMemFree(struct CJThread *cjthread, char *stackTopAddr, size_t 
 #if defined(CANGJIE_TSAN_SUPPORT)
     MapleRuntime::Sanitizer::TsanFree(stackTopAddr, stackSize);
 #endif
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    if (cjthread->stackReservation != nullptr) {
+        if (munmap(cjthread->stackReservation, cjthread->stackReservationSize) != 0) {
+            LOG_ERROR(errno, "stable cjthread stack munmap failed");
+        }
+        cjthread->stackReservation = nullptr;
+        cjthread->stackReservationSize = 0;
+        return;
+    }
+#endif
     if (cjthread->schedule->schdCJThread.stackProtect == false) {
         StackMemFreeInternel(stackTopAddr, stackSize);
     } else {
@@ -203,7 +213,14 @@ void CJThreadFree(struct CJThread *cjthread, bool reuse)
     MapleRuntime::Sanitizer::TsanDeleteRaceState(cjthread);
 #endif
     scheduleCJThread = &(targetSchedule->schdCJThread);
-    if (reuse && cjthread->stack.stackSize == scheduleCJThread->stackSize) {
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    const bool reusableSize = cjthread->stackReservation != nullptr ?
+        cjthread->stackInitialSize == scheduleCJThread->stackSize :
+        cjthread->stack.stackSize == scheduleCJThread->stackSize;
+#else
+    const bool reusableSize = cjthread->stack.stackSize == scheduleCJThread->stackSize;
+#endif
+    if (reuse && reusableSize) {
         if (targetSchedule != schedule) {
             gfreelist = &targetSchedule->schdCJThread.gfreelist;
             pthread_mutex_lock(&gfreelist->gfreeLock);
@@ -485,6 +502,100 @@ char *CJThreadStackMemAlloc(struct Schedule *schedule, struct CJThread *cjthread
 }
 #endif
 
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+// Native frames contain addresses with no relocation metadata. Reserve the
+// bounded address range once; growth only changes access permissions below SP.
+static char* StableStackAlloc(CJThread* thread, size_t initial, bool protect, size_t* total)
+{
+    const size_t page = SchedulePageSize();
+    if (initial == 0 || initial > CJTHREAD_MAX_STACK_SIZE || initial % page != 0 ||
+        CJTHREAD_MAX_STACK_SIZE > SIZE_MAX - page) { return nullptr; }
+    const size_t length = CJTHREAD_MAX_STACK_SIZE + page;
+    void* mapping = mmap(nullptr, length, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mapping == MAP_FAILED) { return nullptr; }
+    char* top = static_cast<char*>(mapping) + length - initial;
+    if (mprotect(top, initial, PROT_READ | PROT_WRITE) != 0) {
+        const int failure = errno;
+        munmap(mapping, length);
+        errno = failure;
+        return nullptr;
+    }
+    thread->stackReservation = static_cast<char*>(mapping);
+    thread->stackReservationSize = length;
+    thread->stackInitialSize = initial;
+    thread->stack.protectAddr = protect ? top - page : nullptr;
+    *total = initial + (protect ? page : 0);
+    MRT_PRCTL(mapping, length, "cj-stack");
+#ifdef CANGJIE_HWASAN_SUPPORT
+    MapleRuntime::Sanitizer::UntagMemory(top, initial);
+#endif
+    return top;
+}
+
+// Called only when acquiring an inactive cached carrier, before CJThreadInit.
+// Its former Mutator has already been destroyed by CJThreadFree.
+static bool StableStackReset(CJThread* thread)
+{
+    const size_t initial = thread->stackInitialSize;
+    if (thread->stackReservation == nullptr || thread->stack.stackSize == initial) { return true; }
+    char* oldTop = thread->stack.stackTopAddr;
+    char* top = thread->stack.stackBaseAddr - initial;
+    const size_t release = top - oldTop;
+    if (mprotect(oldTop, release, PROT_NONE) != 0) { return false; }
+    // Discard only inactive pages. Failure to discard does not change validity
+    // or permit their use; leave an explicit diagnostic rather than invent RSS.
+    if (madvise(oldTop, release, MADV_DONTNEED) != 0) {
+        LOG_ERROR(errno, "stable cjthread stack discard failed");
+    }
+    const bool protect = thread->stack.protectAddr != nullptr;
+    thread->stack.stackTopAddr = top;
+    thread->stack.stackSize = initial;
+    thread->stack.totalSize = initial + (protect ? SchedulePageSize() : 0);
+    thread->stack.protectAddr = protect ? top - SchedulePageSize() : nullptr;
+    thread->stack.stackGuard = top + CJThreadStackReservedFreeze();
+    return true;
+}
+
+static intptr_t StableStackGrow(CJThread* thread, size_t size)
+{
+    const size_t page = SchedulePageSize();
+    if (size <= thread->stack.stackSize || size > CJTHREAD_MAX_STACK_SIZE || size % page != 0) {
+        return -1;
+    }
+    char* oldTop = thread->stack.stackTopAddr;
+    char* top = thread->stack.stackBaseAddr - size;
+    const size_t increase = oldTop - top;
+    const bool protect = thread->stack.protectAddr != nullptr;
+    // The exception path may already have opened the old protection page.
+    // Keep it accessible, and open the new one too, without revoking live bytes.
+    const size_t extra = protect && thread->stack.stackGuardExpanded ? page : 0;
+    char* newlyAccessible = top - extra;
+    // Single contiguous reservation; no active page is revoked on failure.
+    if (mprotect(newlyAccessible, increase, PROT_READ | PROT_WRITE) != 0) {
+        const int failure = errno;
+        // A failing permission operation must not leave a usable unpublished tail.
+        if (mprotect(newlyAccessible, increase, PROT_NONE) != 0) {
+            LOG(RTLOG_FATAL, "stable stack permission rollback failed");
+        }
+        errno = failure;
+        return -1;
+    }
+#ifdef CANGJIE_HWASAN_SUPPORT
+    MapleRuntime::Sanitizer::UntagMemory(newlyAccessible, increase);
+#endif
+#if defined(CANGJIE_TSAN_SUPPORT)
+    MapleRuntime::Sanitizer::TsanCleanShadow(newlyAccessible, increase);
+#endif
+    thread->stack.stackTopAddr = top;
+    thread->stack.stackSize = size;
+    thread->stack.totalSize = size + (protect ? SchedulePageSize() : 0);
+    thread->stack.protectAddr = protect ? top - SchedulePageSize() : nullptr;
+    thread->stack.stackGuard = top + (thread->stack.stackGuardExpanded ? 0 : CJThreadStackReservedFreeze());
+    ProtectAddrSet(reinterpret_cast<uintptr_t>(thread->stack.stackGuard));
+    return 0; // Capacity grew; every live address stayed unchanged.
+}
+#endif
+
 /* stackSizeAlign ensures page alignment before passing in */
 struct CJThread *CJThreadMemAlloc(struct Schedule *schedule, struct StackAttr *stackAttr)
 {
@@ -503,7 +614,15 @@ struct CJThread *CJThreadMemAlloc(struct Schedule *schedule, struct StackAttr *s
         CJThreadStackAttrInit(cjthread, 0, nullptr, stackAttr);
     } else {
         // Allocate stack memeory of CJThread.
-        stackAddr = CJThreadStackMemAlloc(schedule, cjthread, stackAttr->stackSizeAlign, &totalSize);
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+        if (stackAttr->stackGrow) {
+            stackAddr = StableStackAlloc(cjthread, stackAttr->stackSizeAlign,
+                                         schedule->schdCJThread.stackProtect, &totalSize);
+        } else
+#endif
+        {
+            stackAddr = CJThreadStackMemAlloc(schedule, cjthread, stackAttr->stackSizeAlign, &totalSize);
+        }
         if (stackAddr == nullptr) {
             cjthread->uncoloredRootLock.~recursive_mutex();
             free(cjthread);
@@ -559,6 +678,14 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
         // than trusting the pair discipline keeps a stack whose expansion was unpaired
         // from refusing the first legitimate expand of its next task.
         newCJThread->stack.stackGuardExpanded = false;
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+        if (!StableStackReset(newCJThread)) {
+            // Not published or running: destroy the failed cached carrier once.
+            ScheduleAllCJThreadListRemove(newCJThread);
+            CJThreadMemFree(newCJThread);
+            newCJThread = nullptr;
+        }
+#endif
     }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
@@ -2463,6 +2590,15 @@ void CJThreadOldStackFree(void *stackAddr, size_t stackSize)
 
 intptr_t CJThreadStackAdjust(struct CJThread *cjthread, size_t newStackSizeAlign)
 {
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    if (cjthread->stackReservation != nullptr) {
+        return StableStackGrow(cjthread, newStackSizeAlign);
+    }
+    // A Linux owned growable stack is always reserved at creation. Never copy
+    // an unexpected legacy stack while native frames might be alive.
+    LOG_ERROR(ERRNO_SCHD_CJTHREAD_STACK_EXPAND_FAILED, "growable stack lacks reservation");
+    return -1;
+#else
     struct Schedule *schedule = cjthread->schedule;
     struct StackAttr newStackAttr;
     char *newStackAddr;
@@ -2529,6 +2665,7 @@ intptr_t CJThreadStackAdjust(struct CJThread *cjthread, size_t newStackSizeAlign
     }
 
     return newStackBaseAddr - oldStackBaseAddr;
+#endif
 }
 
 intptr_t CJThreadStackGrow(size_t stackSize)
@@ -2553,7 +2690,14 @@ intptr_t CJThreadStackGrow(size_t stackSize)
     }
 
     oldStackSize = cjthread->stack.stackSize;
-    newStackSize = (stackSize == 0) ? oldStackSize << 1 : stackSize;
+    if (stackSize == 0 && oldStackSize > CJTHREAD_MAX_STACK_SIZE / 2) {
+        newStackSize = CJTHREAD_MAX_STACK_SIZE;
+    } else {
+        newStackSize = (stackSize == 0) ? oldStackSize * 2 : stackSize;
+    }
+    if (newStackSize > CJTHREAD_MAX_STACK_SIZE || newStackSize > SIZE_MAX - (SchedulePageSize() - 1)) {
+        return -1;
+    }
     if (newStackSize <= oldStackSize) {
         return 0;
     }
@@ -2567,6 +2711,47 @@ intptr_t CJThreadStackGrow(size_t stackSize)
     }
 
     return CJThreadStackAdjust(cjthread, newStackSizeAlign);
+}
+
+bool CJThreadHasStableStack(void)
+{
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    CJThread* thread = CJThreadGet();
+    return thread != nullptr && thread->stackReservation != nullptr;
+#else
+    return false;
+#endif
+}
+
+int CJThreadTryStackGrow(size_t size, intptr_t* offset)
+{
+    if (offset == nullptr) { return -1; }
+    *offset = 0;
+    CJThread* thread = CJThreadGet();
+    if (thread == nullptr) { return -1; }
+    const size_t before = thread->stack.stackSize;
+    const intptr_t delta = CJThreadStackGrow(size);
+    if (delta == -1) { return -1; }
+    *offset = delta;
+    return thread->stack.stackSize > before ? 1 : 0;
+}
+
+bool CJThreadStackSizeForLow(size_t current, uintptr_t base, uintptr_t low,
+                            size_t reserved, size_t* target)
+{
+    if (target == nullptr || current == 0 || current > CJTHREAD_MAX_STACK_SIZE || low == 0 || low >= base) {
+        return false;
+    }
+    const uintptr_t depth = base - low;
+    if (depth > SIZE_MAX - reserved) { return false; }
+    const size_t minimum = depth + reserved;
+    if (minimum > CJTHREAD_MAX_STACK_SIZE) { return false; }
+    size_t size = current;
+    while (size < minimum) {
+        size = size > CJTHREAD_MAX_STACK_SIZE / 2 ? CJTHREAD_MAX_STACK_SIZE : size * 2;
+    }
+    *target = size;
+    return true;
 }
 
 #ifdef CANGJIE_SANITIZER_SUPPORT

@@ -1420,9 +1420,19 @@ bool IsForeignThread();
  * @param stackSize    [IN] 0 indicates that the size of the stack is twice the size of the
  * original stack. The remaining numbers specify the stack size. The maximum stack size is 1 GB.
  * @retval If the operation is successful, the offsets of the new stack and old stack are
- * returned. If the operation fails, - 1 is returned. If the stack is not expanded, 0 is returned.
+ * returned. Fixed-address growth also returns 0. Failure returns -1; an unchanged
+ * stack returns 0. Use CJThreadTryStackGrow when the caller needs the capacity result.
  */
 intptr_t CJThreadStackGrow(size_t stackSize);
+
+/* Capacity and relocation are independent: successful fixed-address growth has
+ * offset zero. The paired runtime consumes this result, never guesses from delta.
+ * -1: failure, 0: unchanged/disabled, 1: capacity increased. */
+int CJThreadTryStackGrow(size_t stackSize, intptr_t* offset);
+bool CJThreadHasStableStack(void);
+/* Reflection/managed stack-check sizing; no allocation or state mutation. */
+bool CJThreadStackSizeForLow(size_t current, uintptr_t base, uintptr_t requiredLow,
+                            size_t reserved, size_t* target);
 
 /**
  * @brief Release the old cjthread stack

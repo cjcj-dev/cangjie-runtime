@@ -75,6 +75,112 @@
     .size \funcNameStub, .-\funcNameStub
     .endm
 
+////////////////////////////////////////////////////////////////////////////////
+// ApplyCJRegistersStub is CalleeSavedRegistersStub for the four CJ_MCC_ApplyCJ* entries:
+// same callee-saved slots, same C2R classification. Their value records may not fit the
+// stack left to the C++ entry; ApplyCJMethod then returns a growth request rather than
+// raising StackOverflowError (MRT_TakeEntryStackGrowRequest). The growth runs here, after
+// the current C++ entry returned; outer native frames may still be live. Linux
+// fixed-address capacity growth preserves them. The published context is this C2R frame
+// (its pc lies in the C2R range) and FixExtendedStack walks it and the managed callers as
+// for a managed-callee growth. The argument slots below are the only other native-held
+// words; MRT_EntryStackGrow moves them. The entry then runs once more, unarmed, so its
+// value-record guard stays the final check.
+//   stub rbp - 8 .. - 40 | r15 r14 r13 r12 rbx (CalleeSavedRegistersStub layout)
+//   stub rbp - 48        | rcx  argument slots, argSlots = rbp - 72: rdi rsi rdx rcx
+//   stub rbp - 56        | rdx
+//   stub rbp - 64        | rsi
+//   stub rbp - 72        | rdi
+//   stub rbp - 80        | entry result
+//   stub rbp - 88        | requested lowest address
+////////////////////////////////////////////////////////////////////////////////
+#define ApplyCJRegistersStubFrameSize           (8 * 12)
+
+    .macro ApplyCJRegistersStub, funcName, funcNameStub, hasReceiver
+    .text
+    .align 2
+    .global \funcNameStub
+    .type \funcNameStub, @function
+\funcNameStub:
+    .cfi_startproc
+    pushq   %rbp
+    .cfi_def_cfa_offset 16
+    .cfi_offset %rbp, -16
+    movq    %rsp, %rbp
+    .cfi_def_cfa_register %rbp
+    subq    $ApplyCJRegistersStubFrameSize, %rsp
+
+    movq    %r15, -8(%rbp)
+    movq    %r14, -16(%rbp)
+    movq    %r13, -24(%rbp)
+    movq    %r12, -32(%rbp)
+    movq    %rbx, -40(%rbp)
+    .cfi_rel_offset %rbx, -40
+    .cfi_rel_offset %r12, -32
+    .cfi_rel_offset %r13, -24
+    .cfi_rel_offset %r14, -16
+    .cfi_rel_offset %r15, -8
+
+    movq    %rdi, -72(%rbp)
+    movq    %rsi, -64(%rbp)
+    movq    %rdx, -56(%rbp)
+    movq    %rcx, -48(%rbp)
+    callq   MRT_ArmEntryStackGrow@PLT
+1:
+    movq    -72(%rbp), %rdi
+    movq    -64(%rbp), %rsi
+    movq    -56(%rbp), %rdx
+    movq    -48(%rbp), %rcx
+    callq   \funcName
+    movq    %rax, -80(%rbp)
+
+    callq   MRT_TakeEntryStackGrowRequest@PLT
+    testq   %rax, %rax
+    jz      2f
+    movq    %rax, -88(%rbp)
+
+    callq   MRT_GetThreadLocalData@PLT
+    movq    %rax, %rcx
+    movq    %rbp, %rsi
+    movq    $1, %rdx
+    leaq    3f(%rip), %rdi
+    callq   MRT_UpdateUwContext@PLT
+
+    movq    %rbp, %rdi
+    movq    -88(%rbp), %rsi
+    leaq    -72(%rbp), %rdx
+    movq    $\hasReceiver, %rcx
+    callq   MRT_EntryStackGrow@PLT
+3:
+    addq    %rax, %rsp
+    addq    %rax, %rbp
+
+    movq    %rax, %rdi
+    callq   MRT_FreeOldStack@PLT
+
+    callq   MRT_GetThreadLocalData@PLT
+    movq    %rax, %rdi
+    callq   MRT_DeleteC2NContext@PLT
+    jmp     1b
+2:
+    callq   MRT_GetThreadLocalData@PLT
+    movq    %rax,  %r15
+
+    addq    $ApplyCJRegistersStubFrameSize, %rsp
+
+    movq    -80(%rbp), %rax
+    movq    -16(%rbp), %r14
+    movq    -24(%rbp), %r13
+    movq    -32(%rbp), %r12
+    movq    -40(%rbp), %rbx
+
+    popq    %rbp
+    .cfi_def_cfa %rsp, 8
+    retq
+    .cfi_endproc
+    .size \funcNameStub, .-\funcNameStub
+    .endm
+
 .global unwindPCForC2RStubStart
 unwindPCForC2RStubStart:
     CalleeSavedRegistersStub MCC_PackageInitBegin CJ_MCC_PackageInitBegin
@@ -108,10 +214,10 @@ CalleeSavedRegistersStub MRT_ThreadWait CJ_MRT_ThreadWait
 CalleeSavedRegistersStub MRT_ThreadResumeAndWait CJ_MRT_ThreadResumeAndWait
 CalleeSavedRegistersStub MRT_ThreadReady CJ_MRT_ThreadReady
 CalleeSavedRegistersStub MCC_NewPinnedObject CJ_MCC_NewPinnedObject
-CalleeSavedRegistersStub MCC_ApplyCJInstanceMethod CJ_MCC_ApplyCJInstanceMethod
-CalleeSavedRegistersStub MCC_ApplyCJStaticMethod CJ_MCC_ApplyCJStaticMethod
-CalleeSavedRegistersStub MCC_ApplyCJGenericInstanceMethod CJ_MCC_ApplyCJGenericInstanceMethod
-CalleeSavedRegistersStub MCC_ApplyCJGenericStaticMethod CJ_MCC_ApplyCJGenericStaticMethod
+ApplyCJRegistersStub MCC_ApplyCJInstanceMethod CJ_MCC_ApplyCJInstanceMethod 1
+ApplyCJRegistersStub MCC_ApplyCJStaticMethod CJ_MCC_ApplyCJStaticMethod 0
+ApplyCJRegistersStub MCC_ApplyCJGenericInstanceMethod CJ_MCC_ApplyCJGenericInstanceMethod 1
+ApplyCJRegistersStub MCC_ApplyCJGenericStaticMethod CJ_MCC_ApplyCJGenericStaticMethod 0
 CalleeSavedRegistersStub MCC_GetMethodAnnotations CJ_MCC_GetMethodAnnotations
 CalleeSavedRegistersStub MCC_GetInstanceFieldAnnotations CJ_MCC_GetInstanceFieldAnnotations
 CalleeSavedRegistersStub MCC_GetStaticFieldAnnotations CJ_MCC_GetStaticFieldAnnotations

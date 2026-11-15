@@ -71,6 +71,7 @@ public:
     void AttachValueRecords(void* storage, size_t size);
     void* TakeValueRecord(size_t size);
     static bool ValueRecordsFitStack(size_t bytes);
+    static uintptr_t ValueRecordsLowestAddress(size_t bytes);
     void HoldValueRecord(TypeInfo* type, void* record);
     void* StageValueRecord(TypeInfo* type, BaseObject* box);
     static size_t ValueRecordFootprint(size_t size);
@@ -100,7 +101,8 @@ public:
     Uptr GetActualParameterInfos() { return reinterpret_cast<Uptr>(actualParameterInfos.GetDataRef()); }
     Uptr GetGenericParameterInfos() { return reinterpret_cast<Uptr>(genericParameterInfos.GetDataRef()); }
 
-    void* ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTi);
+    void* ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTi,
+                        bool entryGrowArmed = false);
     bool CheckMethodActualArgs(void* genericArgsArray, void* actualArgsArray);
 private:
     void* MemoryAlloc(size_t cnt, size_t size);
