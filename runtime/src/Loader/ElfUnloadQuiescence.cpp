@@ -264,8 +264,42 @@ bool RetainImageViaLocalCallback(Uptr metadata, NativeImageRetainerV1 retainer)
 }
 #endif
 
-bool RetainNativeImage(Uptr metadata, NativeImageRetainerV1 retainer)
+#if defined(__APPLE__)
+bool RetainMachImage(Uptr metadata, void*& nativeReference)
 {
+    Dl_info owner {};
+    CHECK_DETAIL(dladdr(reinterpret_cast<void*>(metadata), &owner) != 0 && owner.dli_fbase != nullptr,
+                 "Mach-O retention: metadata has no native owner");
+    // Native executable images are process-owned on both macOS and iOS.
+    if (owner.dli_fbase == _dyld_get_image_header(0)) { return true; }
+    CHECK_DETAIL(owner.dli_fname != nullptr && owner.dli_fname[0] != '\0',
+                 "Mach-O retention: native image name unavailable");
+    void* lookup = dlopen(owner.dli_fname, RTLD_NOW | RTLD_LOCAL | RTLD_FIRST | RTLD_NOLOAD);
+    CHECK_DETAIL(lookup != nullptr, "Mach-O retention: actual loaded image lookup failed");
+    const auto matches = [&](void* handle) {
+        auto* slot = static_cast<const Uptr*>(dlsym(handle, "_CJMetadataStart"));
+        Dl_info slotOwner {};
+        return slot != nullptr && dladdr(slot, &slotOwner) != 0 &&
+            slotOwner.dli_fbase == owner.dli_fbase && *slot == metadata;
+    };
+    CHECK_DETAIL(matches(lookup), "Mach-O retention: lookup resolved another metadata image");
+    // dyld returns early for NOLOAD, before late NODELETE promotion. The
+    // identity-checked lookup keeps this exact image live across the second
+    // call, which must not use NOLOAD. Keep the resulting native reference:
+    // NODELETE alone preserves mappings but need not suppress terminators or
+    // keep the loader's dependent closure registered when refcount reaches 0.
+    void* retained = dlopen(owner.dli_fname, RTLD_NOW | RTLD_LOCAL | RTLD_FIRST | RTLD_NODELETE);
+    CHECK_DETAIL(retained != nullptr && matches(retained),
+                 "Mach-O retention: promotion resolved another metadata image");
+    nativeReference = retained; // process-owned; never passed to dlclose
+    CHECK_DETAIL(dlclose(lookup) == 0, "Mach-O retention: temporary lookup release failed");
+    return true;
+}
+#endif
+
+bool RetainNativeImage(Uptr metadata, NativeImageRetainerV1 retainer, void*& nativeReference)
+{
+    (void)nativeReference;
 #if defined(_WIN64)
     (void)retainer;
     // Pin the module owning this address, not a pathname which could resolve
@@ -315,6 +349,9 @@ bool RetainNativeImage(Uptr metadata, NativeImageRetainerV1 retainer)
     return true;
 #elif defined(__ANDROID__) || defined(__OHOS__)
     return RetainImageViaLocalCallback(metadata, retainer);
+#elif defined(__APPLE__)
+    (void)retainer;
+    return RetainMachImage(metadata, nativeReference);
 #else
     (void)metadata;
     (void)retainer;
@@ -830,7 +867,7 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     auto image = std::make_shared<ImageAddressMap>();
     image->metadata = imageAddress;
     if (RetainsNativeImages()) {
-        image->retained = RetainNativeImage(imageAddress, retainer);
+        image->retained = RetainNativeImage(imageAddress, retainer, image->nativeReference);
     }
     image->identity = ResolveImageIdentity(imageAddress);
     CHECK_DETAIL(image->identity != 0, "ELF load image identity is unavailable");

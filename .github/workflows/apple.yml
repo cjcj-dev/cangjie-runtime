@@ -25,6 +25,7 @@ on:
           - bsd-backing-fail
           - bsd-backing-product
           - ios-stdlib-configure
+          - readscope-lifetime
         default: all
 
 permissions:
@@ -600,3 +601,39 @@ jobs:
         with:
           name: package-init-${{ matrix.target }}
           path: ${{ runner.temp }}/package-init-ios
+
+  readscope-lifetime:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'readscope-lifetime' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Fixed native bounds dependency
+        run: |
+          git init runtime/third_party/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+          git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+      - name: Normal native production and lifecycle fixture
+        run: |
+          ulimit -c 0
+          node runtime/tests/readscope_native_retention/apple.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-apple-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/readscope-apple/*.json
+            ${{ runner.temp }}/readscope-apple/*.stdout
+            ${{ runner.temp }}/readscope-apple/*.stderr
+            ${{ runner.temp }}/readscope-apple/*.dylib
+            ${{ runner.temp }}/readscope-apple/readscope-consumer
+            ${{ runner.temp }}/readscope-apple/install/runtime/lib/**/*.dylib
+          if-no-files-found: error

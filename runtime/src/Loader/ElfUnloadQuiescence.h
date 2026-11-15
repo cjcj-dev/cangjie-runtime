@@ -35,7 +35,7 @@ public:
     // establish exact-image retention before their readers can bypass admission.
     static constexpr bool RetainsNativeImages()
     {
-#if defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
+#if defined(__APPLE__) || defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
         return true;
 #else
         return false;
@@ -52,6 +52,9 @@ public:
         Uptr identity { 0 };
         U64 generation { 0 };
         bool retained { false };
+        // Apple keeps a native reference as well as NODELETE: mapping lifetime
+        // alone does not prevent native fini/registry removal at refcount zero.
+        void* nativeReference { nullptr };
         std::vector<Range> ranges;
 #ifdef __APPLE__
         // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.

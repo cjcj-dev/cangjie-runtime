@@ -47,3 +47,23 @@ components must be rebuilt through their normal production chain, not relabeled
 as v1-compatible. The new Cjstart cannot run against an old runtime lacking the
 v1 symbol. This is an explicit paired ABI hold, not silent binary compatibility
 or permission to drop a supported target.
+
+## Apple native lifecycle (separate from the ELF v1 ABI)
+
+macOS/iOS registration uses the existing Section.cpp `_CJMetadataStart` exported
+slot as an exact-image witness: the slot's native owner and its value must both
+match the incoming metadata. RTLD_FIRST lookup prevents a dependency's slot
+from qualifying the root image. The main executable is checked against dyld's
+actual executable header, not a path. No new Apple startup ABI is introduced.
+
+A NOLOAD lookup is used only to prove the already loaded identity. Promotion
+uses a second call without NOLOAD, because dyld's early NOLOAD return precedes
+late NODELETE handling. The promoted native reference is process-owned and
+never released: NODELETE mapping retention by itself does not prove absence of
+close-time terminators or preservation of the registered dependency closure.
+The temporary lookup reference is released after exact-instance verification.
+Only registration bears this cost. These are staged implementation properties;
+macOS/iOS native build, constructor reentry, close/reopen and exit-fini evidence
+remain NOT_RUN until the official native runner validates them. Existing images
+must expose their actual Section.cpp witness; no filename-only fallback is
+accepted. Normal old/new image support must be checked by that native run.
