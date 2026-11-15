@@ -94,7 +94,9 @@ void ScopedAllocBuffer::RefreshNativeStructs()
 // words) or malloc'd memory (never expanded) is not such a record.
 size_t ScopedAllocBuffer::ValueRecordFootprint(size_t size)
 {
-    return MRT_ALIGN(size, alignof(std::max_align_t));
+    constexpr size_t alignment = alignof(std::max_align_t);
+    if (size > SIZE_MAX - (alignment - 1)) { return SIZE_MAX; }
+    return MRT_ALIGN(size, alignment);
 }
 
 void ScopedAllocBuffer::AttachValueRecords(void* storage, size_t size)
@@ -520,7 +522,11 @@ size_t MethodInfo::ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const v
     size_t bytes = 0;
     if (hasReceiver ? PassesValueReceiver(reflectVersion) : ConstructsValueReceiver(reflectVersion)) {
         const MSize size = declaringTi->GetInstanceSize();
-        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+        if (size != 0) {
+            const size_t footprint = ScopedAllocBuffer::ValueRecordFootprint(size);
+            if (footprint > SIZE_MAX - bytes) { return SIZE_MAX; }
+            bytes += footprint;
+        }
     }
     if (actualArgs == nullptr) { return bytes; }
     const U64 actualArgCnt = static_cast<const CJArray*>(actualArgs)->length;
@@ -529,7 +535,11 @@ size_t MethodInfo::ValueRecordBytes(bool hasReceiver, U8 reflectVersion, const v
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric() || actualParameterInfo->IsGeneric()) { continue; }
         const MSize size = ValueRecordSize(argType);
-        if (size != 0) { bytes += ScopedAllocBuffer::ValueRecordFootprint(size); }
+        if (size != 0) {
+            const size_t footprint = ScopedAllocBuffer::ValueRecordFootprint(size);
+            if (footprint > SIZE_MAX - bytes) { return SIZE_MAX; }
+            bytes += footprint;
+        }
     }
     return bytes;
 }
@@ -886,8 +896,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     // like the alloca a compiled caller passes (ScopedAllocBuffer::ValueRecordFootprint).
     const size_t valueRecordBytes = ValueRecordBytes(instanceObj != nullptr, reflectVersion, actualArgs);
     if (valueRecordBytes != 0 && !ScopedAllocBuffer::ValueRecordsFitStack(valueRecordBytes)) {
-        // Entered through the CJ_MCC_ApplyCJ* stub: nothing above outlives this frame, so
-        // the stub may grow the stack and enter once more (Mutator::GrowStackForEntry).
+        // Return the current entry before guarded reentry. Outer native frames
+        // may remain alive: fixed-address capacity growth preserves their addresses.
         // That second entry is unarmed and keeps this guard as its final check.
         const uintptr_t requiredLow =
             entryGrowArmed ? ScopedAllocBuffer::ValueRecordsLowestAddress(valueRecordBytes) : 0;

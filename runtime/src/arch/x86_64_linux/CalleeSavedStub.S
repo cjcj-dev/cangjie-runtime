@@ -80,7 +80,8 @@
 // same callee-saved slots, same C2R classification. Their value records may not fit the
 // stack left to the C++ entry; ApplyCJMethod then returns a growth request rather than
 // raising StackOverflowError (MRT_TakeEntryStackGrowRequest). The growth runs here, after
-// the C++ entry returned: no C++ frame is live, the published context is this C2R frame
+// the current C++ entry returned; outer native frames may still be live. Linux
+// fixed-address capacity growth preserves them. The published context is this C2R frame
 // (its pc lies in the C2R range) and FixExtendedStack walks it and the managed callers as
 // for a managed-callee growth. The argument slots below are the only other native-held
 // words; MRT_EntryStackGrow moves them. The entry then runs once more, unarmed, so its

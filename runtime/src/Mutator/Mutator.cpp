@@ -79,6 +79,13 @@ extern "C" void MRT_SetGrowFlag(bool flag)
     LOG(RTLOG_ERROR, "Set flag of GROWStack faild.");
 }
 
+// N2C protects native address stability, not the user's capacity policy or
+// the exception raiser's recursion guard. Stable stacks need no relocation pin.
+extern "C" void MRT_SetNativeStackPin(bool enableStackGrow)
+{
+    if (!CJThreadHasStableStack()) { MRT_SetStackGrow(enableStackGrow); }
+}
+
 extern "C" intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip)
 {
     // arm32 only do stack check and try to throw StackOverFlow Expection.
@@ -616,7 +623,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             StackWatermark& owner;
             bool ended = false;
         } flush(stackWatermark);
-        intptr_t stackOffset;
+        intptr_t stackOffset = 0;
+        const auto grow = [&](size_t size) { return CJThreadTryStackGrow(size, &stackOffset) == 1; };
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.
         // Check whether the stack expansion meets the requirements.
@@ -626,8 +634,7 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         bool isInInterpreter = StackManager::IsInterpreterCodeAddr(currentIp);
 #endif
         if (frameBase == 0) {
-            stackOffset = CJThreadStackGrow(CJTHREAD_MAX_STACK_SIZE);
-            if (stackOffset == 0 || stackOffset == -1) {
+            if (!grow(CJTHREAD_MAX_STACK_SIZE)) {
                 return 0;
             }
 #ifdef INTERPRETER_ENABLED
@@ -638,14 +645,13 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             const uintptr_t* stubFrameBase = reinterpret_cast<const uintptr_t*>(frameBase);
             uintptr_t interpFrameBase = *stubFrameBase;
 
-            size_t requiredSp = interpFrameBase - GetFrameSize(interpFrameBase);
-            size_t newSize = stackSize + stackSize;
-            while (stackBaseAddr - requiredSp > newSize - CJThreadStackReversedGet()) {
-                newSize += newSize;
-            }
+            const size_t interpFrameSize = GetFrameSize(interpFrameBase);
+            const uintptr_t requiredSp = interpFrameSize < interpFrameBase ? interpFrameBase - interpFrameSize : 0;
+            size_t newSize = 0;
+            const bool valid = CJThreadStackSizeForLow(stackSize, stackBaseAddr, requiredSp,
+                                                      CJThreadStackReversedGet(), &newSize);
             DLOG(INTERPRETER, "   try to grow stack size: %zu -> %zu", stackSize, newSize);
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
+            if (!valid || !grow(newSize)) {
                 DLOG(INTERPRETER, "       stack overflow at %p", ip);
                 // The managed raiser may process a new watermark epoch on this stack.
                 flush.End();
@@ -660,23 +666,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             // is top + reserved (CJThreadStackAttrInit), so size like the managed branch:
             // base - requiredLow + reserved <= newSize. A zero answer makes the retried entry
             // raise StackOverflowError at that same guard.
-            const uintptr_t requiredLow = nativeGrowRequiredLow;
-            const uintptr_t reserved = CJThreadStackReversedGet();
-            if (requiredLow >= stackBaseAddr || stackBaseAddr - requiredLow > SIZE_MAX - reserved) {
-                flush.End();
-                return 0;
-            }
-            const size_t minSize = (stackBaseAddr - requiredLow) + reserved;
-            size_t newSize = stackSize;
-            do {
-                if (newSize == 0 || newSize > CJTHREAD_MAX_STACK_SIZE || newSize > SIZE_MAX / 2) {
-                    flush.End();
-                    return 0;
-                }
-                newSize += newSize;
-            } while (newSize < minSize);
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
+            size_t newSize = 0;
+            if (!CJThreadStackSizeForLow(stackSize, stackBaseAddr, nativeGrowRequiredLow,
+                                         CJThreadStackReversedGet(), &newSize) || !grow(newSize)) {
                 flush.End();
                 return 0;
             }
@@ -709,17 +701,27 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #elif defined(__arm__)
             uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize;
 #endif
-            size_t newSize = stackSize + stackSize;
-            while (stackBaseAddr - callerSp > newSize - CJThreadStackReversedGet()) {
-                newSize += newSize;
-            }
-            stackOffset = CJThreadStackGrow(newSize);
-            if (stackOffset == -1 || stackOffset == 0) {
+            size_t newSize = 0;
+            if (!CJThreadStackSizeForLow(stackSize, stackBaseAddr, callerSp, CJThreadStackReversedGet(), &newSize) ||
+                !grow(newSize)) {
                 // No stack switch follows failure; release before entering managed code.
                 flush.End();
                 ExceptionManager::StackOverflow(adjustedSize, ip);
                 return 0;
             }
+        }
+
+        if (stackOffset == 0) {
+            // BeginGrowFlush above still processed the roots/colour transition.
+            // No byte or frame moved, but the usable range and guard did grow.
+            UpdatePollValues(ThreadLocal::GetThreadLocalData());
+            flush.End();
+            MutatorLock();
+            SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGet()));
+            SetStackSize(CJThreadStackSizeGet());
+            SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGet()));
+            MutatorUnlock();
+            return 0;
         }
 
         // Visits the stackmap and records all pointers to be fixed to the resSet.
@@ -802,8 +804,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 }
 
 // The CJ_MCC_ApplyCJ* stub calls this after its C++ entry returned with a growth request,
-// so no C++ frame is live above the stub. Its frame and the managed frames move like a
-// managed-callee growth (FixExtendedStack). The stub's four saved argument registers are
+// only the current entry has returned; outer native frames can still be live.
+// Linux stable capacity growth never moves these frames. Other platforms retain
+// their existing entry policy and relocation contract. The stub's four saved argument registers are
 // the only other native-held words: pointer arguments into the old stack follow the copy,
 // and the receiver comes from a Handle, valid across any safepoint the move passes.
 intptr_t Mutator::GrowStackForEntry(uintptr_t frameBase, uintptr_t requiredLow, uintptr_t* argSlots, bool hasReceiver)
@@ -819,13 +822,12 @@ intptr_t Mutator::GrowStackForEntry(uintptr_t frameBase, uintptr_t requiredLow, 
     nativeGrowRequiredLow = requiredLow;
     const intptr_t stackOffset = FixExtendedStack(static_cast<intptr_t>(frameBase), 0, nullptr);
     nativeGrowRequiredLow = 0;
-    if (stackOffset == 0) {
-        return 0;
-    }
+    // Zero is a valid successful displacement. Even on failure, the root flush
+    // may have healed the receiver: reload it before the guarded reentry.
     // IsStackAddr still describes the old stack until MRT_FreeOldStack.
     uintptr_t* moved = reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(argSlots) + stackOffset);
     for (size_t i = 0; i < argSlotCount; ++i) {
-        if (IsStackAddr(moved[i])) {
+        if (stackOffset != 0 && IsStackAddr(moved[i])) {
             moved[i] += stackOffset;
         }
     }

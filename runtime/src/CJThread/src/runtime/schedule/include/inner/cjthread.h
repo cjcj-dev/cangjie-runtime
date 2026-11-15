@@ -170,6 +170,12 @@ struct CJThread {
     bool isCJThread0;
     uintptr_t uncoloredRootColor;
     std::recursive_mutex uncoloredRootLock;
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    // Tail-only: no generated-code or context-switch field offset changes.
+    char* stackReservation;
+    size_t stackReservationSize;
+    size_t stackInitialSize;
+#endif
 #ifdef __OHOS__
     std::vector<unsigned long long> threadStackTopList;
 #endif
