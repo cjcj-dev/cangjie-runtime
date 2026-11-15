@@ -127,8 +127,9 @@ public:
     // ZGC compact object headers publish klass and mark together with release.
     void InitTypeInfoAndState(TypeInfo* newTypeInfo, bool invisible = false)
     {
-        ObjectState state(ObjectState::NORMAL);
-        state.SetInvisibleObject(invisible);
+        // This value is private until the whole header is published below.
+        const ObjectState state(static_cast<uint16_t>(ObjectState::NORMAL |
+            (invisible ? ObjectState::INVISIBLE_OBJECT_BIT : 0)));
 #ifdef __arm__
         const StateWord header(reinterpret_cast<uintptr_t>(newTypeInfo), state);
 #else

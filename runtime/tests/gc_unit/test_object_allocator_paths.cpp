@@ -149,6 +149,49 @@ static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = 
 }
 
 namespace {
+void* InitializeDirtyObjectHeaders(void*)
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(64 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* object = reinterpret_cast<BaseObject*>(MCC_NewObject(type, 64));
+    if (object == nullptr || object->GetTypeInfo() != type || object->IsInvisibleObject()) {
+        return reinterpret_cast<void*>(1);
+    }
+    // Corrupt only a local copy, never a published heap header. Nonzero high
+    // and low address halves also exercise the complete TypeInfo encoding.
+    const uintptr_t address = sizeof(uintptr_t) == 8 ? UINT64_C(0x123456789ab8) : UINT64_C(0x12349ab8);
+    auto* replacement = reinterpret_cast<TypeInfo*>(address);
+    size_t cases = 0;
+    for (uint16_t oldCode = ObjectState::NORMAL; oldCode <= ObjectState::FORWARDED; ++oldCode) {
+        for (unsigned oldInvisible = 0; oldInvisible != 2; ++oldInvisible) {
+            for (unsigned invisible = 0; invisible != 2; ++invisible) {
+                StateWord header = object->GetStateWord();
+                const uint16_t dirtyState = static_cast<uint16_t>(0xfff8U | oldCode |
+                    (oldInvisible ? ObjectState::INVISIBLE_OBJECT_BIT : 0));
+                uint64_t dirtyBits;
+                std::memcpy(&dirtyBits, &header, sizeof(dirtyBits));
+                dirtyBits = (dirtyBits & UINT64_C(0x0000ffffffffffff)) |
+                    (static_cast<uint64_t>(dirtyState) << 48);
+                std::memcpy(&header, &dirtyBits, sizeof(header));
+                header.InitTypeInfoAndState(replacement, invisible != 0);
+                const uint16_t expected = invisible ? ObjectState::INVISIBLE_OBJECT_BIT : 0;
+                const bool typeValid = header.GetTypeInfo() == replacement;
+                const bool stateValid = header.GetObjectState().GetStateBits() == expected;
+                std::fprintf(stderr, "STATEWORD_INIT_TARGET old_code=%u old_invisible=%u invisible=%u type=%d state=%d\n",
+                             static_cast<unsigned>(oldCode), oldInvisible, invisible, typeValid, stateValid);
+                if (!typeValid || !stateValid) { return reinterpret_cast<void*>(2); }
+                ++cases;
+            }
+        }
+    }
+    std::fprintf(stderr, "STATEWORD_INIT_CASES=%zu\n", cases);
+    return reinterpret_cast<void*>(cases == 16 ? 0 : 3);
+}
+
 void* AllocateTLABSlices(void*)
 {
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
@@ -302,6 +345,7 @@ void* AllocateFastMedium(void*)
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedSizeRouting) { RunAllocatorCase(AllocateSizedObjects); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, DirtyHeaderInitialization) { RunAllocatorCase(InitializeDirtyObjectHeaders); }
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, TLABsShareSmallPage) { RunAllocatorCase(AllocateTLABSlices); }
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSize) { RunAllocatorCase(AllocateFastMedium); }
 
