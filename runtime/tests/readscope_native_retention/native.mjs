@@ -4,16 +4,21 @@ import fs from 'node:fs';import path from 'node:path';import os from 'node:os';i
 assert.equal(process.platform,'win32','native Windows execution is required');
 const here=path.dirname(fileURLToPath(import.meta.url)),runtime=path.resolve(here,'../..'),out=path.resolve(process.env.RUNNER_TEMP,'readscope-native'),build=path.join(out,'build'),install=path.join(out,'install');fs.mkdirSync(out,{recursive:false});
 const clang64=path.resolve(process.env.READSCOPE_CLANG64),tool=name=>path.join(clang64,name+'.exe');
+// Normal COFF archive installation requires GNU BFD, not LLVM objcopy's
+// unsupported COFF rename operation. Keep compiler selection absolute.
+const binutils=path.resolve(clang64,'../../mingw64/bin'),bfd=name=>path.join(binutils,name+'.exe');
+for(const name of ['objcopy','objdump','strip'])assert(fs.existsSync(bfd(name)), 'configured GNU binutils tool missing: '+bfd(name));
 for(const name of ['clang','clang++','llvm-ar','ninja'])assert(fs.existsSync(tool(name)), 'configured CLANG64 tool missing: '+tool(name));
 // Windows environment keys are case-insensitive. Pass one PATH spelling so an
 // inherited Path cannot select the runner's unrelated standalone LLVM first.
 const inherited=Object.fromEntries(Object.entries(process.env).filter(([key])=>key.toUpperCase()!=='PATH'));
-const env={...inherited,PATH:clang64+path.delimiter+process.env.PATH,CANGJIE_BUILD_JOBS:'2',CMAKE_BUILD_PARALLEL_LEVEL:'2',GC_UNIT_GATE_SKIP:'1',SCCACHE_GHA_ENABLED:'true'};
+const env={...inherited,PATH:binutils+path.delimiter+clang64+path.delimiter+process.env.PATH,CANGJIE_BUILD_JOBS:'2',CMAKE_BUILD_PARALLEL_LEVEL:'2',GC_UNIT_GATE_SKIP:'1',SCCACHE_GHA_ENABLED:'true'};
 const rows=[],sha=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 function run(name,args,extra={},expected=0){const row={name,args,cwd:out,started:new Date().toISOString(),expected};rows.push(row);const fd=fs.openSync(path.join(out,name+'.stdout'),'wx'),err=fs.openSync(path.join(out,name+'.stderr'),'wx');const r=spawnSync(args[0],args.slice(1),{cwd:out,env:{...env,...extra},stdio:['ignore',fd,err],timeout:2700000});fs.closeSync(fd);fs.closeSync(err);Object.assign(row,{rc:r.status,signal:r.signal,error:r.error?.message,ended:new Date().toISOString()});fs.writeFileSync(path.join(out,'commands.json'),JSON.stringify(rows,null,2));console.log(name,row.rc,row.signal);if(expected!==null){assert.equal(r.status,expected,name);assert.equal(r.signal,null);}return fs.readFileSync(path.join(out,name+'.stdout'),'utf8');}
 run('compiler-version',[tool('clang'),'--version']);run('ninja-version',[tool('ninja'),'--version']);
+for(const name of ['objcopy','objdump','strip'])run(name+'-version',[bfd(name),'--version']);
 const ref=run('source-ref',['git','-C',path.dirname(runtime),'rev-parse','HEAD']).trim();
-run('configure',['cmake','-S',runtime,'-B',build,'-G','Ninja','-DWINDOWS_FLAG=1','-DCOPYGC_FLAG=1','-DDOPRA_FLAG=1','-DCMAKE_BUILD_TYPE=Release','-DRUNTIME_TRACE_FLAG=1','-DCJ_SDK_VERSION=0.0.1','-DDISABLE_VERSION_CHECK=1','-DCMAKE_C_COMPILER='+tool('clang'),'-DCMAKE_CXX_COMPILER='+tool('clang++'),'-DCMAKE_ASM_COMPILER='+tool('clang'),'-DCMAKE_AR_PATH='+tool('llvm-ar'),'-DCMAKE_MAKE_PROGRAM='+tool('ninja'),'-DCMAKE_C_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCMAKE_CXX_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCJ_RUNTIME_COMMIT='+ref,'-DMRT_GC_UNIT_TESTS=OFF','-DCMAKE_INSTALL_PREFIX='+install]);
+run('configure',['cmake','-S',runtime,'-B',build,'-G','Ninja','-DWINDOWS_FLAG=1','-DCOPYGC_FLAG=1','-DDOPRA_FLAG=1','-DCMAKE_BUILD_TYPE=Release','-DRUNTIME_TRACE_FLAG=1','-DCJ_SDK_VERSION=0.0.1','-DDISABLE_VERSION_CHECK=1','-DCMAKE_C_COMPILER='+tool('clang'),'-DCMAKE_CXX_COMPILER='+tool('clang++'),'-DCMAKE_ASM_COMPILER='+tool('clang'),'-DCMAKE_AR_PATH='+tool('llvm-ar'),'-DCMAKE_MAKE_PROGRAM='+tool('ninja'),'-DWINDOWS_RUNTIME_OBJCOPY='+bfd('objcopy'),'-DWINDOWS_RUNTIME_OBJDUMP='+bfd('objdump'),'-DCMAKE_C_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCMAKE_CXX_COMPILER_LAUNCHER='+process.env.SCCACHE_PATH,'-DCJ_RUNTIME_COMMIT='+ref,'-DMRT_GC_UNIT_TESTS=OFF','-DCMAKE_INSTALL_PREFIX='+install]);
 run('build',['cmake','--build',build,'--parallel','2']);run('install',['cmake','--install',build]);
 function files(root){return fs.readdirSync(root,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(path.join(root,e.name)):[path.join(root,e.name)]);}
 const libraries=files(install).filter(p=>/cangjie-runtime\.dll$/i.test(p)),imports=files(build).filter(p=>/cangjie-runtime\.dll\.a$/i.test(p));assert.equal(libraries.length,1);assert.equal(imports.length,1);const lib=path.dirname(libraries[0]);
