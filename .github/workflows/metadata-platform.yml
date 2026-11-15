@@ -226,6 +226,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Install the native emulator shared-library dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpulse0
       - name: Enable the runner KVM device
         run: test -c /dev/kvm && sudo chmod 666 /dev/kvm
       - name: Normal fixed-arm production and three common C API exit children
