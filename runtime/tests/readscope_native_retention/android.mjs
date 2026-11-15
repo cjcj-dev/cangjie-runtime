@@ -10,7 +10,9 @@ function run(name,args,{input,expected=0,timeout=2700000}={}){const row={name,ar
 function files(p){return fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(p+'/'+e.name):[p+'/'+e.name]);}
 const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const ref=run('source-ref',['git','-C',path.dirname(runtime),'rev-parse','HEAD']).trim();
-run('sdk-packages',[android+'/cmdline-tools/latest/bin/sdkmanager','--install','ndk;'+ndkVersion,'platform-tools','emulator','system-images;android-31;google_apis;x86_64']);
+// Install only the frozen dependencies, including their ordinary sdkmanager
+// license prompts; closed stdin otherwise rejects the system image before build.
+run('sdk-packages',[android+'/cmdline-tools/latest/bin/sdkmanager','--install','ndk;'+ndkVersion,'platform-tools','emulator','system-images;android-31;google_apis;x86_64'],{input:'y\n'.repeat(8)});
 run('compiler-version',[tools+'/clang','--version']);const built=[];
 for(const [arch,flag] of [['x86_64','2'],['aarch64','1']]){
  const build=out+'/'+arch+'/build',install=out+'/'+arch+'/install',cc=tools+'/'+arch+'-linux-android31-clang';
