@@ -61,9 +61,9 @@ func progress(control: Bool): Unit {
 }
 main(args: Array<String>): Int64 {
     requireNoFP(unsafe { FPContext(1.25) } == 7, "fp-control-canonical-pc-safe-frame")
-    requireNoFP(unsafe { NoFPContext() } == 7, "nofp-canonical-pc-safe-frame")
     progress(true)
     progress(false)
+    requireNoFP(unsafe { NoFPContext() } == 7, "nofp-canonical-pc-safe-frame")
     requireNoFP(liveFloating(1.25) == 6.25, "live-fp-across-clobber")
     requireNoFP(unsafe { NoFPZero() } == 29, "zero-arg-result")
     requireNoFP(unsafe { NoFPSix(1,2,3,4,5,6) } == 91, "six-arg-result")
