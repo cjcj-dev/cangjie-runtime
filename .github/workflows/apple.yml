@@ -26,6 +26,7 @@ on:
           - bsd-backing-product
           - ios-stdlib-configure
           - readscope-lifetime
+          - readscope-ios
         default: all
 
 permissions:
@@ -636,4 +637,43 @@ jobs:
             ${{ runner.temp }}/readscope-apple/*.dylib
             ${{ runner.temp }}/readscope-apple/readscope-consumer
             ${{ runner.temp }}/readscope-apple/install/runtime/lib/**/*.dylib
+          if-no-files-found: error
+
+  readscope-ios:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'readscope-ios' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: ios-aarch64
+          - runner: macos-15
+            target: ios-simulator-aarch64
+          - runner: macos-15-intel
+            target: ios-simulator-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      READSCOPE_IOS_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Fixed bounds dependency
+        run: |
+          git init runtime/third_party/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+          git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+          git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+      - name: Normal target production and finite simulator lifecycle
+        run: ulimit -c 0 && node runtime/tests/readscope_native_retention/ios.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/readscope-ios/*.json
+            ${{ runner.temp }}/readscope-ios/*.stdout
+            ${{ runner.temp }}/readscope-ios/*.stderr
+            ${{ runner.temp }}/readscope-ios/install/**
           if-no-files-found: error
