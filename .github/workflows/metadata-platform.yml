@@ -10,11 +10,15 @@ on:
         description: Normal native ARM64 production and finite image lifecycle only.
         type: boolean
         default: false
+      readscope_android_exit_compare:
+        description: Fixed 8e251/d51c normal x64 production; three C API/no-image exit children only.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   prepare:
-    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare }}
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +70,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
-    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 && always() && !cancelled() }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare && always() && !cancelled() }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -126,7 +130,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
             ${{ runner.temp }}/metadata/*.diff
   pac-capability:
-    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 }}
+    if: ${{ !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -152,7 +156,7 @@ jobs:
             ${{ runner.temp }}/metadata/*.json
 
   readscope-android:
-    if: ${{ inputs.readscope_android }}
+    if: ${{ inputs.readscope_android && !inputs.readscope_android_exit_compare }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -183,7 +187,7 @@ jobs:
           if-no-files-found: error
 
   readscope-linux-arm64:
-    if: ${{ inputs.readscope_linux_arm64 }}
+    if: ${{ inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
@@ -210,4 +214,38 @@ jobs:
             ${{ runner.temp }}/readscope-linux-arm64/*.stdout
             ${{ runner.temp }}/readscope-linux-arm64/*.stderr
             ${{ runner.temp }}/readscope-linux-arm64/install/**
+          if-no-files-found: error
+
+  readscope-android-exit-compare:
+    if: ${{ inputs.readscope_android_exit_compare && !inputs.readscope_android && !inputs.readscope_linux_arm64 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      READSCOPE_ANDROID_EXIT_COMPARE: fixed-three-children-v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable the runner KVM device
+        run: test -c /dev/kvm && sudo chmod 666 /dev/kvm
+      - name: Normal fixed-arm production and three common C API exit children
+        run: ulimit -S -c 0 && ulimit -H -c 0 && node runtime/tests/readscope_native_retention/android-exit-compare.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-android-exit-compare
+          path: |
+            ${{ runner.temp }}/readscope-android-exit/*.json
+            ${{ runner.temp }}/readscope-android-exit/*.stdout
+            ${{ runner.temp }}/readscope-android-exit/*.stderr
+            ${{ runner.temp }}/readscope-android-exit/*.pid-logcat
+            ${{ runner.temp }}/readscope-android-exit/tombstones/**
+            ${{ runner.temp }}/readscope-android-exit/base/install/**
+            ${{ runner.temp }}/readscope-android-exit/candidate/install/**
+            ${{ runner.temp }}/readscope-android-exit/base/consumer
+            ${{ runner.temp }}/readscope-android-exit/candidate/consumer
+            ${{ runner.temp }}/readscope-android-exit/base/build/CMakeCache.txt
+            ${{ runner.temp }}/readscope-android-exit/candidate/build/CMakeCache.txt
+            ${{ runner.temp }}/readscope-android-exit/base/build/build.ninja
+            ${{ runner.temp }}/readscope-android-exit/candidate/build/build.ninja
           if-no-files-found: error
