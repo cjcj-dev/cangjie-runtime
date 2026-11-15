@@ -174,3 +174,5 @@ readscope_loader_namespace_harness.cpp manual installed runtime public base GLOB
 readscope_loader_namespace_probe.cpp manual unrelated namespace observer for NULL-handle semantics and RTLD_DEFAULT visibility
 readscope_loader_detection_harness.cpp manual public load failure and restoration with independent native load control
 readscope_loader_detection_failure.cpp manual LD_PRELOAD self-map/LMID fault injection at actual loader dependency
+
+reflection_nested_stable_stack_product.cj manual installed private runtime nested direct/reflection four-arm regression with small growable CJThread stack

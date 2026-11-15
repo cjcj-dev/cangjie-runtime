@@ -28,6 +28,12 @@ extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include <ucontext.h>
 #include <cerrno>
 #include <sys/mman.h>
+#if defined(__linux__) && defined(__x86_64__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -960,6 +966,76 @@ bool CJThreadStackSizeForLow(size_t, uintptr_t, uintptr_t, size_t, size_t*);
 void CJ_CJThreadFree(struct CJThread*, bool);
 }
 
+// Record only this reservation, not an inventory of the process or machine.
+static void DumpStackReservation(const char* phase, uintptr_t base)
+{
+    const uintptr_t low = base - 1024UL*1024*1024 - getpagesize();
+    FILE* f = std::fopen("/proc/self/smaps", "r");
+    GC_EXPECT_TRUE(f != nullptr);
+    char line[512]; bool selected = false; size_t maps = 0, rss = 0, bytes = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+        unsigned long a, b; char perm[5];
+        if (std::sscanf(line, "%lx-%lx %4s", &a, &b, perm) == 3) {
+            selected = a < base && b > low;
+            if (selected) { ++maps; bytes += std::min<uintptr_t>(b,base)-std::max<uintptr_t>(a,low);
+                std::fprintf(stderr, "STABLE_MAP %s %s", phase, line); }
+        } else if (selected) {
+            size_t kb;
+            if (std::sscanf(line, "Rss: %zu kB", &kb) == 1) rss += kb;
+        }
+    }
+    std::fclose(f);
+    std::fprintf(stderr, "STABLE_COST %s reservation_bytes=%zu overlapping_vmas=%zu vma_rss_kib=%zu\n",phase,bytes,maps,rss);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(StableStack, PermissionFailureKeepsOldCapacity)
+{
+    GrowCopyRuntime runtime(8);
+    (void)CJ_ScheduleGetTlsHookRegister(reinterpret_cast<GrowTlsHook>(MRT_GetThreadLocalData));
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    auto* saved = tls->cjthread;
+    void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    auto* t = reinterpret_cast<struct CJThread*>(CJ_CJThreadNew(scheduler, nullptr, GrowCopyUnused,
+                                     nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0));
+    GC_EXPECT_TRUE(t != nullptr);
+    const size_t initial = CJ_CJThreadStackSizeGetByCJThrd(t);
+    auto* top = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(t));
+    auto* base = static_cast<char*>(CJ_CJThreadStackBaseAddrGetByCJThrd(t));
+    const uintptr_t denied = reinterpret_cast<uintptr_t>(top) - initial;
+    // One kernel permission call fails deterministically, without exhausting VA
+    // or replacing any product function. Rollback PROT_NONE remains permitted.
+    sock_filter ins[] = {
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,nr)),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, SYS_mprotect, 0, 7),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[0])),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, static_cast<uint32_t>(denied), 0, 5),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[0])+4),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, static_cast<uint32_t>(denied>>32), 0, 3),
+      BPF_STMT(BPF_LD|BPF_W|BPF_ABS, offsetof(seccomp_data,args[2])),
+      BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K, PROT_READ|PROT_WRITE, 0, 1),
+      BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ERRNO|EPERM),
+      BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW)
+    };
+    sock_fprog filter{static_cast<unsigned short>(sizeof(ins)/sizeof(ins[0])), ins};
+    GC_EXPECT_EQ(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), 0);
+    GC_EXPECT_EQ(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &filter), 0);
+    ThreadLocal::SetCJThread(t);
+    top[0] = 45; base[-64] = 47;
+    intptr_t delta = 99; errno = 0;
+    const int result = CJThreadTryStackGrow(initial*2, &delta);
+    const int failure = errno;
+    GC_EXPECT_EQ(result, -1); GC_EXPECT_EQ(failure, EPERM);
+    GC_EXPECT_EQ(delta, intptr_t{0});
+    GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(t), top);
+    GC_EXPECT_EQ(CJ_CJThreadStackBaseAddrGetByCJThrd(t), base);
+    GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(t), initial);
+    GC_EXPECT_EQ(top[0], 45); GC_EXPECT_EQ(base[-64], 47);
+    DumpStackReservation("permission-failure",reinterpret_cast<uintptr_t>(base));
+    ThreadLocal::SetCJThread(saved);
+    CJ_CJThreadFree(t, false);
+    std::fprintf(stderr,"STABLE_PERMISSION_FAILURE rc=%d errno=%d unchanged=%zu\n",result,failure,initial);
+}
+
 GC_COMPONENT_OTHER_VM_TEST(StableStack, BoundedSizing)
 {
     constexpr size_t mib = 1024 * 1024;
@@ -997,6 +1073,7 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     auto* base = static_cast<char*>(CJ_CJThreadStackBaseAddrGetByCJThrd(thread));
     auto* top = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
     GC_EXPECT_TRUE(initial < 2*1024*1024);
+    DumpStackReservation("initial",reinterpret_cast<uintptr_t>(base));
     ThreadLocal::SetCJThread(thread);
     top[0] = 37;
     base[-64] = 41;
@@ -1009,6 +1086,7 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     GC_EXPECT_EQ(base[-64], 41);
     auto* grown = static_cast<char*>(CJ_CJThreadStackAddrGetByCJThrd(thread));
     grown[0] = 43;
+    DumpStackReservation("grown",reinterpret_cast<uintptr_t>(base));
     GC_EXPECT_EQ(CJThreadTryStackGrow(SIZE_MAX, &delta), -1);
     GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(thread), grown);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(thread), initial*2);
@@ -1030,6 +1108,7 @@ GC_COMPONENT_OTHER_VM_TEST(StableStack, CapacityGuardCacheAndRelease)
     GC_EXPECT_EQ(CJ_CJThreadStackBaseAddrGetByCJThrd(reused), base);
     GC_EXPECT_EQ(CJ_CJThreadStackAddrGetByCJThrd(reused), top);
     GC_EXPECT_EQ(CJ_CJThreadStackSizeGetByCJThrd(reused), initial);
+    DumpStackReservation("reused",reinterpret_cast<uintptr_t>(base));
     unsigned char resident = 0;
     GC_EXPECT_EQ(mincore(grown, getpagesize(), &resident), 0); // reserved, not released
     CJ_CJThreadFree(reused, false);
