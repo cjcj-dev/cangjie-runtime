@@ -1011,6 +1011,42 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBod
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
 namespace {
+std::atomic<U32> failedInitBodyCalls { 0 };
+void FailedManagedInitBody()
+{
+    failedInitBodyCalls.fetch_add(1, std::memory_order_relaxed);
+    alignas(TypeInfo) static DYN_TypeInfo type {};
+    type.typeInfoName = "gc.lock:RetainedInitFailure";
+    auto* ti = reinterpret_cast<TypeInfo*>(&type);
+    ti->SetType(TypeKind::TYPE_KIND_CLASS);
+    ti->SetInstanceSize(64);
+    auto* exception = MCC_NewObject(ti, 64 + TYPEINFO_PTR_SIZE);
+    Target("failed-libinit-real-pending-reference", exception != nullptr);
+    Mutator::GetMutator()->GetExceptionWrapper().SetExceptionRef(exception);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RetainedFailedInitializerIsNotReopened)
+{
+    Init();
+    packageBody = FailedManagedInitBody;
+    std::atomic<bool> done { false };
+    Start([](void* argument) {
+        auto* manager = LoaderManager::GetInstance();
+        Target("failed-libinit-original-body-rejected", !manager->LibInit("package-init-main"));
+        Target("failed-libinit-retained-identity", image->HasLoadFailed() && image->IsRegistered());
+        Target("failed-libinit-second-entry-rejected", !manager->LibInit("package-init-main"));
+        Target("failed-libinit-body-not-reexecuted", failedInitBodyCalls.load(std::memory_order_relaxed) == 1);
+        Target("failed-libinit-no-pending-exception-leak", !ExceptionManager::HasPendingException());
+        secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageB);
+        RegisterMetadata(secondaryMetadata, "retained-independent-init");
+        Target("failed-libinit-independent-image-initializes", manager->LibInit("retained-independent-init"));
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &done);
+    Target("failed-libinit-consumer-completed", Await(done));
+    packageBody = nullptr;
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+namespace {
 std::string FixtureBesideExecutable(const char* name)
 {
     char executable[4096] {};
@@ -1660,6 +1696,35 @@ GC_TEST(PackageInit, UnattachedNativeUnavailable)
     void* token = reinterpret_cast<void*>(1);
     GC_EXPECT_EQ(Begin(P(), U(), 0, &token), Code(Result::Unavailable));
     GC_EXPECT_TRUE(token == nullptr);
+}
+GC_TEST(PackageInit, RetainedMetadataRejectsIndependentPurge)
+{
+    if (!ElfUnloadQuiescence::RetainsNativeImages()) { return; }
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        (void)dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        std::fprintf(stderr, "PACKAGE_INIT_PURGE_TARGET entered\n");
+        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(1, 1);
+        std::_Exit(77);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[1024];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = transcript.find("PACKAGE_INIT_PURGE_TARGET entered") != std::string::npos &&
+        transcript.find("published TypeInfo purge conflicts with process-lifetime image retention") != std::string::npos;
+    std::fprintf(stderr, "PACKAGE_INIT_PURGE_GUARD status=%d target=%d\n", status, target);
+    GC_EXPECT_TRUE(target);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 GC_TEST(PackageInit, AbortUsesNativeExit70)
 {

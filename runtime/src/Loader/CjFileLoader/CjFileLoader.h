@@ -56,7 +56,7 @@ public:
 #endif
     int UnloadLibrary(const char* libName) override;
     Uptr FindSymbol(const CString libName, const CString symName) const override;
-    bool DoInitImage(BaseFile* baseFile) const override;
+    bool DoInitImage(BaseFile* baseFile) override;
     BaseFile* GetBaseFile(CString fileName) const override;
     auto GetBinaryInfoFromAddressFunc() const { return binLoadApi.getBinaryInfoFromAddress; }
     TypeInfo* FindTypeInfoFromLoadedFiles(const char* className) override;
@@ -91,6 +91,7 @@ private:
     void PurgeLoadedFile(BaseFile* baseFile);
     void UnlinkLoadedFile(BaseFile* baseFile);
     void RemovePackageInfo(BaseFile* baseFile);
+    void MarkImageFailed(BaseFile* baseFile);
     void ParseEnumCtor(TypeInfo* ti);
     void RegisterTypeInfoCreatedByFE(BaseFile* baseFile);
     void RegisterOuterTypeExtensions(BaseFile* baseFile);

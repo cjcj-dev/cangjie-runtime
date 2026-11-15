@@ -39,7 +39,7 @@ void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
-    if (file == nullptr) {
+    if (file == nullptr || file->HasLoadFailed()) {
         return;
     }
     {
@@ -637,7 +637,7 @@ bool CJFileLoader::CanPublishAddress(const void* address) const
     auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
     if (image == nullptr) { return true; } // Runtime-allocated metadata.
     return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
-        return file->GetImageAddressMap().identity == image->identity;
+        return file->GetImageAddressMap().identity == image->identity && !file->HasLoadFailed();
     });
 }
 
@@ -715,7 +715,7 @@ bool CJFileLoader::LibInit(const char* libName)
         ElfUnloadQuiescence::SharedTaskAdmissionScope admission;
         ElfUnloadQuiescence::ReadScope reader;
         baseFile = GetBaseFile(libName);
-        if (baseFile == nullptr) { return false; }
+        if (baseFile == nullptr || baseFile->HasLoadFailed()) { return false; }
         std::vector<Uptr> entries;
         baseFile->GetGlobalInitFunc(entries);
         // An empty image has no initializer body to execute or protect.
@@ -752,6 +752,13 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
     // With native pinning the returned reference remains process-owned.
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
+        BaseFile* file = GetBaseFile(baseName);
+        if (file != nullptr && file->HasLoadFailed()) {
+            // A retained failed image stays failed. Its native reference and
+            // published storage must not be reclaimed as error rollback.
+            if (!ElfUnloadQuiescence::RetainsNativeImages()) { binLoadApi.binUnload(handler); }
+            return nullptr;
+        }
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
         auto handlerIt =
             std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
@@ -976,6 +983,8 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
 {
     CString baseName = Os::Path::GetBaseName(libName.Str());
+    BaseFile* file = GetBaseFile(baseName);
+    if (file != nullptr && file->HasLoadFailed()) { return 0; }
     void* handler = nullptr;
     {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
@@ -992,8 +1001,35 @@ Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) cons
 }
 
 
-bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
+void CJFileLoader::MarkImageFailed(BaseFile* baseFile)
 {
+    // Failure withdraws discovery, not storage or roots: published addresses
+    // and generated metadata may already have escaped the initializer. Keep
+    // the native identity, registration and root ownership until process exit.
+    // Reuse the existing catalog publication check, without reader admission.
+    std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    baseFile->MarkLoadFailed();
+    RemovePackageInfo(baseFile);
+    for (auto it = typeInfoCache.begin(); it != typeInfoCache.end();) {
+        if (!CanPublishTypeInfo(it->second)) {
+            it = typeInfoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeTemplateCache.begin(); it != typeTemplateCache.end();) {
+        if (!CanPublishAddress(it->second)) {
+            it = typeTemplateCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool CJFileLoader::DoInitImage(BaseFile* baseFile)
+{
+    if (baseFile->HasLoadFailed()) { return false; }
     // The caller may arrive from a native saferegion. The actual initializer
     // accesses the managed heap; SetManagedContext alone is not that transition.
     // Retain the image with PendingTask, never with an OS-TLS reader here.
@@ -1017,14 +1053,15 @@ bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
             if (mutator != nullptr) {
                 mutator->SetManagedContext(false);
             }
+#endif
             if (ExceptionManager::HasPendingException()) {
+                MarkImageFailed(baseFile);
                 ExceptionRef ex = ExceptionManager::GetPendingException();
                 LOG(RTLOG_ERROR, "Init Image fail! exception occurrence when init image, exception:%s ",
                     ex->GetTypeInfo()->GetName());
                 ExceptionManager::ClearPendingException();
                 return false;
             }
-#endif
         }
     }
     return true;
@@ -1072,7 +1109,9 @@ void CJFileLoader::TryThrowException(Uptr fileMetaAddr)
         packageVersion.Str(), compatibility.GetRuntimeSDKVersion()));
 #ifndef DISABLE_VERSION_CHECK
     ExceptionManager::IncompatiblePackageExpection(msg);
-    RemoveLoadedFiles(file);
+    // ThrowPendingException can return through native frames after arranging
+    // the managed return bridge. Do not purge published storage on that path.
+    if (!ElfUnloadQuiescence::RetainsNativeImages()) { RemoveLoadedFiles(file); }
 #else
     LOG(RTLOG_WARNING, "%s", msg.Str());
 #endif
