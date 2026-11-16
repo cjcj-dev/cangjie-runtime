@@ -3,6 +3,7 @@ import sys
 
 CAP = 2048
 BOUNDARY_CAP = 64
+REMOTE_RUNTIME = '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so'
 
 def fresh():
     return {
@@ -208,6 +209,34 @@ def on_thread_fini(frame, location, extra, internal):
 def on_unload(frame, location, extra, internal):
     return boundary("MRT_LibraryUnLoad", frame)
 
+EXAMINABLE = {'stopped', 'crashed', 'suspended'}
+
+def examinable(state):
+    return state in EXAMINABLE
+
+def live_module():
+    import lldb
+    target = lldb.debugger.GetSelectedTarget()
+    process = target.GetProcess()
+    names = {
+        lldb.eStateStopped: 'stopped', lldb.eStateCrashed: 'crashed', lldb.eStateSuspended: 'suspended',
+        lldb.eStateExited: 'exited', lldb.eStateDetached: 'detached', lldb.eStateRunning: 'running',
+    }
+    name = names.get(process.GetState(), 'unknown')
+    print(f'MODULE_LIVE pid={process.GetID()} state={name}', flush=True)
+    if not process.IsValid() or not examinable(name):
+        print('MODULE_UNAVAILABLE', flush=True)
+        return
+    platform = target.GetPlatform()
+    maps = lldb.SBPlatformShellCommand(f'cat /proc/{process.GetID()}/maps')
+    platform.Run(maps)
+    print('MAPS_BEGIN', flush=True)
+    print(maps.GetOutput() or '', flush=True)
+    print('MAPS_END', flush=True)
+    hashed = lldb.SBPlatformShellCommand(f'sha256sum {REMOTE_RUNTIME}')
+    platform.Run(hashed)
+    print('FILE_SHA ' + (hashed.GetOutput() or '').strip(), flush=True)
+
 def dump():
     print('EVENT_JSON:' + json.dumps(load()), flush=True)
 
@@ -227,6 +256,8 @@ def on_stop():
         process.Continue()
         return
     if thread.GetStopReason() != lldb.eStopReasonSignal or state.get("fatal"):
+        return
+    if thread.GetStopReasonDataAtIndex(0) not in (6, 11):
         return
     recovered = None
     for frame in thread:
@@ -269,6 +300,8 @@ def self_test():
     state["complete"] = False
     if associate(state, None, 10, two("pthread_mutex_lock", "user"))["chain"] != "UNKNOWN":
         raise SystemExit("truncated state still claimed a chain")
+    if examinable("exited") or examinable("detached") or examinable("running") or not examinable("stopped"):
+        raise SystemExit("a dead or running process was treated as examinable")
     print("PAIRING_PASS")
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "self-test":

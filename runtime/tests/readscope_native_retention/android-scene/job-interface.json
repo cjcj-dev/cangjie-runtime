@@ -16,15 +16,21 @@
   ],
   "requiredEnv": [
     "SCENE_COMMANDS",
-    "SCENE_OBSERVER",
     "HOST_SYMBOLS",
+    "RUNTIME_SO",
     "ANDROID_SDK_ROOT",
     "ANDROID_SERIAL"
+  ],
+  "notUsed": [
+    "SCENE_OBSERVER",
+    "classifyFullImageExit",
+    "EXIT_SHELL"
   ],
   "prepare": "node scene.mjs self-test && node scene.mjs calibrate",
   "execute": "SCENE_EXECUTE=1 node scene.mjs execute",
   "executeThisLane": "not invoked",
   "sameDrive": true,
+  "consumer": "node scene.mjs execute keeps the entry-stop module snapshot from lldb stdout. It does not read /proc after quit, and it does not classify the formal shell",
   "budget": {
     "minutes": 45,
     "jobs": 2,
@@ -41,6 +47,12 @@
     "ndk-gdb",
     "simulated sceneSuccess",
     "host-pid kill",
-    "-S before target"
+    "-S before target",
+    "synthetic EXIT_SHELL",
+    "literal build-id token",
+    "shell classifier",
+    "lldb rc as business exit",
+    "lldb uuid as gnu build id",
+    "relink to add a note"
   ]
 }

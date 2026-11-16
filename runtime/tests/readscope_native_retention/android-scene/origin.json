@@ -1,32 +1,53 @@
 {
-  "schema": 2,
+  "schema": 3,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
+  "sourceRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
+  "sourceRequestTerminal": "COMPLETED; controller directly confirmed in adoption instruction",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "4d1c71644d83869de1082d5d8209aa152539d942e5c138204ca7407c680978da"
+      "sha256": "d6bb0d2b7e72a91ec95c48e24b4c104daa74419621a328532e0f4d72cb49904e"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
-      "sha256": "7a75a99f2bdfd2f17ed9b55dcc0ac6b519e4a9ba0844e64cbfe8a005de380d57"
+      "sha256": "8577706992c9f9a39a6b7f39b639d6797427f1cf7cf84a5b7b45b97fcb9ce89a"
     },
     "lldb-commands.txt": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/lldb-commands.txt",
       "sha256": "29f7a82b02b365ccf6103f5993850becc2c75fb9b4361d7c991d9b71c085e67f"
     }
   },
-  "readyForNativeExecution": false,
-  "predecessor": "fa935aad314dec66bd871580511dc0e34b493be7",
-  "predecessorFindings": "Original six findings/old scripts preserved in predecessor; Grok fixed package copied verbatim; no native execution or source-safety verdict.",
-  "blockers": [
-    {
-      "id": "GROK_FINAL_PACKAGE_REVIEW",
-      "detail": "Original Grok owner must read the exact new frozen package plus Sol job/environment/asset/producer entry, then controller separately authorizes any external execution. Do not just flip readiness."
-    }
-  ],
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "9112bd09438499c003fb457ea207601573b15d435e26ab2656f956b7d03b2efc"
+    "sha256": "b6b2d924a6769b53d196106731ec7e2478ed15d1f75aaf15e32a242f63dcc86f"
+  },
+  "predecessor": "431b8d533a401b9113a2678cecdbea0a9560d120",
+  "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
+  "readyForNativeExecution": false,
+  "predecessorFindings": "e373 was not copied; old a90931 package and 431b runtime binding preserved in Git; no old result changed",
+  "blockers": [
+    {
+      "id": "GROK_FINAL_ENTRY_AND_INDEPENDENT_REVIEW",
+      "detail": "New fixed package integrated verbatim; wrapper/workflow still require final entry review and independent review."
+    },
+    {
+      "id": "CONTROLLER_FIXED_EXECUTION_AUTHORIZATION",
+      "detail": "No push/dispatch/debugger/native execution authorized; do not flip readiness."
+    }
+  ],
+  "nativeNotRun": [
+    "NDK27.3.13750724/API31 remote-android actual platform/tool behavior",
+    "entry-stop runtime mapping and same-PID module/maps/load-base/file relation",
+    "SBPlatform.Run actual maps and deployed sha output",
+    "fatal signal delivery/continue/terminal observation and cleanup",
+    "same-generation successful destroy then later lock with both stacks"
+  ],
+  "diagnosticContract": {
+    "formalShellClassifier": false,
+    "shellWait": "UNKNOWN",
+    "gnuBuildId": "ABSENT; not a prerequisite",
+    "samePidLiveModuleRequired": true,
+    "fatalStopIsBusinessExit": false
   }
 }
