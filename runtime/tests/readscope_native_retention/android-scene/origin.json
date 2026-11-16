@@ -24,18 +24,9 @@
   },
   "predecessor": "5715cb62abe40ada616ceef105837ead8c61f8f3",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
-  "readyForNativeExecution": false,
-  "predecessorFindings": "Both rejected objects and counterexamples remain. Fixed successor supplies the Boolean detach argument, separates intent/completion, records actual host close/childRc, and preserves actual foreground signal independently of its timer. Implementation evidence only; independent review pending.",
-  "blockers": [
-    {
-      "id": "GROK_FINAL_ENTRY_AND_INDEPENDENT_REVIEW",
-      "detail": "Complete implementation package is frozen for independent review; implementation delivery and local controls are not SOURCE_PASS."
-    },
-    {
-      "id": "CONTROLLER_FIXED_EXECUTION_AUTHORIZATION",
-      "detail": "No debugger/native/GHA/push/dispatch permission; keep ready false."
-    }
-  ],
+  "readyForNativeExecution": true,
+  "predecessorFindings": "37167 and 5715 SOURCE_REJECT and original counterexamples remain. Controller adopted the independent ed488 SOURCE_PASS_SCOPED and three FIXED findings. This successor changes permit metadata only; technical code and package interface are unchanged. Background error detail preservation remains limited.",
+  "blockers": [],
   "nativeNotRun": [
     "NDK27.3.13750724/API31 remote-android actual platform/tool behavior",
     "entry-stop runtime mapping and same-PID module/maps/load-base/file relation",
@@ -75,5 +66,60 @@
       "source report self-test rc0"
     ],
     "nativeRuns": 0
+  },
+  "executionPermit": {
+    "status": "PREPARED_AWAITING_CONTROLLER_FIXED_SHA_EXTERNAL_EXECUTION_AUTHORIZATION",
+    "meaning": "origin ready only releases the existing local readiness predicate for this fixed one-shot permit object; preparation does not authorize push, dispatch, or native execution",
+    "parent": "ed4882c8e6c08f55fdd003f5c00d5c0e7cadd085",
+    "technicalReview": {
+      "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
+      "verdict": "SOURCE_PASS_SCOPED",
+      "adoptedBy": "Current controller instruction",
+      "reviewRequestTerminal": "Not asserted here; controller harvest is separate"
+    },
+    "scope": {
+      "mode": "preinit/full-image ordinary return",
+      "runtime": "d51c34a06cfd980d0e2694514e2a41421ac41b83",
+      "run": 43760946735,
+      "artifact": 14180621274,
+      "runtimeSha256": "aac5c4456fc9746243a2a15d22beac6a52ee27f269a94cd0e839315bc080db51",
+      "gnuBuildId": "ABSENT",
+      "runtimeRebuild": false,
+      "fixtureAndConsumer": "normal same-source/same-flags relink with new actual ELF identities"
+    },
+    "limits": {
+      "nativeProcesses": 1,
+      "activeSeconds": 60,
+      "totalSeconds": 300,
+      "warmup": 0,
+      "retry": 0,
+      "replacement": 0,
+      "jobMinutes": 45,
+      "jobs": 2,
+      "core": 0
+    },
+    "workflow": {
+      "repository": "cjcj-dev/cangjie-runtime",
+      "ref": "refs/heads/perf/readscope-retained-zero-cost-1115",
+      "file": "metadata-platform.yml",
+      "job": "readscope-android-scene",
+      "runner": "ubuntu-24.04",
+      "inputs": {
+        "readscope_android_scene": true,
+        "readscope_android": false,
+        "readscope_linux_arm64": false,
+        "readscope_android_exit_compare": false
+      }
+    },
+    "owners": {
+      "debuggerLogicAndNativeInterpretation": "diag_c274_fcache_grok_1113",
+      "formalPackageAndResourceCleanup": "rev_ten_perf_std_rebuild_sol_1113_retry"
+    },
+    "limitations": [
+      "background error detail is not fully returned by all reap branches; retain available raw output and record missing detail UNKNOWN",
+      "actual tools, live module identity, events, terminal status and cleanup remain unverified",
+      "single fatal stack is not root-cause attribution; original full-image destroyed-mutex/SIGABRT remains OPEN",
+      "job-interface.readyForNativeExecution remains false as the reviewed independent interface fact"
+    ]
   }
 }
