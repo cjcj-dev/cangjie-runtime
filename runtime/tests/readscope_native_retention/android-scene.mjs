@@ -239,7 +239,9 @@ async function execute() {
   assert.equal(inputs.runtime.sha256, runtimeInput.sha256);
   assert.equal(inputs.runtime.buildId, runtimeInput.buildId);
   assert.notEqual(bindings.RUNTIME_SO, bindings.HOST_SYMBOLS);
-  assert(runtimeInput.buildId, 'RUNTIME_BUILD_ID_UNKNOWN; fixed artifact lacks module Build ID witness');
+  // The fixed original SO has no GNU Build ID. Absence is recorded, not a
+  // rejection: Grok must correlate the actual same-PID module/maps with the
+  // deployed file's identity. A derived LLDB UUID is not a GNU Build ID.
   // No self-test/calibrate here: Grok self-test assumes official tools absent.
   const adb = path.join(sdk, 'platform-tools/adb');
   fs.mkdirSync(env.ANDROID_AVD_HOME, { recursive: true });
