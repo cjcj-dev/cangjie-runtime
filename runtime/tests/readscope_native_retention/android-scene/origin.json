@@ -1,13 +1,13 @@
 {
   "schema": 6,
   "sourceOwner": "diag_c274_fcache_grok_1113",
-  "sourceReport": "REPORT-grok_android_server_version_1116.md",
+  "sourceReport": "REPORT-grok_android_connect_cleanup_1116.md",
   "sourceRequest": null,
   "sourceRequestTerminal": "Grok report DONE; source completion adopted by current controller task; no new request UUID inferred",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "361b3096adbdd3f10389e9ecd10410c683b61db4478fd91de07cad11d716e30b"
+      "sha256": "31fd17611fe87b2b7cef10de6635d7f87c2969ba71cf9f086d7e45964e80ab83"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
@@ -20,15 +20,15 @@
   },
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "cf1f5dff824ab30f4f1e3baa4ba308d732b86c02c4921646fec59f8993a89060"
+    "sha256": "4bf27a7189159c81f8b45720364fffbbed7a609b7d56e699a33757513ff8cb53"
   },
-  "predecessor": "f840093cd135214143620c9438dccd8100957d06",
+  "predecessor": "e8294074a3c06cb4650e463213374979bd56fcf6",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": true,
-  "predecessorFindings": "Official f840 run43815606267 prepare0/execute1/targetN0: server-version rc0 stdout empty and stderr18.0.4 matching host revision was rejected as VERSION_ABSENT. Old evidence unchanged; this successor copies Grok stream/version checks, no runtime or debugger lifecycle change.",
+  "predecessorFindings": "Official e829 run43862034682 prepare0/execute1/targetN0. Loopback host treated as serial; exact failed socket/errno unobserved. Device1677/start3984 owned5039/inode45713; unrelated5555/inode15501 pre-existed. Old cleanup UNCONFIRMED and mutex OPEN unchanged.",
   "blockers": [],
   "nativeNotRun": [
-    "New version gate passes recorded f840 streams; official native launch and post-version file/module/terminal/cleanup paths remain NOT_RUN. FILE_IDENTITY_ABSENT in simulated replay is a fixture boundary, not scene success.",
+    "New serial/port/cleanup changes have not connected to an actual device; target and cleanup are NOT_RUN. Text controls cannot establish native safety.",
     "NDK27.3.13750724/API31 remote-android actual platform/tool behavior",
     "entry-stop runtime mapping and same-PID module/maps/load-base/file relation",
     "SBPlatform.Run actual maps and deployed sha output",
@@ -72,17 +72,16 @@
   "evidenceReuse": {
     "oldCalibration47": "belongs to 617eaa2d; not evidence of executing the new fixed package",
     "currentSourceEvidence": [
-      "Grok version-check.json: real f840 host/server streams and rc/timeout/empty/garbage/version/revision rejection controls; no native runs",
-      "f840 official run43815606267/artifact14202228278 raw execute result retained, targetN0",
-      "e4f9 scoped launcher descendant review and unchanged lifecycle evidence reused; no universal process-family-empty claim",
-      "Sol exact old/new production drive replay and direct host probe binding"
+      "Grok connect-check.json: exact official e829 streams, URL/socket/order controls; nativeRuns0",
+      "Sol new exact old/new production drive controls and unchanged wrapper binding; results separately recorded",
+      "Unchanged scoped launcher descendant evidence; no universal process-family-empty claim"
     ],
     "nativeRuns": 0
   },
   "executionPermit": {
-    "status": "SERVER_VERSION_SUCCESSOR_PREPARED_REQUIRES_REVIEW_AND_NEW_EXACT_SHA_AUTHORIZATION",
-    "meaning": "Origin ready retains its existing local gate meaning; job-interface ready remains false. f840 official permission consumed. This successor has no push/dispatch/native authorization.",
-    "parent": "f840093cd135214143620c9438dccd8100957d06",
+    "status": "CONNECT_CLEANUP_SUCCESSOR_PREPARED_REQUIRES_REVIEW_AND_NEW_EXACT_SHA_AUTHORIZATION",
+    "meaning": "Existing origin ready is a local technical gate only; job-interface ready remains false. e829 permission consumed. No new push/dispatch/native permission.",
+    "parent": "e8294074a3c06cb4650e463213374979bd56fcf6",
     "technicalReview": {
       "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
       "verdict": "SOURCE_PASS_SCOPED",
@@ -135,5 +134,11 @@
       "Foreground escalation covers recorded members still matching starttime and original process group only; off-group and later-unrecorded members are not followed.",
       "Host close records pipe closure only; it does not establish that every descendant is gone. Real NDK lldb.sh descendant behavior remains NOT_RUN."
     ]
+  },
+  "sourceCxxLimitation": {
+    "revision": "d8003a456d14a3deb8054cdaa529ffbf02d9b262",
+    "matchingClice": "NOT_PROVIDED",
+    "localOtherVersionText": "Not evidence of the fixed NDK implementation",
+    "followup": "SOL-GROK-CONNECT-CLICE-readscope-1116.md"
   }
 }

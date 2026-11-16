@@ -94,7 +94,7 @@ test('fixed Grok capability probe uses lldb.sh for both queries and real launch 
  assert.equal(result.outcome,null);assert.equal(calls.length,3);
  const launcher=`/sdk/ndk/${fixed.ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh`;
  assert.equal(calls[1].args[0],launcher);assert.equal(calls[2].args[0],launcher);
- assert(grok.includes("launchArgv(join(sdk, TOOLS.hostWrapper))"));
+ assert(grok.includes("launchArgv(join(sdk, TOOLS.hostWrapper), serial)"));
  assert(!calls.some(c=>c.args.some(x=>/adb|emulator|lldb-server/.test(x))));
 });
 

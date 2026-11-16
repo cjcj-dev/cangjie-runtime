@@ -211,19 +211,32 @@ function section(text, name) {
   return next < 0 ? rest : rest.slice(0, next);
 }
 
-function listenOwned(text) {
-  const inodes = new Set([...section(text, 'FD').matchAll(/socket:\[(\d+)\]/g)].map(match => match[1]));
+function tcpRows(text) {
+  const rows = [];
   const tables = `${section(text, 'TCP')}\n${section(text, 'TCP6')}`;
   for (const line of tables.split('\n')) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 10 || !/^\d+:$/.test(parts[0])) continue;
     const local = parts[1].split(':');
-    const port = (local[1] || '').toLowerCase();
-    const state = parts[3];
-    const inode = parts[9];
-    if (port === '13af' && state === '0A' && inodes.has(inode)) return inode;
+    rows.push({ port: (local.at(-1) || '').toLowerCase(), state: parts[3], inode: parts[9] });
   }
-  return null;
+  return rows;
+}
+
+function socketInodes(text) {
+  return new Set([...section(text, 'FD').matchAll(/socket:\[(\d+)\]/g)].map(match => match[1]));
+}
+
+function listenOwned(text) {
+  const inodes = socketInodes(text);
+  const owned = tcpRows(text).find(row => row.port === '13af' && row.state === '0A' && inodes.has(row.inode));
+  return owned ? owned.inode : null;
+}
+
+function foreignListens(before, after) {
+  const owned = socketInodes(before);
+  const prior = new Set(tcpRows(before).map(row => `${row.port}:${row.inode}`));
+  return tcpRows(after).filter(row => row.state === '0A' && prior.has(`${row.port}:${row.inode}`) && !owned.has(row.inode));
 }
 
 function parseIdentity(text, hostPid) {
@@ -348,16 +361,23 @@ function fileSha(text) {
   return matched ? matched[1] : null;
 }
 
-function launchArgv(lldb) {
+function platformConnect(serial) {
+  if (serial === 'localhost' || serial === '127.0.0.1') return null;
+  if (!/^[A-Za-z_][A-Za-z0-9._-]*$/.test(serial || '')) return null;
+  return `connect://${serial}:5039`;
+}
+
+function launchArgv(lldb, serial) {
   const capture = join(HERE, 'capture.py');
   const settings = join(HERE, 'lldb-commands.txt');
   const symbols = process.env.HOST_SYMBOLS;
+  const url = platformConnect(serial);
   return [
     lldb, '-b',
     '-o', `command source ${settings}`,
     '-o', `command script import ${capture}`,
     '-o', 'platform select remote-android',
-    '-o', 'platform connect connect://127.0.0.1:5039',
+    '-o', `platform connect ${url}`,
     '-o', `target create ${REMOTE}/consumer`,
     '-o', `target symbols add ${symbols}`,
     '-o', 'script capture.arm()',
@@ -568,23 +588,28 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     return result;
   };
   const cleanup = async () => {
-    if (meta.hostPid != null && typeof io.reap === 'function') {
-      const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true, bound.total));
-      log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '', closed: reaped.closed === true, childRc: reaped.childRc ?? null, childSignal: reaped.childSignal ?? null });
-      meta.hostReap = reaped.closed === true && reapConfirmed(reaped.rc, reaped.stdout) ? 'REAPED' : 'UNCONFIRMED';
-    }
     if (started.device) {
       const probe = await run('cleanup-probe', [tool('adb'), '-s', serial, 'shell', identityShell()], { timeoutMs: 5000, cleanup: true });
       const still = parseIdentity(probe.stdout, meta.hostPid);
+      const ownedNow = listenOwned(probe.stdout);
+      meta.listen = ownedNow ? 'PRESENT' : (probe.skipped || probe.timedOut ? 'UNKNOWN' : 'ABSENT');
       if (!still || still.pid !== started.device.pid || still.start !== started.device.start) meta.cleanup = 'UNCONFIRMED';
       else {
         const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still.pid)], { timeoutMs: 5000, cleanup: true });
         meta.cleanup = reapConfirmed(cleaned.rc, cleaned.stdout) && !String(cleaned.argv || '').includes(String(meta.hostPid)) ? 'REAPED' : 'UNCONFIRMED';
       }
     }
+    if (meta.hostPid != null && typeof io.reap === 'function') {
+      const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true, bound.total));
+      log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '', closed: reaped.closed === true, childRc: reaped.childRc ?? null, childSignal: reaped.childSignal ?? null });
+      meta.hostReap = reaped.closed === true && reapConfirmed(reaped.rc, reaped.stdout) ? 'REAPED' : 'UNCONFIRMED';
+    }
     if (started.forward) {
       const removed = await run('cleanup-forward', [tool('adb'), '-s', serial, 'forward', '--remove', 'tcp:5039'], { timeoutMs: 5000, cleanup: true });
-      if (removed.rc !== 0) meta.cleanup = 'UNCONFIRMED';
+      if (removed.rc !== 0) {
+        const again = await run('cleanup-forward-list', [tool('adb'), '-s', serial, 'forward', '--list'], { timeoutMs: 5000, cleanup: true });
+        if (again.rc !== 0 || again.timedOut || forwardBusy(again.stdout, serial)) meta.cleanup = 'UNCONFIRMED';
+      }
     }
     if (!meta.target) meta.targetCleanup = 'UNKNOWN';
     else {
@@ -638,13 +663,22 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     const listed = await run('forward-list', [tool('adb'), '-s', serial, 'forward', '--list']);
     if (listed.rc !== 0 || listed.timedOut) { return finish(listed.timedOut ? 'UNCAPTURED' : 'FORWARD_UNKNOWN', io.simulated, log, { meta }); }
     if (forwardBusy(listed.stdout, serial)) { return finish('FORWARD_BUSY', io.simulated, log, { meta }); }
-    const forwarded = await run('forward', [tool('adb'), '-s', serial, 'forward', 'tcp:5039', 'tcp:5039']);
-    if (forwarded.rc !== 0 || forwarded.timedOut) { return finish(forwarded.timedOut ? 'UNCAPTURED' : 'CONNECT_FAIL', io.simulated, log, { meta }); }
+    const url = platformConnect(serial);
+    if (!url) { return finish('CONNECT_FAIL', io.simulated, log, { meta }); }
+    meta.platformConnect = { url, device: serial, localPort: '5039' };
     started.forward = true;
     const so = process.env.RUNTIME_SO;
     const note = so ? await run('runtime-note', [tool('readelf'), '-n', so]) : null;
     const hashed = so ? await run('runtime-hash', ['sha256sum', so]) : null;
-    const launch = await run('launch', launchArgv(join(sdk, TOOLS.hostWrapper)), { active: true });
+    const previousLocal = process.env.ANDROID_PLATFORM_LOCAL_PORT;
+    process.env.ANDROID_PLATFORM_LOCAL_PORT = '5039';
+    let launch;
+    try {
+      launch = await run('launch', launchArgv(join(sdk, TOOLS.hostWrapper), serial), { active: true });
+    } finally {
+      if (previousLocal === undefined) delete process.env.ANDROID_PLATFORM_LOCAL_PORT;
+      else process.env.ANDROID_PLATFORM_LOCAL_PORT = previousLocal;
+    }
     meta.foreground = {
       pid: launch.pid ?? null,
       signal: launch.signal ?? null,
@@ -1011,7 +1045,7 @@ function plan(selected) {
       truncated: 'complete=false and chain stays UNKNOWN',
       fatalAddress: 'dwarf variable or same-run fatal message only; historical rdi is not an argument',
       devicePid: 'one /proc/net/tcp LISTEN row whose inode is in that pid fd; host adb pid is reaped separately and never killed as the server',
-      forward: 'adb forward --list must not already own tcp:5039; this driver does not replace it',
+      forward: 'adb forward --list must not already own tcp:5039. LLDB creates that forward itself when ANDROID_PLATFORM_LOCAL_PORT=5039. The connect host is the device serial, not 127.0.0.1',
       imageList: 'image list uuid is not a GNU build id. Path, maps and file sha are taken at the entry stop, before continue. A crash does not depend on later ordinary -o commands',
       shellWait: 'formal android.mjs EXIT_SHELL is not an input; this diagnostic always leaves it UNKNOWN',
       businessExit: 'only a same-pid exited-with-status line that is not after CONTROLLED_DETACH. lldb rc, quit, detach, target reap and a timeout signal are not a business exit',
@@ -1049,6 +1083,8 @@ function writeBundle(out, selected, tools) {
     hostCheck: 'node scene.mjs host-check',
     hostLauncher: TOOLS.hostWrapper,
     hostClosure: 'ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Foreground lldb.sh is one process group. Timeout signals that group while the leader starttime matches, then signals only recorded members that are still in the group. Background adb is not in that group.',
+    version: 'Host and device version text is accepted from stdout or stderr. Both must be rc 0, not timed out, and carry the same lldb version and revision. Empty text, nonzero rc, timeout, or a different version stays rejected.',
+    connect: 'platform connect uses connect://<adb serial>:5039. The host is the device serial, never 127.0.0.1 or localhost. ANDROID_PLATFORM_LOCAL_PORT=5039 tells lldb which host port to forward; this driver does not create that forward. A listen row is the server only when its inode is in that pid fd table. Cleanup checks the device pid before reaping the host adb session. A missing pid stays UNCONFIRMED.',
     consumer: 'node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
@@ -1065,7 +1101,7 @@ function assertOrder(result) {
   const source = at('command source ');
   const imported = at('command script import ');
   const selected = argv.indexOf('platform select remote-android');
-  const connected = argv.indexOf('platform connect connect://127.0.0.1:5039');
+  const connected = argv.indexOf('platform connect connect://emulator-5554:5039');
   const created = at('target create ');
   const symbols = at('target symbols add ');
   const armed = argv.indexOf('script capture.arm()');
@@ -1096,6 +1132,9 @@ function assertOrder(result) {
   const cleanup = result.log.find(row => row.step === 'cleanup-server');
   const joined = cleanup ? cleanup.argv.join(' ') : '';
   if (!joined.includes('pid=200') || joined.includes('pid=100')) fail('cleanup used the host adb pid');
+  const cleanupAt = result.log.findIndex(row => row.step === 'cleanup-server');
+  const reapAt = result.log.findIndex(row => row.step === 'reap-host');
+  if (cleanupAt < 0 || reapAt < 0 || cleanupAt > reapAt) fail('device server was checked after its host session');
   const reap = result.log.find(row => row.step === 'reap-host');
   if (!reap || reap.argv[1] !== '100') fail('host adb child was not reaped');
   if (result.meta.hostPid === result.meta.devicePid) fail('device pid collapsed to host pid');
@@ -1270,7 +1309,7 @@ if (argv[0] === 'self-test') {
   const records = JSON.parse(readFileSync(source, 'utf8'));
   const selected = route(records);
   if (selected.launch.at(-1) !== 'preinit') fail('self-test launch');
-  const command = launchArgv('/sdk/lldb').find(item => item.startsWith('process launch '));
+  const command = launchArgv('/sdk/lldb', 'emulator-5554').find(item => item.startsWith('process launch '));
   if (!launchContract(command).ok || launchContract(command).argc !== 3) fail('launch contract');
   if (launchContract(command.replace('--stop-at-entry', '--stop-at-entry true')).ok) fail('old true argument was accepted');
   if (sliceMs(300000, 5000, false) !== 0) fail('a stop still adds time past the total');
@@ -1812,6 +1851,73 @@ if (argv[0] === 'calibrate') {
   writeFileSync(join(HERE, 'version-check.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('VERSION_PASS');
   process.exit(0);
+} else if (argv[0] === 'connect-check') {
+  const officialPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-server-version/external-after-new-exact-authorization/artifacts/14224690883/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const official = JSON.parse(readFileSync(officialPath, 'utf8'));
+  const row = name => official.log.find(item => item.step === name);
+  const launch = row('launch');
+  const identity = row('server-identity');
+  const later = row('cleanup-probe');
+  const start = row('start-server');
+  const forwarded = row('forward');
+  const reapAt = official.log.findIndex(item => item.step === 'reap-host');
+  const probeAt = official.log.findIndex(item => item.step === 'cleanup-probe');
+  if (!launch || launch.rc !== 1 || launch.timedOut !== false || String(launch.stderr || '').trim() !== 'error: Failed to connect port') fail('official connect error changed');
+  if (!launch.argv.includes('platform connect connect://127.0.0.1:5039')) fail('official argv was not the loopback url');
+  if (platformConnect('127.0.0.1') || platformConnect('localhost') || platformConnect('emulator-5554') !== 'connect://emulator-5554:5039') fail('replacement url is not the device serial');
+  if (listenOwned(identity.stdout) !== '45713') fail('official listen inode was not owned by the recorded server');
+  if (listenOwned(later.stdout)) fail('cleanup still showed an owned 5039 listener');
+  const foreign = foreignListens(identity.stdout, later.stdout);
+  if (foreign.length !== 1 || foreign[0].port !== '15b3' || foreign[0].inode !== '15501') fail('tcp6 listener was not the pre-existing row');
+  if (!(reapAt >= 0 && probeAt > reapAt)) fail('official probe ran before the host session was reaped');
+  if (!String(later.stderr || '').includes("can't open /proc/1677/cmdline") || official.meta.devicePid !== '1677' || official.meta.cleanup !== 'UNCONFIRMED') fail('official device identity changed');
+  if (!String(start.argv.at(-1) || '').includes("exec /data/local/tmp/readscope-lifetime/lldb-server platform --listen '*:5039' --server")) fail('server start command changed');
+  if (forwarded.argv.at(-2) !== 'tcp:5039' || forwarded.argv.at(-1) !== 'tcp:5039') fail('old manual forward changed');
+  const previous = process.env.HOST_SYMBOLS;
+  process.env.HOST_SYMBOLS = '/symbols/libcangjie-runtime.so';
+  let fixed;
+  let alreadyGone;
+  let forwardLeft;
+  try {
+    fixed = await drive(scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} }), '/sdk', 'emulator-5554');
+    alreadyGone = await drive(scripted({
+      platform: 'remote-android', serial: 'emulator-5554\tdevice',
+      steps: { 'cleanup-probe': { rc: 0, stdout: later.stdout, stderr: later.stderr }, 'cleanup-forward': { rc: 1, stdout: '', stderr: '' }, 'cleanup-forward-list': { rc: 0, stdout: '', stderr: '' } },
+    }), '/sdk', 'emulator-5554');
+    forwardLeft = await drive(scripted({
+      platform: 'remote-android', serial: 'emulator-5554\tdevice',
+      steps: { 'cleanup-forward': { rc: 1, stdout: '', stderr: '' }, 'cleanup-forward-list': { rc: 0, stdout: 'emulator-5554 tcp:5039 tcp:5039\n', stderr: '' } },
+    }), '/sdk', 'emulator-5554');
+  } finally {
+    if (previous === undefined) delete process.env.HOST_SYMBOLS;
+    else process.env.HOST_SYMBOLS = previous;
+  }
+  const fixedLaunch = fixed.log.find(item => item.step === 'launch');
+  const fixedCleanup = fixed.log.findIndex(item => item.step === 'cleanup-server');
+  const fixedReap = fixed.log.findIndex(item => item.step === 'reap-host');
+  if (!fixedLaunch || !fixedLaunch.argv.includes('platform connect connect://emulator-5554:5039') || fixedLaunch.argv.some(item => item.includes('127.0.0.1'))) fail('fixed launch did not use the device serial');
+  if (fixed.log.some(item => item.step === 'forward')) fail('driver still creates the forward');
+  if (!(fixedCleanup >= 0 && fixedReap > fixedCleanup)) fail('fixed cleanup still closes the host session first');
+  if (fixed.meta.platformConnect?.localPort !== '5039' || fixed.meta.platformConnect?.device !== 'emulator-5554') fail('local port was not reserved for lldb');
+  if (alreadyGone.log.some(item => item.step === 'cleanup-server') || alreadyGone.meta.cleanup !== 'UNCONFIRMED' || alreadyGone.meta.listen !== 'ABSENT') fail('missing server was killed or its listener was still claimed');
+  if (alreadyGone.outcome !== 'CLEANUP_UNCONFIRMED') fail('missing server became reaped');
+  if (forwardLeft.outcome !== 'CLEANUP_UNCONFIRMED' || forwardLeft.meta.cleanup !== 'UNCONFIRMED') fail('a remaining forward was ignored');
+  const report = {
+    officialOutcome: official.outcome,
+    connectError: String(launch.stderr).trim(),
+    oldUrlDevice: '127.0.0.1',
+    fixedUrl: platformConnect('emulator-5554'),
+    ownedInode: '45713',
+    ownedPort: '13af',
+    foreign,
+    sessionReapedBeforeProbe: true,
+    fixedOrder: { cleanupServer: fixedCleanup, reapHost: fixedReap },
+    missingServer: { outcome: alreadyGone.outcome, listen: alreadyGone.meta.listen, killed: alreadyGone.log.some(item => item.step === 'cleanup-server') },
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'connect-check.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('CONNECT_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1828,5 +1934,5 @@ if (argv[0] === 'calibrate') {
   const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
   process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|version-check|host-check|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|version-check|connect-check|host-check|calibrate|execute');
 }
