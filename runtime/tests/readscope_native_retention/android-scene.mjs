@@ -227,6 +227,17 @@ function files(root) {
   });
 }
 
+function prepareBoundsDirectory(bounds) {
+  try {
+    fs.mkdirSync(bounds);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  const entry = fs.lstatSync(bounds);
+  assert(entry.isDirectory() && !entry.isSymbolicLink(), 'fixed bounds dependency must be a real directory');
+  assert.equal(fs.readdirSync(bounds).length, 0, 'fresh fixed dependency only');
+}
+
 function prepare() {
   const { out, sdk, env } = context();
   fs.mkdirSync(out); // Existing/partial output is never accepted as a cache.
@@ -251,7 +262,7 @@ function prepare() {
     assert.equal(run(`blob-${file}`, ['git', '-C', source, 'rev-parse', `${fixed.runtime}:runtime/tests/readscope_native_retention/${file}`]).trim(), expected);
   }
   const bounds = path.join(runtime, 'third_party/third_party_bounds_checking_function');
-  assert.equal(fs.readdirSync(bounds).length, 0, 'fresh fixed dependency only');
+  prepareBoundsDirectory(bounds);
   run('bounds-init', ['git', 'init', bounds]);
   run('bounds-remote', ['git', '-C', bounds, 'remote', 'add', 'origin',
     'https://gitcode.com/openharmony/third_party_bounds_checking_function.git']);
