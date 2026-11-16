@@ -117,6 +117,86 @@ function runner(out, env) {
   return { run, rows };
 }
 
+// Own only the ChildProcess created at this call site. 'exit' is not 'close':
+// pipes may still be open, and sending a signal is not proof of a reap.
+export function ownChild(child) {
+  const owned = { child, exit: null, close: null, error: null, signals: [] };
+  owned.closed = new Promise(resolve => {
+    child.once('error', error => { owned.error = error.message; });
+    child.once('exit', (rc, signal) => { owned.exit = { rc, signal }; });
+    child.once('close', (rc, signal) => {
+      owned.close = { rc, signal, at: Date.now() };
+      resolve(owned.close);
+    });
+  });
+  return owned;
+}
+
+async function waitClosedUntil(owned, deadlineMs) {
+  if (owned.close) return owned.close;
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) return null;
+  let timer;
+  try {
+    return await Promise.race([owned.closed,
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), remaining); })]);
+  } finally { clearTimeout(timer); }
+}
+
+export async function settleOwnedChild(owned, {
+  naturalUntilMs, deadlineMs, termGraceMs = 1000, killGraceMs = 1000,
+}) {
+  assert(naturalUntilMs <= deadlineMs);
+  const natural = await waitClosedUntil(owned, naturalUntilMs);
+  const signal = name => {
+    // Never signal an exited process merely because its pipes have not closed.
+    if (owned.close || owned.exit || !Number.isInteger(owned.child.pid) || Date.now() >= deadlineMs) return;
+    const row = { signal: name, at: Date.now() };
+    try { row.accepted = owned.child.kill(name); } catch (error) { row.error = error.message; }
+    owned.signals.push(row);
+  };
+  if (!natural && !owned.close) {
+    signal('SIGTERM');
+    await waitClosedUntil(owned, Math.min(Date.now() + termGraceMs, deadlineMs - killGraceMs));
+    if (!owned.close) {
+      signal('SIGKILL');
+      await waitClosedUntil(owned, deadlineMs);
+    }
+  }
+  return { pid: owned.child.pid ?? null, exit: owned.exit, close: owned.close,
+    error: owned.error, signals: owned.signals, timedOut: !natural,
+    reaped: owned.close !== null, deadlineMs, observedAt: Date.now() };
+}
+
+export function asyncRunner(out, env) {
+  const rows = [];
+  return async (name, args, limits) => {
+    assert(!rows.some(row => row.name === name), `duplicate command ${name}`);
+    const row = { name, args, cwd: out, started: new Date().toISOString() };
+    rows.push(row);
+    if (Date.now() >= limits.deadlineMs) {
+      Object.assign(row, { skipped: true, reason: 'DEADLINE', rc: null, signal: null, reaped: false });
+      json(path.join(out, 'commands.json'), rows);
+      return row;
+    }
+    const stdout = fs.openSync(path.join(out, `${name}.stdout`), 'wx');
+    const stderr = fs.openSync(path.join(out, `${name}.stderr`), 'wx');
+    try {
+      const owned = ownChild(spawn(args[0], args.slice(1), { cwd: out, env,
+        stdio: ['ignore', stdout, stderr] }));
+      Object.assign(row, await settleOwnedChild(owned, limits));
+      row.rc = row.close?.rc ?? null;
+      row.signal = row.close?.signal ?? null;
+    } catch (error) { row.error = error.stack; }
+    finally {
+      fs.closeSync(stdout); fs.closeSync(stderr);
+      row.ended = new Date().toISOString();
+      json(path.join(out, 'commands.json'), rows);
+    }
+    return row;
+  };
+}
+
 function files(root) {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const name = path.join(root, entry.name);
@@ -247,10 +327,12 @@ async function execute() {
   const emulator = spawn(emulatorTool, ['-avd', 'readscope-scene', '-port', '5554', '-no-window',
     '-no-audio', '-no-boot-anim', '-no-snapshot', '-gpu', 'swiftshader_indirect', '-memory', '2048'],
   { env, stdio: ['ignore', stdout, stderr] });
-  const closed = new Promise(resolve => {
-    emulator.once('error', error => resolve({ error: error.message }));
-    emulator.once('close', (rc, signal) => resolve({ rc, signal }));
-  });
+  const emulatorOwned = ownChild(emulator);
+  let sceneStarted = null;
+  let primaryError = null;
+  let emulatorResult = null;
+  const cleanupResults = [];
+  let cleanupError = null;
   try {
     run('wait-device', [adb, '-s', 'emulator-5554', 'wait-for-device'], { timeout: 180000 });
     const deadline = Date.now() + fixed.bootSeconds * 1000;
@@ -289,19 +371,61 @@ async function execute() {
       remoteRuntime: '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so',
       recorderOutput: path.join(bundle, 'run'),
       actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
-    const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run') };
+    // One 300s collection-and-cleanup budget. Grok owns 270s including its
+    // cleanup; the wrapper starts TERM only after 275s and must reap by 285s.
+    // The last 15s cover collection and emulator shutdown, with no fresh budget.
+    sceneStarted = Date.now();
+    const hardDeadline = sceneStarted + fixed.totalSeconds * 1000;
+    const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run'),
+      SCENE_DEADLINE_MS: String(hardDeadline - 30000) };
     delete sceneEnv.SCENE_OBSERVER; // Do not inherit a stale formal-shell binding.
-    const scene = runner(path.join(out, 'grok'), sceneEnv);
-    scene.run('scene', [process.execPath, path.join(bundle, 'scene.mjs'), 'execute'], { timeout: fixed.totalSeconds * 1000 });
+    const scene = asyncRunner(path.join(out, 'grok'), sceneEnv);
+    const result = await scene('scene', [process.execPath, path.join(bundle, 'scene.mjs'), 'execute'], {
+      naturalUntilMs: hardDeadline - 25000, deadlineMs: hardDeadline - 15000,
+      termGraceMs: 5000, killGraceMs: 5000 });
+    json(path.join(out, 'scene-wrapper-result.json'), { ...result, sceneStarted, hardDeadline,
+      innerDeadline: Number(sceneEnv.SCENE_DEADLINE_MS), nativeBusinessExit: 'UNKNOWN; read Grok records separately' });
+    assert(result.reaped && !result.timedOut && !result.error, 'scene wrapper did not close normally');
+    assert.equal(result.rc, 0, 'scene Node rc; not a native business rc');
+    assert.equal(result.signal, null);
+  } catch (error) {
+    primaryError = error;
+    json(path.join(out, 'execution-error.json'), { message: error.message, stack: error.stack });
   } finally {
-    run('logcat', [adb, '-s', 'emulator-5554', 'logcat', '-d', '-b', 'all', '-v', 'epoch'], { allowFailure: true, timeout: 10000 });
-    run('crash', [adb, '-s', 'emulator-5554', 'logcat', '-d', '-b', 'crash', '-v', 'epoch'], { allowFailure: true, timeout: 10000 });
-    run('stop-emulator', [adb, '-s', 'emulator-5554', 'emu', 'kill'], { allowFailure: true, timeout: 10000 });
-    const ended = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve(null), 10000))]);
-    if (ended === null) emulator.kill('SIGTERM');
-    json(path.join(out, 'emulator-result.json'), { pid: emulator.pid, ended, explicitTerminate: ended === null });
-    fs.closeSync(stdout); fs.closeSync(stderr);
+    // Before scene launch there is no native sample; still bound preparation
+    // cleanup. After launch every cleanup command shares the original deadline.
+    const deadlineMs = sceneStarted === null ? Date.now() + 15000 : sceneStarted + fixed.totalSeconds * 1000;
+    try {
+      fs.mkdirSync(path.join(out, 'cleanup'));
+      const cleanup = asyncRunner(path.join(out, 'cleanup'), env);
+      const collect = (name, args) => {
+        const deadline = Math.min(Date.now() + 1500, deadlineMs - 5000);
+        return cleanup(name, args, { naturalUntilMs: Math.min(Date.now() + 1000, deadline),
+          deadlineMs: deadline, termGraceMs: 250, killGraceMs: 250 });
+      };
+      cleanupResults.push(await collect('logcat', [adb, '-s', 'emulator-5554', 'logcat', '-d', '-b', 'all', '-v', 'epoch']));
+      cleanupResults.push(await collect('crash', [adb, '-s', 'emulator-5554', 'logcat', '-d', '-b', 'crash', '-v', 'epoch']));
+      cleanupResults.push(await collect('stop-emulator', [adb, '-s', 'emulator-5554', 'emu', 'kill']));
+    } catch (error) {
+      cleanupError = error.message;
+      json(path.join(out, 'cleanup-error.json'), { message: error.message, stack: error.stack });
+    } finally {
+      emulatorResult = await settleOwnedChild(emulatorOwned, {
+        naturalUntilMs: Math.min(Date.now() + 2000, deadlineMs - 3000), deadlineMs,
+        termGraceMs: 1000, killGraceMs: 1000 });
+      json(path.join(out, 'emulator-result.json'), { ...emulatorResult,
+        sceneStarted, preparationOnly: sceneStarted === null, primaryError: primaryError?.message });
+      json(path.join(out, 'cleanup-summary.json'), { deadlineMs, commands: cleanupResults,
+        error: cleanupError, emulatorReaped: emulatorResult.reaped,
+        confirmed: !cleanupError && cleanupResults.length === 3 && cleanupResults.every(row => row.reaped && !row.timedOut && !row.error && row.rc === 0) && emulatorResult.reaped });
+      fs.closeSync(stdout); fs.closeSync(stderr);
+    }
   }
+  if (primaryError) throw primaryError;
+  assert(emulatorResult?.reaped, 'EMULATOR_CLOSE_UNKNOWN; cleanup not confirmed');
+  assert(!cleanupError && cleanupResults.length === 3 &&
+    cleanupResults.every(row => row.reaped && !row.timedOut && !row.error && row.rc === 0),
+  'CLEANUP_UNKNOWN; command state/records missing or cleanup incomplete');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
