@@ -1955,7 +1955,10 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
             if (Heap::IsHeapAddress(obj)) {
                 curObj = HeapAccess<>::oop_load(&(obj->GetRefField(offset)));
             } else {
-                curObj = to_object(obj->GetRefField(offset).GetTargetObject());
+                // Non-heap tuple payloads contain uncolored stack roots, not
+                // HeapSlot zpointer encodings. This gc-leaf call consumes the
+                // caller's rooted record without introducing a safepoint.
+                curObj = to_object(safe(RootSlotAt(reinterpret_cast<MAddress>(obj) + offset).LoadPlain()));
             }
             TypeInfo* curti = curObj->GetTypeInfo();
             if (!curti->IsSubType(fieldTargetTI)) {
