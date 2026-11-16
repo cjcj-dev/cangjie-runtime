@@ -12,24 +12,41 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const bundle = path.join(here, 'android-scene');
 const fixed = JSON.parse(fs.readFileSync(path.join(bundle, 'input.json')));
 const origin = JSON.parse(fs.readFileSync(path.join(bundle, 'origin.json')));
+const jobInterface = JSON.parse(fs.readFileSync(path.join(bundle, 'job-interface.json')));
 const sha = p => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const json = (p, value) => fs.writeFileSync(p, JSON.stringify(value, null, 2) + '\n');
+
+function interfaceBindings(out, sdk) {
+  return {
+    SCENE_COMMANDS: path.join(out, 'scene-commands.json'),
+    SCENE_OBSERVER: path.join(here, 'android-exit-records.mjs'),
+    HOST_SYMBOLS: path.join(out, 'consumer'),
+    ANDROID_SDK_ROOT: sdk,
+    ANDROID_SERIAL: 'emulator-5554',
+  };
+}
 
 function checkBundle() {
   for (const [name, entry] of Object.entries(origin.files)) {
     assert.equal(sha(path.join(bundle, name)), entry.sha256, `Grok file changed: ${name}`);
   }
+  assert.equal(sha(path.join(bundle, 'job-interface.json')), origin.jobInterface.sha256);
+  const plannedBindings = interfaceBindings('$RUNNER_TEMP/readscope-android-scene', '$ANDROID_HOME');
+  assert.deepEqual(Object.keys(plannedBindings).sort(), [...jobInterface.requiredEnv].sort());
+  assert.equal(sha(plannedBindings.SCENE_OBSERVER), fixed.observerSha256, 'exact shared 761b observer');
+  assert.equal(jobInterface.readyForNativeExecution, false);
   assert.equal(fixed.mode, 'preinit');
   assert.equal(fixed.nativeProcesses, 1);
   assert.equal(fixed.runtime, 'd51c34a06cfd980d0e2694514e2a41421ac41b83');
   assert.equal(fixed.observer, '761b0ad956d975488b984e419ef4a803711e2635');
-  return { state: 'PREPARED_NOT_EXECUTED', fixed, origin, nativeRuns: 0 };
+  return { state: 'PREPARED_NOT_EXECUTED', fixed, origin, jobInterface,
+    plannedBindings, nativeRuns: 0 };
 }
 
 function requireReady() {
   checkBundle();
-  // This delivery deliberately cannot launch the known incomplete driver.
-  // Only a new, Grok-corrected and controller-approved frozen bundle can do so.
+  // The corrected, byte-identical bundle still needs Grok's final entry check
+  // and separate controller authorization before any native execution.
   assert.equal(origin.readyForNativeExecution, true,
     `GROK_ENTRY_NOT_READY: ${origin.blockers.map(x => x.id).join(',')}`);
 }
@@ -218,7 +235,25 @@ async function execute() {
     for (const [i, p] of deploy.entries()) run(`push-${i}`, [adb, '-s', 'emulator-5554', 'push', p, '/data/local/tmp/readscope-lifetime/']);
     run('chmod-consumer', [adb, '-s', 'emulator-5554', 'shell', 'chmod', '700', '/data/local/tmp/readscope-lifetime/consumer']);
     run('clear-log', [adb, '-s', 'emulator-5554', 'logcat', '-b', 'all', '-c']);
-    const sceneEnv = { ...env, SCENE_EXECUTE: '1', SCENE_COMMANDS: path.join(out, 'scene-commands.json'), EXIT_SCENE_OUT: out };
+    const bindings = interfaceBindings(out, sdk);
+    const inputs = JSON.parse(fs.readFileSync(path.join(out, 'module-inputs.json')));
+    const symbols = fs.lstatSync(bindings.HOST_SYMBOLS);
+    assert(symbols.isFile() && !symbols.isSymbolicLink(), 'HOST_SYMBOLS must be the new local consumer ELF');
+    assert.equal(fs.realpathSync(bindings.HOST_SYMBOLS), bindings.HOST_SYMBOLS, 'HOST_SYMBOLS has no indirect alias');
+    assert.equal(sha(bindings.HOST_SYMBOLS), inputs.consumer.sha256, 'relinked consumer unchanged');
+    assert.equal(fs.readFileSync(bindings.HOST_SYMBOLS).subarray(0, 4).toString('hex'), '7f454c46');
+    assert.equal(sha(bindings.SCENE_OBSERVER), fixed.observerSha256);
+    assert.equal(inputs.runtime.sha256, fixed.runtimeSha256);
+    json(path.join(out, 'scene-bindings.json'), { ...bindings,
+      HOST_SYMBOLS_SHA256: inputs.consumer.sha256,
+      SCENE_OBSERVER_SHA256: fixed.observerSha256,
+      remoteExecutable: '/data/local/tmp/readscope-lifetime/consumer',
+      remoteFixture: '/data/local/tmp/readscope-lifetime/fixture.so',
+      remoteLibraryPath: '/data/local/tmp/readscope-lifetime',
+      runtimeSha256: fixed.runtimeSha256,
+      recorderOutput: path.join(bundle, 'run'),
+      actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
+    const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run') };
     const scene = runner(path.join(out, 'grok'), sceneEnv);
     scene.run('scene', [process.execPath, path.join(bundle, 'scene.mjs'), 'execute'], { timeout: fixed.totalSeconds * 1000 });
   } finally {

@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       readscope_android_scene:
-        description: Prepared single d51c full-image Grok scene; blocked until fixed debugger bundle is approved.
+        description: Prepared single d51c full-image Grok scene; final packaged entry review and execution approval pending.
         type: boolean
         default: false
 permissions:
@@ -321,3 +321,4 @@ jobs:
             ${{ runner.temp }}/readscope-android-scene/fixture.so
             ${{ runner.temp }}/readscope-android-scene/consumer
             runtime/tests/readscope_native_retention/android-scene/execute-result.json
+            runtime/tests/readscope_native_retention/android-scene/run/

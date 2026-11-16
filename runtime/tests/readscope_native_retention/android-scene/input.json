@@ -24,5 +24,7 @@
   "replacement": 0,
   "activeSeconds": 60,
   "totalSeconds": 300,
-  "bootSeconds": 240
+  "bootSeconds": 240,
+  "observerSha256": "96e07e5231438b8752881e87b73431fa24b24b5460a0605a92aee2e9b213d3ff",
+  "observerBlob": "85061c13c429c8cdb4368c0a69e81dbb73210a05"
 }
