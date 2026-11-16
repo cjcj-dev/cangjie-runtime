@@ -1,7 +1,7 @@
 #!/usr/bin/env zx
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
@@ -188,13 +188,47 @@ function targetVerdict(text, target) {
   return state === 'PRESENT' || state === 'GONE' ? state : 'UNKNOWN';
 }
 
-function killShell(pid) {
-  return `pid=${pid}
-if [ ! -d /proc/$pid ]; then echo UNCONFIRMED; exit 3; fi
-kill -TERM "$pid"
+function killShell(server) {
+  if (!server || !/^\d+$/.test(server.pid) || !/^\d+$/.test(server.start) || !/^\d+$/.test(server.inode)) return 'echo OWNER_MISMATCH\nexit 3';
+  return `pid=${server.pid}
+want_start=${server.start}
+want_inode=${server.inode}
+want_cmd=${REMOTE}/lldb-server
+owner_ok() {
+  if [ ! -r /proc/$pid/stat ] || [ ! -r /proc/$pid/cmdline ]; then return 1; fi
+  start=$(awk '{print $22}' /proc/$pid/stat)
+  cmd=$(tr '\\0' ' ' < /proc/$pid/cmdline)
+  fd_ok=0
+  for link in /proc/$pid/fd/*; do
+    dest=$(readlink "$link" 2>/dev/null) || continue
+    if [ "$dest" = "socket:[$want_inode]" ]; then fd_ok=1; fi
+  done
+  listen_ok=0
+  for table in /proc/net/tcp /proc/net/tcp6; do
+    if [ ! -f "$table" ]; then continue; fi
+    while IFS= read -r line; do
+      set -- $line
+      case "$1" in
+        [0-9]*:) ;;
+        *) continue ;;
+      esac
+      port=$(printf '%s' "\${2##*:}" | tr 'A-F' 'a-f')
+      if [ "$4" = "0A" ] && [ "$port" = "13af" ] && [ "\${10}" = "$want_inode" ]; then listen_ok=1; fi
+    done < "$table"
+  done
+  case "$cmd" in
+    *"$want_cmd"*) cmd_ok=1 ;;
+    *) cmd_ok=0 ;;
+  esac
+  [ "$start" = "$want_start" ] && [ "$cmd_ok" = 1 ] && [ "$fd_ok" = 1 ] && [ "$listen_ok" = 1 ]
+}
+if [ ! -d /proc/$pid ]; then echo OWNER_ABSENT; exit 3; fi
+if ! owner_ok; then echo OWNER_MISMATCH; exit 3; fi
+kill -TERM "$pid" || { echo OWNER_ABSENT; exit 3; }
 i=0
 while [ "$i" -lt 25 ]; do
-  if [ ! -d /proc/$pid ]; then echo REAPED; exit 0; fi
+  if [ ! -d /proc/$pid ]; then echo OWNER_ABSENT; exit 3; fi
+  if ! owner_ok; then echo OWNER_MISMATCH; exit 3; fi
   i=$((i+1))
   sleep 0.2
 done
@@ -250,8 +284,9 @@ function parseIdentity(text, hostPid) {
   if (!/^\d+$/.test(pid) || !/^\d+$/.test(start) || grab('DEVICE_NOW') !== start) return null;
   if (hostPid != null && pid === String(hostPid)) return null;
   if (!cmdline.includes(`${REMOTE}/lldb-server`)) return null;
-  if (!listenOwned(text)) return null;
-  return { pid, start, cmdline };
+  const inode = listenOwned(text);
+  if (!inode) return null;
+  return { pid, start, cmdline, inode };
 }
 
 function forwardBusy(text, serial) {
@@ -593,9 +628,9 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
       const still = parseIdentity(probe.stdout, meta.hostPid);
       const ownedNow = listenOwned(probe.stdout);
       meta.listen = ownedNow ? 'PRESENT' : (probe.skipped || probe.timedOut ? 'UNKNOWN' : 'ABSENT');
-      if (!still || still.pid !== started.device.pid || still.start !== started.device.start) meta.cleanup = 'UNCONFIRMED';
+      if (!still || still.pid !== started.device.pid || still.start !== started.device.start || still.inode !== started.device.inode) meta.cleanup = 'UNCONFIRMED';
       else {
-        const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still.pid)], { timeoutMs: 5000, cleanup: true });
+        const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still)], { timeoutMs: 5000, cleanup: true });
         meta.cleanup = reapConfirmed(cleaned.rc, cleaned.stdout) && !String(cleaned.argv || '').includes(String(meta.hostPid)) ? 'REAPED' : 'UNCONFIRMED';
       }
     }
@@ -1084,7 +1119,7 @@ function writeBundle(out, selected, tools) {
     hostLauncher: TOOLS.hostWrapper,
     hostClosure: 'ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Foreground lldb.sh is one process group. Timeout signals that group while the leader starttime matches, then signals only recorded members that are still in the group. Background adb is not in that group.',
     version: 'Host and device version text is accepted from stdout or stderr. Both must be rc 0, not timed out, and carry the same lldb version and revision. Empty text, nonzero rc, timeout, or a different version stays rejected.',
-    connect: 'platform connect uses connect://<adb serial>:5039. The host is the device serial, never 127.0.0.1 or localhost. ANDROID_PLATFORM_LOCAL_PORT=5039 tells lldb which host port to forward; this driver does not create that forward. A listen row is the server only when its inode is in that pid fd table. Cleanup checks the device pid before reaping the host adb session. A missing pid stays UNCONFIRMED.',
+    connect: 'platform connect uses connect://<adb serial>:5039. The host is the device serial, never 127.0.0.1 or localhost. ANDROID_PLATFORM_LOCAL_PORT=5039 tells lldb which host port to forward; this driver does not create that forward. A listen row is the server only when its inode is in that pid fd table. Cleanup probes the device before reaping the host adb session. The signal shell rechecks the recorded pid, starttime, cmdline and 5039 listen inode before the signal and on every wait iteration. A mismatch or a missing piece is UNKNOWN, not REAPED. /proc disappearing or a reused pid is not a reap. This is not a pidfd wait.',
     consumer: 'node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
@@ -1132,6 +1167,10 @@ function assertOrder(result) {
   const cleanup = result.log.find(row => row.step === 'cleanup-server');
   const joined = cleanup ? cleanup.argv.join(' ') : '';
   if (!joined.includes('pid=200') || joined.includes('pid=100')) fail('cleanup used the host adb pid');
+  if (!joined.includes('want_start=99') || !joined.includes('want_inode=5555') || !joined.includes('/stat') || !joined.includes('/cmdline')) fail('server signal omitted the recorded instance');
+  const gateAt = joined.indexOf('OWNER_MISMATCH');
+  const killAt = joined.indexOf('kill -TERM');
+  if (gateAt < 0 || killAt < 0 || killAt < gateAt) fail('signal precedes the identity gate');
   const cleanupAt = result.log.findIndex(row => row.step === 'cleanup-server');
   const reapAt = result.log.findIndex(row => row.step === 'reap-host');
   if (cleanupAt < 0 || reapAt < 0 || cleanupAt > reapAt) fail('device server was checked after its host session');
@@ -1918,6 +1957,103 @@ if (argv[0] === 'calibrate') {
   writeFileSync(join(HERE, 'connect-check.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('CONNECT_PASS');
   process.exit(0);
+} else if (argv[0] === 'owner-guard') {
+  const previous = process.env.HOST_SYMBOLS;
+  process.env.HOST_SYMBOLS = '/symbols/libcangjie-runtime.so';
+  let shaped;
+  let reusedBeforeProbe;
+  let versionMismatch;
+  let gone;
+  try {
+    shaped = await drive(scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} }), '/sdk', 'emulator-5554');
+    reusedBeforeProbe = await drive(scripted({
+      platform: 'remote-android', serial: 'emulator-5554\tdevice',
+      steps: { 'cleanup-probe': { rc: 0, stdout: procDump('200', '100'), stderr: '' } },
+    }), '/sdk', 'emulator-5554');
+    versionMismatch = await drive(scripted({
+      platform: 'remote-android', serial: 'emulator-5554\tdevice',
+      steps: { 'server-version': { rc: 0, stdout: '', stderr: 'lldb-server version 17.0.0\n' } },
+    }), '/sdk', 'emulator-5554');
+    gone = await drive(scripted({
+      platform: 'remote-android', serial: 'emulator-5554\tdevice',
+      steps: { 'cleanup-probe': { rc: 0, stdout: '', stderr: "can't open /proc/200/cmdline" } },
+    }), '/sdk', 'emulator-5554');
+  } finally {
+    if (previous === undefined) delete process.env.HOST_SYMBOLS;
+    else process.env.HOST_SYMBOLS = previous;
+  }
+  const cleanup = shaped.log.find(row => row.step === 'cleanup-server');
+  const shell = cleanup ? cleanup.argv.at(-1) : '';
+  const expected = killShell({ pid: '200', start: '99', inode: '5555' });
+  if (shell !== expected) fail('cleanup-server did not receive the recorded instance');
+  if (!shell.includes('/stat') || !shell.includes('want_start=99') || !shell.includes('/cmdline') || !shell.includes('want_inode=5555')) fail('signal shell dropped a recorded field');
+  if (shell.includes('echo REAPED')) fail('signal shell still claims REAPED');
+  if (platformConnect('127.0.0.1') || platformConnect('localhost') || platformConnect('emulator-5554') !== 'connect://emulator-5554:5039') fail('connect url regressed');
+  if (reusedBeforeProbe.log.some(row => row.step === 'cleanup-server') || reusedBeforeProbe.meta.cleanup !== 'UNCONFIRMED') fail('probe-visible reuse was signaled');
+  if (versionMismatch.outcome !== 'VERSION_MISMATCH' || versionMismatch.log.some(row => row.step === 'start-server')) fail('version mismatch reached start-server');
+  if (gone.log.some(row => row.step === 'cleanup-server') || gone.meta.cleanup !== 'UNCONFIRMED') fail('missing probe was signaled');
+  function runOwnerShell(mode) {
+    const root = join(HERE, 'run', 'owner-guard');
+    rmSync(root, { recursive: true, force: true });
+    const proc = join(root, 'proc');
+    const pidDir = join(proc, '200');
+    mkdirSync(join(pidDir, 'fd'), { recursive: true });
+    mkdirSync(join(proc, 'net'), { recursive: true });
+    const start = mode === 'reused-before-signal' ? '100' : '99';
+    const fields = Array.from({ length: 22 }, () => '0');
+    fields[21] = start;
+    writeFileSync(join(pidDir, 'stat'), `${fields.join(' ')}\n`);
+    const cmd = mode === 'other-command' ? '/bin/other' : `${REMOTE}/lldb-server platform --listen *:5039`;
+    writeFileSync(join(pidDir, 'cmdline'), cmd);
+    if (mode !== 'missing-socket') symlinkSync('socket:[5555]', join(pidDir, 'fd', '3'));
+    const inode = mode === 'other-socket' ? '9999' : '5555';
+    const row = `1: 00000000:13AF 00000000:0000 0A 00000000:00000000 00:00000000 00000000 2000 0 ${inode} 1 0 0 0 10 0\n`;
+    writeFileSync(join(proc, 'net', 'tcp'), `sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n${row}`);
+    writeFileSync(join(proc, 'net', 'tcp6'), 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n');
+    if (mode === 'absent') rmSync(pidDir, { recursive: true, force: true });
+    const signalLog = join(root, 'signals');
+    const body = expected.replaceAll('/proc', proc);
+    let mutation = '';
+    if (mode === 'same') mutation = `rm -rf ${JSON.stringify(pidDir)}`;
+    if (mode === 'reuse-after-signal') {
+      const reused = Array.from({ length: 22 }, () => '0');
+      reused[21] = '100';
+      mutation = `printf '%s\\n' ${JSON.stringify(reused.join(' '))} > ${JSON.stringify(join(pidDir, 'stat'))}`;
+    }
+    const prelude = `kill() { printf 'SIGNAL %s\\n' "$*" >> ${JSON.stringify(signalLog)};${mutation ? ` ${mutation};` : ''} }\n`;
+    const result = spawnSync('bash', ['-c', prelude + body], { encoding: 'utf8' });
+    return {
+      mode,
+      rc: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      signals: existsSync(signalLog) ? readFileSync(signalLog, 'utf8') : '',
+    };
+  }
+  const shells = ['same', 'reused-before-signal', 'absent', 'other-command', 'other-socket', 'missing-socket', 'reuse-after-signal'].map(runOwnerShell);
+  const byMode = Object.fromEntries(shells.map(row => [row.mode, row]));
+  const signaled = row => row.signals.includes('SIGNAL -TERM 200');
+  if (!signaled(byMode.same) || byMode.same.rc !== 3 || !String(byMode.same.stdout).includes('OWNER_ABSENT') || /\bREAPED\b/.test(byMode.same.stdout)) fail('same instance claimed a reap from a vanished proc entry');
+  if (signaled(byMode['reused-before-signal']) || byMode['reused-before-signal'].rc !== 3 || !String(byMode['reused-before-signal'].stdout).includes('OWNER_MISMATCH')) fail('start change before the signal was not refused');
+  if (signaled(byMode.absent) || byMode.absent.rc !== 3 || !String(byMode.absent.stdout).includes('OWNER_ABSENT')) fail('missing proc was signaled');
+  if (signaled(byMode['other-command']) || byMode['other-command'].rc !== 3) fail('other command was signaled');
+  if (signaled(byMode['other-socket']) || byMode['other-socket'].rc !== 3) fail('other socket was signaled');
+  if (signaled(byMode['missing-socket']) || byMode['missing-socket'].rc !== 3) fail('missing socket was signaled');
+  if (!signaled(byMode['reuse-after-signal']) || byMode['reuse-after-signal'].rc !== 3 || !String(byMode['reuse-after-signal'].stdout).includes('OWNER_MISMATCH') || String(byMode['reuse-after-signal'].stdout).includes('REAPED')) fail('pid reuse after the signal was treated as reaped');
+  const report = {
+    shellHasRecordedStart: shell.includes('want_start=99') && shell.includes('/stat'),
+    claimsReaped: shell.includes('echo REAPED'),
+    pidfd: false,
+    shells,
+    probeReuseSignaled: reusedBeforeProbe.log.some(row => row.step === 'cleanup-server'),
+    goneSignaled: gone.log.some(row => row.step === 'cleanup-server'),
+    versionOutcome: versionMismatch.outcome,
+    connect: platformConnect('emulator-5554'),
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'owner-guard.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('OWNER_GUARD_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1934,5 +2070,5 @@ if (argv[0] === 'calibrate') {
   const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
   process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|version-check|connect-check|host-check|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|version-check|connect-check|owner-guard|host-check|calibrate|execute');
 }
