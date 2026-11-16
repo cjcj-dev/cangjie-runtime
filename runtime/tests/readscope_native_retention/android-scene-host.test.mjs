@@ -89,11 +89,61 @@ test('fixed Grok capability probe uses lldb.sh for both queries and real launch 
  const calls=[];
  const result=await probeHost({stat:()=>true,readText:()=>OFFICIAL_LAUNCHER},'/sdk',async(step,args)=>{
   calls.push({step,args:Array.from(args)});
-  return{rc:0,timedOut:false,stdout:step==='host-ldd'?missing:step==='platform-list'?'remote-android\n':'fixture-version',stderr:''};
+  return{rc:0,timedOut:false,stdout:step==='host-ldd'?missing:step==='platform-list'?'remote-android\n':'lldb version 18.0.4 (lldb revision d8003a456d14a3deb8054cdaa529ffbf02d9b262)\n',stderr:''};
  });
  assert.equal(result.outcome,null);assert.equal(calls.length,3);
  const launcher=`/sdk/ndk/${fixed.ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh`;
  assert.equal(calls[1].args[0],launcher);assert.equal(calls[2].args[0],launcher);
  assert(grok.includes("launchArgv(join(sdk, TOOLS.hostWrapper))"));
  assert(!calls.some(c=>c.args.some(x=>/adb|emulator|lldb-server/.test(x))));
+});
+
+// Exact streams from official f840 run43815606267/artifact14202228278,
+// execute-result.json host-version/server-version. No debugger or device runs.
+const officialVersionText='lldb version 18.0.4 (/mnt/disks/build-disk/src/android/llvm-r522817/out/llvm-project/lldb revision d8003a456d14a3deb8054cdaa529ffbf02d9b262)\n  clang revision d8003a456d14a3deb8054cdaa529ffbf02d9b262\n  llvm revision d8003a456d14a3deb8054cdaa529ffbf02d9b262\n';
+function recordedVersionDrive(){
+ const grok=fs.readFileSync(process.env.SCENE_VERSION_SOURCE||path.join(bundle,'scene.mjs'),'utf8');
+ const end=grok.indexOf('\nfunction readProc(');assert(end>0);
+ const definitions=grok.slice(0,end).replace(/^#![^\n]*\n/,'').replace(/^import [^\n]+;\n/gm,'')
+  .replace("const HERE = dirname(new URL(import.meta.url).pathname);",'const HERE = '+JSON.stringify(bundle)+';');
+ return vm.runInNewContext(definitions+'\n({drive,scripted})',{
+  join:path.join,createHash,readFileSync:fs.readFileSync,Date,
+  process:{env:{HOST_SYMBOLS:'/symbols/libcangjie-runtime.so'}},
+  spawn:()=>{throw Error('Native tools forbidden in recorded version test');},
+ });
+}
+async function versionReplay(host,server){
+ const {drive,scripted}=recordedVersionDrive();
+ return drive(scripted({platform:'remote-android',serial:'emulator-5554\tdevice',steps:{'host-version':host,'server-version':server}}),'/sdk','emulator-5554');
+}
+const versionRow=(stdout='',stderr='',extra={})=>({rc:0,timedOut:false,stdout,stderr,...extra});
+test('official f840 stderr version passes the actual drive version gate only',async()=>{
+ for(const [host,server] of [
+  [versionRow(officialVersionText),versionRow('',officialVersionText)],
+  [versionRow('',officialVersionText),versionRow(officialVersionText)],
+ ]){
+  const r=await versionReplay(host,server);
+  assert(r.log.some(x=>x.step==='start-server'),'TARGET: official version streams must pass the real drive version gate');
+  assert.equal(r.outcome,'FILE_IDENTITY_ABSENT','Only the next simulated fixture identity boundary is reached');
+  assert.equal(r.sceneSuccess,false);assert.equal(r.businessExit,null);
+ }
+});
+test('version rejection controls stop actual drive before any server start',async()=>{
+ const good=versionRow(officialVersionText),cases=[
+  ['server rc',good,versionRow('',officialVersionText,{rc:1}),'VERSION_ABSENT'],
+  ['server timeout',good,versionRow('',officialVersionText,{timedOut:true}),'UNCAPTURED'],
+  ['server empty',good,versionRow(),'VERSION_ABSENT'],
+  ['server nonversion',good,versionRow('','1 file pushed, 0 skipped.\n'),'VERSION_ABSENT'],
+  ['server version mismatch',good,versionRow('',officialVersionText.replace('18.0.4','17.0.0')),'VERSION_MISMATCH'],
+  ['server revision mismatch',good,versionRow('',officialVersionText.replaceAll('d8003a456d14a3deb8054cdaa529ffbf02d9b262','00000000aaaaaaaa')),'VERSION_MISMATCH'],
+  ['host rc',versionRow(officialVersionText,'',{rc:1}),good,'VERSION_ABSENT'],
+  ['host timeout',versionRow(officialVersionText,'',{timedOut:true}),good,'UNCAPTURED'],
+  ['host empty',versionRow(),good,'VERSION_ABSENT'],
+  ['host nonversion',versionRow('fixture-version'),good,'VERSION_ABSENT'],
+ ];
+ for(const [name,host,server,outcome] of cases){
+  const r=await versionReplay(host,server);assert.equal(r.outcome,outcome,name);
+  assert(!r.log.some(x=>x.step==='start-server'),name+' must reject before start-server');
+  assert.equal(r.sceneSuccess,false);assert.equal(r.businessExit,null);
+ }
 });

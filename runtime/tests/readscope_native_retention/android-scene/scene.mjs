@@ -496,6 +496,20 @@ function hasRemoteAndroid(text) {
   return /(?:^|\s)remote-android(?=[:\s]|$)/.test(text || '');
 }
 
+function versionOf(result) {
+  if (!result || result.timedOut || result.rc !== 0) return null;
+  const lines = `${result.stdout || ''}\n${result.stderr || ''}`.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^lldb(?:-server)? version (\d+\.\d+\.\d+)\b(?:.*\brevision ([0-9a-f]{8,}))?/);
+    if (match) return { version: match[1], revision: match[2] || null };
+  }
+  return null;
+}
+
+function sameVersion(host, device) {
+  return Boolean(host && device && host.version === device.version && host.revision === device.revision);
+}
+
 async function probeHost(io, sdk, run) {
   const bare = join(sdk, TOOLS.hostLldb);
   const launcher = join(sdk, TOOLS.hostWrapper);
@@ -511,12 +525,13 @@ async function probeHost(io, sdk, run) {
   if ((ldd.rc !== 0 && closure.missing.length === 0) || !closure.ok) return { outcome: 'HOST_CLOSURE_ABSENT', closure };
   const hostVer = await run('host-version', hostArgv(sdk, ['--version']));
   if (hostVer.timedOut) return { outcome: 'UNCAPTURED', closure };
-  if (hostVer.rc !== 0 || !hostVer.stdout) return { outcome: 'VERSION_ABSENT', closure };
+  const hostVersion = versionOf(hostVer);
+  if (hostVer.rc !== 0 || !hostVersion) return { outcome: 'VERSION_ABSENT', closure };
   const platforms = await run('platform-list', hostArgv(sdk, ['-b', '-o', 'platform list', '-o', 'quit']));
   if (platforms.timedOut) return { outcome: 'UNCAPTURED', closure };
   if (platforms.rc !== 0) return { outcome: 'PLATFORM_LIST_FAIL', closure };
   if (!hasRemoteAndroid(platforms.stdout)) return { outcome: 'PLATFORM_ABSENT', closure, extra: { meta: { remoteAndroid: false } } };
-  return { outcome: null, closure, launcher };
+  return { outcome: null, closure, launcher, version: hostVersion };
 }
 
 async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
@@ -602,12 +617,17 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     if (probed.closure) meta.closure = probed.closure;
     if (probed.outcome) return finish(probed.outcome, io.simulated, log, { meta });
     meta.remoteAndroid = true;
+    meta.hostVersion = probed.version;
     const devices = await run('adb-devices', [tool('adb'), 'devices']);
     if (devices.rc !== 0 || !(devices.stdout || '').includes(serial)) { return finish('CONNECT_FAIL', io.simulated, log, { meta }); }
     const pushed = await run('push-server', [tool('adb'), '-s', serial, 'push', tool('server'), `${REMOTE}/lldb-server`]);
     if (pushed.rc !== 0) { return finish('CONNECT_FAIL', io.simulated, log, { meta }); }
     const serverVer = await run('server-version', [tool('adb'), '-s', serial, 'shell', `${REMOTE}/lldb-server version`]);
-    if (serverVer.rc !== 0 || !serverVer.stdout) { return finish('VERSION_ABSENT', io.simulated, log, { meta }); }
+    if (serverVer.timedOut) return finish('UNCAPTURED', io.simulated, log, { meta });
+    const serverVersion = versionOf(serverVer);
+    if (serverVer.rc !== 0 || !serverVersion) return finish('VERSION_ABSENT', io.simulated, log, { meta });
+    if (!sameVersion(probed.version, serverVersion)) return finish('VERSION_MISMATCH', io.simulated, log, { meta });
+    meta.serverVersion = serverVersion;
     const server = await run('start-server', [tool('adb'), '-s', serial, 'shell', startShell()], { background: true });
     meta.hostPid = typeof server.pid === 'number' ? server.pid : null;
     if (server.rc !== 0 || server.timedOut) { return finish(server.timedOut ? 'UNCAPTURED' : 'CONNECT_FAIL', io.simulated, log, { meta }); }
@@ -1730,6 +1750,68 @@ if (argv[0] === 'calibrate') {
   writeFileSync(join(HERE, 'ownership.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('OWNERSHIP_PASS');
   process.exit(0);
+} else if (argv[0] === 'version-check') {
+  const officialPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-platform-colon/external-after-new-exact-authorization/artifacts/14202228278/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const official = JSON.parse(readFileSync(officialPath, 'utf8'));
+  const hostRow = official.log.find(row => row.step === 'host-version');
+  const serverRow = official.log.find(row => row.step === 'server-version');
+  const hostParsed = versionOf(hostRow);
+  const serverParsed = versionOf(serverRow);
+  if (!hostRow || !serverRow || hostRow.rc !== 0 || serverRow.rc !== 0 || serverRow.timedOut !== false || serverRow.stdout !== '') fail('official version rows changed');
+  if (!hostParsed || !serverParsed || !sameVersion(hostParsed, serverParsed)) fail('official stderr version was not accepted');
+  const previous = process.env.HOST_SYMBOLS;
+  process.env.HOST_SYMBOLS = '/symbols/libcangjie-runtime.so';
+  const replay = async (name, script, expectOutcome, stoppedBefore) => {
+    const result = await drive(scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', ...script }), '/sdk', 'emulator-5554');
+    const steps = result.log.map(row => row.step);
+    if (result.outcome !== expectOutcome || result.sceneSuccess !== false || result.businessExit !== null) fail(`${name} -> ${result.outcome}`);
+    if (stoppedBefore && steps.includes(stoppedBefore)) fail(`${name} passed ${stoppedBefore}`);
+    return { name, outcome: result.outcome, steps, sceneSuccess: result.sceneSuccess, businessExit: result.businessExit, devicePid: result.meta?.devicePid ?? null, target: result.meta?.target ?? null };
+  };
+  let cases;
+  try {
+    const passed = await drive(scripted({
+      platform: 'remote-android',
+      serial: 'emulator-5554\tdevice',
+      steps: {
+        'host-version': { rc: 0, stdout: hostRow.stdout, stderr: hostRow.stderr },
+        'server-version': { rc: 0, stdout: serverRow.stdout, stderr: serverRow.stderr },
+      },
+    }), '/sdk', 'emulator-5554');
+    if (!passed.log.some(row => row.step === 'start-server') || ['VERSION_ABSENT', 'VERSION_MISMATCH'].includes(passed.outcome) || passed.sceneSuccess !== false) fail('official streams did not pass the version gate');
+    const hostOnStderr = await drive(scripted({
+      platform: 'remote-android',
+      serial: 'emulator-5554\tdevice',
+      steps: {
+        'host-version': { rc: 0, stdout: '', stderr: hostRow.stdout },
+        'server-version': { rc: 0, stdout: serverRow.stderr, stderr: '' },
+      },
+    }), '/sdk', 'emulator-5554');
+    if (!hostOnStderr.log.some(row => row.step === 'start-server') || ['VERSION_ABSENT', 'VERSION_MISMATCH'].includes(hostOnStderr.outcome)) fail('host stderr version was ignored');
+    cases = [
+      { name: 'official-streams', outcome: passed.outcome, reachedServer: true, sceneSuccess: passed.sceneSuccess, businessExit: passed.businessExit, devicePid: passed.meta?.devicePid ?? null, target: passed.meta?.target ?? null },
+      { name: 'streams-swapped', outcome: hostOnStderr.outcome, reachedServer: true, sceneSuccess: hostOnStderr.sceneSuccess },
+      await replay('server-rc', { steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' }, 'server-version': { rc: 1, stdout: '', stderr: serverRow.stderr } } }, 'VERSION_ABSENT', 'start-server'),
+      await replay('server-timeout', { timeout: 'server-version', steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' } } }, 'UNCAPTURED', 'start-server'),
+      await replay('server-empty', { steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' }, 'server-version': { rc: 0, stdout: '', stderr: '' } } }, 'VERSION_ABSENT', 'start-server'),
+      await replay('server-garbage', { steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' }, 'server-version': { rc: 0, stdout: '', stderr: '1 file pushed, 0 skipped.\n' } } }, 'VERSION_ABSENT', 'start-server'),
+      await replay('server-other-version', { steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' }, 'server-version': { rc: 0, stdout: '', stderr: 'lldb version 17.0.0\n' } } }, 'VERSION_MISMATCH', 'start-server'),
+      await replay('server-other-revision', { steps: { 'host-version': { rc: 0, stdout: hostRow.stdout, stderr: '' }, 'server-version': { rc: 0, stdout: '', stderr: 'lldb version 18.0.4 (lldb revision 00000000aaaaaaaa)\n' } } }, 'VERSION_MISMATCH', 'start-server'),
+    ];
+  } finally {
+    if (previous === undefined) delete process.env.HOST_SYMBOLS;
+    else process.env.HOST_SYMBOLS = previous;
+  }
+  const report = {
+    officialOutcome: official.outcome,
+    oldStdoutOnlyRejects: serverRow.stdout === '',
+    accepted: { host: hostParsed, server: serverParsed },
+    cases,
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'version-check.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('VERSION_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1746,5 +1828,5 @@ if (argv[0] === 'calibrate') {
   const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
   process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|host-check|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|version-check|host-check|calibrate|execute');
 }

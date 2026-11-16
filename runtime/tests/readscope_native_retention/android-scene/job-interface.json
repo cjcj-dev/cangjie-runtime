@@ -34,6 +34,7 @@
   "hostCheck": "node scene.mjs host-check",
   "hostLauncher": "ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh",
   "hostClosure": "ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Foreground lldb.sh is one process group. Timeout signals that group while the leader starttime matches, then signals only recorded members that are still in the group. Background adb is not in that group.",
+  "version": "Host and device version text is accepted from stdout or stderr. Both must be rc 0, not timed out, and carry the same lldb version and revision. Empty text, nonzero rc, timeout, or a different version stays rejected.",
   "consumer": "node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close",
   "budget": {
     "minutes": 45,
