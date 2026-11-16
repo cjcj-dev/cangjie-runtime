@@ -16,7 +16,7 @@ const jobInterface = JSON.parse(fs.readFileSync(path.join(bundle, 'job-interface
 const sha = p => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const json = (p, value) => fs.writeFileSync(p, JSON.stringify(value, null, 2) + '\n');
 
-function interfaceBindings(out, sdk) {
+function interfaceBindings(out, sdk, deadlineMs = null) {
   return {
     SCENE_COMMANDS: path.join(out, 'scene-commands.json'),
     HOST_SYMBOLS: path.join(out, 'consumer'),
@@ -24,7 +24,22 @@ function interfaceBindings(out, sdk) {
       'x86_64/install/runtime/lib/linux_android31_x86_64_cjnative/libcangjie-runtime.so'),
     ANDROID_SDK_ROOT: sdk,
     ANDROID_SERIAL: 'emulator-5554',
+    SCENE_DEADLINE_MS: deadlineMs === null ? '$COLLECTION_T0_PLUS_270000' : String(deadlineMs),
   };
+}
+
+// One call site supplies both the executable route and the absolute deadlines.
+// No tool is started by constructing or checking this launch description.
+export function sceneLaunch(out, sdk, env, sceneStarted) {
+  assert(Number.isSafeInteger(sceneStarted));
+  const hardDeadline = sceneStarted + fixed.totalSeconds * 1000;
+  const bindings = interfaceBindings(out, sdk, hardDeadline - 30000);
+  const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run') };
+  delete sceneEnv.SCENE_OBSERVER;
+  return { argv: [process.execPath, path.join(bundle, 'scene.mjs'), 'execute'],
+    bindings, env: sceneEnv, sceneStarted, hardDeadline,
+    limits: { naturalUntilMs: hardDeadline - 25000, deadlineMs: hardDeadline - 15000,
+      termGraceMs: 5000, killGraceMs: 5000 } };
 }
 
 export function runtimeIdentity(so, notes) {
@@ -60,7 +75,7 @@ function checkBundle() {
   assert.equal(fixed.nativeProcesses, 1);
   assert.equal(fixed.runtime, 'd51c34a06cfd980d0e2694514e2a41421ac41b83');
   const pendingBindings = origin.blockers.filter(row =>
-    ['SHARED_DEADLINE_NOT_CONSUMED', 'DETACHED_TARGET_OWNERSHIP_AND_REAP'].includes(row.id));
+    ['TARGET_REAP_TOKEN_AND_RC'].includes(row.id));
   return { state: 'PREPARED_NOT_EXECUTED', fixed, origin, jobInterface,
     plannedBindings, pendingBindings,
     interfaceStatus: pendingBindings.length ? 'INCOMPLETE_HOLD' : 'BOUND_NOT_EXECUTED',
@@ -68,7 +83,7 @@ function checkBundle() {
       shellWait: 'UNKNOWN', lldbRcIsBusinessRc: false, syntheticExitShell: false,
       deviceRuntimeIdentity: 'UNKNOWN; actual module identity must be verified before qualification',
       controlledDetachBusinessExit: 'UNKNOWN',
-      targetCleanup: 'UNKNOWN until same-instance ownership and cleanup records are supplied; emulator shutdown is separate' },
+      targetCleanup: 'Read Grok same-instance cleanup result separately; missing identity or unconfirmed disappearance remains UNKNOWN' },
     nativeRuns: 0 };
 }
 
@@ -368,7 +383,12 @@ async function execute() {
     assert.equal(sha(bindings.HOST_SYMBOLS), inputs.consumer.sha256, 'relinked consumer unchanged');
     assert.equal(fs.readFileSync(bindings.HOST_SYMBOLS).subarray(0, 4).toString('hex'), '7f454c46');
     assert.equal(inputs.runtime.sha256, fixed.runtimeSha256);
-    json(path.join(out, 'scene-bindings.json'), { ...bindings,
+    // One 300s collection-and-cleanup budget; the inner absolute deadline
+    // includes its cleanup. Wrapper TERM/close and emulator cleanup are separate.
+    sceneStarted = Date.now();
+    const launch = sceneLaunch(out, sdk, env, sceneStarted);
+    json(path.join(out, 'scene-bindings.json'), { ...launch.bindings,
+      sceneStarted, hardDeadline: launch.hardDeadline,
       HOST_SYMBOLS_SHA256: inputs.consumer.sha256,
       remoteExecutable: '/data/local/tmp/readscope-lifetime/consumer',
       remoteFixture: '/data/local/tmp/readscope-lifetime/fixture.so',
@@ -378,21 +398,11 @@ async function execute() {
       remoteRuntime: '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so',
       recorderOutput: path.join(bundle, 'run'),
       actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
-    // Required shared interface (currently held as INCOMPLETE_HOLD): Grok
-    // must finish its cleanup by 270s. The wrapper starts TERM only after
-    // 275s and must reap by 285s within the one 300s total budget.
-    // The last 15s cover collection and emulator shutdown, with no fresh budget.
-    sceneStarted = Date.now();
-    const hardDeadline = sceneStarted + fixed.totalSeconds * 1000;
-    const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run'),
-      SCENE_DEADLINE_MS: String(hardDeadline - 30000) };
-    delete sceneEnv.SCENE_OBSERVER; // Do not inherit a stale formal-shell binding.
-    const scene = asyncRunner(path.join(out, 'grok'), sceneEnv);
-    const result = await scene('scene', [process.execPath, path.join(bundle, 'scene.mjs'), 'execute'], {
-      naturalUntilMs: hardDeadline - 25000, deadlineMs: hardDeadline - 15000,
-      termGraceMs: 5000, killGraceMs: 5000 });
+    const scene = asyncRunner(path.join(out, 'grok'), launch.env);
+    const result = await scene('scene', launch.argv, launch.limits);
+    const hardDeadline = launch.hardDeadline;
     json(path.join(out, 'scene-wrapper-result.json'), { ...result, sceneStarted, hardDeadline,
-      innerDeadline: Number(sceneEnv.SCENE_DEADLINE_MS), nativeBusinessExit: 'UNKNOWN; read Grok records separately' });
+      innerDeadline: Number(launch.bindings.SCENE_DEADLINE_MS), nativeBusinessExit: 'UNKNOWN; read Grok records separately' });
     assert(result.reaped && !result.timedOut && !result.error, 'scene wrapper did not close normally');
     assert.equal(result.rc, 0, 'scene Node rc; not a native business rc');
     assert.equal(result.signal, null);

@@ -4,6 +4,7 @@ import sys
 CAP = 2048
 BOUNDARY_CAP = 64
 REMOTE_RUNTIME = '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so'
+REMOTE_CONSUMER = '/data/local/tmp/readscope-lifetime/consumer'
 
 def fresh():
     return {
@@ -261,6 +262,7 @@ def live_module():
     hashed = lldb.SBPlatformShellCommand(f'sha256sum {REMOTE_RUNTIME}')
     platform.Run(hashed)
     print('FILE_SHA ' + (hashed.GetOutput() or '').strip(), flush=True)
+    print(target_line(process, platform), flush=True)
 
 def dump():
     print('EVENT_JSON:' + json.dumps(load()), flush=True)
@@ -277,8 +279,23 @@ def seal():
     save(state)
     dump()
 
+def target_line(process, platform):
+    import lldb
+    command = lldb.SBPlatformShellCommand(
+        "pid=%d; start=$(awk '{print $22}' /proc/$pid/stat 2>/dev/null); exe=$(readlink /proc/$pid/exe 2>/dev/null); echo TARGET_IDENTITY pid=$pid start=$start path=$exe" % process.GetID())
+    platform.Run(command)
+    return (command.GetOutput() or '').strip()
+
 def mark_detach():
+    import lldb
     print('CONTROLLED_DETACH', flush=True)
+    target = lldb.debugger.GetSelectedTarget()
+    process = target.GetProcess() if target.IsValid() else None
+    names = {lldb.eStateStopped: 'stopped', lldb.eStateCrashed: 'crashed', lldb.eStateSuspended: 'suspended'}
+    if process and process.IsValid() and examinable(names.get(process.GetState(), '')):
+        print(target_line(process, target.GetPlatform()), flush=True)
+    else:
+        print('TARGET_IDENTITY_ABSENT', flush=True)
 
 def on_stop():
     import lldb

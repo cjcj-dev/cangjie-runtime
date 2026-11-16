@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 
 const HERE = dirname(new URL(import.meta.url).pathname);
 const OLD_ADDRESS = '0x7b33ef1eb08c';
@@ -14,10 +15,18 @@ const ACTIVE_MS = 60000;
 const TOTAL_MS = 300000;
 const CLEANUP_RESERVE_MS = 20000;
 
-function sliceMs(elapsed, requested, cleanup) {
-  const remain = cleanup ? TOTAL_MS - elapsed : TOTAL_MS - CLEANUP_RESERVE_MS - elapsed;
+function sliceMs(elapsed, requested, cleanup, total = TOTAL_MS) {
+  const remain = cleanup ? total - elapsed : total - CLEANUP_RESERVE_MS - elapsed;
   if (remain <= 0) return 0;
   return Math.min(requested, remain);
+}
+
+function budgetBound(origin) {
+  const raw = process.env.SCENE_DEADLINE_MS;
+  if (raw == null || raw === '') return { total: TOTAL_MS, source: 'INTERNAL' };
+  const absolute = Number(raw);
+  if (!Number.isFinite(absolute)) return { total: null, source: 'INVALID' };
+  return { total: Math.min(TOTAL_MS, absolute - origin), source: 'SCENE_DEADLINE_MS' };
 }
 const RUNTIME_PATH = `${REMOTE}/libcangjie-runtime.so`;
 
@@ -117,6 +126,63 @@ echo '---TCP6---'
 cat /proc/net/tcp6 2>/dev/null || true`;
 }
 
+function agreedTarget(lines) {
+  const parsed = lines.map(line => {
+    const matched = line.match(/^TARGET_IDENTITY pid=(\d+) start=(\d+) path=(\S+)$/);
+    return matched ? { pid: matched[1], start: matched[2], path: matched[3] } : null;
+  }).filter(Boolean);
+  if (parsed.length === 0) return null;
+  const first = parsed[0];
+  if (parsed.some(row => row.pid !== first.pid || row.start !== first.start || row.path !== first.path)) return { conflict: true };
+  return first;
+}
+
+function targetProbe(target) {
+  return `pid=${target.pid}
+want_start=${target.start}
+want_path=${target.path}
+if [ ! -d /proc/$pid ]; then echo TARGET_PID=$pid; echo TARGET_START=$want_start; echo TARGET_PATH=$want_path; echo TARGET_STATE=GONE; exit 0; fi
+start=$(awk '{print $22}' /proc/$pid/stat)
+exe=$(readlink /proc/$pid/exe)
+echo TARGET_PID=$pid
+echo TARGET_START=$start
+echo TARGET_PATH=$exe
+if [ "$start" = "$want_start" ] && [ "$exe" = "$want_path" ]; then echo TARGET_STATE=PRESENT; else echo TARGET_STATE=MISMATCH; fi`;
+}
+
+function targetKill(target) {
+  return `pid=${target.pid}
+want_start=${target.start}
+want_path=${target.path}
+if [ ! -d /proc/$pid ]; then echo TARGET_STATE=GONE; exit 0; fi
+start=$(awk '{print $22}' /proc/$pid/stat)
+exe=$(readlink /proc/$pid/exe)
+if [ "$start" != "$want_start" ] || [ "$exe" != "$want_path" ]; then echo TARGET_STATE=MISMATCH; exit 3; fi
+kill -TERM "$pid"
+i=0
+while [ "$i" -lt 25 ]; do
+  if [ ! -d /proc/$pid ]; then echo REAPED; exit 0; fi
+  i=$((i+1))
+  sleep 0.2
+done
+echo NOT_REAPED
+exit 4`;
+}
+
+function reapConfirmed(rc, text) {
+  return rc === 0 && String(text || '').split('\n').some(line => line.trim() === 'REAPED');
+}
+
+function targetVerdict(text, target) {
+  const grab = name => {
+    const matched = String(text || '').match(new RegExp(`^${name}=(.*)$`, 'm'));
+    return matched ? matched[1].trim() : '';
+  };
+  if (grab('TARGET_PID') !== target.pid || grab('TARGET_START') !== target.start || grab('TARGET_PATH') !== target.path) return 'UNKNOWN';
+  const state = grab('TARGET_STATE');
+  return state === 'PRESENT' || state === 'GONE' ? state : 'UNKNOWN';
+}
+
 function killShell(pid) {
   return `pid=${pid}
 if [ ! -d /proc/$pid ]; then echo UNCONFIRMED; exit 3; fi
@@ -211,6 +277,7 @@ function liveParts(text) {
   const image = [];
   const maps = [];
   const files = [];
+  const targets = [];
   let inMaps = false;
   for (const line of String(text || '').split('\n')) {
     if (/^Process \d+ exited with status = /.test(line) || /^Process \d+ detached$/.test(line)) {
@@ -241,9 +308,10 @@ function liveParts(text) {
     if (state !== 'live') continue;
     if (inMaps) maps.push(line);
     else if (line.startsWith('FILE_SHA ')) files.push(line.slice('FILE_SHA '.length));
+    else if (line.startsWith('TARGET_IDENTITY ')) targets.push(line);
     else if (/^\[\s*\d+\]/.test(line)) image.push(line);
   }
-  return { pid, image: image.join('\n'), maps: maps.join('\n'), file: files.join('\n') };
+  return { pid, image: image.join('\n'), maps: maps.join('\n'), file: files.join('\n'), target: agreedTarget(targets) };
 }
 
 function fileSha(text) {
@@ -375,16 +443,24 @@ function sbProcess(text) {
   return { launched, exits, states, stops, restarts, controlled };
 }
 
-async function drive(io, sdk, serial = 'emulator-5554') {
+async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
   const log = [];
-  const meta = { cleanup: 'NOT_STARTED', hostReap: 'NOT_STARTED', hostPid: null, devicePid: null, remoteAndroid: false, nativeWait: 'ABSENT' };
+  const meta = { cleanup: 'NOT_STARTED', hostReap: 'NOT_STARTED', hostPid: null, devicePid: null, target: null, targetCleanup: 'UNKNOWN', remoteAndroid: false, nativeWait: 'ABSENT' };
   const started = { device: null, forward: false };
   const tool = name => join(sdk, TOOLS[name]);
   const origin = typeof io.now === 'function' ? io.now('start') : Date.now();
+  const bound = budgetBound(origin);
+  meta.deadline = { source: bound.source, totalMs: bound.total };
+  if (options.requireDeadline && bound.source !== 'SCENE_DEADLINE_MS') {
+    return finish('DEADLINE_ABSENT', io.simulated, log, { meta });
+  }
+  if (bound.total == null || bound.total <= 0) {
+    return finish(bound.source === 'INVALID' ? 'DEADLINE_ABSENT' : 'DEADLINE_EXHAUSTED', io.simulated, log, { meta });
+  }
   const elapsed = step => (typeof io.now === 'function' ? io.now(step) : Date.now()) - origin;
   const run = async (step, argv, options = {}) => {
     const cap = options.active ? ACTIVE_MS : (options.timeoutMs ?? 30000);
-    const slice = sliceMs(elapsed(step), cap, Boolean(options.cleanup));
+    const slice = sliceMs(elapsed(step), cap, Boolean(options.cleanup), bound.total);
     if (slice <= 0) {
       const skipped = { rc: null, timedOut: true, stdout: '', stderr: '', skipped: true };
       log.push({ step, argv, rc: null, timedOut: true, skipped: true, timeoutMs: 0, stdout: '', stderr: '' });
@@ -400,9 +476,9 @@ async function drive(io, sdk, serial = 'emulator-5554') {
   };
   const cleanup = async () => {
     if (meta.hostPid != null && typeof io.reap === 'function') {
-      const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true));
+      const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true, bound.total));
       log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '' });
-      meta.hostReap = reaped.rc === 0 && String(reaped.stdout || '').includes('REAPED') ? 'REAPED' : 'UNCONFIRMED';
+      meta.hostReap = reapConfirmed(reaped.rc, reaped.stdout) ? 'REAPED' : 'UNCONFIRMED';
     }
     if (started.device) {
       const probe = await run('cleanup-probe', [tool('adb'), '-s', serial, 'shell', identityShell()], { timeoutMs: 5000, cleanup: true });
@@ -410,12 +486,28 @@ async function drive(io, sdk, serial = 'emulator-5554') {
       if (!still || still.pid !== started.device.pid || still.start !== started.device.start) meta.cleanup = 'UNCONFIRMED';
       else {
         const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still.pid)], { timeoutMs: 5000, cleanup: true });
-        meta.cleanup = cleaned.rc === 0 && String(cleaned.stdout || '').includes('REAPED') && !String(cleaned.argv || '').includes(String(meta.hostPid)) ? 'REAPED' : 'UNCONFIRMED';
+        meta.cleanup = reapConfirmed(cleaned.rc, cleaned.stdout) && !String(cleaned.argv || '').includes(String(meta.hostPid)) ? 'REAPED' : 'UNCONFIRMED';
       }
     }
     if (started.forward) {
       const removed = await run('cleanup-forward', [tool('adb'), '-s', serial, 'forward', '--remove', 'tcp:5039'], { timeoutMs: 5000, cleanup: true });
       if (removed.rc !== 0) meta.cleanup = 'UNCONFIRMED';
+    }
+    if (!meta.target) meta.targetCleanup = 'UNKNOWN';
+    else {
+      const probe = await run('cleanup-target-probe', [tool('adb'), '-s', serial, 'shell', targetProbe(meta.target)], { timeoutMs: 5000, cleanup: true });
+      if (probe.skipped || probe.timedOut) meta.targetCleanup = 'UNCONFIRMED';
+      else {
+        const verdict = targetVerdict(probe.stdout, meta.target);
+        if (verdict === 'PRESENT') {
+          const cleaned = await run('cleanup-target', [tool('adb'), '-s', serial, 'shell', targetKill(meta.target)], { timeoutMs: 5000, cleanup: true });
+          if (cleaned.skipped || cleaned.timedOut) meta.targetCleanup = 'UNCONFIRMED';
+          else if (cleaned.rc === 0 && String(cleaned.stdout || '').split('\n').some(line => line.trim() === 'REAPED')) meta.targetCleanup = 'REAPED';
+          else if (cleaned.rc === 0 && String(cleaned.stdout || '').split('\n').some(line => line.trim() === 'TARGET_STATE=GONE')) meta.targetCleanup = 'ABSENT';
+          else meta.targetCleanup = 'UNCONFIRMED';
+        } else if (verdict === 'GONE') meta.targetCleanup = 'ABSENT';
+        else meta.targetCleanup = 'UNKNOWN';
+      }
     }
   };
   const attempt = async () => {
@@ -487,6 +579,9 @@ async function drive(io, sdk, serial = 'emulator-5554') {
     meta.module = 'ABSENT';
     meta.nativeWait = 'UNKNOWN';
     const proc = sbProcess(text);
+    if (proc.launched.length === 1 && live.target && !live.target.conflict && live.target.pid === proc.launched[0].pid && live.target.path === `${REMOTE}/consumer`) {
+      meta.target = live.target;
+    }
     const ledger = { buildId: null, meta, lldbRc: launch.rc, businessExit: null, process: proc, captures: { logcat: logcat.rc ?? null, crash: crash.rc ?? null } };
     if (!so || !digest || noted !== 'ABSENT') {
       if (digest && digest !== ORIGINAL_SO) return finish('FILE_IDENTITY_MISMATCH', io.simulated, log, ledger);
@@ -742,7 +837,9 @@ function plan(selected) {
       forward: 'adb forward --list must not already own tcp:5039; this driver does not replace it',
       imageList: 'image list uuid is not a GNU build id. Path, maps and file sha are taken at the entry stop, before continue. A crash does not depend on later ordinary -o commands',
       shellWait: 'formal android.mjs EXIT_SHELL is not an input; this diagnostic always leaves it UNKNOWN',
-      businessExit: 'only a same-pid exited-with-status line that is not after CONTROLLED_DETACH. lldb rc, quit, detach and a timeout signal are not a business exit',
+      businessExit: 'only a same-pid exited-with-status line that is not after CONTROLLED_DETACH. lldb rc, quit, detach, target reap and a timeout signal are not a business exit',
+      deadline: 'SCENE_DEADLINE_MS is an absolute millisecond bound. The driver uses min(own 300s, deadline-origin) for work and cleanup. It does not add time and does not replace the server pid with the target pid',
+      target: 'pid, starttime and /proc/pid/exe saved while the entry stop is examinable. Cleanup kills only that triple. A reused pid or a missing line stays UNKNOWN and is not killed',
       crashCommands: '-k status, seal, detach --keep-stopped, then quit. The saved mutex-events.json is the capture record',
       foreground: 'the launch pid is waited to close inside its own slice. TERM then SIGKILL. Cleanup uses the reserved part of the 300s and does not add another 5s',
       sceneSuccess: false,
@@ -766,13 +863,13 @@ function writeBundle(out, selected, tools) {
     packageDir: '.',
     packages: [`ndk;${NDK}`, 'platform-tools', 'emulator', 'system-images;android-31;google_apis;x86_64'],
     scripts: ['scene.mjs', 'capture.py', 'lldb-commands.txt'],
-    requiredEnv: ['SCENE_COMMANDS', 'HOST_SYMBOLS', 'RUNTIME_SO', 'ANDROID_SDK_ROOT', 'ANDROID_SERIAL'],
+    requiredEnv: ['SCENE_COMMANDS', 'HOST_SYMBOLS', 'RUNTIME_SO', 'ANDROID_SDK_ROOT', 'ANDROID_SERIAL', 'SCENE_DEADLINE_MS'],
     notUsed: ['SCENE_OBSERVER', 'classifyFullImageExit', 'EXIT_SHELL'],
     prepare: 'node scene.mjs self-test && node scene.mjs calibrate',
     execute: 'SCENE_EXECUTE=1 node scene.mjs execute',
     executeThisLane: 'not invoked',
     sameDrive: true,
-    consumer: 'node scene.mjs execute reads the entry-stop snapshot and mutex-events.json. Crash export is an -k command, not a later ordinary -o. quit after detach is not a business exit',
+    consumer: 'node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Target reap uses the entry-stop pid, start and path. Server pid and emulator stop are not a business exit',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
     forbid: ['runtime-fini', 'no-image', 'NoFP', 'retry', 'ndk-gdb', 'simulated sceneSuccess', 'host-pid kill', '-S before target', 'synthetic EXIT_SHELL', 'literal build-id token', 'shell classifier', 'lldb rc as business exit', 'lldb uuid as gnu build id', 'relink to add a note'],
@@ -830,9 +927,10 @@ function processText(body, pid = '2400', live = {}) {
   const sha = live.sha || ORIGINAL_SO;
   const maps = live.maps === false ? '' : `MAPS_BEGIN\n${base}-7f0000001000 r-xp 00000000 00:00 1 ${RUNTIME_PATH}\nMAPS_END\n`;
   const file = live.file === false ? '' : `FILE_SHA ${sha}  ${RUNTIME_PATH}\n`;
+  const identity = live.identity ? `TARGET_IDENTITY pid=${pid} start=${live.identity.start} path=${live.identity.path}\n` : '';
   const image = live.image === false ? '' : imageLine(live.uuid);
   const head = live.process === false ? '' : `Process ${pid} launched: '${REMOTE}/consumer' (x86_64)\nProcess ${pid} stopped\n`;
-  return `${head}MODULE_LIVE pid=${pid} state=stopped\n${maps}${file}${image}${body}`;
+  return `${head}MODULE_LIVE pid=${pid} state=stopped\n${maps}${file}${identity}${image}${body}`;
 }
 
 async function calibrate() {
@@ -924,6 +1022,41 @@ async function calibrate() {
   if (fromFile.association?.chain !== 'DESTROY0_THEN_LOCK') fail('saved capture was ignored');
   const detachedKill = await expect('controlled-detach-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}CONTROLLED_DETACH\nProcess 2400 exited with status = 0 (0x00000000) \n`), stderr: '' } } }, 'FATAL_STOP_UNEXITED', null);
   if (detachedKill.businessExit !== null) fail('controlled detach was read as a natural exit');
+  const previousDeadline = process.env.SCENE_DEADLINE_MS;
+  process.env.SCENE_DEADLINE_MS = '270000';
+  const outer = await expect('outer-deadline', { platform: 'remote-android', serial: 'emulator-5554\tdevice', at: { launch: 260000 }, steps: {} }, 'UNCAPTURED', 'launch');
+  const outerLaunch = outer.log.find(row => row.step === 'launch');
+  const outerCleanup = outer.log.find(row => row.step === 'cleanup-probe');
+  if (!outerLaunch || outerLaunch.timeoutMs !== 0 || !outerCleanup || outerCleanup.timeoutMs !== 5000) fail('shared deadline did not keep cleanup inside 270s');
+  Object.assign(cases.at(-1), { launchTimeoutMs: outerLaunch.timeoutMs, cleanupTimeoutMs: outerCleanup.timeoutMs, deadlineTotalMs: outer.meta.deadline.totalMs });
+  process.env.SCENE_DEADLINE_MS = '400000';
+  const extended = await expect('deadline-no-extend', { platform: 'remote-android', serial: 'emulator-5554\tdevice', at: { launch: 290000 }, steps: {} }, 'UNCAPTURED', 'launch');
+  if (extended.log.find(row => row.step === 'launch').timeoutMs !== 0 || extended.meta.deadline.totalMs !== 300000) fail('deadline extended the 300s budget');
+  Object.assign(cases.at(-1), { launchTimeoutMs: 0, deadlineTotalMs: extended.meta.deadline.totalMs });
+  if (previousDeadline === undefined) delete process.env.SCENE_DEADLINE_MS;
+  else process.env.SCENE_DEADLINE_MS = previousDeadline;
+  const denied = await drive(scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} }), '/sdk', 'emulator-5554', { requireDeadline: true });
+  if (denied.outcome !== 'DEADLINE_ABSENT' || denied.log.some(row => row.step === 'launch')) fail('execute without a deadline ran');
+  cases.push({ name: 'deadline-required', outcome: denied.outcome, steps: denied.log.map(row => row.step), simulated: true, sceneSuccess: false, shellWait: 'UNKNOWN', businessExit: null });
+  const target = { start: '55', path: `${REMOTE}/consumer` };
+  const reaped = await expect('target-reaped', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n', '2400', { identity: target }), stderr: '' }, 'cleanup-target-probe': { rc: 0, stdout: `TARGET_PID=2400\nTARGET_START=55\nTARGET_PATH=${REMOTE}/consumer\nTARGET_STATE=PRESENT\n`, stderr: '' }, 'cleanup-target': { rc: 0, stdout: 'REAPED\n', stderr: '' } } }, 'DIAG_EXITED', null);
+  if (reaped.businessExit !== 0 || reaped.meta.targetCleanup !== 'REAPED' || reaped.meta.devicePid === '2400' || !reaped.log.some(row => row.step === 'cleanup-target' && row.argv.join(' ').includes('want_start=55'))) fail('target reap changed the business exit');
+  Object.assign(cases.at(-1), { targetCleanup: reaped.meta.targetCleanup, devicePid: reaped.meta.devicePid });
+  const notReaped = await expect('target-not-reaped', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n', '2400', { identity: target }), stderr: '' }, 'cleanup-target-probe': { rc: 0, stdout: `TARGET_PID=2400\nTARGET_START=55\nTARGET_PATH=${REMOTE}/consumer\nTARGET_STATE=PRESENT\n`, stderr: '' }, 'cleanup-target': { rc: 4, stdout: 'NOT_REAPED\n', stderr: '' } } }, 'DIAG_EXITED', null);
+  if (notReaped.businessExit !== 0 || notReaped.meta.targetCleanup !== 'UNCONFIRMED') fail('NOT_REAPED was accepted as REAPED');
+  Object.assign(cases.at(-1), { targetCleanup: notReaped.meta.targetCleanup });
+  const notReapedZero = await expect('target-not-reaped-rc0', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n', '2400', { identity: target }), stderr: '' }, 'cleanup-target-probe': { rc: 0, stdout: `TARGET_PID=2400\nTARGET_START=55\nTARGET_PATH=${REMOTE}/consumer\nTARGET_STATE=PRESENT\n`, stderr: '' }, 'cleanup-target': { rc: 0, stdout: 'NOT_REAPED\n', stderr: '' } } }, 'DIAG_EXITED', null);
+  if (notReapedZero.businessExit !== 0 || notReapedZero.meta.targetCleanup !== 'UNCONFIRMED') fail('rc 0 NOT_REAPED was accepted as REAPED');
+  Object.assign(cases.at(-1), { targetCleanup: notReapedZero.meta.targetCleanup });
+  await expect('server-not-reaped-rc0', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { 'cleanup-server': { rc: 0, stdout: 'NOT_REAPED\n', stderr: '' } } }, 'CLEANUP_UNCONFIRMED', null);
+  await expect('host-not-reaped-rc0', { platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: { reap: { rc: 0, stdout: 'NOT_REAPED\n', stderr: '' } } }, 'CLEANUP_UNCONFIRMED', null);
+  const reused = await expect('target-reused-pid', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n', '2400', { identity: target }), stderr: '' }, 'cleanup-target-probe': { rc: 0, stdout: `TARGET_PID=2400\nTARGET_START=99\nTARGET_PATH=${REMOTE}/consumer\nTARGET_STATE=MISMATCH\n`, stderr: '' }, 'cleanup-target': { rc: 0, stdout: 'REAPED\n', stderr: '' } } }, 'DIAG_EXITED', null);
+  if (reused.meta.targetCleanup !== 'UNKNOWN' || reused.businessExit !== 0 || reused.log.some(row => row.step === 'cleanup-target')) fail('a reused pid was killed');
+  Object.assign(cases.at(-1), { targetCleanup: reused.meta.targetCleanup, killed: false });
+  const lateIdentity = `Process 2400 launched: '${REMOTE}/consumer' (x86_64)\nProcess 2400 stopped\nMODULE_LIVE pid=2400 state=stopped\nFILE_SHA ${ORIGINAL_SO}  ${RUNTIME_PATH}\n${imageLine()}Process 2400 exited with status = 0 (0x00000000) \nTARGET_IDENTITY pid=2400 start=55 path=${REMOTE}/consumer\nMAPS_BEGIN\n7f0000000000-7f0000001000 r-xp 00000000 00:00 1 ${RUNTIME_PATH}\nMAPS_END\n`;
+  const lateTarget = await expect('identity-after-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: lateIdentity, stderr: '' } } }, 'MAPS_ABSENT', null);
+  if (lateTarget.meta.target || lateTarget.meta.targetCleanup !== 'UNKNOWN' || lateTarget.log.some(row => row.step === 'cleanup-target')) fail('identity after exit armed a kill');
+  Object.assign(cases.at(-1), { targetCleanup: lateTarget.meta.targetCleanup, killed: false });
   const thrown = await expect('launch-threw', { platform: 'remote-android', serial: 'emulator-5554\tdevice', throw: 'launch', steps: {} }, 'DRIVER_EXCEPTION', null);
   if (!thrown.log.some(row => row.step === 'cleanup-server' && row.argv.join(' ').includes('pid=200'))) fail('exception path skipped device cleanup');
   const recorder = scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n'), stderr: '' }, 'module-maps': { rc: 0, stdout: `7f0000000000-7f0000001000 r-xp 00000000 00:00 1 ${RUNTIME_PATH}\n`, stderr: '' } } });
@@ -961,6 +1094,23 @@ if (argv[0] === 'self-test') {
   if (sliceMs(300000, 5000, false) !== 0) fail('a stop still adds time past the total');
   if (sliceMs(290000, 5000, true) !== 5000) fail('cleanup reserve was removed');
   if (sliceMs(250000, 60000, false) !== 30000) fail('active work ate the cleanup reserve');
+  if (sliceMs(260000, 60000, false, 300000) !== 20000 || sliceMs(260000, 60000, false, 270000) !== 0) fail('outer deadline was not applied');
+  if (reapConfirmed(4, 'NOT_REAPED\n') || reapConfirmed(0, 'NOT_REAPED\n') || !reapConfirmed(0, 'REAPED\n') || !reapConfirmed(0, 'REAPED')) fail('reap token is not a whole line');
+  const sceneText = readFileSync(join(HERE, 'scene.mjs'), 'utf8');
+  const branchAt = sceneText.indexOf('          if (cleaned.skipped || cleaned.timedOut) meta.targetCleanup');
+  const branchEnd = sceneText.indexOf('\n        } else if (verdict', branchAt);
+  if (branchAt < 0 || branchEnd <= branchAt) fail('target reap branch is not extractable');
+  const exact = sceneText.slice(branchAt, branchEnd);
+  const red = { cleaned: { rc: 4, stdout: 'NOT_REAPED\n' }, meta: {} };
+  const control = { cleaned: { rc: 0, stdout: 'REAPED\n' }, meta: {} };
+  runInNewContext(exact, red);
+  runInNewContext(exact, control);
+  if (red.meta.targetCleanup !== 'UNCONFIRMED' || control.meta.targetCleanup !== 'REAPED') fail('extracted reap branch still accepts NOT_REAPED');
+  writeFileSync(join(HERE, 'reap-predicate.json'), JSON.stringify({ exact, red: red.meta.targetCleanup, control: control.meta.targetCleanup, nativeRuns: 0 }, null, 2) + '\n');
+  if (budgetBound(0).total !== 300000) fail('missing deadline changed the internal budget');
+  process.env.SCENE_DEADLINE_MS = '400000';
+  if (budgetBound(0).total !== 300000) fail('absolute deadline raised the 300s cap');
+  delete process.env.SCENE_DEADLINE_MS;
   let rejected = false;
   try {
     route([{ name: 'fixture-link', args: ['/src/elf-fixture.cpp'] }, { name: 'consumer-link', args: ['/src/elf-consumer.cpp'] }, { name: 'preinit', args: ['consumer', 'fixture.so', 'runtime-fini'] }]);
@@ -1000,7 +1150,7 @@ if (argv[0] === 'calibrate') {
   if (!sdk) fail('ANDROID_SDK_ROOT unset');
   const source = process.env.SCENE_COMMANDS;
   route(JSON.parse(readFileSync(source, 'utf8')));
-  const result = await drive(realIO(), sdk, process.env.ANDROID_SERIAL || 'emulator-5554');
+  const result = await drive(realIO(), sdk, process.env.ANDROID_SERIAL || 'emulator-5554', { requireDeadline: true });
   writeFileSync(join(HERE, 'execute-result.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(result.outcome);
   process.exit(String(result.outcome).startsWith('FATAL_') ? 0 : 1);

@@ -19,7 +19,8 @@
     "HOST_SYMBOLS",
     "RUNTIME_SO",
     "ANDROID_SDK_ROOT",
-    "ANDROID_SERIAL"
+    "ANDROID_SERIAL",
+    "SCENE_DEADLINE_MS"
   ],
   "notUsed": [
     "SCENE_OBSERVER",
@@ -30,7 +31,7 @@
   "execute": "SCENE_EXECUTE=1 node scene.mjs execute",
   "executeThisLane": "not invoked",
   "sameDrive": true,
-  "consumer": "node scene.mjs execute reads the entry-stop snapshot and mutex-events.json. Crash export is an -k command, not a later ordinary -o. quit after detach is not a business exit",
+  "consumer": "node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Target reap uses the entry-stop pid, start and path. Server pid and emulator stop are not a business exit",
   "budget": {
     "minutes": 45,
     "jobs": 2,
