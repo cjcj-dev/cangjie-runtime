@@ -318,6 +318,7 @@ jobs:
             ${{ runner.temp }}/readscope-android-scene/*.stderr
             ${{ runner.temp }}/readscope-android-scene/execution/
             ${{ runner.temp }}/readscope-android-scene/grok/
+            ${{ runner.temp }}/readscope-android-scene/cleanup/
             ${{ runner.temp }}/readscope-android-scene/fixture.so
             ${{ runner.temp }}/readscope-android-scene/consumer
             runtime/tests/readscope_native_retention/android-scene/execute-result.json

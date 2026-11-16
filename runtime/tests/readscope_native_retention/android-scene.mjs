@@ -227,6 +227,11 @@ function files(root) {
   });
 }
 
+function assertHostDependencies(stdout, stderr) {
+  assert(!/\bnot found\b|error while loading shared libraries|cannot open shared object file/i.test(stdout + '\n' + stderr),
+    'NDK_HOST_DEPENDENCY_MISSING');
+}
+
 function prepareBoundsDirectory(bounds) {
   try {
     fs.mkdirSync(bounds);
@@ -298,7 +303,9 @@ function prepare() {
     run(`${key}-elf`, [path.join(tools, 'llvm-readelf'), '-hW', debuggerTools[key]]);
   }
   assert(fs.statSync(debuggerTools.wrapper).isFile());
-  run('host-lldb-dependencies', ['ldd', debuggerTools.host]);
+  const hostDependencies = run('host-lldb-dependencies', ['ldd', debuggerTools.host]);
+  assertHostDependencies(hostDependencies,
+    fs.readFileSync(path.join(out, 'host-lldb-dependencies.stderr'), 'utf8'));
   json(path.join(out, 'debugger-tools.json'), { paths: debuggerTools,
     hashes: Object.fromEntries(Object.entries(debuggerTools).map(([k, p]) => [k, sha(p)])),
     actualVersions: 'NOT_RUN; Grok driver must read before native launch',
