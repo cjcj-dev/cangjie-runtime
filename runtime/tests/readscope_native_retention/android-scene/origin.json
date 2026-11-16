@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "sourceOwner": "diag_c274_fcache_grok_1113",
+  "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
+  "files": {
+    "scene.mjs": {
+      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
+      "sha256": "d0465daaf16dcb414428dab8cb02732f9318316a525762077cd2927db27c4958"
+    },
+    "capture.py": {
+      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
+      "sha256": "1e3097bb9be731aaa002589a6bcaca50713837e1bb66ada8a2f5adee20f8ac18"
+    },
+    "lldb-commands.txt": {
+      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/lldb-commands.txt",
+      "sha256": "d943f39fbb165a529bb50bf1f9b51dc8958d2c138a8e92733e76e449c83a4a86"
+    }
+  },
+  "readyForNativeExecution": false,
+  "blockers": [
+    {
+      "id": "G1",
+      "file": "lldb-commands.txt",
+      "detail": "Absolute /root/cj_build/agent_scratch path cannot import packaged capture.py on official runner; owner must make it relocatable."
+    },
+    {
+      "id": "G2",
+      "file": "scene.mjs",
+      "detail": "-S commands run capture.arm before platform/target create; capture.arm raises no target. Owner must establish target before arming."
+    },
+    {
+      "id": "G3",
+      "file": "scene.mjs",
+      "detail": "realIO returns host adb child.pid for background server; cleanup uses this as Android PID. Need actual device server PID and owned cleanup, timeout/total limit and final child reaping."
+    },
+    {
+      "id": "G4",
+      "file": "scene.mjs",
+      "detail": "Real launch stdout/stderr are discarded, no fatal/association decoded, nonzero launch rc becomes NOT_REPRODUCED. Need native status, PID/window, raw capture and UNKNOWN on missing evidence; consume existing 761b observer where applicable."
+    },
+    {
+      "id": "G5",
+      "file": "scene.mjs",
+      "detail": "Launch does not set device LD_LIBRARY_PATH; target/symbol paths need local-vs-remote binding and verified loaded runtime. Actual LLDB/server versions/platform list still NOT_VERIFIED."
+    },
+    {
+      "id": "G6",
+      "file": "capture.py",
+      "detail": "Init/destroy records contain PC/module but no destroyer stack. Need same-execution generation and both stacks/modules; do not infer association from historical register/address."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+settings set auto-confirm true
+settings set target.process.run-all-threads true
+settings set stop-line-count-before 0
+settings set stop-line-count-after 0
+command script import /root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py
+script capture.arm()
+process handle SIGABRT --stop true --pass false --notify true
+target stop-hook add --one-liner "script capture.on_stop()"
