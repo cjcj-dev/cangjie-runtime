@@ -288,7 +288,7 @@ def target_line(process, platform):
 
 def mark_detach():
     import lldb
-    print('CONTROLLED_DETACH', flush=True)
+    print('DETACH_INTENT', flush=True)
     target = lldb.debugger.GetSelectedTarget()
     process = target.GetProcess() if target.IsValid() else None
     names = {lldb.eStateStopped: 'stopped', lldb.eStateCrashed: 'crashed', lldb.eStateSuspended: 'suspended'}

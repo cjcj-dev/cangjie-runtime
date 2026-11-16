@@ -31,7 +31,7 @@
   "execute": "SCENE_EXECUTE=1 node scene.mjs execute",
   "executeThisLane": "not invoked",
   "sameDrive": true,
-  "consumer": "node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Target reap uses the entry-stop pid, start and path. Server pid and emulator stop are not a business exit",
+  "consumer": "node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Detach completion is only Process <id> detached after process detach --keep-stopped true. Host reap requires an observed close. Target reap uses the entry-stop pid, start and path",
   "budget": {
     "minutes": 45,
     "jobs": 2,

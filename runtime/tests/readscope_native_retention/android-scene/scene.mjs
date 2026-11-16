@@ -343,7 +343,7 @@ function launchArgv(lldb) {
     '-k', 'process status',
     '-k', 'script capture.seal()',
     '-k', 'script capture.mark_detach()',
-    '-k', 'process detach --keep-stopped',
+    '-k', 'process detach --keep-stopped true',
     '-k', 'quit',
   ];
 }
@@ -394,6 +394,15 @@ function decode(document) {
   });
 }
 
+function detachFact(proc) {
+  return {
+    intent: Boolean(proc.intent),
+    completed: proc.detachState === 'detached',
+    status: proc.detachState === 'detached' ? 'DETACHED' : 'UNKNOWN',
+    error: proc.detachError ?? null,
+  };
+}
+
 function sbProcess(text) {
   const launched = [];
   const exits = [];
@@ -402,6 +411,9 @@ function sbProcess(text) {
   const restarts = [];
   let current = null;
   let controlled = false;
+  let intent = false;
+  let detachState = 'UNKNOWN';
+  let detachError = null;
   for (const line of String(text || '').split('\n')) {
     let matched = line.match(/^Process (\d+) launched: '([^']*)' \(([^)]*)\)$/);
     if (matched) {
@@ -424,6 +436,10 @@ function sbProcess(text) {
     matched = line.match(/^Process (\d+) (stopped|crashed|detached|suspended|exited|running|launching|stepping|connected|attaching|invalid|unloaded|unknown)$/);
     if (matched) {
       current = matched[1];
+      if (matched[2] === 'detached') {
+        controlled = true;
+        detachState = 'detached';
+      }
       states.push({ pid: matched[1], state: matched[2] });
       continue;
     }
@@ -433,19 +449,23 @@ function sbProcess(text) {
       states.push({ pid: matched[1], state: 'running' });
       continue;
     }
-    if (line.trim() === 'CONTROLLED_DETACH') {
-      controlled = true;
+    if (line.trim() === 'DETACH_INTENT' || line.trim() === 'CONTROLLED_DETACH') {
+      intent = true;
+      continue;
+    }
+    if (line.startsWith('Detach failed:') || line.includes('invalid boolean option:')) {
+      detachError = line.trim();
       continue;
     }
     matched = line.match(/^\* thread #\d+.*\bstop reason = (.+)$/);
     if (matched) stops.push({ pid: current, reason: matched[1].trim() });
   }
-  return { launched, exits, states, stops, restarts, controlled };
+  return { launched, exits, states, stops, restarts, controlled, intent, detachState, detachError };
 }
 
 async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
   const log = [];
-  const meta = { cleanup: 'NOT_STARTED', hostReap: 'NOT_STARTED', hostPid: null, devicePid: null, target: null, targetCleanup: 'UNKNOWN', remoteAndroid: false, nativeWait: 'ABSENT' };
+  const meta = { cleanup: 'NOT_STARTED', hostReap: 'NOT_STARTED', hostPid: null, devicePid: null, target: null, targetCleanup: 'UNKNOWN', detach: { intent: false, completed: false, status: 'UNKNOWN', error: null }, remoteAndroid: false, nativeWait: 'ABSENT' };
   const started = { device: null, forward: false };
   const tool = name => join(sdk, TOOLS[name]);
   const origin = typeof io.now === 'function' ? io.now('start') : Date.now();
@@ -477,8 +497,8 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
   const cleanup = async () => {
     if (meta.hostPid != null && typeof io.reap === 'function') {
       const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true, bound.total));
-      log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '' });
-      meta.hostReap = reapConfirmed(reaped.rc, reaped.stdout) ? 'REAPED' : 'UNCONFIRMED';
+      log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '', closed: reaped.closed === true, childRc: reaped.childRc ?? null, childSignal: reaped.childSignal ?? null });
+      meta.hostReap = reaped.closed === true && reapConfirmed(reaped.rc, reaped.stdout) ? 'REAPED' : 'UNCONFIRMED';
     }
     if (started.device) {
       const probe = await run('cleanup-probe', [tool('adb'), '-s', serial, 'shell', identityShell()], { timeoutMs: 5000, cleanup: true });
@@ -554,6 +574,7 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     meta.foreground = {
       pid: launch.pid ?? null,
       signal: launch.signal ?? null,
+      timer: Boolean(launch.timer),
       closed: launch.closed !== false,
       rc: launch.rc ?? null,
       timedOut: Boolean(launch.timedOut),
@@ -579,6 +600,7 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     meta.module = 'ABSENT';
     meta.nativeWait = 'UNKNOWN';
     const proc = sbProcess(text);
+    meta.detach = detachFact(proc);
     if (proc.launched.length === 1 && live.target && !live.target.conflict && live.target.pid === proc.launched[0].pid && live.target.path === `${REMOTE}/consumer`) {
       meta.target = live.target;
     }
@@ -696,7 +718,9 @@ function scripted(script) {
     },
     async reap(pid) {
       runs.push('reap-host');
-      return { ...(script.steps.reap || { rc: 0, stdout: 'REAPED\n', stderr: '' }), pid };
+      const result = { ...(script.steps.reap || { rc: 0, stdout: 'REAPED\n', stderr: '' }), pid };
+      if (result.closed == null) result.closed = reapConfirmed(result.rc, result.stdout);
+      return result;
     },
     async run(step, argv) {
       runs.push(step);
@@ -705,7 +729,7 @@ function scripted(script) {
       if (mapsPid && dead.has(mapsPid[1])) return { rc: 1, stdout: '', stderr: 'DEAD' };
       if (script.throw === step) throw new Error(`injected ${step}`);
       if (script.timeout === step) {
-        return { rc: null, timedOut: true, signal: 'SIGTERM', closed: true, pid: 4242, stdout: script.timeoutStdout || '', stderr: '' };
+        return { rc: null, timedOut: true, timer: true, signal: 'SIGTERM', closed: true, pid: 4242, stdout: script.timeoutStdout || '', stderr: '' };
       }
       const result = { ...(defaults[step] || { rc: 0, stdout: '', stderr: '' }), ...(script.steps[step] || {}) };
       if (Array.isArray(argv) && argv.includes('quit')) {
@@ -735,20 +759,20 @@ function watchChild(child, runMs, reapMs) {
       try { child.kill('SIGTERM'); } catch { /* already closed */ }
       killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already closed */ } }, Math.max(1, Math.floor(reapMs / 2)));
       giveUp = setTimeout(() => {
-        finishRun({ rc: null, signal: 'SIGKILL', timedOut: true, closed: false, pid, stdout, stderr });
+        finishRun({ rc: null, signal: null, timer: true, timedOut: true, closed: false, pid, stdout, stderr });
       }, reapMs);
     }, runMs);
     child.on('error', error => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(giveUp);
-      finishRun({ rc: 127, signal: null, timedOut: false, closed: false, pid, stdout, stderr: `${stderr}${error.message}` });
+      finishRun({ rc: 127, signal: null, timer: timingOut, timedOut: timingOut, closed: false, pid, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(giveUp);
-      finishRun({ rc: code, signal: timingOut ? (signal || 'SIGTERM') : null, timedOut: timingOut, closed: true, pid, stdout, stderr });
+      finishRun({ rc: code, signal: signal ?? null, timer: timingOut, timedOut: timingOut, closed: true, pid, stdout, stderr });
     });
   });
 }
@@ -766,26 +790,29 @@ function realIO() {
     },
     now() { return Date.now(); },
     reap(pid, waitMs = 0) {
-      const child = children.get(Number(pid));
-      if (!child) return Promise.resolve({ rc: 1, stdout: 'UNCONFIRMED', stderr: '', closed: false, pid });
-      if (child.exitCode != null || child.signalCode != null) {
-        return Promise.resolve({ rc: 0, stdout: 'REAPED', stderr: '', closed: true, signal: child.signalCode, pid });
-      }
+      const record = children.get(Number(pid));
+      if (!record) return Promise.resolve({ rc: 1, stdout: 'UNCONFIRMED', stderr: '', closed: false, signal: null, timer: false, pid, childRc: null, childSignal: null });
+      const snapshot = () => {
+        if (!record.close) {
+          return { rc: 1, stdout: 'UNCONFIRMED\n', stderr: record.error || '', closed: false, signal: null, timer: false, pid, childRc: record.exit ? record.exit.code : null, childSignal: record.exit ? record.exit.signal : null };
+        }
+        return { rc: 0, stdout: 'REAPED\n', stderr: '', closed: true, signal: record.close.signal ?? null, timer: false, pid, childRc: record.close.code, childSignal: record.close.signal ?? null };
+      };
+      if (record.close) return Promise.resolve(snapshot());
+      const exited = Boolean(record.exit) || record.child.exitCode != null || record.child.signalCode != null;
       const budget = Math.max(0, waitMs);
-      if (budget === 0) {
-        try { child.kill('SIGKILL'); } catch { /* already closed */ }
-        return Promise.resolve({ rc: 4, stdout: 'NOT_REAPED', stderr: '', closed: false, signal: 'SIGKILL', pid });
-      }
-      return new Promise(resolve => {
-        const timer = setTimeout(() => {
-          try { child.kill('SIGKILL'); } catch { /* already closed */ }
-          resolve({ rc: 4, stdout: 'NOT_REAPED', stderr: '', closed: false, signal: 'SIGKILL', pid });
-        }, budget);
-        child.once('close', (code, signal) => {
-          clearTimeout(timer);
-          resolve({ rc: 0, stdout: 'REAPED', stderr: '', closed: true, signal, pid });
+      if (exited) {
+        if (budget === 0) return Promise.resolve(snapshot());
+        return new Promise(resolve => {
+          const timer = setTimeout(() => resolve(snapshot()), budget);
+          record.child.once('close', () => { clearTimeout(timer); resolve(snapshot()); });
         });
-        child.kill('SIGTERM');
+      }
+      if (budget === 0) return Promise.resolve(snapshot());
+      return new Promise(resolve => {
+        const timer = setTimeout(() => resolve({ rc: 4, stdout: 'NOT_REAPED\n', stderr: '', closed: false, signal: null, timer: true, pid, childRc: record.exit ? record.exit.code : null, childSignal: record.exit ? record.exit.signal : null }), budget);
+        record.child.once('close', () => { clearTimeout(timer); resolve(snapshot()); });
+        try { record.child.kill('SIGTERM'); } catch { /* already closed */ }
       });
     },
     run(step, argv, options = {}) {
@@ -794,8 +821,12 @@ function realIO() {
         env: { ...process.env, EXIT_SCENE_OUT: join(HERE, 'run') },
       });
       if (options.background) {
-        children.set(child.pid, child);
-        return Promise.resolve({ rc: 0, timedOut: false, closed: false, stdout: '', stderr: '', pid: child.pid, signal: null });
+        const record = { child, exit: null, error: null, close: null };
+        child.on('exit', (code, signal) => { record.exit = { code, signal: signal ?? null }; });
+        child.on('error', error => { record.error = String(error && error.message || error); });
+        child.on('close', (code, signal) => { record.close = { code, signal: signal ?? null }; });
+        children.set(child.pid, record);
+        return Promise.resolve({ rc: 0, timedOut: false, closed: false, stdout: '', stderr: '', pid: child.pid, signal: null, timer: false });
       }
       const timeoutMs = options.timeoutMs ?? options.totalMs ?? TOTAL_MS;
       const reapMs = Math.min(2000, Math.floor(timeoutMs / 4));
@@ -824,7 +855,7 @@ function plan(selected) {
     debugger: {
       platformRequired: 'remote-android',
       missingPlatform: 'PLATFORM_ABSENT',
-      commandOrder: ['command source', 'command script import', 'platform select remote-android', 'platform connect', 'target create', 'target symbols add', 'script capture.arm()', 'process launch --stop-at-entry', 'script capture.live_module()', 'image list', 'process continue', 'process status', 'script capture.seal()', '-k process status', '-k script capture.seal()', '-k script capture.mark_detach()', '-k process detach --keep-stopped', '-k quit'],
+      commandOrder: ['command source', 'command script import', 'platform select remote-android', 'platform connect', 'target create', 'target symbols add', 'script capture.arm()', 'process launch --stop-at-entry', 'script capture.live_module()', 'image list', 'process continue', 'process status', 'script capture.seal()', '-k process status', '-k script capture.seal()', '-k script capture.mark_detach()', '-k process detach --keep-stopped true', '-k quit'],
       remoteExecutable: `${REMOTE}/consumer`,
       remoteLibraryPath: REMOTE,
       hostSymbols: 'HOST_SYMBOLS',
@@ -840,7 +871,7 @@ function plan(selected) {
       businessExit: 'only a same-pid exited-with-status line that is not after CONTROLLED_DETACH. lldb rc, quit, detach, target reap and a timeout signal are not a business exit',
       deadline: 'SCENE_DEADLINE_MS is an absolute millisecond bound. The driver uses min(own 300s, deadline-origin) for work and cleanup. It does not add time and does not replace the server pid with the target pid',
       target: 'pid, starttime and /proc/pid/exe saved while the entry stop is examinable. Cleanup kills only that triple. A reused pid or a missing line stays UNKNOWN and is not killed',
-      crashCommands: '-k status, seal, detach --keep-stopped, then quit. The saved mutex-events.json is the capture record',
+      crashCommands: '-k status, seal, detach intent, process detach --keep-stopped true, then quit. Completion is only the formal Process <id> detached line. Intent is not completion',
       foreground: 'the launch pid is waited to close inside its own slice. TERM then SIGKILL. Cleanup uses the reserved part of the 300s and does not add another 5s',
       sceneSuccess: false,
     },
@@ -869,7 +900,7 @@ function writeBundle(out, selected, tools) {
     execute: 'SCENE_EXECUTE=1 node scene.mjs execute',
     executeThisLane: 'not invoked',
     sameDrive: true,
-    consumer: 'node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Target reap uses the entry-stop pid, start and path. Server pid and emulator stop are not a business exit',
+    consumer: 'node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Detach completion is only Process <id> detached after process detach --keep-stopped true. Host reap requires an observed close. Target reap uses the entry-stop pid, start and path',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
     forbid: ['runtime-fini', 'no-image', 'NoFP', 'retry', 'ndk-gdb', 'simulated sceneSuccess', 'host-pid kill', '-S before target', 'synthetic EXIT_SHELL', 'literal build-id token', 'shell classifier', 'lldb rc as business exit', 'lldb uuid as gnu build id', 'relink to add a note'],
@@ -897,14 +928,14 @@ function assertOrder(result) {
   const sealed = argv.indexOf('script capture.seal()');
   const order = [source, imported, selected, connected, created, symbols, armed, launched, live, image, continued, status, sealed];
   if (order.some(index => index < 0) || order.some((index, place) => place > 0 && index < order[place - 1])) fail('command order');
-  const crash = ['process status', 'script capture.seal()', 'script capture.mark_detach()', 'process detach --keep-stopped', 'quit'];
+  const crash = ['process status', 'script capture.seal()', 'script capture.mark_detach()', 'process detach --keep-stopped true', 'quit'];
   let cursor = sealed;
   for (const command of crash) {
     const index = argv.indexOf(command, command === 'process status' || command === 'script capture.seal()' ? cursor + 1 : cursor);
     if (index < 0 || argv[index - 1] !== '-k' || index < cursor) fail(`crash command ${command}`);
     cursor = index;
   }
-  if (argv.includes('true')) fail('stop-at-entry was given an argument');
+  if (argv.some(item => item.includes('--stop-at-entry true'))) fail('stop-at-entry was given an argument');
   if (!launchContract(argv[launched]).ok) fail('inferior arguments changed');
   if (argv[imported] !== `command script import ${join(HERE, 'capture.py')}`) fail('import is not package-relative');
   if (!argv[launched].includes('--stop-at-entry')) fail('module snapshot is not taken at a stop');
@@ -1020,8 +1051,10 @@ async function calibrate() {
   if (missed.businessExit !== 134 || missed.association?.chain === 'DESTROY0_THEN_LOCK') fail('saved missing init still attributed one generation');
   const fromFile = await expect('saved-without-stdout', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', saved: covered, steps: { launch: { rc: 0, stdout: processText(`${stop}Process 2400 exited with status = 134 (0x00000086) \n`), stderr: '' } } }, 'FATAL_ATTRIBUTED', null);
   if (fromFile.association?.chain !== 'DESTROY0_THEN_LOCK') fail('saved capture was ignored');
-  const detachedKill = await expect('controlled-detach-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}CONTROLLED_DETACH\nProcess 2400 exited with status = 0 (0x00000000) \n`), stderr: '' } } }, 'FATAL_STOP_UNEXITED', null);
-  if (detachedKill.businessExit !== null) fail('controlled detach was read as a natural exit');
+  const intentOnly = await expect('detach-intent-not-completion', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}DETACH_INTENT\nProcess 2400 exited with status = 0 (0x00000000) \n`), stderr: '' } } }, 'FATAL_UNKNOWN', null);
+  if (intentOnly.businessExit !== 0 || intentOnly.meta.detach.completed || intentOnly.meta.detach.status !== 'UNKNOWN') fail('detach intent erased a real exit or counted as completion');
+  const detachedKill = await expect('controlled-detach-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}DETACH_INTENT\nProcess 2400 detached\nProcess 2400 exited with status = 0 (0x00000000) \n`), stderr: '' } } }, 'FATAL_STOP_UNEXITED', null);
+  if (detachedKill.businessExit !== null || detachedKill.meta.detach.completed !== true || detachedKill.meta.detach.status !== 'DETACHED') fail('formal detach state was read as a natural exit');
   const previousDeadline = process.env.SCENE_DEADLINE_MS;
   process.env.SCENE_DEADLINE_MS = '270000';
   const outer = await expect('outer-deadline', { platform: 'remote-android', serial: 'emulator-5554\tdevice', at: { launch: 260000 }, steps: {} }, 'UNCAPTURED', 'launch');
@@ -1141,6 +1174,128 @@ if (argv[0] === 'calibrate') {
       process.exit(1);
     }
   });
+} else if (argv[0] === 'interface-check') {
+  const { EventEmitter } = await import('node:events');
+  const options = readFileSync('/root/cj_build/llvm_src/cjcj-llvm/lldb/source/Commands/Options.td', 'utf8');
+  const definition = options.match(/def process_detach_keep_stopped\s*:[\s\S]*?;/)?.[0];
+  if (!definition || !definition.includes('Arg<"Boolean">')) fail('keep-stopped is not a Boolean option');
+  const stopAtEntry = options.match(/def process_launch_stop_at_entry\s*:[\s\S]*?;/)?.[0];
+  if (!stopAtEntry || stopAtEntry.includes('Arg<')) fail('stop-at-entry gained an argument');
+  const booleans = new Set(['true', 'false', 'on', 'off', 'yes', 'no', '1', '0']);
+  const crash = launchArgv('/sdk/lldb').filter((item, index, all) => all[index - 1] === '-k');
+  const expected = ['process status', 'script capture.seal()', 'script capture.mark_detach()', 'process detach --keep-stopped true', 'quit'];
+  if (crash.join('\n') !== expected.join('\n')) fail(`crash commands ${crash.join(' | ')}`);
+  const detach = crash[3];
+  const detachArg = detach.split(/\s+/)[detach.split(/\s+/).indexOf('--keep-stopped') + 1];
+  if (!booleans.has(detachArg)) fail('detach boolean missing');
+  const rejected = 'process detach --keep-stopped';
+  const rejectedArg = rejected.split(/\s+/)[rejected.split(/\s+/).indexOf('--keep-stopped') + 1];
+  if (booleans.has(rejectedArg)) fail('missing boolean was accepted');
+  const handle = launchArgv('/sdk/lldb').find(item => item.startsWith('process handle '));
+  for (const name of ['--stop', '--pass', '--notify']) {
+    const tokens = handle.split(/\s+/);
+    const value = tokens[tokens.indexOf(name) + 1];
+    if (!booleans.has(value)) fail(`${name} is not a Boolean value`);
+  }
+  const intent = detachFact(sbProcess("Process 2400 launched: '/data/local/tmp/readscope-lifetime/consumer' (x86_64)\nDETACH_INTENT\nProcess 2400 exited with status = 0 (0x00000000) \n"));
+  const intentProc = sbProcess("Process 2400 launched: '/data/local/tmp/readscope-lifetime/consumer' (x86_64)\nDETACH_INTENT\nProcess 2400 exited with status = 0 (0x00000000) \n");
+  if (intent.completed || intent.status !== 'UNKNOWN' || intentProc.exits[0].controlled) fail('intent counted as detach completion');
+  const formal = sbProcess("Process 2400 launched: '/data/local/tmp/readscope-lifetime/consumer' (x86_64)\nDETACH_INTENT\nProcess 2400 detached\nProcess 2400 exited with status = 0 (0x00000000) \n");
+  const formalFact = detachFact(formal);
+  if (!formalFact.completed || formalFact.status !== 'DETACHED' || !formal.exits[0].controlled || formal.exits[0].status !== 0) fail('formal detach state was ignored');
+  const failed = detachFact(sbProcess('DETACH_INTENT\nDetach failed: lost connection\n'));
+  if (failed.completed || failed.status !== 'UNKNOWN' || !failed.error) fail('detach failure became completion');
+  const statusDef = options.match(/def process_status_verbose\s*:[\s\S]*?;/)?.[0];
+  if (!statusDef || statusDef.includes('Arg<')) fail('process status verbose is not a flag');
+  const scriptDef = options.match(/def script_language\s*:[\s\S]*?;/)?.[0];
+  if (!scriptDef || !scriptDef.includes('EnumArg<"ScriptLang">')) fail('script language option changed');
+  if (crash.some(item => item.startsWith('--') || item.includes('--language') || item.includes('--verbose'))) fail('control segment invented an optional flag');
+  const quitSrc = readFileSync('/root/cj_build/llvm_src/cjcj-llvm/lldb/source/Commands/CommandObjectQuit.cpp', 'utf8');
+  if (!quitSrc.includes('"quit [exit-code]"') || !quitSrc.includes('eArgTypeUnsignedInteger')) fail('quit is not an optional unsigned exit code');
+  if (crash[4] !== 'quit') fail('quit was given a flag');
+  const sceneText = readFileSync(join(HERE, 'scene.mjs'), 'utf8');
+  const fragment = sceneText.slice(sceneText.indexOf('function watchChild('), sceneText.indexOf('\nfunction plan('));
+  let queued = null;
+  const loaded = runInNewContext(`${fragment}\n({ watchChild, realIO })`, {
+    spawn() { return queued; },
+    setTimeout, clearTimeout, process, join, HERE, TOTAL_MS, existsSync, readFileSync,
+  });
+  const hostChild = (pid, fields = {}) => {
+    const child = new EventEmitter();
+    child.pid = pid;
+    child.exitCode = Object.hasOwn(fields, 'exitCode') ? fields.exitCode : null;
+    child.signalCode = Object.hasOwn(fields, 'signalCode') ? fields.signalCode : null;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kills = [];
+    child.kill = signal => { child.kills.push(signal); return true; };
+    return child;
+  };
+  const hostFact = reaped => reaped.closed === true && reapConfirmed(reaped.rc, reaped.stdout);
+  queued = hostChild(424242, { exitCode: 0, signalCode: null });
+  const openIo = loaded.realIO();
+  await openIo.run('start-server', ['fake-only'], { background: true });
+  const open = await openIo.reap(424242, 20);
+  if (open.closed !== false || hostFact(open) || queued.kills.length !== 0) fail('exitCode became a close');
+  queued = hostChild(424243);
+  const closeIo = loaded.realIO();
+  await closeIo.run('start-server', ['fake-only'], { background: true });
+  queued.emit('exit', 0, null);
+  queued.emit('close', 0, null);
+  const closed = await closeIo.reap(424243, 20);
+  if (!hostFact(closed) || closed.childRc !== 0 || closed.childSignal !== null || queued.kills.length !== 0) fail('observed close was not reaped');
+  queued = hostChild(424244);
+  const exitIo = loaded.realIO();
+  await exitIo.run('start-server', ['fake-only'], { background: true });
+  queued.emit('exit', 0, null);
+  const exitOnly = await exitIo.reap(424244, 15);
+  if (exitOnly.closed !== false || exitOnly.childRc !== 0 || hostFact(exitOnly) || queued.kills.length !== 0) fail('exit without close was reaped or signaled');
+  queued = hostChild(424245);
+  const liveIo = loaded.realIO();
+  await liveIo.run('start-server', ['fake-only'], { background: true });
+  const live = await liveIo.reap(424245, 15);
+  if (live.closed !== false || hostFact(live) || queued.kills.join(',') !== 'SIGTERM') fail('live reap dropped the close requirement');
+  const external = new EventEmitter();
+  external.pid = 424242;
+  external.stdout = new EventEmitter();
+  external.stderr = new EventEmitter();
+  external.kill = () => true;
+  const externalRun = watchChild(external, 100, 20);
+  queueMicrotask(() => external.emit('close', null, 'SIGKILL'));
+  const externalResult = await externalRun;
+  if (externalResult.signal !== 'SIGKILL' || externalResult.timer !== false || externalResult.closed !== true) fail('external signal was cleared');
+  const normal = new EventEmitter();
+  normal.pid = 7;
+  normal.stdout = new EventEmitter();
+  normal.stderr = new EventEmitter();
+  normal.kill = () => true;
+  const normalRun = watchChild(normal, 100, 20);
+  queueMicrotask(() => normal.emit('close', 0, null));
+  const normalResult = await normalRun;
+  if (normalResult.rc !== 0 || normalResult.signal !== null || normalResult.timer !== false || normalResult.closed !== true) fail('normal close was rewritten');
+  const timed = new EventEmitter();
+  timed.pid = 8;
+  timed.stdout = new EventEmitter();
+  timed.stderr = new EventEmitter();
+  timed.kill = () => true;
+  const timedRun = watchChild(timed, 15, 40);
+  setTimeout(() => timed.emit('close', null, 'SIGTERM'), 25);
+  const timedResult = await timedRun;
+  if (timedResult.signal !== 'SIGTERM' || timedResult.timer !== true || timedResult.timedOut !== true || timedResult.closed !== true) fail('timeout rewrote the close signal');
+  const report = {
+    detach: { command: detach, argument: detachArg, rejected: rejectedArg ?? null, intent, formal: formalFact, failed },
+    hostExitWithoutClose: { closed: open.closed, reaped: hostFact(open), kills: 0 },
+    hostClose: { closed: closed.closed, reaped: hostFact(closed), childRc: closed.childRc, kills: 0 },
+    hostExitOnly: { closed: exitOnly.closed, childRc: exitOnly.childRc, reaped: hostFact(exitOnly), kills: 0 },
+    hostLive: { closed: live.closed, reaped: hostFact(live), signalled: 'SIGTERM' },
+    foregroundExternal: { signal: externalResult.signal, timer: externalResult.timer, closed: externalResult.closed },
+    foregroundNormal: { rc: normalResult.rc, signal: normalResult.signal, timer: normalResult.timer },
+    foregroundTimeout: { signal: timedResult.signal, timer: timedResult.timer, timedOut: timedResult.timedOut },
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'interface-check.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('INTERFACE_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1153,7 +1308,9 @@ if (argv[0] === 'calibrate') {
   const result = await drive(realIO(), sdk, process.env.ANDROID_SERIAL || 'emulator-5554', { requireDeadline: true });
   writeFileSync(join(HERE, 'execute-result.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(result.outcome);
-  process.exit(String(result.outcome).startsWith('FATAL_') ? 0 : 1);
+  const detachDone = result.meta?.detach?.completed === true;
+  const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
+  process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|calibrate|execute');
 }

@@ -1,17 +1,17 @@
 {
-  "schema": 5,
+  "schema": 6,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
-  "sourceRequest": "9d2d3b62-f4a9-4e51-bbe9-231d8c302ad2",
-  "sourceRequestTerminal": "COMPLETED; controller directly confirmed in adoption instruction",
+  "sourceRequest": "b2a79922-5354-443f-9d46-e4c3b8d744e8",
+  "sourceRequestTerminal": "COMPLETED; controller tool verification stated in current adoption instruction, not a new human approval",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "617eaa2d8ea35da9f6f340fcb76340d1b600d38c65a2ba7e11ac4e80019a5e2f"
+      "sha256": "d35dd655766471d541f50cdbe1faee79a6e5c0df8ee0a0d6893735afe8300a40"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
-      "sha256": "126253ae69be6d28c97bf0e27bec300899af0a86a2947ef49b122270fde474f3"
+      "sha256": "5562524a1d1ec05d8a487d4092ad45747f1dcf1e9ce2ecfcfd605aec6b187d1a"
     },
     "lldb-commands.txt": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/lldb-commands.txt",
@@ -20,12 +20,12 @@
   },
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "2f2b2ec5ad93f5ed08c10bfb796f8d1c3b77c0cc518b56d7b828a70c6e6d411b"
+    "sha256": "bc83ee4444171521ec03a02612c838a79e3f341e841a498be9953442fa1a418c"
   },
-  "predecessor": "55778c7e8f83c0e4fb48e4d3b6fcd5f5f09e67e7",
+  "predecessor": "5715cb62abe40ada616ceef105837ead8c61f8f3",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": false,
-  "predecessorFindings": "37167 SOURCE_REJECT remains. Absolute deadline and target instance cleanup supplied in authorized successor. The real NOT_REAPED counterexample is retained; the original Grok owner repaired target/server/host rc+whole-line predicates in this fixed scene.",
+  "predecessorFindings": "Both rejected objects and counterexamples remain. Fixed successor supplies the Boolean detach argument, separates intent/completion, records actual host close/childRc, and preserves actual foreground signal independently of its timer. Implementation evidence only; independent review pending.",
   "blockers": [
     {
       "id": "GROK_FINAL_ENTRY_AND_INDEPENDENT_REVIEW",
@@ -52,7 +52,8 @@
     "samePidLiveModuleRequired": true,
     "fatalStopIsBusinessExit": false,
     "controlledDetachBusinessExit": "UNKNOWN",
-    "targetCleanup": "Same live pid/start/exe; rc0 and whole-line REAPED only after /proc disappearance wait. Missing/reused/late identity UNKNOWN; target cleanup does not create a natural business exit. Native behavior NOT_RUN."
+    "targetCleanup": "Same live pid/start/exe; rc0 and whole-line REAPED only after /proc disappearance wait. Missing/reused/late identity UNKNOWN; target cleanup does not create a natural business exit. Native behavior NOT_RUN.",
+    "exitProvenance": "Actual detach, debugger kill/quit, timeout and cleanup must not establish a natural business exit. Source review of the fixed operation chain remains separate from the parser intent/completion controls. No additional reachable violation established by Sol; exact scope question handed to original Grok owner."
   },
   "rejectedPackage": "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
   "sourceProvenance": {
@@ -60,6 +61,19 @@
     "nativeSession": "ses_e2d918ab4ffegXNGJG7ij4SN9H",
     "reportEvent": "call-06524593-8034-4cda-8452-5de7392a4360-128",
     "originalRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
-    "successorTerminalSource": "Controller confirms requests f67981cf-cbb2-44fd-88f2-bc7bca610000 and 9d2d3b62-f4a9-4e51-bbe9-231d8c302ad2 COMPLETED; original 44e record preserved unchanged"
+    "successorTerminalSource": "Controller tool verification confirms b2a79922-5354-443f-9d46-e4c3b8d744e8 COMPLETED. Original request-44e1719b record unchanged; no new journal event invented."
+  },
+  "rejectedPackages": [
+    "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
+    "5715cb62abe40ada616ceef105837ead8c61f8f3"
+  ],
+  "evidenceReuse": {
+    "oldCalibration47": "belongs to 617eaa2d; not evidence of executing the new fixed package",
+    "currentSourceEvidence": [
+      "interface-check.json",
+      "reap-predicate.json",
+      "source report self-test rc0"
+    ],
+    "nativeRuns": 0
   }
 }
