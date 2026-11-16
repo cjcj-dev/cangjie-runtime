@@ -5,6 +5,7 @@
 #include "Heap/shared/memAllocator.hpp"
 #include "HeapManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include <cstring>
 namespace MapleRuntime {
 MArray* MemAllocator::allocate() const
 {
@@ -13,7 +14,13 @@ MArray* MemAllocator::allocate() const
 }
 void MemAllocator::mem_clear(MAddress address) const
 {
-    BaseObject::ClearMemory(address, arraySize);
+    // MArray::NewKnownWidthArray validates the size before allocate() obtains
+    // the whole word-aligned extent. As in HotSpot memAllocator.cpp:366-374,
+    // clear that owned payload, including tail padding, before publishing klass.
+    DCHECK_D(address != NULL_ADDRESS, "cannot initialize null object");
+    DCHECK_D(arraySize >= sizeof(BaseObject), "unexpected object size");
+    const size_t bytes = AlignUp(arraySize, sizeof(uintptr_t)) - sizeof(BaseObject);
+    std::memset(reinterpret_cast<void*>(address + sizeof(BaseObject)), 0, bytes);
 }
 MArray* MemAllocator::finish(MAddress address) const
 {

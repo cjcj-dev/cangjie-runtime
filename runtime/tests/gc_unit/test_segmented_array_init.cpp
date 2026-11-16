@@ -212,6 +212,44 @@ public:
 
 constexpr MIndex kLargeRefLength = 1024 * 1024;
 
+void* RunDirtySmallArrayCase(void*)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    TypeInfo* type = GetByteArrayTypeInfos().array;
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+    // Supply actual heap extents to the existing TLAB, with dirty bytes rather
+    // than relying on a fresh OS page. Allocation and initialization below are
+    // the public product entry, never a test-side copy of mem_clear.
+    const MIndex lengths[] = {0, 1, 7, 8, 9, 15, 16, 17, 20, 23, 24, 25, 63, 64, 65};
+    for (MIndex length : lengths) {
+        buffer->RetireTLAB(false);
+        size_t actual = 0;
+        const uintptr_t start = ZCollectedHeap::heap()->allocate_new_tlab(4096, 4096, &actual);
+        if (start == 0 || actual != 4096) { return reinterpret_cast<void*>(1); }
+        std::memset(reinterpret_cast<void*>(start), 0xa5, actual);
+        buffer->FillTLAB(start, actual);
+        const size_t size = AlignUp(MArray::GetContentOffset() + length, sizeof(uintptr_t));
+        MArray* array = MCC_NewArray8(type, length);
+        const bool reused = reinterpret_cast<uintptr_t>(array) == start;
+        if (!reused) { return reinterpret_cast<void*>(2); }
+        size_t mismatches = 0;
+        const auto* bytes = reinterpret_cast<const unsigned char*>(start);
+        for (size_t i = MArray::GetContentOffset(); i < size; ++i) {
+            mismatches += bytes[i] != 0;
+        }
+        bool guard = true;
+        for (size_t i = size; i < size + sizeof(uintptr_t); ++i) { guard &= bytes[i] == 0xa5; }
+        const bool header = array->GetLength() == length && array->GetTypeInfo() == type &&
+                            !array->IsInvisibleObject();
+        std::fprintf(stderr, "SMALL_ARRAY_DIRTY_TARGET length=%zu bytes=%zu reused=%d mismatches=%zu guard=%d header=%d\n",
+                     static_cast<size_t>(length), size, reused, mismatches, guard, header);
+        if (mismatches != 0 || !guard || !header) { return reinterpret_cast<void*>(3); }
+    }
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+
 void* RunArrayCase(void* argument)
 {
     const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
@@ -801,6 +839,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallPrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 3), 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, DirtySmallPrimitiveArrayClearsAlignedExtent)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunDirtySmallArrayCase, 0), 0);
 }
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesClearedPayload)
 {
