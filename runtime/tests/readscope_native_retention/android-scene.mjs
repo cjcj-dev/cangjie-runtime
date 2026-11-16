@@ -59,16 +59,23 @@ function checkBundle() {
   assert.equal(fixed.mode, 'preinit');
   assert.equal(fixed.nativeProcesses, 1);
   assert.equal(fixed.runtime, 'd51c34a06cfd980d0e2694514e2a41421ac41b83');
+  const pendingBindings = origin.blockers.filter(row =>
+    ['SHARED_DEADLINE_NOT_CONSUMED', 'DETACHED_TARGET_OWNERSHIP_AND_REAP'].includes(row.id));
   return { state: 'PREPARED_NOT_EXECUTED', fixed, origin, jobInterface,
-    plannedBindings, pendingBindings: [], interfaceStatus: 'BOUND_NOT_EXECUTED',
+    plannedBindings, pendingBindings,
+    interfaceStatus: pendingBindings.length ? 'INCOMPLETE_HOLD' : 'BOUND_NOT_EXECUTED',
     diagnosticContract: { resultSource: 'same-PID SBProcess state/ExitStatus/StopReason',
       shellWait: 'UNKNOWN', lldbRcIsBusinessRc: false, syntheticExitShell: false,
-      deviceRuntimeIdentity: 'UNKNOWN; actual module identity must be verified before qualification' },
+      deviceRuntimeIdentity: 'UNKNOWN; actual module identity must be verified before qualification',
+      controlledDetachBusinessExit: 'UNKNOWN',
+      targetCleanup: 'UNKNOWN until same-instance ownership and cleanup records are supplied; emulator shutdown is separate' },
     nativeRuns: 0 };
 }
 
 function requireReady() {
-  checkBundle();
+  const checked = checkBundle();
+  assert.equal(checked.pendingBindings.length, 0,
+    `GROK_INTERFACE_INCOMPLETE: ${checked.pendingBindings.map(row => row.id).join(',')}`);
   // Byte-identical Grok package is bound, but final entry/independent review
   // and separate controller authorization are required before native execution.
   assert.equal(origin.readyForNativeExecution, true,
@@ -371,8 +378,9 @@ async function execute() {
       remoteRuntime: '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so',
       recorderOutput: path.join(bundle, 'run'),
       actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
-    // One 300s collection-and-cleanup budget. Grok owns 270s including its
-    // cleanup; the wrapper starts TERM only after 275s and must reap by 285s.
+    // Required shared interface (currently held as INCOMPLETE_HOLD): Grok
+    // must finish its cleanup by 270s. The wrapper starts TERM only after
+    // 275s and must reap by 285s within the one 300s total budget.
     // The last 15s cover collection and emulator shutdown, with no fresh budget.
     sceneStarted = Date.now();
     const hardDeadline = sceneStarted + fixed.totalSeconds * 1000;

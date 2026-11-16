@@ -1,17 +1,17 @@
 {
-  "schema": 3,
+  "schema": 4,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
-  "sourceRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
-  "sourceRequestTerminal": "COMPLETED; controller directly confirmed in adoption instruction",
+  "sourceRequest": "b0a22c37-0892-4c20-99d2-93685c25bf38",
+  "sourceRequestTerminal": "COMPLETED/live_turn none; controller directly confirmed, not inferred from report WIP",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "d6bb0d2b7e72a91ec95c48e24b4c104daa74419621a328532e0f4d72cb49904e"
+      "sha256": "76113089bde889f541f52650fbd7c63f7d83d1abbb0d731e7b0a3de12272cdd1"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
-      "sha256": "8577706992c9f9a39a6b7f39b639d6797427f1cf7cf84a5b7b45b97fcb9ce89a"
+      "sha256": "2eb9a6e047eed94c2039944a89913ac2b553bdb32879d21884b541890d464135"
     },
     "lldb-commands.txt": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/lldb-commands.txt",
@@ -20,20 +20,28 @@
   },
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "b6b2d924a6769b53d196106731ec7e2478ed15d1f75aaf15e32a242f63dcc86f"
+    "sha256": "7ddddb583229d66b0aa921b341ff9ae2db529d4eed7d4a68ce7432492ab2a688"
   },
-  "predecessor": "431b8d533a401b9113a2678cecdbea0a9560d120",
+  "predecessor": "ce84459afce6eead476e52a84a520ce341bea758",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": false,
-  "predecessorFindings": "e373 was not copied; old a90931 package and 431b runtime binding preserved in Git; no old result changed",
+  "predecessorFindings": "37167 source reject remains; exact fixed successor copied without modifying Grok logic. Wrapper checkpoint is not whole-package qualification.",
   "blockers": [
     {
+      "id": "SHARED_DEADLINE_NOT_CONSUMED",
+      "detail": "Wrapper passes SCENE_DEADLINE_MS=t0+270000 within total300000; fixed Grok drive still uses independent TOTAL_MS. Exact gap handed to original Grok owner."
+    },
+    {
+      "id": "DETACHED_TARGET_OWNERSHIP_AND_REAP",
+      "detail": "Fixed package detaches keep-stopped but only has server/host/forward cleanup. Inferior instance identity and exact cleanup result are not yet supplied; emulator shutdown is not native natural exit."
+    },
+    {
       "id": "GROK_FINAL_ENTRY_AND_INDEPENDENT_REVIEW",
-      "detail": "New fixed package integrated verbatim; wrapper/workflow still require final entry review and independent review."
+      "detail": "Whole successor remains incomplete; no new whole-package review request or self-review."
     },
     {
       "id": "CONTROLLER_FIXED_EXECUTION_AUTHORIZATION",
-      "detail": "No push/dispatch/debugger/native execution authorized; do not flip readiness."
+      "detail": "No push/dispatch/debugger/native execution authorized; keep readiness false."
     }
   ],
   "nativeNotRun": [
@@ -48,6 +56,16 @@
     "shellWait": "UNKNOWN",
     "gnuBuildId": "ABSENT; not a prerequisite",
     "samePidLiveModuleRequired": true,
-    "fatalStopIsBusinessExit": false
+    "fatalStopIsBusinessExit": false,
+    "controlledDetachBusinessExit": "UNKNOWN",
+    "targetCleanup": "UNBOUND; original Grok owner successor required"
+  },
+  "rejectedPackage": "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
+  "sourceProvenance": {
+    "record": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/request-44e1719b.json",
+    "nativeSession": "ses_e2d918ab4ffegXNGJG7ij4SN9H",
+    "reportEvent": "call-06524593-8034-4cda-8452-5de7392a4360-128",
+    "originalRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
+    "successorTerminalSource": "controller adoption instruction; original record still has successorTerminal UNKNOWN and is preserved"
   }
 }

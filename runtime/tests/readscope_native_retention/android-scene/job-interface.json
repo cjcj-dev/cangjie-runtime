@@ -30,7 +30,7 @@
   "execute": "SCENE_EXECUTE=1 node scene.mjs execute",
   "executeThisLane": "not invoked",
   "sameDrive": true,
-  "consumer": "node scene.mjs execute keeps the entry-stop module snapshot from lldb stdout. It does not read /proc after quit, and it does not classify the formal shell",
+  "consumer": "node scene.mjs execute reads the entry-stop snapshot and mutex-events.json. Crash export is an -k command, not a later ordinary -o. quit after detach is not a business exit",
   "budget": {
     "minutes": 45,
     "jobs": 2,

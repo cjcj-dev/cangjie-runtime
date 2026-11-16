@@ -12,6 +12,13 @@ const NDK = '27.3.13750724';
 const REMOTE = '/data/local/tmp/readscope-lifetime';
 const ACTIVE_MS = 60000;
 const TOTAL_MS = 300000;
+const CLEANUP_RESERVE_MS = 20000;
+
+function sliceMs(elapsed, requested, cleanup) {
+  const remain = cleanup ? TOTAL_MS - elapsed : TOTAL_MS - CLEANUP_RESERVE_MS - elapsed;
+  if (remain <= 0) return 0;
+  return Math.min(requested, remain);
+}
 const RUNTIME_PATH = `${REMOTE}/libcangjie-runtime.so`;
 
 const TOOLS = {
@@ -259,14 +266,38 @@ function launchArgv(lldb) {
     '-o', 'script capture.arm()',
     '-o', 'process handle SIGABRT --stop true --pass false --notify true',
     '-o', 'target stop-hook add --one-liner "script capture.on_stop()"',
-    '-o', `process launch --stop-at-entry true --environment LD_LIBRARY_PATH=${REMOTE} -- ${REMOTE}/fixture.so preinit`,
+    '-o', `process launch --stop-at-entry --environment LD_LIBRARY_PATH=${REMOTE} -- ${REMOTE}/fixture.so preinit`,
     '-o', 'script capture.live_module()',
     '-o', 'image list',
     '-o', 'process continue',
     '-o', 'process status',
-    '-o', 'script capture.dump()',
-    '-o', 'quit',
+    '-o', 'script capture.seal()',
+    '-k', 'process status',
+    '-k', 'script capture.seal()',
+    '-k', 'script capture.mark_detach()',
+    '-k', 'process detach --keep-stopped',
+    '-k', 'quit',
   ];
+}
+
+function launchContract(command) {
+  const matched = String(command).match(/--stop-at-entry(?:\s+(\S+))?/);
+  const next = matched ? matched[1] : null;
+  const extra = Boolean(next && !next.startsWith('--'));
+  const inferior = String(command).split(' -- ').pop().trim().split(/\s+/);
+  return {
+    extra,
+    argc: inferior.length + 1,
+    ok: Boolean(matched) && !extra && inferior.length === 2 && inferior[0].endsWith('/fixture.so') && inferior[1] === 'preinit',
+  };
+}
+
+function capturedState(io, stdout) {
+  if (typeof io.savedCapture === 'function') {
+    const saved = io.savedCapture();
+    if (saved && typeof saved === 'object') return saved;
+  }
+  return jsonLine(stdout, 'EVENT_JSON:');
 }
 
 function jsonLine(text, prefix) {
@@ -302,6 +333,7 @@ function sbProcess(text) {
   const stops = [];
   const restarts = [];
   let current = null;
+  let controlled = false;
   for (const line of String(text || '').split('\n')) {
     let matched = line.match(/^Process (\d+) launched: '([^']*)' \(([^)]*)\)$/);
     if (matched) {
@@ -312,7 +344,7 @@ function sbProcess(text) {
     matched = line.match(/^Process (\d+) exited with status = (-?\d+) \(0x[0-9a-fA-F]+\)\s*(.*)$/);
     if (matched) {
       current = matched[1];
-      exits.push({ pid: matched[1], status: Number(matched[2]), description: matched[3].trim() });
+      exits.push({ pid: matched[1], status: Number(matched[2]), description: matched[3].trim(), controlled });
       continue;
     }
     matched = line.match(/^Process (\d+) stopped and restarted(?:: (.*))?$/);
@@ -333,10 +365,14 @@ function sbProcess(text) {
       states.push({ pid: matched[1], state: 'running' });
       continue;
     }
+    if (line.trim() === 'CONTROLLED_DETACH') {
+      controlled = true;
+      continue;
+    }
     matched = line.match(/^\* thread #\d+.*\bstop reason = (.+)$/);
     if (matched) stops.push({ pid: current, reason: matched[1].trim() });
   }
-  return { launched, exits, states, stops, restarts };
+  return { launched, exits, states, stops, restarts, controlled };
 }
 
 async function drive(io, sdk, serial = 'emulator-5554') {
@@ -345,11 +381,11 @@ async function drive(io, sdk, serial = 'emulator-5554') {
   const started = { device: null, forward: false };
   const tool = name => join(sdk, TOOLS[name]);
   const origin = typeof io.now === 'function' ? io.now('start') : Date.now();
-  const left = step => TOTAL_MS - ((typeof io.now === 'function' ? io.now(step) : Date.now()) - origin);
+  const elapsed = step => (typeof io.now === 'function' ? io.now(step) : Date.now()) - origin;
   const run = async (step, argv, options = {}) => {
-    const cap = options.stop ? (options.timeoutMs ?? 5000) : (options.active ? ACTIVE_MS : (options.timeoutMs ?? 30000));
-    const slice = options.stop ? cap : Math.min(cap, left(step));
-    if (!options.stop && slice <= 0) {
+    const cap = options.active ? ACTIVE_MS : (options.timeoutMs ?? 30000);
+    const slice = sliceMs(elapsed(step), cap, Boolean(options.cleanup));
+    if (slice <= 0) {
       const skipped = { rc: null, timedOut: true, stdout: '', stderr: '', skipped: true };
       log.push({ step, argv, rc: null, timedOut: true, skipped: true, timeoutMs: 0, stdout: '', stderr: '' });
       return skipped;
@@ -364,21 +400,21 @@ async function drive(io, sdk, serial = 'emulator-5554') {
   };
   const cleanup = async () => {
     if (meta.hostPid != null && typeof io.reap === 'function') {
-      const reaped = await io.reap(meta.hostPid);
+      const reaped = await io.reap(meta.hostPid, sliceMs(elapsed('reap-host'), 5000, true));
       log.push({ step: 'reap-host', argv: ['reap', String(meta.hostPid)], rc: reaped.rc, timedOut: false, stdout: reaped.stdout ?? '', stderr: reaped.stderr ?? '' });
       meta.hostReap = reaped.rc === 0 && String(reaped.stdout || '').includes('REAPED') ? 'REAPED' : 'UNCONFIRMED';
     }
     if (started.device) {
-      const probe = await run('cleanup-probe', [tool('adb'), '-s', serial, 'shell', identityShell()], { timeoutMs: 5000, stop: true });
+      const probe = await run('cleanup-probe', [tool('adb'), '-s', serial, 'shell', identityShell()], { timeoutMs: 5000, cleanup: true });
       const still = parseIdentity(probe.stdout, meta.hostPid);
       if (!still || still.pid !== started.device.pid || still.start !== started.device.start) meta.cleanup = 'UNCONFIRMED';
       else {
-        const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still.pid)], { timeoutMs: 5000, stop: true });
+        const cleaned = await run('cleanup-server', [tool('adb'), '-s', serial, 'shell', killShell(still.pid)], { timeoutMs: 5000, cleanup: true });
         meta.cleanup = cleaned.rc === 0 && String(cleaned.stdout || '').includes('REAPED') && !String(cleaned.argv || '').includes(String(meta.hostPid)) ? 'REAPED' : 'UNCONFIRMED';
       }
     }
     if (started.forward) {
-      const removed = await run('cleanup-forward', [tool('adb'), '-s', serial, 'forward', '--remove', 'tcp:5039'], { timeoutMs: 5000, stop: true });
+      const removed = await run('cleanup-forward', [tool('adb'), '-s', serial, 'forward', '--remove', 'tcp:5039'], { timeoutMs: 5000, cleanup: true });
       if (removed.rc !== 0) meta.cleanup = 'UNCONFIRMED';
     }
   };
@@ -423,7 +459,17 @@ async function drive(io, sdk, serial = 'emulator-5554') {
     const note = so ? await run('runtime-note', [tool('readelf'), '-n', so]) : null;
     const hashed = so ? await run('runtime-hash', ['sha256sum', so]) : null;
     const launch = await run('launch', launchArgv(tool('hostLldb')), { active: true });
-    if (launch.timedOut) { return finish('UNCAPTURED', io.simulated, log, { meta }); }
+    meta.foreground = {
+      pid: launch.pid ?? null,
+      signal: launch.signal ?? null,
+      closed: launch.closed !== false,
+      rc: launch.rc ?? null,
+      timedOut: Boolean(launch.timedOut),
+    };
+    if (launch.timedOut) {
+      const saved = capturedState(io, launch.stdout);
+      return finish('UNCAPTURED', io.simulated, log, { meta, businessExit: null, saved });
+    }
     const logcat = await run('logcat', [tool('adb'), '-s', serial, 'logcat', '-d', '-v', 'epoch']);
     const crash = await run('crash', [tool('adb'), '-s', serial, 'logcat', '-d', '-b', 'crash', '-v', 'epoch']);
     if (typeof launch.stdout !== 'string' || typeof launch.stderr !== 'string') {
@@ -465,13 +511,13 @@ async function drive(io, sdk, serial = 'emulator-5554') {
     }
     meta.module = 'LINKED';
     meta.loadBase = `0x${image.base.toString(16)}`;
-    const exitRow = proc.exits.find(row => row.pid === pid) || null;
+    const exitRow = proc.exits.find(row => row.pid === pid && !row.controlled) || null;
     const stops = proc.stops.filter(row => row.pid === pid && row.reason);
     const fatalStop = stops.some(row => /\bsignal SIGABRT\b|\bsignal SIGSEGV\b/.test(row.reason));
-    const detached = proc.states.some(row => row.pid === pid && row.state === 'detached');
+    const detached = proc.controlled || proc.states.some(row => row.pid === pid && row.state === 'detached');
     let linked = null;
     if (fatalStop || fatal) {
-      const state = jsonLine(launch.stdout, 'EVENT_JSON:');
+      const state = capturedState(io, launch.stdout);
       const fatalFrames = jsonLine(launch.stdout, 'FATAL_FRAMES_JSON:') || state?.fatal?.frames || null;
       linked = await decode({ state: state || { complete: false }, dwarf: null, messageAddress: messageAddress(text), fatalFrames });
     }
@@ -563,15 +609,53 @@ function scripted(script) {
       const mapsPid = joined.match(/\/proc\/(\d+)\/maps/);
       if (mapsPid && dead.has(mapsPid[1])) return { rc: 1, stdout: '', stderr: 'DEAD' };
       if (script.throw === step) throw new Error(`injected ${step}`);
-      if (script.timeout === step) return { rc: null, timedOut: true, stdout: '', stderr: '' };
+      if (script.timeout === step) {
+        return { rc: null, timedOut: true, signal: 'SIGTERM', closed: true, pid: 4242, stdout: script.timeoutStdout || '', stderr: '' };
+      }
       const result = { ...(defaults[step] || { rc: 0, stdout: '', stderr: '' }), ...(script.steps[step] || {}) };
       if (Array.isArray(argv) && argv.includes('quit')) {
         for (const matched of String(result.stdout || '').matchAll(/Process (\d+) launched:/g)) dead.add(matched[1]);
       }
       return result;
     },
+    savedCapture() { return script.saved || null; },
     runs,
   };
+}
+
+function watchChild(child, runMs, reapMs) {
+  return new Promise(resolve => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timingOut = false;
+    let killTimer = null;
+    let giveUp = null;
+    const pid = child.pid;
+    const finishRun = result => { if (!settled) { settled = true; resolve(result); } };
+    if (child.stdout) child.stdout.on('data', chunk => { stdout += chunk; });
+    if (child.stderr) child.stderr.on('data', chunk => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      timingOut = true;
+      try { child.kill('SIGTERM'); } catch { /* already closed */ }
+      killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already closed */ } }, Math.max(1, Math.floor(reapMs / 2)));
+      giveUp = setTimeout(() => {
+        finishRun({ rc: null, signal: 'SIGKILL', timedOut: true, closed: false, pid, stdout, stderr });
+      }, reapMs);
+    }, runMs);
+    child.on('error', error => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      clearTimeout(giveUp);
+      finishRun({ rc: 127, signal: null, timedOut: false, closed: false, pid, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      clearTimeout(giveUp);
+      finishRun({ rc: code, signal: timingOut ? (signal || 'SIGTERM') : null, timedOut: timingOut, closed: true, pid, stdout, stderr });
+    });
+  });
 }
 
 function realIO() {
@@ -580,54 +664,47 @@ function realIO() {
     simulated: false,
     stat(path) { return existsSync(path); },
     readText(path) { return readFileSync(path, 'utf8'); },
+    savedCapture() {
+      const path = join(HERE, 'run', 'mutex-events.json');
+      if (!existsSync(path)) return null;
+      try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+    },
     now() { return Date.now(); },
-    reap(pid) {
-      const child = children.get(pid);
-      if (!child) return Promise.resolve({ rc: 1, stdout: 'UNCONFIRMED', stderr: '' });
-      if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ rc: 0, stdout: 'REAPED', stderr: '' });
+    reap(pid, waitMs = 0) {
+      const child = children.get(Number(pid));
+      if (!child) return Promise.resolve({ rc: 1, stdout: 'UNCONFIRMED', stderr: '', closed: false, pid });
+      if (child.exitCode != null || child.signalCode != null) {
+        return Promise.resolve({ rc: 0, stdout: 'REAPED', stderr: '', closed: true, signal: child.signalCode, pid });
+      }
+      const budget = Math.max(0, waitMs);
+      if (budget === 0) {
+        try { child.kill('SIGKILL'); } catch { /* already closed */ }
+        return Promise.resolve({ rc: 4, stdout: 'NOT_REAPED', stderr: '', closed: false, signal: 'SIGKILL', pid });
+      }
       return new Promise(resolve => {
         const timer = setTimeout(() => {
-          child.kill('SIGKILL');
-          resolve({ rc: 4, stdout: 'NOT_REAPED', stderr: '' });
-        }, 5000);
-        child.once('close', () => {
+          try { child.kill('SIGKILL'); } catch { /* already closed */ }
+          resolve({ rc: 4, stdout: 'NOT_REAPED', stderr: '', closed: false, signal: 'SIGKILL', pid });
+        }, budget);
+        child.once('close', (code, signal) => {
           clearTimeout(timer);
-          resolve({ rc: 0, stdout: 'REAPED', stderr: '' });
+          resolve({ rc: 0, stdout: 'REAPED', stderr: '', closed: true, signal, pid });
         });
         child.kill('SIGTERM');
       });
     },
     run(step, argv, options = {}) {
-      return new Promise(resolve => {
-        const child = spawn(argv[0], argv.slice(1), {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...process.env, EXIT_SCENE_OUT: join(HERE, 'run') },
-        });
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-        const finishRun = result => { if (!settled) { settled = true; resolve(result); } };
-        const timer = setTimeout(() => {
-          child.kill('SIGTERM');
-          finishRun({ rc: null, timedOut: true, stdout, stderr, pid: child.pid });
-        }, options.timeoutMs ?? options.totalMs ?? 300000);
-        child.stdout.on('data', chunk => { stdout += chunk; });
-        child.stderr.on('data', chunk => { stderr += chunk; });
-        child.on('error', error => {
-          clearTimeout(timer);
-          finishRun({ rc: 127, timedOut: false, stdout, stderr: `${stderr}${error.message}`, pid: child.pid });
-        });
-        if (options.background) {
-          clearTimeout(timer);
-          children.set(child.pid, child);
-          finishRun({ rc: 0, timedOut: false, stdout, stderr, pid: child.pid });
-          return;
-        }
-        child.on('close', code => {
-          clearTimeout(timer);
-          finishRun({ rc: code, timedOut: false, stdout, stderr, pid: child.pid });
-        });
+      const child = spawn(argv[0], argv.slice(1), {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, EXIT_SCENE_OUT: join(HERE, 'run') },
       });
+      if (options.background) {
+        children.set(child.pid, child);
+        return Promise.resolve({ rc: 0, timedOut: false, closed: false, stdout: '', stderr: '', pid: child.pid, signal: null });
+      }
+      const timeoutMs = options.timeoutMs ?? options.totalMs ?? TOTAL_MS;
+      const reapMs = Math.min(2000, Math.floor(timeoutMs / 4));
+      return watchChild(child, Math.max(0, timeoutMs - reapMs), reapMs);
     },
   };
 }
@@ -652,7 +729,7 @@ function plan(selected) {
     debugger: {
       platformRequired: 'remote-android',
       missingPlatform: 'PLATFORM_ABSENT',
-      commandOrder: ['command source', 'command script import', 'platform select remote-android', 'platform connect', 'target create', 'target symbols add', 'script capture.arm()', 'process launch --stop-at-entry', 'script capture.live_module()', 'image list', 'process continue', 'process status', 'quit'],
+      commandOrder: ['command source', 'command script import', 'platform select remote-android', 'platform connect', 'target create', 'target symbols add', 'script capture.arm()', 'process launch --stop-at-entry', 'script capture.live_module()', 'image list', 'process continue', 'process status', 'script capture.seal()', '-k process status', '-k script capture.seal()', '-k script capture.mark_detach()', '-k process detach --keep-stopped', '-k quit'],
       remoteExecutable: `${REMOTE}/consumer`,
       remoteLibraryPath: REMOTE,
       hostSymbols: 'HOST_SYMBOLS',
@@ -663,9 +740,11 @@ function plan(selected) {
       fatalAddress: 'dwarf variable or same-run fatal message only; historical rdi is not an argument',
       devicePid: 'one /proc/net/tcp LISTEN row whose inode is in that pid fd; host adb pid is reaped separately and never killed as the server',
       forward: 'adb forward --list must not already own tcp:5039; this driver does not replace it',
-      imageList: 'image list uuid is not a GNU build id. Path, maps and file sha are taken at the entry stop, before continue or quit',
+      imageList: 'image list uuid is not a GNU build id. Path, maps and file sha are taken at the entry stop, before continue. A crash does not depend on later ordinary -o commands',
       shellWait: 'formal android.mjs EXIT_SHELL is not an input; this diagnostic always leaves it UNKNOWN',
-      businessExit: 'only the same pid Process <id> exited with status line; lldb rc and a fatal stop are separate',
+      businessExit: 'only a same-pid exited-with-status line that is not after CONTROLLED_DETACH. lldb rc, quit, detach and a timeout signal are not a business exit',
+      crashCommands: '-k status, seal, detach --keep-stopped, then quit. The saved mutex-events.json is the capture record',
+      foreground: 'the launch pid is waited to close inside its own slice. TERM then SIGKILL. Cleanup uses the reserved part of the 300s and does not add another 5s',
       sceneSuccess: false,
     },
   };
@@ -693,7 +772,7 @@ function writeBundle(out, selected, tools) {
     execute: 'SCENE_EXECUTE=1 node scene.mjs execute',
     executeThisLane: 'not invoked',
     sameDrive: true,
-    consumer: 'node scene.mjs execute keeps the entry-stop module snapshot from lldb stdout. It does not read /proc after quit, and it does not classify the formal shell',
+    consumer: 'node scene.mjs execute reads the entry-stop snapshot and mutex-events.json. Crash export is an -k command, not a later ordinary -o. quit after detach is not a business exit',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
     forbid: ['runtime-fini', 'no-image', 'NoFP', 'retry', 'ndk-gdb', 'simulated sceneSuccess', 'host-pid kill', '-S before target', 'synthetic EXIT_SHELL', 'literal build-id token', 'shell classifier', 'lldb rc as business exit', 'lldb uuid as gnu build id', 'relink to add a note'],
@@ -718,9 +797,18 @@ function assertOrder(result) {
   const image = argv.indexOf('image list');
   const continued = argv.indexOf('process continue');
   const status = argv.indexOf('process status');
-  const quit = argv.indexOf('quit');
-  const order = [source, imported, selected, connected, created, symbols, armed, launched, live, image, continued, status, quit];
+  const sealed = argv.indexOf('script capture.seal()');
+  const order = [source, imported, selected, connected, created, symbols, armed, launched, live, image, continued, status, sealed];
   if (order.some(index => index < 0) || order.some((index, place) => place > 0 && index < order[place - 1])) fail('command order');
+  const crash = ['process status', 'script capture.seal()', 'script capture.mark_detach()', 'process detach --keep-stopped', 'quit'];
+  let cursor = sealed;
+  for (const command of crash) {
+    const index = argv.indexOf(command, command === 'process status' || command === 'script capture.seal()' ? cursor + 1 : cursor);
+    if (index < 0 || argv[index - 1] !== '-k' || index < cursor) fail(`crash command ${command}`);
+    cursor = index;
+  }
+  if (argv.includes('true')) fail('stop-at-entry was given an argument');
+  if (!launchContract(argv[launched]).ok) fail('inferior arguments changed');
   if (argv[imported] !== `command script import ${join(HERE, 'capture.py')}`) fail('import is not package-relative');
   if (!argv[launched].includes('--stop-at-entry')) fail('module snapshot is not taken at a stop');
   if (!argv[launched].includes(`LD_LIBRARY_PATH=${REMOTE}`)) fail('remote library path missing');
@@ -780,9 +868,16 @@ async function calibrate() {
   await expect('split-socket', { platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: { 'server-identity': { rc: 0, stdout: procDump('200', '99', '5555', '9999'), stderr: '' } } }, 'SERVER_UNCONFIRMED', 'launch');
   if (cases.at(-1).steps.includes('cleanup-server')) fail('unconfirmed server was killed');
   await expect('forward-busy', { platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: { 'forward-list': { rc: 0, stdout: 'emulator-5554 tcp:5039 tcp:5039\n', stderr: '' } } }, 'FORWARD_BUSY', 'forward');
-  await expect('budget', { platform: 'remote-android', serial: 'emulator-5554\tdevice', at: { launch: 300001 }, steps: {} }, 'UNCAPTURED', 'launch');
+  const exhausted = await expect('budget', { platform: 'remote-android', serial: 'emulator-5554\tdevice', at: { launch: 300001 }, steps: {} }, 'CLEANUP_UNCONFIRMED', 'launch');
+  const cleanupProbe = exhausted.log.find(row => row.step === 'cleanup-probe');
+  if (!cleanupProbe || cleanupProbe.timeoutMs !== 0 || cleanupProbe.skipped !== true) fail('cleanup added time after the total');
   const timed = await expect('timeout', { platform: 'remote-android', serial: 'emulator-5554\tdevice', timeout: 'launch', steps: {} }, 'UNCAPTURED', null);
   if (timed.log.find(row => row.step === 'launch').timeoutMs !== 60000) fail('active budget is not 60s');
+  if (timed.meta.foreground?.pid !== 4242 || timed.meta.foreground.signal !== 'SIGTERM' || timed.meta.foreground.closed !== true || timed.businessExit !== null) {
+    fail('timeout did not record this foreground close');
+  }
+  const timedExit = await expect('timeout-not-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', timeout: 'launch', timeoutStdout: 'Process 2400 exited with status = 0 (0x00000000) \n', steps: {} }, 'UNCAPTURED', null);
+  if (timedExit.businessExit !== null || timedExit.meta.foreground?.signal !== 'SIGTERM') fail('a killed debugger became a business exit');
   const shaped = await expect('launch-shaped', { platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} }, 'FILE_IDENTITY_ABSENT', null);
   assertOrder(shaped);
   const matched = await expect('identity-without-process', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText('', '2400', { process: false }), stderr: '' } } }, 'PROCESS_ABSENT', null);
@@ -821,6 +916,14 @@ async function calibrate() {
   await expect('fatal-unknown', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}Process 2400 exited with status = 134 (0x00000086) \n`), stderr: '' } } }, 'FATAL_UNKNOWN', null);
   const attributed = await expect('fatal-attributed', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${chain}Process 2400 exited with status = 134 (0x00000086) \n`), stderr: '' } } }, 'FATAL_ATTRIBUTED', null);
   if (attributed.sceneSuccess || attributed.businessExit !== 134 || attributed.shellWait !== 'UNKNOWN') fail('attributed exit collapsed into a shell pass');
+  const covered = { complete: true, dead: { '4660': { state: 'dead', event: { frames, tid: 1624, kind: 'destroy', return: 0 } } }, fatal: { frames: fatalFrames } };
+  const uncovered = { ...covered, missing: ['pthread_mutex_init'] };
+  const missed = await expect('missing-init-saved', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', saved: uncovered, steps: { launch: { rc: 0, stdout: processText(`${chain}Process 2400 exited with status = 134 (0x00000086) \n`), stderr: '' } } }, 'FATAL_UNKNOWN', null);
+  if (missed.businessExit !== 134 || missed.association?.chain === 'DESTROY0_THEN_LOCK') fail('saved missing init still attributed one generation');
+  const fromFile = await expect('saved-without-stdout', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', saved: covered, steps: { launch: { rc: 0, stdout: processText(`${stop}Process 2400 exited with status = 134 (0x00000086) \n`), stderr: '' } } }, 'FATAL_ATTRIBUTED', null);
+  if (fromFile.association?.chain !== 'DESTROY0_THEN_LOCK') fail('saved capture was ignored');
+  const detachedKill = await expect('controlled-detach-exit', { platform: 'remote-android', serial: 'emulator-5554\tdevice', runtimeSo: '/opt/libcangjie-runtime.so', steps: { launch: { rc: 0, stdout: processText(`${stop}CONTROLLED_DETACH\nProcess 2400 exited with status = 0 (0x00000000) \n`), stderr: '' } } }, 'FATAL_STOP_UNEXITED', null);
+  if (detachedKill.businessExit !== null) fail('controlled detach was read as a natural exit');
   const thrown = await expect('launch-threw', { platform: 'remote-android', serial: 'emulator-5554\tdevice', throw: 'launch', steps: {} }, 'DRIVER_EXCEPTION', null);
   if (!thrown.log.some(row => row.step === 'cleanup-server' && row.argv.join(' ').includes('pid=200'))) fail('exception path skipped device cleanup');
   const recorder = scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: { launch: { rc: 0, stdout: processText('Process 2400 exited with status = 0 (0x00000000) \n'), stderr: '' }, 'module-maps': { rc: 0, stdout: `7f0000000000-7f0000001000 r-xp 00000000 00:00 1 ${RUNTIME_PATH}\n`, stderr: '' } } });
@@ -833,12 +936,31 @@ async function calibrate() {
 
 const argv = process.argv.slice(2);
 
+if (argv[0] === 'reap-check') {
+  const child = spawn('sleep', ['30'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const started = Date.now();
+  const result = await watchChild(child, 150, 800);
+  const elapsed = Date.now() - started;
+  if (!result.closed || result.pid !== child.pid || !['SIGTERM', 'SIGKILL'].includes(result.signal) || elapsed >= 2000 || result.timedOut !== true) {
+    console.error(JSON.stringify({ result, elapsed }));
+    process.exit(1);
+  }
+  console.log(`REAP_PASS pid=${result.pid} signal=${result.signal} elapsed=${elapsed}`);
+  process.exit(0);
+}
+
 if (argv[0] === 'self-test') {
   const source = process.env.SCENE_COMMANDS;
   if (!source) fail('SCENE_COMMANDS unset');
   const records = JSON.parse(readFileSync(source, 'utf8'));
   const selected = route(records);
   if (selected.launch.at(-1) !== 'preinit') fail('self-test launch');
+  const command = launchArgv('/sdk/lldb').find(item => item.startsWith('process launch '));
+  if (!launchContract(command).ok || launchContract(command).argc !== 3) fail('launch contract');
+  if (launchContract(command.replace('--stop-at-entry', '--stop-at-entry true')).ok) fail('old true argument was accepted');
+  if (sliceMs(300000, 5000, false) !== 0) fail('a stop still adds time past the total');
+  if (sliceMs(290000, 5000, true) !== 5000) fail('cleanup reserve was removed');
+  if (sliceMs(250000, 60000, false) !== 30000) fail('active work ate the cleanup reserve');
   let rejected = false;
   try {
     route([{ name: 'fixture-link', args: ['/src/elf-fixture.cpp'] }, { name: 'consumer-link', args: ['/src/elf-consumer.cpp'] }, { name: 'preinit', args: ['consumer', 'fixture.so', 'runtime-fini'] }]);

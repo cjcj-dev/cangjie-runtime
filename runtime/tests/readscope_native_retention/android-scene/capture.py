@@ -64,7 +64,24 @@ def on_return(state, tid, rax, frames):
 def unknown(reason):
     return {"chain": "UNKNOWN", "address": None, "source": reason, "sceneSuccess": False}
 
+def note_coverage(state, name, final):
+    state.setdefault("coverage", {})[name] = final
+    if final in ("bound", "hit"):
+        state["missing"] = [item for item in state.get("missing", []) if item != name]
+    return state
+
+def resolve_coverage(state, counts):
+    for name, count in counts.items():
+        if (state.get("coverage") or {}).get(name) == "hit":
+            note_coverage(state, name, "hit")
+            continue
+        if count:
+            note_coverage(state, name, "bound")
+    return state
+
 def associate(state, dwarf_mutex, message_address, fatal_frames=None):
+    if "pthread_mutex_init" in state.get("missing", []) or (state.get("coverage") or {}).get("pthread_mutex_init") == "pending":
+        return unknown("init-coverage")
     if not state.get("complete", False):
         return unknown("truncated")
     if not stack_ok(fatal_frames):
@@ -165,8 +182,13 @@ def arm():
     for name, callback in names:
         breakpoint = target.BreakpointCreateByName(name)
         breakpoint.SetScriptCallbackFunction(callback)
-        if breakpoint.GetNumLocations() == 0:
+        locations = breakpoint.GetNumLocations()
+        state.setdefault("breakpoints", {})[name] = breakpoint.GetID()
+        if locations == 0:
             state["missing"].append(name)
+            note_coverage(state, name, "pending")
+        else:
+            note_coverage(state, name, "bound")
     save(state)
 
 def remember(kind, frame):
@@ -178,6 +200,9 @@ def remember(kind, frame):
     return False
 
 def on_init(frame, location, extra, internal):
+    state = load()
+    note_coverage(state, "pthread_mutex_init", "hit")
+    save(state)
     if "pthread_mutex_init" in (frame_name(frame) or ""):
         return remember("init", frame)
     return False
@@ -239,6 +264,21 @@ def live_module():
 
 def dump():
     print('EVENT_JSON:' + json.dumps(load()), flush=True)
+
+def seal():
+    import lldb
+    target = lldb.debugger.GetSelectedTarget()
+    state = load()
+    counts = {}
+    for name, ident in (state.get("breakpoints") or {}).items():
+        breakpoint = target.FindBreakpointByID(ident)
+        counts[name] = breakpoint.GetNumLocations() if breakpoint.IsValid() else 0
+    resolve_coverage(state, counts)
+    save(state)
+    dump()
+
+def mark_detach():
+    print('CONTROLLED_DETACH', flush=True)
 
 def on_stop():
     import lldb
@@ -302,6 +342,28 @@ def self_test():
         raise SystemExit("truncated state still claimed a chain")
     if examinable("exited") or examinable("detached") or examinable("running") or not examinable("stopped"):
         raise SystemExit("a dead or running process was treated as examinable")
+    frames = two("pthread_mutex_destroy", "owner")
+    positive = fresh()
+    on_call(positive, 1, "destroy", 4660, frames)
+    on_return(positive, 1, 0, frames)
+    if associate(positive, 4660, None, two("pthread_mutex_lock", "user"))["chain"] != "DESTROY0_THEN_LOCK":
+        raise SystemExit("observed coverage changed the independent control")
+    uncovered = fresh()
+    on_call(uncovered, 1, "destroy", 4660, frames)
+    on_return(uncovered, 1, 0, frames)
+    uncovered["missing"] = ["pthread_mutex_init"]
+    if associate(uncovered, 4660, None, two("pthread_mutex_lock", "user"))["chain"] != "UNKNOWN":
+        raise SystemExit("missing init coverage still claimed one generation")
+    pending = fresh()
+    on_call(pending, 1, "destroy", 4660, frames)
+    on_return(pending, 1, 0, frames)
+    note_coverage(pending, "pthread_mutex_init", "pending")
+    pending["missing"] = ["pthread_mutex_init"]
+    if associate(pending, 4660, None, two("pthread_mutex_lock", "user"))["chain"] != "UNKNOWN":
+        raise SystemExit("pending init was treated as covered")
+    resolve_coverage(pending, {"pthread_mutex_init": 1})
+    if "pthread_mutex_init" in pending["missing"] or associate(pending, 4660, None, two("pthread_mutex_lock", "user"))["chain"] != "DESTROY0_THEN_LOCK":
+        raise SystemExit("a later bind stayed missing")
     print("PAIRING_PASS")
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "self-test":
