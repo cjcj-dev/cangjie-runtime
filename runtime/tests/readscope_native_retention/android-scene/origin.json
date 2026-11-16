@@ -2,12 +2,12 @@
   "schema": 6,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
-  "sourceRequest": "710c11c5-13b9-46b3-a6cb-7b1eaab98f65",
+  "sourceRequest": "0dec7f97-602c-4c7e-93ea-89cf5ca064fd",
   "sourceRequestTerminal": "COMPLETED; controller tool verification stated in current adoption instruction, not a new human approval",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "cfe28dbc4ebde1d111a6172ce1c3a0a602cc6e145d2895c838a595220e4b9a65"
+      "sha256": "9db5d3ea75ce455a43b8145f6f26cc2ed8c2828f526c676ffa0397adbbba31c0"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
@@ -20,12 +20,12 @@
   },
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "ec11f16626058a6a0f6acb943e9a45b5cff560b2d3b850046ce5d03f08d9253e"
+    "sha256": "9920840084606f8bc76a052466169d4d7342ff5681629510bb02ecd059aaa898"
   },
-  "predecessor": "5715cb62abe40ada616ceef105837ead8c61f8f3",
+  "predecessor": "816eb58e55c57031e7dd130343b1bd70e6f24ba3",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": true,
-  "predecessorFindings": "37167/5715 SOURCE_REJECT remain. ed488 SOURCE_PASS_SCOPED is reused only for unchanged preparation logic. This successor integrates Grok r27d lldb.sh/host-check and formal pre-AVD host closure; the new startup interface has not executed on a real runner. Background error detail preservation remains limited.",
+  "predecessorFindings": "816eb SOURCE_REJECT and 37167/5715 rejects remain. Host launcher/closure checks were FIXED_SCOPED. This successor byte-copies the Grok foreground group/member escalation repair; daemonized/off-group or later-unrecorded descendants remain outside its coverage. A pipe close is not proof that all owned descendants disappeared. Not a full lifecycle PASS.",
   "blockers": [],
   "nativeNotRun": [
     "r27d lldb.sh actual version/remote-android host-check and launch on official runner",
@@ -45,7 +45,16 @@
     "fatalStopIsBusinessExit": false,
     "controlledDetachBusinessExit": "UNKNOWN",
     "targetCleanup": "Same live pid/start/exe; rc0 and whole-line REAPED only after /proc disappearance wait. Missing/reused/late identity UNKNOWN; target cleanup does not create a natural business exit. Native behavior NOT_RUN.",
-    "exitProvenance": "Actual detach, debugger kill/quit, timeout and cleanup must not establish a natural business exit. Source review of the fixed operation chain remains separate from the parser intent/completion controls. No additional reachable violation established by Sol; exact scope question handed to original Grok owner."
+    "exitProvenance": "Actual detach, debugger kill/quit, timeout and cleanup must not establish a natural business exit. Source review of the fixed operation chain remains separate from the parser intent/completion controls. No additional reachable violation established by Sol; exact scope question handed to original Grok owner.",
+    "hostDescendants": {
+      "scope": "Foreground process group while leader identity matches; after leader disappears, recorded members only, with matching start and original group.",
+      "uncovered": [
+        "off-group members",
+        "members first appearing after recorded snapshot"
+      ],
+      "pipeClose": "Not all-owned-processes-empty proof",
+      "realNdkDescendantCoverage": "NOT_RUN; review must examine exact launcher evidence and bounded ownership implementation."
+    }
   },
   "rejectedPackage": "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
   "sourceProvenance": {
@@ -53,25 +62,26 @@
     "nativeSession": "ses_e2d918ab4ffegXNGJG7ij4SN9H",
     "reportEvent": "call-06524593-8034-4cda-8452-5de7392a4360-128",
     "originalRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
-    "successorTerminalSource": "Controller tool verification confirms 710c11c5-13b9-46b3-a6cb-7b1eaab98f65 COMPLETED. Historical request-44e1719b journal unchanged; no new native session or report event invented."
+    "successorTerminalSource": "Controller tool verification confirms 0dec7f97-602c-4c7e-93ea-89cf5ca064fd COMPLETED. Historical request-44e1719b journal unchanged; no new session/report event invented."
   },
   "rejectedPackages": [
     "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
-    "5715cb62abe40ada616ceef105837ead8c61f8f3"
+    "5715cb62abe40ada616ceef105837ead8c61f8f3",
+    "816eb58e55c57031e7dd130343b1bd70e6f24ba3"
   ],
   "evidenceReuse": {
     "oldCalibration47": "belongs to 617eaa2d; not evidence of executing the new fixed package",
     "currentSourceEvidence": [
-      "interface-check.json",
-      "reap-predicate.json",
-      "source report self-test rc0"
+      "Grok ownership.json target-red/controls and limitations",
+      "Grok host-closure.json",
+      "New Sol exact-package binding and minimal copied-function routing controls; no repeated47 calibration/native evidence"
     ],
     "nativeRuns": 0
   },
   "executionPermit": {
-    "status": "PREPARED_AWAITING_CONTROLLER_FIXED_SHA_EXTERNAL_EXECUTION_AUTHORIZATION",
-    "meaning": "Origin ready releases the local readiness predicate only. Previous 330e47 official permit was consumed by run43804384904; this new full candidate requires new exact-SHA external authorization.",
-    "parent": "5362d48b1931dc3c553baa44d90e229c4f146894",
+    "status": "COMPLETE_SUCCESSOR_PREPARATION_AWAITING_INDEPENDENT_REVIEW_AND_NEW_EXACT_SHA_AUTHORIZATION",
+    "meaning": "Origin ready retains the local gate meaning only. 816eb SOURCE_REJECT is not reversed; this complete successor requires independent review and separate exact-SHA external authorization. No push/dispatch/native permission.",
+    "parent": "816eb58e55c57031e7dd130343b1bd70e6f24ba3",
     "technicalReview": {
       "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
       "verdict": "SOURCE_PASS_SCOPED",
@@ -120,7 +130,9 @@
       "background error detail is not fully returned by all reap branches; retain available raw output and record missing detail UNKNOWN",
       "actual tools, live module identity, events, terminal status and cleanup remain unverified",
       "single fatal stack is not root-cause attribution; original full-image destroyed-mutex/SIGABRT remains OPEN",
-      "job-interface.readyForNativeExecution remains false as the reviewed independent interface fact"
+      "job-interface.readyForNativeExecution remains false as the reviewed independent interface fact",
+      "Foreground escalation covers recorded members still matching starttime and original process group only; off-group and later-unrecorded members are not followed.",
+      "Host close records pipe closure only; it does not establish that every descendant is gone. Real NDK lldb.sh descendant behavior remains NOT_RUN."
     ]
   }
 }

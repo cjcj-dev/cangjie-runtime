@@ -1,7 +1,7 @@
 #!/usr/bin/env zx
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
@@ -543,6 +543,8 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
       step, argv, rc: result.rc, timedOut: Boolean(result.timedOut), timeoutMs: slice,
       stdout: typeof result.stdout === 'string' ? result.stdout : null,
       stderr: typeof result.stderr === 'string' ? result.stderr : null,
+      owned: result.owned ?? null,
+      ownership: result.ownership ?? null,
     });
     return result;
   };
@@ -623,7 +625,8 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
       pid: launch.pid ?? null,
       signal: launch.signal ?? null,
       timer: Boolean(launch.timer),
-      closed: launch.closed !== false,
+      closed: launch.closed === true,
+      owned: launch.owned ?? null,
       rc: launch.rc ?? null,
       timedOut: Boolean(launch.timedOut),
     };
@@ -791,6 +794,60 @@ function scripted(script) {
   };
 }
 
+function readProc(pid) {
+  try {
+    const text = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const end = text.lastIndexOf(')');
+    if (end < 0) return null;
+    const fields = text.slice(end + 2).trim().split(/\s+/);
+    return { pgrp: fields[2], start: fields[19] };
+  } catch {
+    return null;
+  }
+}
+
+function groupIdentity(pid) {
+  const now = readProc(pid);
+  if (!now || now.pgrp !== String(pid)) return null;
+  return { pid: Number(pid), start: now.start, pgrp: now.pgrp };
+}
+
+function groupMembers(pgid, read = readProc) {
+  let names = [];
+  try { names = readdirSync('/proc'); } catch { return []; }
+  const members = [];
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    const info = read(name);
+    if (!info || info.pgrp !== String(pgid)) continue;
+    members.push({ pid: Number(name), start: info.start, pgrp: info.pgrp });
+  }
+  return members;
+}
+
+function signalOwned(child, identity, signal, read = readProc) {
+  if (!identity) {
+    try { child.kill(signal); } catch { /* fixture or already closed */ }
+    return 'DIRECT';
+  }
+  const now = read(identity.pid);
+  if (now && (now.start !== identity.start || now.pgrp !== identity.pgrp)) return 'REUSED';
+  if (now) {
+    identity.members = groupMembers(identity.pid, read);
+    try { process.kill(-identity.pid, signal); } catch { /* group already gone */ }
+    return 'GROUP';
+  }
+  const members = Array.isArray(identity.members) ? identity.members : [];
+  let sent = 0;
+  for (const member of members) {
+    if (member.pid === identity.pid) continue;
+    const memberNow = read(member.pid);
+    if (!memberNow || memberNow.start !== member.start || memberNow.pgrp !== identity.pgrp) continue;
+    try { process.kill(member.pid, signal); sent += 1; } catch { /* member already gone */ }
+  }
+  return sent > 0 ? 'MEMBER' : 'UNCONFIRMED';
+}
+
 function watchChild(child, runMs, reapMs) {
   return new Promise(resolve => {
     let stdout = '';
@@ -799,29 +856,43 @@ function watchChild(child, runMs, reapMs) {
     let timingOut = false;
     let killTimer = null;
     let giveUp = null;
+    let ownership = 'DIRECT';
+    let escalation = null;
     const pid = child.pid;
-    const finishRun = result => { if (!settled) { settled = true; resolve(result); } };
+    let identity = null;
+    if (child.ownedGroup) {
+      for (let attempt = 0; attempt < 5 && !identity; attempt += 1) identity = groupIdentity(pid);
+    }
+    ownership = identity ? 'GROUP' : (child.ownedGroup ? 'NO_IDENTITY' : 'DIRECT');
+    const finishRun = result => { if (!settled) { settled = true; resolve({ ...result, escalation }); } };
     if (child.stdout) child.stdout.on('data', chunk => { stdout += chunk; });
     if (child.stderr) child.stderr.on('data', chunk => { stderr += chunk; });
+    const arm = signal => {
+      const how = signalOwned(child, identity, signal);
+      if (how === 'REUSED') ownership = 'REUSED';
+      if (how === 'MEMBER' || how === 'UNCONFIRMED') escalation = how;
+      return how;
+    };
     const timer = setTimeout(() => {
       timingOut = true;
-      try { child.kill('SIGTERM'); } catch { /* already closed */ }
-      killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already closed */ } }, Math.max(1, Math.floor(reapMs / 2)));
+      arm('SIGTERM');
+      if (settled) return;
+      killTimer = setTimeout(() => { arm('SIGKILL'); }, Math.max(1, Math.floor(reapMs / 2)));
       giveUp = setTimeout(() => {
-        finishRun({ rc: null, signal: null, timer: true, timedOut: true, closed: false, pid, stdout, stderr });
+        finishRun({ rc: null, signal: null, timer: true, timedOut: true, closed: false, owned: ownership === 'REUSED' ? 'REUSED' : 'UNCONFIRMED', ownership, pid, stdout, stderr });
       }, reapMs);
     }, runMs);
     child.on('error', error => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(giveUp);
-      finishRun({ rc: 127, signal: null, timer: timingOut, timedOut: timingOut, closed: false, pid, stdout, stderr: `${stderr}${error.message}` });
+      finishRun({ rc: 127, signal: null, timer: timingOut, timedOut: timingOut, closed: false, owned: 'UNCONFIRMED', ownership, pid, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(giveUp);
-      finishRun({ rc: code, signal: signal ?? null, timer: timingOut, timedOut: timingOut, closed: true, pid, stdout, stderr });
+      finishRun({ rc: code, signal: signal ?? null, timer: timingOut, timedOut: timingOut, closed: true, owned: 'CLOSED', ownership, pid, stdout, stderr });
     });
   });
 }
@@ -867,8 +938,10 @@ function realIO() {
     run(step, argv, options = {}) {
       const child = spawn(argv[0], argv.slice(1), {
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: !options.background,
         env: { ...process.env, EXIT_SCENE_OUT: join(HERE, 'run') },
       });
+      if (!options.background) child.ownedGroup = true;
       if (options.background) {
         const record = { child, exit: null, error: null, close: null };
         child.on('exit', (code, signal) => { record.exit = { code, signal: signal ?? null }; });
@@ -951,7 +1024,7 @@ function writeBundle(out, selected, tools) {
     sameDrive: true,
     hostCheck: 'node scene.mjs host-check',
     hostLauncher: TOOLS.hostWrapper,
-    hostClosure: 'ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Do not substitute a system libpython.',
+    hostClosure: 'ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Foreground lldb.sh is one process group. Timeout signals that group while the leader starttime matches, then signals only recorded members that are still in the group. Background adb is not in that group.',
     consumer: 'node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
@@ -1266,7 +1339,7 @@ if (argv[0] === 'calibrate') {
   if (!quitSrc.includes('"quit [exit-code]"') || !quitSrc.includes('eArgTypeUnsignedInteger')) fail('quit is not an optional unsigned exit code');
   if (crash[4] !== 'quit') fail('quit was given a flag');
   const sceneText = readFileSync(join(HERE, 'scene.mjs'), 'utf8');
-  const fragment = sceneText.slice(sceneText.indexOf('function watchChild('), sceneText.indexOf('\nfunction plan('));
+  const fragment = sceneText.slice(sceneText.indexOf('function readProc('), sceneText.indexOf('\nfunction plan('));
   let queued = null;
   const loaded = runInNewContext(`${fragment}\n({ watchChild, realIO })`, {
     spawn() { return queued; },
@@ -1407,6 +1480,238 @@ if (argv[0] === 'calibrate') {
   writeFileSync(join(HERE, 'host-closure.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('HOST_CLOSURE_PASS');
   process.exit(0);
+} else if (argv[0] === 'ownership-check') {
+  const { EventEmitter } = await import('node:events');
+  mkdirSync(join(HERE, 'run'), { recursive: true });
+  const hold = join(HERE, 'run', 'ownership-hold.mjs');
+  const outsider = join(HERE, 'run', 'ownership-outsider.mjs');
+  const outsiderFile = join(HERE, 'run', 'ownership-outsider.pid');
+  const launcher = join(HERE, 'run', 'ownership-launcher.sh');
+  writeFileSync(outsider, "process.on('SIGHUP', () => {});\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);\n");
+  writeFileSync(hold, `import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\nconst child = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(outsider)}], { detached: true, stdio: 'ignore' });\nwriteFileSync(${JSON.stringify(outsiderFile)}, String(child.pid));\nchild.unref();\nprocess.on('SIGHUP', () => {});\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);\n`);
+  writeFileSync(launcher, `#!/bin/bash\n${JSON.stringify(process.execPath)} "$1" &\necho "holder=$!"\nwait\n`);
+  const sceneText = readFileSync(join(HERE, 'scene.mjs'), 'utf8');
+  const begin = sceneText.indexOf('function readProc(');
+  const end = sceneText.indexOf('\nfunction plan(', begin);
+  if (begin < 0 || end <= begin) fail('ownership fragment missing');
+  const fragment = sceneText.slice(begin, end);
+  const eventFixture = kind => {
+    const signals = [];
+    const spawnCalls = [];
+    let descendantAlive = kind === 'wrapped-timeout';
+    const child = new EventEmitter();
+    child.pid = 101;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = signal => {
+      signals.push(signal);
+      if (kind === 'wrapped-timeout') child.emit('exit', null, signal);
+      else child.emit('close', null, signal);
+      return true;
+    };
+    const io = runInNewContext(`${fragment}\nrealIO()`, {
+      Map, Promise, Boolean, Number, String, Math, Date, setTimeout, clearTimeout,
+      process: { env: {} }, HERE: '/sealed', TOTAL_MS: 40, join,
+      spawn(program, args, options) {
+        spawnCalls.push({ program, detached: options.detached, background: false });
+        if (kind === 'normal') setTimeout(() => child.emit('close', 0, null), 0);
+        return child;
+      },
+      existsSync: () => false,
+      readFileSync() { throw new Error('event fixture has no process identity'); },
+    });
+    return { io, signals, spawnCalls, descendantAlive: () => descendantAlive };
+  };
+  const direct = eventFixture('direct-timeout');
+  const directResult = await direct.io.run('launch', ['/sealed/direct-event-child'], { timeoutMs: 40 });
+  if (!directResult.timedOut || directResult.closed !== true || directResult.signal !== 'SIGTERM' || direct.signals.join(',') !== 'SIGTERM' || directResult.ownership !== 'NO_IDENTITY') fail('direct control lost');
+  const normalEvent = eventFixture('normal');
+  const normalEventResult = await normalEvent.io.run('launch', ['/sealed/bin/lldb.sh'], { timeoutMs: 40 });
+  if (normalEventResult.rc !== 0 || normalEventResult.closed !== true || normalEventResult.timedOut || normalEvent.signals.length !== 0) fail('normal control lost');
+  const wrapped = eventFixture('wrapped-timeout');
+  const wrappedResult = await wrapped.io.run('launch', ['/sealed/bin/lldb.sh', '--batch'], { timeoutMs: 40 });
+  if (!wrapped.descendantAlive() || wrappedResult.closed !== false || wrappedResult.signal !== null || wrappedResult.owned !== 'UNCONFIRMED' || wrappedResult.ownership !== 'NO_IDENTITY') fail('event fixture hid the descendant');
+  const seen = [];
+  const split = runInNewContext(`${fragment}\nrealIO()`, {
+    Map, Promise, Boolean, Number, String, Math, Date, setTimeout, clearTimeout,
+    process: { env: {}, kill() { throw new Error('split must not signal'); } },
+    HERE, TOTAL_MS: 40, join, existsSync: () => false,
+    readFileSync() { throw new Error('no proc'); },
+    spawn(program, args, options) {
+      seen.push(options.detached === true);
+      const child = new EventEmitter();
+      child.pid = 77;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => true;
+      if (options.detached) setTimeout(() => child.emit('close', 0, null), 0);
+      return child;
+    },
+  });
+  await split.run('start-server', ['adb'], { background: true });
+  await split.run('host-version', ['lldb.sh'], { timeoutMs: 40 });
+  if (seen[0] !== false || seen[1] !== true) fail(`detached split ${seen.join(',')}`);
+  const originalKill = process.kill;
+  let groupKilled = false;
+  process.kill = () => { groupKilled = true; throw new Error('reused'); };
+  let reused = 'UNSET';
+  try {
+    reused = signalOwned({ pid: 1, kill() { groupKilled = true; } }, { pid: 1, start: '10', pgrp: '1' }, 'SIGTERM', () => ({ start: '99', pgrp: '1' }));
+  } finally {
+    process.kill = originalKill;
+  }
+  if (reused !== 'REUSED' || groupKilled) fail('reused pid was signaled');
+  const memberCalls = [];
+  process.kill = (pid, signal) => { memberCalls.push([pid, signal]); };
+  let memberHow = 'UNSET';
+  let reusedMember = 'UNSET';
+  try {
+    memberHow = signalOwned({ pid: 50, kill() { memberCalls.push(['child', 'SIGKILL']); } }, {
+      pid: 50, start: '10', pgrp: '50',
+      members: [{ pid: 50, start: '10', pgrp: '50' }, { pid: 60, start: '11', pgrp: '50' }],
+    }, 'SIGKILL', pid => Number(pid) === 50 ? null : { start: '11', pgrp: '50' });
+    reusedMember = signalOwned({ pid: 50, kill() { memberCalls.push(['child', 'SIGTERM']); } }, {
+      pid: 50, start: '10', pgrp: '50',
+      members: [{ pid: 61, start: '12', pgrp: '50' }],
+    }, 'SIGKILL', () => ({ start: '99', pgrp: '50' }));
+  } finally {
+    process.kill = originalKill;
+  }
+  if (memberHow !== 'MEMBER' || memberCalls.some(([pid]) => pid < 0) || memberCalls.join('|') !== '60,SIGKILL') fail(`leader exit did not stay on the recorded member ${memberCalls}`);
+  if (reusedMember !== 'REUSED' || memberCalls.length !== 1) fail('reused leader still reached a member');
+  const live = pid => {
+    try { return !/^State:\s+Z/m.test(readFileSync(`/proc/${pid}/status`, 'utf8')); } catch { return false; }
+  };
+  const killSame = (pid, start) => {
+    const now = readProc(pid);
+    if (!pid || !start || !now || now.start !== start) return false;
+    try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; }
+  };
+  const outsiderIdentity = async () => {
+    const started = Date.now();
+    while (Date.now() - started < 1000) {
+      if (existsSync(outsiderFile)) {
+        const pid = Number(readFileSync(outsiderFile, 'utf8'));
+        const start = readProc(pid)?.start;
+        if (pid && start) return { pid, start };
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return null;
+  };
+  const directChild = spawn('bash', [launcher, hold], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let directText = '';
+  let holderPid = 0;
+  try {
+    holderPid = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('holder line missing')), 2000);
+      directChild.stdout.on('data', chunk => {
+        directText += chunk;
+        const match = directText.match(/holder=(\d+)/);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      });
+      directChild.once('close', () => { clearTimeout(timer); reject(new Error('launcher closed before holder')); });
+    });
+    const leader = groupIdentity(directChild.pid);
+    const holderStart = readProc(holderPid)?.start;
+    const outside = await outsiderIdentity();
+    if (!leader || leader.pgrp !== String(directChild.pid)) fail('launcher is not its own group leader');
+    process.kill(directChild.pid, 'SIGTERM');
+    await new Promise(resolve => setTimeout(resolve, 400));
+    if (!live(holderPid)) fail('direct kill already removed the descendant');
+    if (outside && !live(outside.pid)) fail('direct kill reached the off-group process');
+  } finally {
+    const holderStart = readProc(holderPid)?.start;
+    const outside = existsSync(outsiderFile) ? { pid: Number(readFileSync(outsiderFile, 'utf8')), start: null } : null;
+    if (outside) outside.start = readProc(outside.pid)?.start;
+    killSame(holderPid, holderStart);
+    if (outside) killSame(outside.pid, outside.start);
+    const leaderNow = readProc(directChild.pid);
+    if (leaderNow) killSame(directChild.pid, leaderNow.start);
+  }
+  await new Promise(resolve => { if (directChild.exitCode != null || directChild.signalCode != null) resolve(); else directChild.once('close', resolve); });
+  const redChild = spawn('bash', [launcher, hold], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let redText = '';
+  let redHolder = 0;
+  let redOutside = null;
+  let oldUpgrade = 'UNSET';
+  try {
+    redHolder = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('resistant holder missing')), 2000);
+      redChild.stdout.on('data', chunk => {
+        redText += chunk;
+        const match = redText.match(/holder=(\d+)/);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      });
+    });
+    const redLeader = groupIdentity(redChild.pid);
+    redOutside = await outsiderIdentity();
+    if (!redLeader || !redOutside) fail('resistant fixture did not publish its group');
+    const leaderExited = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('leader was not reaped')), 2000);
+      redChild.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+    process.kill(-redChild.pid, 'SIGTERM');
+    await leaderExited;
+    const after = readProc(redChild.pid);
+    oldUpgrade = !after || after.start !== redLeader.start ? 'REUSED' : 'GROUP';
+    if (oldUpgrade !== 'REUSED' || !live(redHolder)) fail('old upgrade was not red after the leader exited');
+    if (!live(redOutside.pid)) fail('group TERM reached the off-group process');
+  } finally {
+    const holderStart = readProc(redHolder)?.start;
+    killSame(redHolder, holderStart);
+    if (redOutside) killSame(redOutside.pid, redOutside.start);
+    const leaderNow = readProc(redChild.pid);
+    if (leaderNow) killSame(redChild.pid, leaderNow.start);
+  }
+  await new Promise(resolve => { if (redChild.exitCode != null || redChild.signalCode != null) resolve(); else redChild.once('close', resolve); });
+  const produced = await realIO().run('host-version', ['bash', launcher, hold], { timeoutMs: 1200 });
+  const producedHolder = Number((String(produced.stdout || '').match(/holder=(\d+)/) || [])[1] || 0);
+  const producedGone = producedHolder !== 0 && !existsSync(`/proc/${producedHolder}`);
+  const producedOutside = existsSync(outsiderFile) ? Number(readFileSync(outsiderFile, 'utf8')) : 0;
+  const producedOutsideStart = readProc(producedOutside)?.start;
+  const offGroupAlive = producedOutside !== 0 && live(producedOutside);
+  if (!produced.timedOut || produced.closed !== true || produced.owned !== 'CLOSED' || produced.ownership !== 'GROUP' || produced.escalation !== 'MEMBER' || !producedGone || !offGroupAlive) {
+    killSame(producedHolder, readProc(producedHolder)?.start);
+    killSame(producedOutside, producedOutsideStart);
+    fail(`group upgrade did not close only the in-group descendant ${JSON.stringify({ closed: produced.closed, owned: produced.owned, ownership: produced.ownership, escalation: produced.escalation, gone: producedGone, offGroupAlive, signal: produced.signal })}`);
+  }
+  killSame(producedOutside, producedOutsideStart);
+  const quick = await realIO().run('host-version', ['bash', '-c', 'exit 0'], { timeoutMs: 2000 });
+  if (quick.rc !== 0 || quick.closed !== true || quick.timedOut || quick.owned !== 'CLOSED' || quick.ownership !== 'GROUP') fail('normal launcher completion changed');
+  const previousDeadline = process.env.SCENE_DEADLINE_MS;
+  const previousSymbols = process.env.HOST_SYMBOLS;
+  process.env.SCENE_DEADLINE_MS = '1';
+  process.env.HOST_SYMBOLS = '/symbols/libcangjie-runtime.so';
+  let budget;
+  try {
+    budget = await drive(scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} }), '/sdk', 'emulator-5554');
+  } finally {
+    if (previousDeadline === undefined) delete process.env.SCENE_DEADLINE_MS;
+    else process.env.SCENE_DEADLINE_MS = previousDeadline;
+    if (previousSymbols === undefined) delete process.env.HOST_SYMBOLS;
+    else process.env.HOST_SYMBOLS = previousSymbols;
+  }
+  const skipped = budget.log.find(row => row.step === 'host-ldd');
+  if (budget.outcome !== 'UNCAPTURED' || skipped?.skipped !== true || skipped?.owned === 'CLOSED' || budget.sceneSuccess !== false || budget.businessExit !== null || budget.meta?.foreground) fail('exhausted budget looked confirmed');
+  const report = {
+    eventRed: { descendantAlive: wrapped.descendantAlive(), closed: wrappedResult.closed, signal: wrappedResult.signal, owned: wrappedResult.owned },
+    directControl: { closed: directResult.closed, signal: directResult.signal, timedOut: directResult.timedOut, ownership: directResult.ownership },
+    normalControl: { rc: normalEventResult.rc, closed: normalEventResult.closed, timedOut: normalEventResult.timedOut },
+    detachedSplit: seen,
+    reused: { status: reused, signaled: groupKilled },
+    leaderGone: { status: memberHow, signals: memberCalls },
+    reusedLeaderStopsMembers: reusedMember,
+    directKillLeavesDescendant: true,
+    oldUpgradeWhileDescendantAlive: oldUpgrade,
+    groupTimeout: { closed: produced.closed, owned: produced.owned, ownership: produced.ownership, escalation: produced.escalation, signal: produced.signal, descendantGone: producedGone, offGroupAlive },
+    normalCompletion: { rc: quick.rc, closed: quick.closed, owned: quick.owned, ownership: quick.ownership, timedOut: quick.timedOut },
+    budgetExhausted: { outcome: budget.outcome, skipped: skipped?.skipped === true, sceneSuccess: budget.sceneSuccess, businessExit: budget.businessExit },
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'ownership.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('OWNERSHIP_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1423,5 +1728,5 @@ if (argv[0] === 'calibrate') {
   const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
   process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|interface-check|host-closure-check|host-check|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|host-closure-check|ownership-check|host-check|calibrate|execute');
 }
