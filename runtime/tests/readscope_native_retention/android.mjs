@@ -1,6 +1,19 @@
 #!/usr/bin/env zx
 // Official Linux GHA runner: normal Android production, then x64 emulator only.
 import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';import {fileURLToPath} from 'node:url';import {spawnSync,spawn} from 'node:child_process';import {createHash} from 'node:crypto';
+import {classifyFullImageExit} from './android-exit-records.mjs';
+// The offline CLI replays retained observations through this exact production
+// success exit. It performs no SDK/device/model/subprocess operations.
+function finishFullImageCase(input, saveResult) {
+ const result=classifyFullImageExit(input);saveResult(result);
+ assert.equal(result.pass,true,`ANDROID_FULL_IMAGE_EXIT_${result.outcome}: ${input.mode}`);
+ return result;
+}
+if(process.argv[2]==='--replay-full-image-records'){
+ assert.equal(process.argv.length,5,'offline replay requires input JSON and output JSON');
+ const inputs=JSON.parse(fs.readFileSync(process.argv[3],'utf8')),results=[];
+ for(const input of inputs){finishFullImageCase(input,result=>{results.push(result);fs.writeFileSync(process.argv[4],JSON.stringify(results,null,2));});}
+}else{
 assert.equal(process.platform,'linux');
 const here=path.dirname(fileURLToPath(import.meta.url)),runtime=path.resolve(here,'../..'),out=path.join(process.env.RUNNER_TEMP,'readscope-android');fs.mkdirSync(out);
 const android=process.env.ANDROID_HOME;assert(android&&path.isAbsolute(android));const ndkVersion='27.3.13750724',ndk=path.join(android,'ndk',ndkVersion),toolchain=path.join(ndk,'toolchains/llvm/prebuilt/linux-x86_64'),tools=toolchain+'/bin',adb=android+'/platform-tools/adb';
@@ -49,8 +62,27 @@ try{
  run('device-identity',[adb,'-s','emulator-5554','shell','getprop']);run('remote-directory',[adb,'-s','emulator-5554','shell','mkdir','-p','/data/local/tmp/readscope-lifetime']);
  const deploy=[out+'/fixture.so',out+'/consumer',...files(lib).filter(p=>p.endsWith('.so')),toolchain+'/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so'];const names=new Set();for(const [i,p] of deploy.entries()){assert(!names.has(path.basename(p)),'ambiguous native dependency '+p);names.add(path.basename(p));run('push-'+i,[adb,'-s','emulator-5554','push',p,'/data/local/tmp/readscope-lifetime/']);}
  run('consumer-permissions',[adb,'-s','emulator-5554','shell','chmod','700','/data/local/tmp/readscope-lifetime/consumer']);
- for(const mode of ['preinit','runtime-fini']){const output=run(mode,[adb,'-s','emulator-5554','shell','env','LD_LIBRARY_PATH=/data/local/tmp/readscope-lifetime','/data/local/tmp/readscope-lifetime/consumer','/data/local/tmp/readscope-lifetime/fixture.so',mode],{expected:null,timeout:20000}),row=rows.at(-1),stderr=fs.readFileSync(out+'/'+mode+'.stderr','utf8'),combined=output+stderr;assert.equal(row.rc,0,mode);assert.equal(row.signal,null,mode);assert(combined.includes('elf-published-package executed=1 pass=1'));assert.equal((combined.match(/ELF_FIXTURE_INIT count=1/g)||[]).length,1);assert.equal((combined.match(/ELF_FIXTURE_FINI count=1/g)||[]).length,1);}
+ const cases=[];
+ for(const mode of ['preinit','runtime-fini']){
+  run(mode+'-clear-log',[adb,'-s','emulator-5554','logcat','-b','all','-c'],{timeout:10000});
+  // Fixed ASCII paths/modes only. The timestamp precedes launch, so a fatal in
+  // the child's first millisecond remains in scope. $! and wait name the real
+  // consumer child; adb's return/signal is recorded separately, never native.
+  const shell=`ulimit -c 0; started=$(date +%s.%N); LD_LIBRARY_PATH=/data/local/tmp/readscope-lifetime /data/local/tmp/readscope-lifetime/consumer /data/local/tmp/readscope-lifetime/fixture.so ${mode} & child_pid=$!; wait "$child_pid"; native_status=$?; ended=$(date +%s.%N); printf '\\nEXIT_SHELL child_pid=%s realtime_start=%s realtime_end=%s native_wait_rc=%s\\n' "$child_pid" "$started" "$ended" "$native_status"; exit "$native_status"`;
+  const stdout=run(mode,[adb,'-s','emulator-5554','shell',shell],{expected:null,timeout:20000}),command=rows.at(-1);
+  // Log drain only, not another consumer invocation or warmup.
+  await new Promise(resolve=>setTimeout(resolve,1000));
+  const logcat=run(mode+'-logcat',[adb,'-s','emulator-5554','logcat','-d','-b','all','-v','epoch'],{expected:null,timeout:10000}),logCommand=rows.at(-1);
+  const crash=run(mode+'-crash',[adb,'-s','emulator-5554','logcat','-d','-b','crash','-v','epoch'],{expected:null,timeout:10000}),crashCommand=rows.at(-1);
+  finishFullImageCase({mode,stdout,stderr:fs.readFileSync(out+'/'+mode+'.stderr','utf8'),logcat,crash,
+   adbRc:command.rc,adbSignal:command.signal,adbError:command.error,
+   captures:{stderr:true,logcat:logCommand,crash:crashCommand}},result=>{
+    fs.writeFileSync(out+'/'+mode+'.pid-logcat',result.pidLogcat);
+    cases.push({mode,command,...result});fs.writeFileSync(out+'/results.json',JSON.stringify({cases,scope:'full-image exit observations; original Android exit red remains OPEN'},null,2));
+   });
+ }
 }finally{
  run('crash-log',[adb,'-s','emulator-5554','logcat','-d','-b','crash'],{expected:null,timeout:10000});run('stop-emulator',[adb,'-s','emulator-5554','emu','kill'],{expected:null,timeout:10000});
  const ended=await Promise.race([emulatorExit,new Promise(resolve=>setTimeout(()=>resolve(null),10000))]);if(ended===null){killed=emulator.kill('SIGTERM');}fs.writeFileSync(out+'/emulator-result.json',JSON.stringify({pid:emulator.pid,ended,explicitTerminated:killed}));fs.closeSync(log);fs.closeSync(err);
+}
 }
