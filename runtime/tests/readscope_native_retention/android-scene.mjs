@@ -21,9 +21,31 @@ function interfaceBindings(out, sdk) {
     SCENE_COMMANDS: path.join(out, 'scene-commands.json'),
     SCENE_OBSERVER: path.join(here, 'android-exit-records.mjs'),
     HOST_SYMBOLS: path.join(out, 'consumer'),
+    RUNTIME_SO: path.join(path.dirname(out), 'readscope-android-scene-artifact',
+      'x86_64/install/runtime/lib/linux_android31_x86_64_cjnative/libcangjie-runtime.so'),
     ANDROID_SDK_ROOT: sdk,
     ANDROID_SERIAL: 'emulator-5554',
   };
+}
+
+export function runtimeIdentity(so, notes) {
+  const stat = fs.lstatSync(so);
+  assert(stat.isFile() && !stat.isSymbolicLink(), 'RUNTIME_SO must be the installed artifact ELF');
+  assert.equal(fs.realpathSync(so), so, 'RUNTIME_SO has no indirect alias');
+  const bytes = fs.readFileSync(so);
+  assert.equal(bytes.subarray(0, 4).toString('hex'), '7f454c46');
+  assert.equal(bytes[4], 2, 'runtime ELF64');
+  assert.equal(bytes[5], 1, 'runtime little endian');
+  assert.equal(bytes.readUInt16LE(18), 62, 'runtime x86_64');
+  assert.equal(sha(so), fixed.runtimeSha256, 'original installed runtime; no fallback rebuild');
+  const ids = [...notes.matchAll(/^\s*Build ID:\s*([0-9a-fA-F]+)\s*$/gm)];
+  assert(ids.length <= 1, 'ambiguous runtime Build ID');
+  const buildId = ids[0]?.[1].toLowerCase() ?? null;
+  assert(!buildId || (buildId.length % 2 === 0), 'invalid runtime Build ID');
+  return { path: so, sha256: fixed.runtimeSha256, buildId,
+    buildIdStatus: buildId ? 'PRESENT' : 'ABSENT',
+    artifact: fixed.artifact, source: fixed.runtime,
+    deviceIdentity: 'UNKNOWN; no target execution or module observation' };
 }
 
 function checkBundle() {
@@ -32,7 +54,12 @@ function checkBundle() {
   }
   assert.equal(sha(path.join(bundle, 'job-interface.json')), origin.jobInterface.sha256);
   const plannedBindings = interfaceBindings('$RUNNER_TEMP/readscope-android-scene', '$ANDROID_HOME');
-  assert.deepEqual(Object.keys(plannedBindings).sort(), [...jobInterface.requiredEnv].sort());
+  // Stage the new runtime binding without changing Grok's frozen old interface.
+  // It cannot execute until Grok supplies the revised SBProcess-based package.
+  const pendingBindings = Object.keys(plannedBindings).filter(k => !jobInterface.requiredEnv.includes(k));
+  assert.deepEqual(Object.keys(plannedBindings).filter(k => k !== 'RUNTIME_SO').sort(),
+    [...jobInterface.requiredEnv].sort());
+  assert.deepEqual(pendingBindings, ['RUNTIME_SO']);
   assert.equal(sha(plannedBindings.SCENE_OBSERVER), fixed.observerSha256, 'exact shared 761b observer');
   assert.equal(jobInterface.readyForNativeExecution, false);
   assert.equal(fixed.mode, 'preinit');
@@ -40,15 +67,21 @@ function checkBundle() {
   assert.equal(fixed.runtime, 'd51c34a06cfd980d0e2694514e2a41421ac41b83');
   assert.equal(fixed.observer, '761b0ad956d975488b984e419ef4a803711e2635');
   return { state: 'PREPARED_NOT_EXECUTED', fixed, origin, jobInterface,
-    plannedBindings, nativeRuns: 0 };
+    plannedBindings, pendingBindings, interfaceStatus: 'PENDING_GROK_FIXED_SBPROCESS_PACKAGE',
+    diagnosticContract: { resultSource: 'same-PID SBProcess state/ExitStatus/StopReason',
+      shellWait: 'UNKNOWN', lldbRcIsBusinessRc: false, syntheticExitShell: false,
+      deviceRuntimeIdentity: 'UNKNOWN; actual module identity must be verified before qualification' },
+    nativeRuns: 0 };
 }
 
 function requireReady() {
   checkBundle();
-  // The corrected, byte-identical bundle still needs Grok's final entry check
-  // and separate controller authorization before any native execution.
+  // The old byte-identical debugger package is retained for provenance only.
+  // A fixed SBProcess package, Grok entry check, independent review and separate
+  // controller authorization are required before any native execution.
   assert.equal(origin.readyForNativeExecution, true,
     `GROK_ENTRY_NOT_READY: ${origin.blockers.map(x => x.id).join(',')}`);
+  assert.fail('GROK_SBPROCESS_PACKAGE_NOT_INTEGRATED; readiness cannot be flipped');
 }
 
 function context() {
@@ -176,9 +209,11 @@ function prepare() {
     `-L${lib}`, '-lcangjie-runtime', '-ldl', '-o', path.join(out, 'consumer')]);
   run('fixture-identity', [path.join(tools, 'llvm-readelf'), '-hndW', path.join(out, 'fixture.so')]);
   run('consumer-identity', [path.join(tools, 'llvm-readelf'), '-hndW', path.join(out, 'consumer')]);
-  run('runtime-identity', [path.join(tools, 'llvm-readelf'), '-hndW', so]);
+  assert.equal(so, interfaceBindings(out, sdk).RUNTIME_SO);
+  const runtimeNotes = run('runtime-identity', [path.join(tools, 'llvm-readelf'), '-hndW', so]);
+  const runtimeInput = runtimeIdentity(so, runtimeNotes);
   json(path.join(out, 'module-inputs.json'), {
-    runtimeSource: fixed.runtime, runtime: { path: so, sha256: sha(so) },
+    runtimeSource: fixed.runtime, runtime: runtimeInput,
     fixture: { path: path.join(out, 'fixture.so'), sha256: sha(path.join(out, 'fixture.so')), originalElf: 'NOT_SAVED' },
     consumer: { path: path.join(out, 'consumer'), sha256: sha(path.join(out, 'consumer')), originalElf: 'NOT_SAVED' },
     sourceBlobs: { fixture: fixed.fixtureBlob, consumer: fixed.consumerBlob },
@@ -195,6 +230,16 @@ function prepare() {
 async function execute() {
   const { out, sdk, env } = context();
   const { run } = runner(path.join(out, 'execution'), env);
+  const bindings = interfaceBindings(out, sdk);
+  const inputs = JSON.parse(fs.readFileSync(path.join(out, 'module-inputs.json')));
+  const readelf = path.join(sdk, 'ndk', fixed.ndk, 'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf');
+  const runtimeInput = runtimeIdentity(bindings.RUNTIME_SO,
+    run('runtime-before-scene', [readelf, '-nW', bindings.RUNTIME_SO]));
+  assert.equal(inputs.runtime.path, bindings.RUNTIME_SO);
+  assert.equal(inputs.runtime.sha256, runtimeInput.sha256);
+  assert.equal(inputs.runtime.buildId, runtimeInput.buildId);
+  assert.notEqual(bindings.RUNTIME_SO, bindings.HOST_SYMBOLS);
+  assert(runtimeInput.buildId, 'RUNTIME_BUILD_ID_UNKNOWN; fixed artifact lacks module Build ID witness');
   // No self-test/calibrate here: Grok self-test assumes official tools absent.
   const adb = path.join(sdk, 'platform-tools/adb');
   fs.mkdirSync(env.ANDROID_AVD_HOME, { recursive: true });
@@ -235,8 +280,6 @@ async function execute() {
     for (const [i, p] of deploy.entries()) run(`push-${i}`, [adb, '-s', 'emulator-5554', 'push', p, '/data/local/tmp/readscope-lifetime/']);
     run('chmod-consumer', [adb, '-s', 'emulator-5554', 'shell', 'chmod', '700', '/data/local/tmp/readscope-lifetime/consumer']);
     run('clear-log', [adb, '-s', 'emulator-5554', 'logcat', '-b', 'all', '-c']);
-    const bindings = interfaceBindings(out, sdk);
-    const inputs = JSON.parse(fs.readFileSync(path.join(out, 'module-inputs.json')));
     const symbols = fs.lstatSync(bindings.HOST_SYMBOLS);
     assert(symbols.isFile() && !symbols.isSymbolicLink(), 'HOST_SYMBOLS must be the new local consumer ELF');
     assert.equal(fs.realpathSync(bindings.HOST_SYMBOLS), bindings.HOST_SYMBOLS, 'HOST_SYMBOLS has no indirect alias');
@@ -251,6 +294,8 @@ async function execute() {
       remoteFixture: '/data/local/tmp/readscope-lifetime/fixture.so',
       remoteLibraryPath: '/data/local/tmp/readscope-lifetime',
       runtimeSha256: fixed.runtimeSha256,
+      runtime: runtimeInput,
+      remoteRuntime: '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so',
       recorderOutput: path.join(bundle, 'run'),
       actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
     const sceneEnv = { ...env, ...bindings, SCENE_EXECUTE: '1', EXIT_SCENE_OUT: path.join(bundle, 'run') };
@@ -267,6 +312,7 @@ async function execute() {
   }
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const mode = process.argv[2];
 try {
   if (mode === '--check-bundle') console.log(JSON.stringify(checkBundle(), null, 2));
@@ -279,4 +325,5 @@ try {
   } else throw Error('usage: android-scene.mjs --check-bundle|--require-ready|--prepare|--execute');
 } catch (error) {
   console.error(error.stack); process.exitCode = 1;
+}
 }
