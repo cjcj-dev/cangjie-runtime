@@ -303,13 +303,26 @@ function prepare() {
     run(`${key}-elf`, [path.join(tools, 'llvm-readelf'), '-hW', debuggerTools[key]]);
   }
   assert(fs.statSync(debuggerTools.wrapper).isFile());
-  const hostDependencies = run('host-lldb-dependencies', ['ldd', debuggerTools.host]);
+  // Match the fixed r27d lldb.sh environment, without substituting system Python.
+  // Grok host-check verifies the official launcher bytes and uses it for both
+  // capability probes; execute uses that same launcher for the actual launch.
+  const pythonHome = path.join(tools, '../python3');
+  const pythonLib = path.join(pythonHome, 'lib');
+  const packagedPython = fs.lstatSync(path.join(pythonLib, 'libpython3.11.so.1.0'));
+  assert(packagedPython.isFile() && !packagedPython.isSymbolicLink(), 'NDK packaged Python must be a real file');
+  const hostDependencies = run('host-lldb-dependencies', ['env', `PYTHONHOME=${pythonHome}`,
+    `LD_LIBRARY_PATH=${pythonLib}:${env.LD_LIBRARY_PATH || ''}`, 'ldd', debuggerTools.host]);
   assertHostDependencies(hostDependencies,
     fs.readFileSync(path.join(out, 'host-lldb-dependencies.stderr'), 'utf8'));
+  run('host-check', [process.execPath, path.join(bundle, 'scene.mjs'), 'host-check']);
+  const hostCheck = JSON.parse(fs.readFileSync(path.join(bundle, 'host-check.json'), 'utf8'));
+  assert.equal(hostCheck.outcome, 'HOST_READY', 'Grok host-check must establish tool capability');
+  assert.equal(hostCheck.meta?.remoteAndroid, true);
+  assert.equal(hostCheck.meta?.launcher, debuggerTools.wrapper);
   json(path.join(out, 'debugger-tools.json'), { paths: debuggerTools,
     hashes: Object.fromEntries(Object.entries(debuggerTools).map(([k, p]) => [k, sha(p)])),
-    actualVersions: 'NOT_RUN; Grok driver must read before native launch',
-    remoteAndroid: 'NOT_VERIFIED; only Grok driver may verify platform list',
+    actualVersions: hostCheck.log.filter(row => row.step === 'host-version'),
+    remoteAndroid: hostCheck.meta.remoteAndroid,
     requiredPlatform: 'remote-android', noAlternateDebugger: true });
   // The original staging log.h is a byte copy, not a generated configuration:
   // fixed CJThread/src/base/log/CMakeLists.txt: file(COPY include/log.h ...).

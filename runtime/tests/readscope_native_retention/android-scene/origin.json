@@ -2,12 +2,12 @@
   "schema": 6,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
-  "sourceRequest": "b2a79922-5354-443f-9d46-e4c3b8d744e8",
+  "sourceRequest": "710c11c5-13b9-46b3-a6cb-7b1eaab98f65",
   "sourceRequestTerminal": "COMPLETED; controller tool verification stated in current adoption instruction, not a new human approval",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "d35dd655766471d541f50cdbe1faee79a6e5c0df8ee0a0d6893735afe8300a40"
+      "sha256": "cfe28dbc4ebde1d111a6172ce1c3a0a602cc6e145d2895c838a595220e4b9a65"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
@@ -20,14 +20,15 @@
   },
   "jobInterface": {
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
-    "sha256": "bc83ee4444171521ec03a02612c838a79e3f341e841a498be9953442fa1a418c"
+    "sha256": "ec11f16626058a6a0f6acb943e9a45b5cff560b2d3b850046ce5d03f08d9253e"
   },
   "predecessor": "5715cb62abe40ada616ceef105837ead8c61f8f3",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": true,
-  "predecessorFindings": "37167 and 5715 SOURCE_REJECT and original counterexamples remain. Controller adopted the independent ed488 SOURCE_PASS_SCOPED and three FIXED findings. This successor changes permit metadata only; technical code and package interface are unchanged. Background error detail preservation remains limited.",
+  "predecessorFindings": "37167/5715 SOURCE_REJECT remain. ed488 SOURCE_PASS_SCOPED is reused only for unchanged preparation logic. This successor integrates Grok r27d lldb.sh/host-check and formal pre-AVD host closure; the new startup interface has not executed on a real runner. Background error detail preservation remains limited.",
   "blockers": [],
   "nativeNotRun": [
+    "r27d lldb.sh actual version/remote-android host-check and launch on official runner",
     "NDK27.3.13750724/API31 remote-android actual platform/tool behavior",
     "entry-stop runtime mapping and same-PID module/maps/load-base/file relation",
     "SBPlatform.Run actual maps and deployed sha output",
@@ -52,7 +53,7 @@
     "nativeSession": "ses_e2d918ab4ffegXNGJG7ij4SN9H",
     "reportEvent": "call-06524593-8034-4cda-8452-5de7392a4360-128",
     "originalRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
-    "successorTerminalSource": "Controller tool verification confirms b2a79922-5354-443f-9d46-e4c3b8d744e8 COMPLETED. Original request-44e1719b record unchanged; no new journal event invented."
+    "successorTerminalSource": "Controller tool verification confirms 710c11c5-13b9-46b3-a6cb-7b1eaab98f65 COMPLETED. Historical request-44e1719b journal unchanged; no new native session or report event invented."
   },
   "rejectedPackages": [
     "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
@@ -69,8 +70,8 @@
   },
   "executionPermit": {
     "status": "PREPARED_AWAITING_CONTROLLER_FIXED_SHA_EXTERNAL_EXECUTION_AUTHORIZATION",
-    "meaning": "origin ready only releases the existing local readiness predicate for this fixed one-shot permit object; preparation does not authorize push, dispatch, or native execution",
-    "parent": "ed4882c8e6c08f55fdd003f5c00d5c0e7cadd085",
+    "meaning": "Origin ready releases the local readiness predicate only. Previous 330e47 official permit was consumed by run43804384904; this new full candidate requires new exact-SHA external authorization.",
+    "parent": "5362d48b1931dc3c553baa44d90e229c4f146894",
     "technicalReview": {
       "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
       "verdict": "SOURCE_PASS_SCOPED",

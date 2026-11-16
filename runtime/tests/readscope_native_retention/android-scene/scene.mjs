@@ -1,5 +1,6 @@
 #!/usr/bin/env zx
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -29,10 +30,14 @@ function budgetBound(origin) {
   return { total: Math.min(TOTAL_MS, absolute - origin), source: 'SCENE_DEADLINE_MS' };
 }
 const RUNTIME_PATH = `${REMOTE}/libcangjie-runtime.so`;
+const PYTHON_SONAME = 'libpython3.11.so.1.0';
+const LAUNCHER_SHA = '8d0172dae364b43da5e1e40a6707bfa07679dccb31ae9b6b321f51f114a4f3cd';
+const OFFICIAL_LAUNCHER = '#!/bin/bash\nCURDIR=$(cd "$(dirname "$0")" && pwd)\nexport PYTHONHOME="$CURDIR/../python3"\nexport LD_LIBRARY_PATH="$CURDIR/../python3/lib:$LD_LIBRARY_PATH"\n"$CURDIR/lldb" "$@"\n';
 
 const TOOLS = {
   hostLldb: `ndk/${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb`,
   hostWrapper: `ndk/${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh`,
+  pythonLib: `ndk/${NDK}/toolchains/llvm/prebuilt/linux-x86_64/python3/lib/libpython3.11.so.1.0`,
   readelf: `ndk/${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf`,
   server: `ndk/${NDK}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/x86_64/lldb-server`,
   adb: 'platform-tools/adb',
@@ -314,6 +319,30 @@ function liveParts(text) {
   return { pid, image: image.join('\n'), maps: maps.join('\n'), file: files.join('\n'), target: agreedTarget(targets) };
 }
 
+function sha256(text) {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+function missingSonames(text) {
+  const names = [];
+  for (const line of String(text || '').split('\n')) {
+    const match = line.match(/^\s*(\S+)\s+=>\s+not found\s*$/);
+    if (match) names.push(match[1]);
+  }
+  return names;
+}
+
+function closureDecision(lddText, pythonPackaged) {
+  const missing = missingSonames(lddText);
+  const closedByLauncher = pythonPackaged ? missing.filter(name => name === PYTHON_SONAME) : [];
+  const open = missing.filter(name => !closedByLauncher.includes(name));
+  return { lddRcIsNotClosure: true, missing, closedByLauncher, open, ok: open.length === 0 };
+}
+
+function hostArgv(sdk, args) {
+  return [join(sdk, TOOLS.hostWrapper), ...args];
+}
+
 function fileSha(text) {
   const matched = String(text || '').match(/^([0-9a-f]{64})\s+\S+$/m);
   return matched ? matched[1] : null;
@@ -463,6 +492,29 @@ function sbProcess(text) {
   return { launched, exits, states, stops, restarts, controlled, intent, detachState, detachError };
 }
 
+async function probeHost(io, sdk, run) {
+  const bare = join(sdk, TOOLS.hostLldb);
+  const launcher = join(sdk, TOOLS.hostWrapper);
+  const pythonLib = join(sdk, TOOLS.pythonLib);
+  for (const name of ['hostLldb', 'hostWrapper', 'pythonLib']) {
+    if (!io.stat(join(sdk, TOOLS[name]))) return { outcome: 'TOOL_ABSENT', extra: { missing: name } };
+  }
+  const text = io.readText(launcher);
+  if (sha256(text) !== LAUNCHER_SHA) return { outcome: 'LAUNCHER_MISMATCH', extra: { meta: { launcher } } };
+  const ldd = await run('host-ldd', ['ldd', bare]);
+  if (ldd.timedOut) return { outcome: 'UNCAPTURED' };
+  const closure = closureDecision(ldd.stdout, true);
+  if ((ldd.rc !== 0 && closure.missing.length === 0) || !closure.ok) return { outcome: 'HOST_CLOSURE_ABSENT', closure };
+  const hostVer = await run('host-version', hostArgv(sdk, ['--version']));
+  if (hostVer.timedOut) return { outcome: 'UNCAPTURED', closure };
+  if (hostVer.rc !== 0 || !hostVer.stdout) return { outcome: 'VERSION_ABSENT', closure };
+  const platforms = await run('platform-list', hostArgv(sdk, ['-b', '-o', 'platform list', '-o', 'quit']));
+  if (platforms.timedOut) return { outcome: 'UNCAPTURED', closure };
+  if (platforms.rc !== 0) return { outcome: 'PLATFORM_LIST_FAIL', closure };
+  if (!/(^|\s)remote-android(\s|$)/.test(platforms.stdout || '')) return { outcome: 'PLATFORM_ABSENT', closure, extra: { meta: { remoteAndroid: false } } };
+  return { outcome: null, closure, launcher };
+}
+
 async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
   const log = [];
   const meta = { cleanup: 'NOT_STARTED', hostReap: 'NOT_STARTED', hostPid: null, devicePid: null, target: null, targetCleanup: 'UNKNOWN', detach: { intent: false, completed: false, status: 'UNKNOWN', error: null }, remoteAndroid: false, nativeWait: 'ABSENT' };
@@ -540,13 +592,9 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     }
     const symbols = process.env.HOST_SYMBOLS;
     if (!symbols || symbols === `${REMOTE}/consumer`) { return finish('SYMBOLS_ABSENT', io.simulated, log, { meta }); }
-    const hostVer = await run('host-version', [tool('hostLldb'), '--version']);
-    if (hostVer.timedOut) { return finish('UNCAPTURED', io.simulated, log, { meta }); }
-    if (hostVer.rc !== 0 || !hostVer.stdout) { return finish('VERSION_ABSENT', io.simulated, log, { meta }); }
-    const platforms = await run('platform-list', [tool('hostLldb'), '-b', '-o', 'platform list', '-o', 'quit']);
-    if (platforms.timedOut) { return finish('UNCAPTURED', io.simulated, log, { meta }); }
-    if (platforms.rc !== 0) { return finish('PLATFORM_LIST_FAIL', io.simulated, log, { meta }); }
-    if (!/(^|\s)remote-android(\s|$)/.test(platforms.stdout || '')) { return finish('PLATFORM_ABSENT', io.simulated, log, { meta }); }
+    const probed = await probeHost(io, sdk, run);
+    if (probed.closure) meta.closure = probed.closure;
+    if (probed.outcome) return finish(probed.outcome, io.simulated, log, { meta });
     meta.remoteAndroid = true;
     const devices = await run('adb-devices', [tool('adb'), 'devices']);
     if (devices.rc !== 0 || !(devices.stdout || '').includes(serial)) { return finish('CONNECT_FAIL', io.simulated, log, { meta }); }
@@ -570,7 +618,7 @@ async function drive(io, sdk, serial = 'emulator-5554', options = {}) {
     const so = process.env.RUNTIME_SO;
     const note = so ? await run('runtime-note', [tool('readelf'), '-n', so]) : null;
     const hashed = so ? await run('runtime-hash', ['sha256sum', so]) : null;
-    const launch = await run('launch', launchArgv(tool('hostLldb')), { active: true });
+    const launch = await run('launch', launchArgv(join(sdk, TOOLS.hostWrapper)), { active: true });
     meta.foreground = {
       pid: launch.pid ?? null,
       signal: launch.signal ?? null,
@@ -688,6 +736,7 @@ function scripted(script) {
   const state = { clock: 0 };
   const identity = procDump();
   const defaults = {
+    'host-ldd': { rc: 0, stdout: `\t${PYTHON_SONAME} => not found\n`, stderr: '' },
     'host-version': { rc: 0, stdout: 'lldb version 18.0.1', stderr: '' },
     'platform-list': { rc: 0, stdout: script.platform || '', stderr: '' },
     'adb-devices': { rc: 0, stdout: script.serial || '', stderr: '' },
@@ -711,7 +760,7 @@ function scripted(script) {
   return {
     simulated: true,
     stat(path) { return script.absent ? false : !String(path).endsWith('/missing'); },
-    readText(path) { return readFileSync(path, 'utf8'); },
+    readText(path) { return String(path).endsWith('/lldb.sh') ? OFFICIAL_LAUNCHER : readFileSync(path, 'utf8'); },
     now(step) {
       if (script.at && script.at[step] != null) state.clock = script.at[step];
       return state.clock;
@@ -900,7 +949,10 @@ function writeBundle(out, selected, tools) {
     execute: 'SCENE_EXECUTE=1 node scene.mjs execute',
     executeThisLane: 'not invoked',
     sameDrive: true,
-    consumer: 'node scene.mjs execute stops at SCENE_DEADLINE_MS, including cleanup, and never past its own 300s. Detach completion is only Process <id> detached after process detach --keep-stopped true. Host reap requires an observed close. Target reap uses the entry-stop pid, start and path',
+    hostCheck: 'node scene.mjs host-check',
+    hostLauncher: TOOLS.hostWrapper,
+    hostClosure: 'ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Do not substitute a system libpython.',
+    consumer: 'node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close',
     budget: { minutes: 45, jobs: 2, core: 0, activeSeconds: 60, totalSeconds: 300 },
     mode: 'preinit/full-image',
     forbid: ['runtime-fini', 'no-image', 'NoFP', 'retry', 'ndk-gdb', 'simulated sceneSuccess', 'host-pid kill', '-S before target', 'synthetic EXIT_SHELL', 'literal build-id token', 'shell classifier', 'lldb rc as business exit', 'lldb uuid as gnu build id', 'relink to add a note'],
@@ -1296,6 +1348,65 @@ if (argv[0] === 'calibrate') {
   writeFileSync(join(HERE, 'interface-check.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('INTERFACE_PASS');
   process.exit(0);
+} else if (argv[0] === 'host-check') {
+  const sdk = process.env.ANDROID_SDK_ROOT;
+  if (!sdk) fail('ANDROID_SDK_ROOT unset');
+  const io = realIO();
+  const log = [];
+  const run = async (step, args) => {
+    const result = await io.run(step, args, { timeoutMs: 30000 });
+    log.push({ step, argv: args, rc: result.rc ?? null, timedOut: Boolean(result.timedOut), stdout: result.stdout ?? '', stderr: result.stderr ?? '' });
+    return result;
+  };
+  const probed = await probeHost(io, sdk, run);
+  const outcome = probed.outcome || 'HOST_READY';
+  const result = finish(outcome, false, log, { meta: { closure: probed.closure ?? null, launcher: probed.launcher ?? null, nativeWait: 'ABSENT', devicePid: null, target: null, businessExit: null, remoteAndroid: outcome === 'HOST_READY' } });
+  writeFileSync(join(HERE, 'host-check.json'), JSON.stringify(result, null, 2) + '\n');
+  console.log(outcome);
+  process.exit(outcome === 'HOST_READY' ? 0 : 1);
+} else if (argv[0] === 'host-closure-check') {
+  if (sha256(OFFICIAL_LAUNCHER) !== LAUNCHER_SHA) fail('embedded launcher does not match the r27d zip');
+  const lddPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-bounds-preparation/external-after-exact-authorization/artifacts/14196974102/_temp/readscope-android-scene/host-lldb-dependencies.stdout';
+  const executedPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-bounds-preparation/external-after-exact-authorization/artifacts/14196974102/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const lddText = readFileSync(lddPath, 'utf8');
+  const closed = closureDecision(lddText, true);
+  const open = closureDecision(lddText, false);
+  if (!closed.ok || closed.closedByLauncher.join(',') !== PYTHON_SONAME || closed.open.length !== 0) fail('packaged python did not close the recorded gap');
+  if (open.ok || open.open.join(',') !== PYTHON_SONAME) fail('missing packaged python was treated as closed');
+  const executed = JSON.parse(readFileSync(executedPath, 'utf8'));
+  const bare = executed.log[0];
+  if (bare.argv[0].endsWith('/lldb.sh') || bare.rc !== 127 || !bare.stderr.includes(PYTHON_SONAME)) fail('recorded bare launch was rewritten');
+  const positive = scripted({ platform: 'remote-android', serial: 'emulator-5554\tdevice', steps: {} });
+  process.env.HOST_SYMBOLS = '/symbols/libcangjie-runtime.so';
+  const ready = await probeHost(positive, '/sdk', (step, args) => positive.run(step, args));
+  if (ready.outcome || !ready.launcher.endsWith('/lldb.sh')) fail('launcher probe did not reach platform list');
+  if (positive.runs.some(step => ['adb-devices', 'start-server', 'launch'].includes(step))) fail('host probe started a device or target');
+  if (!positive.runs.includes('host-version') || positive.runs.at(positive.runs.indexOf('host-version') - 1) !== 'host-ldd') fail('version ran before the dependency text');
+  const versionArgv = hostArgv('/sdk', ['--version']);
+  if (versionArgv[0] === bare.argv[0] || !versionArgv[0].endsWith('/lldb.sh') || versionArgv[1] !== '--version') fail('version argv fell back to the bare binary');
+  const blocked = scripted({ steps: { 'host-ldd': { rc: 0, stdout: `\t${PYTHON_SONAME} => not found\n\tlibncurses.so.6 => not found\n`, stderr: '' } } });
+  const blockedResult = await probeHost(blocked, '/sdk', (step, args) => blocked.run(step, args));
+  if (blockedResult.outcome !== 'HOST_CLOSURE_ABSENT' || blocked.runs.includes('host-version')) fail('an unclosed soname still launched lldb');
+  const mismatched = scripted({});
+  mismatched.readText = () => '#!/bin/bash\nexec "$0" "$@"\n';
+  const mismatch = await probeHost(mismatched, '/sdk', (step, args) => mismatched.run(step, args));
+  if (mismatch.outcome !== 'LAUNCHER_MISMATCH' || mismatched.runs.includes('host-ldd')) fail('a different launcher was accepted');
+  const absentVersion = scripted({ platform: 'remote-android', steps: { 'host-version': { rc: 127, stdout: '', stderr: `${PYTHON_SONAME}\n` } } });
+  const absent = await probeHost(absentVersion, '/sdk', (step, args) => absentVersion.run(step, args));
+  if (absent.outcome !== 'VERSION_ABSENT' || absentVersion.runs.includes('platform-list')) fail('version failure continued into platform discovery');
+  const report = {
+    launcherSha: LAUNCHER_SHA,
+    recordedBare: { argv: bare.argv, rc: bare.rc },
+    lddRcWouldNotClose: true,
+    packaged: closed,
+    unpackaged: open,
+    versionArgv,
+    probeSteps: positive.runs,
+    nativeRuns: 0,
+  };
+  writeFileSync(join(HERE, 'host-closure.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log('HOST_CLOSURE_PASS');
+  process.exit(0);
 } else if (argv[0] === 'execute') {
   if (process.env.SCENE_EXECUTE !== '1') {
     console.error('NOT_AUTHORIZED');
@@ -1312,5 +1423,5 @@ if (argv[0] === 'calibrate') {
   const unconfirmedStop = result.outcome === 'FATAL_STOP_UNEXITED' && !detachDone;
   process.exit(String(result.outcome).startsWith('FATAL_') && !unconfirmedStop ? 0 : 1);
 } else {
-  fail('usage: scene.mjs self-test|interface-check|calibrate|execute');
+  fail('usage: scene.mjs self-test|interface-check|host-closure-check|host-check|calibrate|execute');
 }
