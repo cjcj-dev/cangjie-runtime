@@ -2,12 +2,12 @@
   "schema": 6,
   "sourceOwner": "diag_c274_fcache_grok_1113",
   "sourceReport": "REPORT-grok_android_exit_scene_1116.md",
-  "sourceRequest": "0dec7f97-602c-4c7e-93ea-89cf5ca064fd",
-  "sourceRequestTerminal": "COMPLETED; controller tool verification stated in current adoption instruction, not a new human approval",
+  "sourceRequest": "fc44f579-5f46-4e10-a484-51455e70512e",
+  "sourceRequestTerminal": "COMPLETED; controller tool verification in current instruction, not a new human approval",
   "files": {
     "scene.mjs": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "9db5d3ea75ce455a43b8145f6f26cc2ed8c2828f526c676ffa0397adbbba31c0"
+      "sha256": "078b93d1405bb9024024e811c0b5d32360f2d06437a8994dfd3f97431ae64a27"
     },
     "capture.py": {
       "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
@@ -22,13 +22,13 @@
     "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
     "sha256": "9920840084606f8bc76a052466169d4d7342ff5681629510bb02ecd059aaa898"
   },
-  "predecessor": "816eb58e55c57031e7dd130343b1bd70e6f24ba3",
+  "predecessor": "e4f9af498870dc9278bbb1ce6a30e4b37cb23f81",
   "frozenOldReviewObject": "a90931e8ea1e23e1729217c3657e47626cb730d5",
   "readyForNativeExecution": true,
-  "predecessorFindings": "816eb SOURCE_REJECT and 37167/5715 rejects remain. Host launcher/closure checks were FIXED_SCOPED. This successor byte-copies the Grok foreground group/member escalation repair; daemonized/off-group or later-unrecorded descendants remain outside its coverage. A pipe close is not proof that all owned descendants disappeared. Not a full lifecycle PASS.",
+  "predecessorFindings": "e4f9 SOURCE_PASS_SCOPED for recorded same-group descendants remains. Official run43813247816 failed prepare1 because remote-android: text was rejected; targetN0. This successor byte-copies the fixed platform-token parser and its direct text controls. All prior SOURCE_REJECT objects/NDK and original product failures remain unchanged.",
   "blockers": [],
   "nativeNotRun": [
-    "r27d lldb.sh actual version/remote-android host-check and launch on official runner",
+    "Full successful host-check and native launch after parser repair NOT_RUN; e4f9 official lldb.sh version/platform commands were0 and actual remote-android plugin listed",
     "NDK27.3.13750724/API31 remote-android actual platform/tool behavior",
     "entry-stop runtime mapping and same-PID module/maps/load-base/file relation",
     "SBPlatform.Run actual maps and deployed sha output",
@@ -72,16 +72,17 @@
   "evidenceReuse": {
     "oldCalibration47": "belongs to 617eaa2d; not evidence of executing the new fixed package",
     "currentSourceEvidence": [
-      "Grok ownership.json target-red/controls and limitations",
-      "Grok host-closure.json",
-      "New Sol exact-package binding and minimal copied-function routing controls; no repeated47 calibration/native evidence"
+      "Grok host-closure.json official platform stdout through probeHost plus exact-name negative controls; no repeated47 calibration",
+      "e4f9 official run43813247816/artifact14201471674 host-check raw version/platform outputs; old prepare1/targetN0 retained",
+      "e4f9 scoped descendant review/ownership originals reused for unchanged code; no whole-family cleanup qualification",
+      "New Sol copied-function exact official text controls and minimal wrapper test dependency/binding check"
     ],
     "nativeRuns": 0
   },
   "executionPermit": {
-    "status": "COMPLETE_SUCCESSOR_PREPARATION_AWAITING_INDEPENDENT_REVIEW_AND_NEW_EXACT_SHA_AUTHORIZATION",
-    "meaning": "Origin ready retains the local gate meaning only. 816eb SOURCE_REJECT is not reversed; this complete successor requires independent review and separate exact-SHA external authorization. No push/dispatch/native permission.",
-    "parent": "816eb58e55c57031e7dd130343b1bd70e6f24ba3",
+    "status": "PLATFORM_PARSER_SUCCESSOR_PREPARED_REQUIRES_NEW_EXACT_SHA_AUTHORIZATION",
+    "meaning": "Origin ready retains its unchanged local technology gate meaning. Previous e4f9 official permit consumed by run43813247816/prepare1/targetN0. No push/dispatch/native authorization for this successor.",
+    "parent": "e4f9af498870dc9278bbb1ce6a30e4b37cb23f81",
     "technicalReview": {
       "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
       "verdict": "SOURCE_PASS_SCOPED",

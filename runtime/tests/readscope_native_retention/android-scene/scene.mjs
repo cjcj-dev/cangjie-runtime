@@ -492,6 +492,10 @@ function sbProcess(text) {
   return { launched, exits, states, stops, restarts, controlled, intent, detachState, detachError };
 }
 
+function hasRemoteAndroid(text) {
+  return /(?:^|\s)remote-android(?=[:\s]|$)/.test(text || '');
+}
+
 async function probeHost(io, sdk, run) {
   const bare = join(sdk, TOOLS.hostLldb);
   const launcher = join(sdk, TOOLS.hostWrapper);
@@ -511,7 +515,7 @@ async function probeHost(io, sdk, run) {
   const platforms = await run('platform-list', hostArgv(sdk, ['-b', '-o', 'platform list', '-o', 'quit']));
   if (platforms.timedOut) return { outcome: 'UNCAPTURED', closure };
   if (platforms.rc !== 0) return { outcome: 'PLATFORM_LIST_FAIL', closure };
-  if (!/(^|\s)remote-android(\s|$)/.test(platforms.stdout || '')) return { outcome: 'PLATFORM_ABSENT', closure, extra: { meta: { remoteAndroid: false } } };
+  if (!hasRemoteAndroid(platforms.stdout)) return { outcome: 'PLATFORM_ABSENT', closure, extra: { meta: { remoteAndroid: false } } };
   return { outcome: null, closure, launcher };
 }
 
@@ -1467,6 +1471,18 @@ if (argv[0] === 'calibrate') {
   const absentVersion = scripted({ platform: 'remote-android', steps: { 'host-version': { rc: 127, stdout: '', stderr: `${PYTHON_SONAME}\n` } } });
   const absent = await probeHost(absentVersion, '/sdk', (step, args) => absentVersion.run(step, args));
   if (absent.outcome !== 'VERSION_ABSENT' || absentVersion.runs.includes('platform-list')) fail('version failure continued into platform discovery');
+  const officialHost = JSON.parse(readFileSync('/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-e4f9-official-once/artifacts/14201471674/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/host-check.json', 'utf8'));
+  const officialList = officialHost.log.find(row => row.step === 'platform-list');
+  if (!officialList || officialList.rc !== 0 || !hasRemoteAndroid(officialList.stdout)) fail('official platform list was rejected');
+  const officialProbe = scripted({ platform: officialList.stdout, serial: 'emulator-5554\tdevice', steps: {} });
+  const officialReady = await probeHost(officialProbe, '/sdk', (step, args) => officialProbe.run(step, args));
+  if (officialReady.outcome || officialProbe.runs.includes('adb-devices')) fail('official platform text did not pass the host probe');
+  const colonAbsent = scripted({ platform: 'remote-linux: Remote Linux user platform plug-in.\n', serial: 'emulator-5554\tdevice', steps: {} });
+  const colonResult = await probeHost(colonAbsent, '/sdk', (step, args) => colonAbsent.run(step, args));
+  if (colonResult.outcome !== 'PLATFORM_ABSENT' || colonResult.extra?.meta?.remoteAndroid !== false) fail('a different colon plugin became remote-android');
+  for (const text of ['', 'remote-linux remote-gdb-server', 'remote-androidian: plug-in', 'notremote-android: plug-in', 'remote-android-extra: plug-in']) {
+    if (hasRemoteAndroid(text)) fail(`platform text counted ${text}`);
+  }
   const report = {
     launcherSha: LAUNCHER_SHA,
     recordedBare: { argv: bare.argv, rc: bare.rc },
@@ -1475,6 +1491,8 @@ if (argv[0] === 'calibrate') {
     unpackaged: open,
     versionArgv,
     probeSteps: positive.runs,
+    officialPlatform: { rc: officialList.rc, accepted: officialReady.outcome === null, remoteAndroid: true },
+    rejectedPlatformText: ['', 'remote-linux remote-gdb-server', 'remote-androidian: plug-in', 'notremote-android: plug-in', 'remote-android-extra: plug-in', 'remote-linux: Remote Linux user platform plug-in.'],
     nativeRuns: 0,
   };
   writeFileSync(join(HERE, 'host-closure.json'), JSON.stringify(report, null, 2) + '\n');

@@ -84,7 +84,7 @@ test('fixed Grok capability probe uses lldb.sh for both queries and real launch 
  const script=part('const NDK =','const REMOTE =')+
   part('const PYTHON_SONAME =','function fail(')+
   part('function missingSonames(','function launchArgv(')+
-  part('async function probeHost(','async function drive(')+'\n({probeHost, OFFICIAL_LAUNCHER})';
+  part('function hasRemoteAndroid(','async function drive(')+'\n({probeHost, OFFICIAL_LAUNCHER})';
  const {probeHost,OFFICIAL_LAUNCHER}=vm.runInNewContext(script,{join:path.join,sha256:text=>createHash('sha256').update(text).digest('hex')});
  const calls=[];
  const result=await probeHost({stat:()=>true,readText:()=>OFFICIAL_LAUNCHER},'/sdk',async(step,args)=>{
