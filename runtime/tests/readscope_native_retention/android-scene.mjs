@@ -230,6 +230,14 @@ function files(root) {
 function prepare() {
   const { out, sdk, env } = context();
   fs.mkdirSync(out); // Existing/partial output is never accepted as a cache.
+  const diskPath = fs.realpathSync(process.env.RUNNER_TEMP);
+  const disk = fs.statfsSync(diskPath, { bigint: true });
+  const availableBytes = disk.bavail * disk.bsize;
+  const requiredBytes = 16n * 1024n ** 3n;
+  json(path.join(out, 'disk-admission.json'), { path: diskPath,
+    availableBytes: String(availableBytes), requiredBytes: String(requiredBytes),
+    observedAt: new Date().toISOString() });
+  assert(availableBytes >= requiredBytes, 'SCENE_PREPARE_INSUFFICIENT_DISK');
   const { run, rows } = runner(out, env);
   json(path.join(out, 'input.json'), checkBundle());
   const checkout = path.resolve(here, '../../..');
