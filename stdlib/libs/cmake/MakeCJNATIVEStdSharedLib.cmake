@@ -113,6 +113,14 @@ function(make_cangjie_lib target_name)
                 list(APPEND flags_to_compile "${RUNTIME_COMMON_LIB_DIR}/section.o")
             endif()
             list(APPEND flags_to_compile "${RUNTIME_COMMON_LIB_DIR}/cjstart.o")
+            if(MINGW)
+                # This final link bypasses cjc's DLL driver. Use the matching
+                # target startup's CRT wrapper: cjstart only registers PENDING,
+                # and a successful DllMainCRTStartup must commit that image.
+                list(APPEND flags_to_compile "${RUNTIME_COMMON_LIB_DIR}/cjstartdllentry.o")
+                list(APPEND flags_to_compile "${LINKER_OPTION_PREFIX}-e,__CJ_DllMainCRTStartupV1")
+                list(APPEND native_entry_depends "${RUNTIME_COMMON_LIB_DIR}/cjstartdllentry.o")
+            endif()
 
             if(CANGJIE_BUILD_STDLIB_WITH_COVERAGE)
                 list(APPEND flags_to_compile "$ENV{CANGJIE_HOME}/lib/${output_cj_lib_dir}/libclang_rt-profile.a")
@@ -365,6 +373,7 @@ function(make_cangjie_lib target_name)
             DEPENDS
                 ${resolved_depends}
                 ${CANGJIE_LIBRARY_OBJECTS}
+                ${native_entry_depends}
                 boundscheck
             COMMENT "Generating ${target_lib_full_name}")
 

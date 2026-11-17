@@ -36,7 +36,7 @@ public:
     virtual bool FileHasMultiPackage(const char* path) = 0;
     virtual void GetSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*> &subPackages) = 0;
 
-    virtual bool DoInitImage(BaseFile* baseFile) const = 0;
+    virtual bool DoInitImage(BaseFile* baseFile) = 0;
     virtual bool LibInit(const char*) = 0;
     virtual void* LoadCJLibrary(const char*) = 0;
 #ifdef INTERPRETER_ENABLED

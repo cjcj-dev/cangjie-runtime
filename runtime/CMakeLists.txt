@@ -681,13 +681,18 @@ endif()
 
 if (WINDOWS_FLAG MATCHES 1)
     add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/x86_64_windows/Cjstart.S)
+    # Separate from cjstart.o: executables must not acquire a reference to the
+    # DLL CRT entry. The paired compiler links this object only for DLL output.
+    add_library(cjstartdllentry OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/x86_64_windows/CjDllEntry.S)
+    install(PROGRAMS $<TARGET_OBJECTS:cjstartdllentry>
+            RENAME cjstartdllentry.o DESTINATION lib/${TARGET_ARCH})
     add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Windows/Section.cpp)
 elseif (MACOS_FLAG MATCHES 1)
-    add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Macos/section.cpp)
+    add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Macos/Section.cpp)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-        add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/X86_64_macos/Cjstart.S)
+        add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/x86_64_macos/Cjstart.S)
     else()
-        add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/Aarch64_macos/Cjstart.S)
+        add_library(cjstart OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/arch/aarch64_macos/Cjstart.S)
     endif()
 elseif (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     add_library(section OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/src/os/Macos/Section.cpp)
@@ -799,8 +804,15 @@ if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
         install_runtime_postprocess(cangjie-runtime "${STRIP_PROGRAM}"
             "runtime/lib/${TARGET_ARCH}/libcangjie-runtime.dylib" -x)
         if (ASAN_SUPPORT_FLAG MATCHES 0)
-        install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
-            "bin/cjfilt" -x)
+        if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
+            # CMake installs iOS executables as bundles, including simulator
+            # targets. Postprocess the installed executable inside that bundle.
+            install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+                "bin/$<TARGET_BUNDLE_DIR_NAME:cjfilt>/$<TARGET_FILE_NAME:cjfilt>" -x)
+        else()
+            install_runtime_postprocess(cjfilt "${STRIP_PROGRAM}"
+                "bin/cjfilt" -x)
+        endif()
         endif()
         if (RUNTIME_TRACE_FLAG MATCHES 1)
         install_runtime_postprocess(cangjie-trace "${STRIP_PROGRAM}"

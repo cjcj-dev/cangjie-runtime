@@ -16,7 +16,8 @@
 extern "C" {
 // CJMetadataHeader
 unsigned long _CJMetadataSize;
-uintptr_t _CJMetadataStart;
+// Public exact-image witness used only at registration, before publication.
+__attribute__((visibility("default"))) uintptr_t _CJMetadataStart;
 
 // CJSDKVersion
 unsigned long _CJSDKVersionSize;

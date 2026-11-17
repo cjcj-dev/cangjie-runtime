@@ -39,7 +39,7 @@ void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
-    if (file == nullptr) {
+    if (file == nullptr || file->HasLoadFailed()) {
         return;
     }
     {
@@ -203,8 +203,11 @@ void CJFileLoader::VisitExtensionData(
             }
         }
     }
-    // Callbacks may instantiate/register types. The same reader keeps every
-    // selected extension alive even if its image is concurrently unlinked.
+    // Selection linearizes under catalogMutex against MarkImageFailed. A
+    // snapshot selected before failure may finish; a new visit after failure
+    // cannot discover that owner's extensions. Retained bytes keep an earlier
+    // snapshot alive. Do not hold the catalog across callbacks, which may
+    // instantiate/register types (and acquire tiMutex in the reverse order).
     for (auto* extension : selected) { f(extension); }
 }
 
@@ -240,6 +243,7 @@ void CJFileLoader::RegisterTypeExt(BaseFile* baseFile)
 {
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    if (baseFile->HasLoadFailed()) { return; }
     Uptr typeExtBase = baseFile->GetTypeExtBase();
     Uptr typeExtEnd = typeExtBase + baseFile->GetTypeExtTotalSize();
     while (typeExtBase < typeExtEnd) {
@@ -636,8 +640,13 @@ bool CJFileLoader::CanPublishAddress(const void* address) const
     // discovery set, changed under this same catalog lock by UnlinkLoadedFile.
     auto image = ElfUnloadQuiescence::RegisteredImageForAddress(reinterpret_cast<Uptr>(address));
     if (image == nullptr) { return true; } // Runtime-allocated metadata.
+    // Several metadata owners may share one native image. An independent
+    // owner's success cannot republish the failed owner's metadata range.
+    for (BaseFile* file : loadedFiles) {
+        if (file->HasLoadFailed() && file->IsAddrInCJFile(reinterpret_cast<Uptr>(address))) { return false; }
+    }
     return std::any_of(loadedFiles.begin(), loadedFiles.end(), [&image](BaseFile* file) {
-        return file->GetImageAddressMap().identity == image->identity;
+        return file->GetImageAddressMap().identity == image->identity && !file->HasLoadFailed();
     });
 }
 
@@ -715,7 +724,7 @@ bool CJFileLoader::LibInit(const char* libName)
         ElfUnloadQuiescence::SharedTaskAdmissionScope admission;
         ElfUnloadQuiescence::ReadScope reader;
         baseFile = GetBaseFile(libName);
-        if (baseFile == nullptr) { return false; }
+        if (baseFile == nullptr || baseFile->HasLoadFailed()) { return false; }
         std::vector<Uptr> entries;
         baseFile->GetGlobalInitFunc(entries);
         // An empty image has no initializer body to execute or protect.
@@ -752,6 +761,20 @@ void* CJFileLoader::LoadCJLibrary(const char* libName)
     // With native pinning the returned reference remains process-owned.
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
+#ifdef _WIN64
+        if (!LoaderManager::GetInstance()->CommitNativeImageForHandle(handler)) {
+            LOG(RTLOG_ERROR, "CJ library has no successful native-entry instance: %s", libName);
+            binLoadApi.binUnload(handler);
+            return nullptr;
+        }
+#endif
+        BaseFile* file = GetBaseFile(baseName);
+        if (file != nullptr && file->HasLoadFailed()) {
+            // A retained failed image stays failed. Its native reference and
+            // published storage must not be reclaimed as error rollback.
+            if (!ElfUnloadQuiescence::RetainsNativeImages()) { binLoadApi.binUnload(handler); }
+            return nullptr;
+        }
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
         auto handlerIt =
             std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
@@ -976,6 +999,8 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
 {
     CString baseName = Os::Path::GetBaseName(libName.Str());
+    BaseFile* file = GetBaseFile(baseName);
+    if (file != nullptr && file->HasLoadFailed()) { return 0; }
     void* handler = nullptr;
     {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
@@ -992,8 +1017,47 @@ Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) cons
 }
 
 
-bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
+void CJFileLoader::MarkImageFailed(BaseFile* baseFile)
 {
+    // Failure withdraws discovery, not storage or roots: published addresses
+    // and generated metadata may already have escaped the initializer. Keep
+    // the native identity, registration and root ownership until process exit.
+    // Reuse the existing catalog publication check, without reader admission.
+    std::lock_guard<std::recursive_mutex> registrationLock(registrationMutex);
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    baseFile->MarkLoadFailed();
+    RemovePackageInfo(baseFile);
+    // Withdraw discovery only. The owning image, roots, generated metadata
+    // and already-published tables stay resident. Visits that selected their
+    // snapshot before this catalog transaction are allowed to finish.
+    extensionDatas.erase(baseFile);
+    for (auto it = typeExts.begin(); it != typeExts.end();) {
+        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second)) ||
+            baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->first))) {
+            it = typeExts.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeInfoCache.begin(); it != typeInfoCache.end();) {
+        if (!CanPublishTypeInfo(it->second)) {
+            it = typeInfoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeTemplateCache.begin(); it != typeTemplateCache.end();) {
+        if (!CanPublishAddress(it->second)) {
+            it = typeTemplateCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool CJFileLoader::DoInitImage(BaseFile* baseFile)
+{
+    if (baseFile->HasLoadFailed()) { return false; }
     // The caller may arrive from a native saferegion. The actual initializer
     // accesses the managed heap; SetManagedContext alone is not that transition.
     // Retain the image with PendingTask, never with an OS-TLS reader here.
@@ -1017,14 +1081,15 @@ bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
             if (mutator != nullptr) {
                 mutator->SetManagedContext(false);
             }
+#endif
             if (ExceptionManager::HasPendingException()) {
+                MarkImageFailed(baseFile);
                 ExceptionRef ex = ExceptionManager::GetPendingException();
                 LOG(RTLOG_ERROR, "Init Image fail! exception occurrence when init image, exception:%s ",
                     ex->GetTypeInfo()->GetName());
                 ExceptionManager::ClearPendingException();
                 return false;
             }
-#endif
         }
     }
     return true;
@@ -1072,7 +1137,9 @@ void CJFileLoader::TryThrowException(Uptr fileMetaAddr)
         packageVersion.Str(), compatibility.GetRuntimeSDKVersion()));
 #ifndef DISABLE_VERSION_CHECK
     ExceptionManager::IncompatiblePackageExpection(msg);
-    RemoveLoadedFiles(file);
+    // ThrowPendingException can return through native frames after arranging
+    // the managed return bridge. Do not purge published storage on that path.
+    if (!ElfUnloadQuiescence::RetainsNativeImages()) { RemoveLoadedFiles(file); }
 #else
     LOG(RTLOG_WARNING, "%s", msg.Str());
 #endif
@@ -1125,7 +1192,10 @@ TypeExt* CJFileLoader::GetTypeExt(void* type)
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeExts.find(type);
-    return it == typeExts.end() ? nullptr : it->second;
+    // The returned pointer is a catalog snapshot, like VisitExtensionData.
+    // Neither a failed extension owner nor a failed target may be rediscovered
+    // by a later NeedRefresh query. Storage is not reclaimed here.
+    return it == typeExts.end() || !CanPublishAddress(it->second) || !CanPublishAddress(type) ? nullptr : it->second;
 }
 
 } // namespace MapleRuntime

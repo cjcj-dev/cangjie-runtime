@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 #if defined(__linux__)
 #include <cstddef>
+#include <dlfcn.h>
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
 #include "ObjectModel/RefField.h"
 #include "Interpreter/RuntimeTypes.h"
@@ -23,6 +24,22 @@ struct ImageMetadata {
     alignas(16) DYN_TypeInfo namedType {};
     DYN_ExtensionData extension {};
 } metadata;
+}
+namespace {
+unsigned int retainCalls = 0;
+}
+// The call must return through this image: namespace selection uses its PC.
+extern "C" __attribute__((visibility("protected")))
+void* __CJ_ImageRetainV1(const char* path, int flags)
+{
+    void* result = dlopen(path, flags);
+    ++retainCalls;
+    return result;
+}
+extern "C" unsigned int PackageInitImageRetainCalls() { return retainCalls; }
+extern "C" void* PackageInitImageWrongInstance(const char*, int)
+{
+    return dlopen("libm.so.6", RTLD_NOW | RTLD_LOCAL);
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
 extern "C" void PackageInitImageSetRoot(uintptr_t value)
