@@ -5,6 +5,7 @@
 #define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_unittest.hpp"
 #if defined(__linux__)
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -88,6 +89,23 @@ void UnitA() {}
 void UnitB() {}
 void Aggregate() {}
 
+// ABI record used by the native registration test (TypeTemplate has no constructor).
+struct ExtensionTemplateRecord {
+    const char* name;
+    I8 type;
+    I8 flag;
+    U16 fieldNum;
+    U16 typeArgsNum;
+    std::atomic<U16> uuid;
+    const GenericFunc* fieldFns;
+    GenericFunc superFn;
+    FuncRef finalizerMethod;
+    ReflectInfo* reflectInfo;
+    ExtensionData** vExtensionDataStart;
+    U16 validInheritNum;
+};
+static_assert(sizeof(ExtensionTemplateRecord) == sizeof(TypeTemplate));
+
 // Real CJFile metadata in the executable image, loaded through the product
 // catalog. These are native ABI consumers; compiler-generated consumers are #48.
 struct Metadata {
@@ -95,6 +113,10 @@ struct Metadata {
     CJGCFlagsTable flags { 1, 1, 0 };
     Uptr entries[2] { reinterpret_cast<Uptr>(&PackageA), reinterpret_cast<Uptr>(&PackageB) };
     alignas(16) DYN_TypeInfo namedType {};
+    alignas(16) ExtensionTemplateRecord genericTemplate {};
+    I32 outerExtensionRef { 0 };
+    DYN_ExtensionData outerExtension {};
+    alignas(16) unsigned char typeExtension[32] {};
 };
 Metadata metadata;
 Metadata secondaryMetadata;
@@ -122,6 +144,17 @@ CJFile* RegisterMetadata(Metadata& value, const char* name)
     value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(Metadata, entries), sizeof(value.entries) };
     if (value.namedType.typeInfoName != nullptr) {
         value.header.tables[TYPE_INFO_TABLE] = { offsetof(Metadata, namedType), sizeof(value.namedType) };
+    }
+    if (value.genericTemplate.name != nullptr) {
+        value.header.tables[TYPE_TEMPLATE_TABLE] = {
+            offsetof(Metadata, genericTemplate), sizeof(value.genericTemplate) };
+    }
+    if (value.outerExtensionRef != 0) {
+        value.header.tables[OUTER_TYPE_EXTENSIONS_TABLE] = {
+            offsetof(Metadata, outerExtensionRef), sizeof(value.outerExtensionRef) };
+    }
+    if (reinterpret_cast<TypeExt*>(value.typeExtension)->size != 0) {
+        value.header.tables[TYPE_EXT_TABLE] = { offsetof(Metadata, typeExtension), sizeof(value.typeExtension) };
     }
     auto* file = new CJFile(CString(name), reinterpret_cast<Uptr>(&value));
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
@@ -1062,6 +1095,100 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RetainedFailedInitializerIsNotReopened)
         static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
     }, &done);
     Target("failed-libinit-consumer-completed", Await(done));
+    packageBody = nullptr;
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+namespace {
+std::atomic<U32> failedExtensionCalls { 0 }, healthyExtensionCalls { 0 };
+void* FailedExtensionWhere(U32, TypeInfo*[])
+{
+    failedExtensionCalls.fetch_add(1, std::memory_order_relaxed);
+    return reinterpret_cast<void*>(1);
+}
+void* HealthyExtensionWhere(U32, TypeInfo*[])
+{
+    healthyExtensionCalls.fetch_add(1, std::memory_order_relaxed);
+    return reinterpret_cast<void*>(1);
+}
+void ConfigureExtension(Metadata& value, TypeTemplate* tt, DYN_TypeInfo* itf, void* where, TypeInfo* key)
+{
+    value.outerExtensionRef = offsetof(Metadata, outerExtension) - offsetof(Metadata, outerExtensionRef);
+    value.outerExtension.argNum = 1;
+    value.outerExtension.tt = tt;
+    value.outerExtension.isInterfaceTypeInfo = 1;
+    value.outerExtension.interfaceTypeInfo = itf;
+    value.outerExtension.whereCondFn = where;
+    auto* typeExt = reinterpret_cast<TypeExt*>(value.typeExtension);
+    typeExt->ti = key;
+    typeExt->size = sizeof(value.typeExtension);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, FailedInitializerWithdrawsExternalExtensions)
+{
+    // F and H are distinct registered CJ headers in one retained native image.
+    // H owns T and the interface; F supplies an external extension of T.
+    secondaryMetadata.genericTemplate.name = "gc.extension:HealthyBox";
+    secondaryMetadata.genericTemplate.type = TypeKind::TYPE_KIND_CLASS;
+    secondaryMetadata.genericTemplate.typeArgsNum = 1;
+    auto* tt = reinterpret_cast<TypeTemplate*>(&secondaryMetadata.genericTemplate);
+    static DYN_TypeInfo argument {};
+    argument.typeInfoName = "gc.extension:HealthyArgument";
+    argument.type = TypeKind::TYPE_KIND_INT64;
+    argument.instanceSize = sizeof(I64);
+    argument.align = sizeof(I64);
+    secondaryMetadata.namedType.typeInfoName = "gc.extension:HealthyInterface";
+    secondaryMetadata.namedType.type = TypeKind::TYPE_KIND_INTERFACE;
+    auto* argumentTi = reinterpret_cast<TypeInfo*>(&argument);
+    auto* itf = reinterpret_cast<TypeInfo*>(&secondaryMetadata.namedType);
+    ConfigureExtension(metadata, tt, &secondaryMetadata.namedType,
+        reinterpret_cast<void*>(&FailedExtensionWhere), argumentTi);
+    ConfigureExtension(secondaryMetadata, tt, &secondaryMetadata.namedType,
+        reinterpret_cast<void*>(&HealthyExtensionWhere), itf);
+    Init(); // Registers F's real OUTER_TYPE_EXTENSIONS_TABLE before LibInit.
+    secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageB);
+    auto* healthyFile = RegisterMetadata(secondaryMetadata, "healthy-extension-owner");
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    Target("extension-real-typeext-registered", loader->GetTypeExt(argumentTi) ==
+        reinterpret_cast<TypeExt*>(metadata.typeExtension));
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(argumentTi);
+    packageBody = FailedManagedInitBody;
+    std::atomic<bool> done { false };
+    Start([](void* opaque) {
+        auto* manager = LoaderManager::GetInstance();
+        auto* loader = static_cast<CJFileLoader*>(manager->GetLoader());
+        auto* tt = reinterpret_cast<TypeTemplate*>(&secondaryMetadata.genericTemplate);
+        auto* arg = reinterpret_cast<TypeInfo*>(&argument);
+        auto* itf = reinterpret_cast<TypeInfo*>(&secondaryMetadata.namedType);
+        // An earlier selected snapshot remains valid across the failure, but
+        // the next selection must not rediscover F. No storage is freed.
+        unsigned selected = 0;
+        loader->VisitExtensionData(itf, [&](ExtensionData* ed) {
+            if (selected++ == 0) {
+                Target("extension-real-libinit-failure", !manager->LibInit("package-init-main"));
+            }
+            Target("extension-earlier-snapshot-remains-readable", ed->GetTargetType() == tt);
+            return false;
+        }, tt);
+        Target("extension-both-real-registrations-selected", selected == 2);
+        Target("extension-healthy-owner-initializes", manager->LibInit("healthy-extension-owner"));
+        TypeInfo* args[] = { arg };
+        // First generic instantiation is after the failed LibInit returned.
+        auto* ti = TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(tt, 1, args);
+        std::vector<TypeInfo*> interfaces;
+        ti->GetInterfaces(interfaces); // Also exercises delayed outer resolution.
+        Target("extension-healthy-callback-and-interface", healthyExtensionCalls.load() != 0 &&
+            std::find(interfaces.begin(), interfaces.end(), itf) != interfaces.end());
+        Target("extension-failed-callback-never-invoked", failedExtensionCalls.load() == 0);
+        Target("extension-failed-typeext-withdrawn", loader->GetTypeExt(arg) == nullptr);
+        Target("extension-healthy-typeext-preserved", loader->GetTypeExt(itf) ==
+            reinterpret_cast<TypeExt*>(secondaryMetadata.typeExtension));
+        loader->RegisterTypeExt(image);
+        Target("extension-failed-typeext-cannot-reregister", loader->GetTypeExt(arg) == nullptr);
+        static_cast<std::atomic<bool>*>(opaque)->store(true, std::memory_order_release);
+    }, &done);
+    Target("extension-consumer-completed", Await(done));
+    Target("extension-resident-failed-and-healthy-headers", image->HasLoadFailed() && image->IsRegistered() &&
+        !healthyFile->HasLoadFailed() && healthyFile->IsRegistered());
     packageBody = nullptr;
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }

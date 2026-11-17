@@ -203,8 +203,11 @@ void CJFileLoader::VisitExtensionData(
             }
         }
     }
-    // Callbacks may instantiate/register types. The same reader keeps every
-    // selected extension alive even if its image is concurrently unlinked.
+    // Selection linearizes under catalogMutex against MarkImageFailed. A
+    // snapshot selected before failure may finish; a new visit after failure
+    // cannot discover that owner's extensions. Retained bytes keep an earlier
+    // snapshot alive. Do not hold the catalog across callbacks, which may
+    // instantiate/register types (and acquire tiMutex in the reverse order).
     for (auto* extension : selected) { f(extension); }
 }
 
@@ -240,6 +243,7 @@ void CJFileLoader::RegisterTypeExt(BaseFile* baseFile)
 {
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    if (baseFile->HasLoadFailed()) { return; }
     Uptr typeExtBase = baseFile->GetTypeExtBase();
     Uptr typeExtEnd = typeExtBase + baseFile->GetTypeExtTotalSize();
     while (typeExtBase < typeExtEnd) {
@@ -1023,6 +1027,18 @@ void CJFileLoader::MarkImageFailed(BaseFile* baseFile)
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     baseFile->MarkLoadFailed();
     RemovePackageInfo(baseFile);
+    // Withdraw discovery only. The owning image, roots, generated metadata
+    // and already-published tables stay resident. Visits that selected their
+    // snapshot before this catalog transaction are allowed to finish.
+    extensionDatas.erase(baseFile);
+    for (auto it = typeExts.begin(); it != typeExts.end();) {
+        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second)) ||
+            baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->first))) {
+            it = typeExts.erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = typeInfoCache.begin(); it != typeInfoCache.end();) {
         if (!CanPublishTypeInfo(it->second)) {
             it = typeInfoCache.erase(it);
@@ -1176,7 +1192,10 @@ TypeExt* CJFileLoader::GetTypeExt(void* type)
     ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeExts.find(type);
-    return it == typeExts.end() ? nullptr : it->second;
+    // The returned pointer is a catalog snapshot, like VisitExtensionData.
+    // Neither a failed extension owner nor a failed target may be rediscovered
+    // by a later NeedRefresh query. Storage is not reclaimed here.
+    return it == typeExts.end() || !CanPublishAddress(it->second) || !CanPublishAddress(type) ? nullptr : it->second;
 }
 
 } // namespace MapleRuntime
