@@ -1,0 +1,35 @@
+#!/usr/bin/env zx
+// Normal iOS product build; simulator execution is separate from device coverage.
+import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';import {fileURLToPath} from 'node:url';import {spawnSync} from 'node:child_process';import {createHash} from 'node:crypto';
+import {selectSimulator} from './ios-simulator-selection.mjs';
+assert.equal(process.platform,'darwin');const target=process.env.READSCOPE_IOS_TARGET;assert(['ios-aarch64','ios-simulator-aarch64','ios-simulator-x86_64'].includes(target));
+const here=path.dirname(fileURLToPath(import.meta.url)),runtime=path.resolve(here,'../..'),out=path.join(process.env.RUNNER_TEMP,'readscope-ios');fs.mkdirSync(out);
+const simulator=target.startsWith('ios-simulator-'),sdk=simulator?'iphonesimulator':'iphoneos',arch=target.endsWith('x86_64')?'x86_64':'arm64',env={...process.env,CANGJIE_BUILD_JOBS:'2',CMAKE_BUILD_PARALLEL_LEVEL:'2',GC_UNIT_GATE_SKIP:'1',SCCACHE_GHA_ENABLED:'true',TMPDIR:out},rows=[];
+const save=()=>fs.writeFileSync(out+'/commands.json',JSON.stringify(rows,null,2));
+function run(name,args,{cwd=out,extra={},expected=0,timeout=2700000}={}){const row={name,args,cwd,started:new Date().toISOString(),expected};rows.push(row);save();const a=fs.openSync(out+'/'+name+'.stdout','wx'),b=fs.openSync(out+'/'+name+'.stderr','wx'),r=spawnSync(args[0],args.slice(1),{cwd,env:{...env,...extra},stdio:['ignore',a,b],timeout});fs.closeSync(a);fs.closeSync(b);Object.assign(row,{rc:r.status,signal:r.signal,error:r.error?.message,ended:new Date().toISOString()});save();console.log(name,row.rc,row.signal);if(expected!==null){assert.equal(r.status,expected,name);assert.equal(r.signal,null,name);}return fs.readFileSync(out+'/'+name+'.stdout','utf8');}
+function files(p){return fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(p+'/'+e.name):[p+'/'+e.name]);}const hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const ref=run('source-ref',['git','-C',path.dirname(runtime),'rev-parse','HEAD']).trim(),sdkPath=run('sdk-path',['xcrun','--sdk',sdk,'--show-sdk-path']).trim(),clang=run('compiler-path',['xcrun','--sdk',sdk,'--find','clang']).trim();run('xcode-version',['xcodebuild','-version']);const sdkVersion=run('sdk-version',['xcrun','--sdk',sdk,'--show-sdk-version']).trim();run('compiler-version',[clang,'--version']);
+run('normal-build',['python3',runtime+'/build.py','build','--target',target,'--build-type','release','--target-toolchain',path.dirname(path.dirname(clang)),'--target-sysroot',sdkPath,'--prefix',out+'/install'],{cwd:runtime});
+run('normal-install',['python3',runtime+'/build.py','install','--prefix',out+'/install'],{cwd:runtime});
+const install=out+'/install',libraries=files(install).filter(p=>p.endsWith('/libcangjie-runtime.dylib'));assert.equal(libraries.length,1);const library=libraries[0],lib=path.dirname(library),build=runtime+'/CMakebuild',product={ref,target,sdk,sdkPath,arch,runtime:{path:library,sha256:hash(library)},deviceExecution:'NOT_RUN',DebugO0:'NOT_RUN',scope:'normal iOS build/install; finite simulator native lifecycle only, not actual iOS hardware or generated CJ SDK'};
+fs.writeFileSync(out+'/identity.json',JSON.stringify(product,null,2));run('runtime-load-commands',['xcrun','otool','-L',library]);
+// src/CMakeLists.txt builds StackManager separately for COMPILE_DYNAMIC and
+// the static runtime object target on iOS. Inspect both normal graph members.
+const machineMembers=['src/ObjectModel/CMakeFiles/ObjectModel.dir/MClass.cpp.o','src/CMakeFiles/cangjie-runtime.dir/StackManager.cpp.o','src/CMakeFiles/runtime.dir/StackManager.cpp.o'];
+fs.writeFileSync(out+'/machine-members.json',JSON.stringify(machineMembers,null,2));
+for(const [index,member] of machineMembers.entries()){const object=build+'/'+member;assert(fs.statSync(object).isFile(),member);const body=run(index+'-'+path.basename(object)+'-machine',['xcrun','llvm-objdump','-dr',object]);assert(!/ElfUnloadQuiescence[^\n]*(?:ReadScope|AssertReaderActive|CheckReaderActive)|readerDepth/.test(body),member);}
+if(simulator){
+ assert.equal(process.arch==='arm64'?'arm64':'x86_64',arch,'simulator must match native runner architecture');
+ const headers=[runtime+'/src',runtime+'/include',runtime+'/src/Loader/BinaryFile',runtime+'/src/CJThread/src/runtime/schedule/include',runtime+'/third_party/third_party_bounds_checking_function/include',...files(build).filter(p=>p.endsWith('/log.h')).map(p=>path.dirname(p))],common=[clang+'++','-std=gnu++17','-O2','-target',arch+'-apple-ios13.0-simulator','-isysroot',sdkPath,...headers.map(p=>'-I'+p)],fixture=out+'/fixture.dylib',consumer=out+'/consumer';
+ run('fixture-link',[...common,'-dynamiclib',here+'/apple-fixture.cpp','-L'+lib,'-lcangjie-runtime','-Wl,-rpath,'+lib,'-o',fixture]);run('consumer-link',[...common,here+'/apple-consumer.cpp','-L'+lib,'-lcangjie-runtime','-Wl,-rpath,'+lib,'-o',consumer]);run('fixture-sign',['codesign','--force','--sign','-',fixture]);run('consumer-sign',['codesign','--force','--sign','-',consumer]);
+ const runtimes=JSON.parse(run('simulator-runtimes',['xcrun','simctl','list','runtimes','--json'])).runtimes,types=JSON.parse(run('simulator-types',['xcrun','simctl','list','devicetypes','--json'])).devicetypes;
+ const expected={sdkVersion:env.READSCOPE_SIM_SDK_VERSION,runtime:env.READSCOPE_SIM_RUNTIME,build:env.READSCOPE_SIM_BUILD,device:env.READSCOPE_SIM_DEVICE};
+ const selected=selectSimulator({sdkVersion,arch,runtimes,types,expected});
+ // Persist the resolved inputs before boot, including on a later timeout.
+ product.simulator={...selected,sdkVersion,expected};fs.writeFileSync(out+'/identity.json',JSON.stringify(product,null,2));
+ const udid=run('simulator-create',['xcrun','simctl','create','readscope-lifetime-'+process.pid,selected.deviceType.identifier,selected.runtime.identifier]).trim();assert.match(udid,/^[0-9A-F-]{36}$/i);product.simulator.udid=udid;fs.writeFileSync(out+'/identity.json',JSON.stringify(product,null,2));
+ try{
+  run('simulator-boot',['xcrun','simctl','boot',udid]);run('simulator-boot-status',['xcrun','simctl','bootstatus',udid,'-b'],{timeout:240000});
+  for(const mode of ['preinit','runtime-fini']){const output=run(mode,['xcrun','simctl','spawn',udid,consumer,fixture,mode],{extra:{SIMCTL_CHILD_DYLD_LIBRARY_PATH:lib,SIMCTL_CHILD_DYLD_PRINT_LIBRARIES:'1'},expected:null,timeout:30000}),r=rows.at(-1),stderr=fs.readFileSync(out+'/'+mode+'.stderr','utf8');assert.equal(r.rc,0,mode);assert.equal(r.signal,null,mode);assert(output.includes('apple-reopen-no-double-init executed=1 pass=1'));assert.equal((stderr.match(/APPLE_FIXTURE_INIT count=1/g)||[]).length,1);assert.equal((stderr.match(/APPLE_FIXTURE_FINI count=1/g)||[]).length,1);}
+ }finally{run('simulator-shutdown',['xcrun','simctl','shutdown',udid],{expected:null,timeout:20000});run('simulator-delete',['xcrun','simctl','delete',udid],{expected:null,timeout:20000});}
+}

@@ -8,6 +8,8 @@
 #ifndef MRT_BASE_FILE_H
 #define MRT_BASE_FILE_H
 
+#include <atomic>
+
 #include "Base/CString.h"
 #include "Base/Types.h"
 #include "os/Path.h"
@@ -50,8 +52,19 @@ public:
 
     virtual const CString& GetRealPath() const;
     const CString& GetBaseName() const;
-    void SetFileCompatibility(bool isComp) { isCompatible = isComp; }
+    void SetFileCompatibility(bool isComp)
+    {
+        isCompatible = isComp;
+#ifndef DISABLE_VERSION_CHECK
+        if (!isComp) { MarkLoadFailed(); }
+#endif
+    }
     bool IsCompatible() const { return isCompatible; }
+    // An irreversible native pin does not turn a failed load into a successful
+    // one. Keep the failed identity resident, but never rerun its initializer
+    // or offer it through the public load/symbol entries as a usable library.
+    bool HasLoadFailed() const { return loadFailed.load(std::memory_order_acquire); }
+    void MarkLoadFailed() { loadFailed.store(true, std::memory_order_release); }
     void SetImageAddressMap(std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> map)
     {
         imageAddressMap = std::move(map);
@@ -67,6 +80,7 @@ private:
     CString baseName;
     bool isCompatible { false };
     bool registered { false }; // Protected by the loader catalog lock.
+    std::atomic<bool> loadFailed { false };
 };
 } // namespace MapleRuntime
 #endif

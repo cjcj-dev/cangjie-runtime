@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "repository": "cjcj-dev/cangjie-runtime",
+  "runtime": "d51c34a06cfd980d0e2694514e2a41421ac41b83",
+  "observer": "761b0ad956d975488b984e419ef4a803711e2635",
+  "runtimeSha256": "aac5c4456fc9746243a2a15d22beac6a52ee27f269a94cd0e839315bc080db51",
+  "artifact": {
+    "run": 43760946735,
+    "id": 14180621274,
+    "name": "readscope-android",
+    "size": 2364032,
+    "digest": "sha256:7bb0f7dc2576045946bd2c20b5b90efd1b9f107828d83d36a526f50ee700c351"
+  },
+  "bounds": "2ae82839ecaaa7d031e66ccbd2076d671acfd615",
+  "fixtureBlob": "a8e90380a4b6ca9ea846c3b6a79c7574f9daf404",
+  "consumerBlob": "96a1a79241830989f6974cd33ddc8af4ca71b036",
+  "ndk": "27.3.13750724",
+  "api": 31,
+  "systemImage": "system-images;android-31;google_apis;x86_64",
+  "mode": "preinit",
+  "nativeProcesses": 1,
+  "warmup": 0,
+  "retry": 0,
+  "replacement": 0,
+  "activeSeconds": 60,
+  "totalSeconds": 300,
+  "bootSeconds": 240,
+  "observerSha256": "96e07e5231438b8752881e87b73431fa24b24b5460a0605a92aee2e9b213d3ff",
+  "observerBlob": "85061c13c429c8cdb4368c0a69e81dbb73210a05"
+}

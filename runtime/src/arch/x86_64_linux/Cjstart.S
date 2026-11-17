@@ -13,13 +13,33 @@ __CJ_Init_Start:                        # @__CJ_Init_Start
     .cfi_def_cfa_offset 16
     leaq  __CJMetadataStart(%rip), %rdi
     movl  $1, %esi
+#if defined(__ANDROID__) || defined(__OHOS__)
+    leaq  __CJ_ImageRetainV1(%rip), %rdx
+    callq MRT_LibraryOnLoadRetainedV1@PLT
+#else
     callq MRT_LibraryOnLoad@PLT
+#endif
     popq  %rax
     .cfi_def_cfa_offset 8
     retq
 .Lfunc_end:
     .size __CJ_Init_Start, .Lfunc_end-__CJ_Init_Start
     .cfi_endproc
+#if defined(__ANDROID__) || defined(__OHOS__)
+    .globl __CJ_ImageRetainV1
+    .protected __CJ_ImageRetainV1
+    .type __CJ_ImageRetainV1,@function
+__CJ_ImageRetainV1:
+    .cfi_startproc
+    pushq %rcx
+    .cfi_def_cfa_offset 16
+    callq dlopen@PLT
+    popq %rcx
+    .cfi_def_cfa_offset 8
+    retq
+    .size __CJ_ImageRetainV1, .-__CJ_ImageRetainV1
+    .cfi_endproc
+#endif
                                             # -- End function
     .section  .init_array.0,"aw",@init_array
     .p2align  3

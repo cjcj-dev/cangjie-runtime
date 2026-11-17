@@ -32,6 +32,7 @@
 #include <mach-o/loader.h>
 #else
 #include <link.h>
+#include <sys/auxv.h>
 #endif
 #endif
 
@@ -196,9 +197,131 @@ ReaderSlot* CurrentReaderSlot()
 // dlopen resolves non-null names in the caller's namespace. Do not assume a
 // matching pathname is sufficient: check the native map against the metadata
 // address, then use the handle's LMID for NODELETE promotion.
-bool RetainNativeImage(Uptr metadata)
+#if defined(__linux__)
+bool RetainImageViaLocalCallback(Uptr metadata, NativeImageRetainerV1 retainer)
 {
-#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    Dl_info owner {};
+    CHECK_DETAIL(dladdr(reinterpret_cast<void*>(metadata), &owner) != 0 && owner.dli_fbase != nullptr,
+                 "native image retention v1: metadata has no native owner");
+    if (retainer != nullptr) {
+        Dl_info callbackOwner {};
+        CHECK_DETAIL(dladdr(reinterpret_cast<void*>(retainer), &callbackOwner) != 0 &&
+                         callbackOwner.dli_fbase == owner.dli_fbase,
+                     "native image retention v1: callback is not owned by metadata image");
+    }
+    struct Lifetime {
+        Uptr metadata;
+        Uptr mainPhdr;
+        bool found { false };
+        bool main { false };
+        bool nodelete { false };
+    } lifetime { metadata, static_cast<Uptr>(getauxval(AT_PHDR)) };
+    dl_iterate_phdr([](dl_phdr_info* loaded, size_t, void* argument) {
+        auto& proof = *static_cast<Lifetime*>(argument);
+        bool contains = false;
+        for (size_t i = 0; i != loaded->dlpi_phnum; ++i) {
+            const auto& segment = loaded->dlpi_phdr[i];
+            const Uptr start = loaded->dlpi_addr + segment.p_vaddr;
+            contains |= segment.p_type == PT_LOAD && proof.metadata >= start &&
+                proof.metadata - start < segment.p_memsz;
+        }
+        if (!contains) { return 0; }
+        proof.found = true;
+        proof.main = proof.mainPhdr != 0 && reinterpret_cast<Uptr>(loaded->dlpi_phdr) == proof.mainPhdr;
+        // Read the actual loaded object's dynamic table. A path/SONAME match
+        // does not identify Android FORCE_LOAD duplicates or another namespace.
+        for (size_t i = 0; i != loaded->dlpi_phnum; ++i) {
+            const auto& segment = loaded->dlpi_phdr[i];
+            if (segment.p_type != PT_DYNAMIC) { continue; }
+            const auto* dynamic = reinterpret_cast<const ElfW(Dyn)*>(loaded->dlpi_addr + segment.p_vaddr);
+            for (size_t n = 0; n != segment.p_memsz / sizeof(ElfW(Dyn)) && dynamic[n].d_tag != DT_NULL; ++n) {
+                if (dynamic[n].d_tag == DT_FLAGS_1) {
+                    proof.nodelete |= (dynamic[n].d_un.d_val & DF_1_NODELETE) != 0;
+                }
+            }
+        }
+        return 1;
+    }, &lifetime);
+    CHECK_DETAIL(lifetime.found, "native image retention v1: native program headers not found");
+    if (lifetime.main || lifetime.nodelete) { return true; }
+    CHECK_DETAIL(retainer != nullptr,
+                 "native image retention v1: rebuild CJ startup/image; old image has no lifetime proof");
+    CHECK_DETAIL(owner.dli_fname != nullptr && owner.dli_fname[0] != '\0',
+                 "native image retention v1: library name unavailable");
+    // These calls must return through Cjstart, rather than tail-jump to dlopen:
+    // both Bionic and OHOS derive the caller's native namespace from its PC.
+    void* lookup = retainer(owner.dli_fname, RTLD_NOW | RTLD_NOLOAD);
+    CHECK_DETAIL(lookup != nullptr && dlsym(lookup, NATIVE_IMAGE_RETAINER_SYMBOL_V1) ==
+                     reinterpret_cast<void*>(retainer),
+                 "native image retention v1: lookup resolved another image instance");
+    void* pinned = retainer(owner.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE);
+    CHECK_DETAIL(pinned != nullptr && dlsym(pinned, NATIVE_IMAGE_RETAINER_SYMBOL_V1) ==
+                     reinterpret_cast<void*>(retainer),
+                 "native image retention v1: promotion resolved another image instance");
+    CHECK_DETAIL(dlclose(pinned) == 0 && dlclose(lookup) == 0,
+                 "native image retention v1: temporary native reference release failed");
+    return true;
+}
+#endif
+
+#if defined(__APPLE__)
+bool RetainMachImage(Uptr metadata, void*& nativeReference)
+{
+    Dl_info owner {};
+    CHECK_DETAIL(dladdr(reinterpret_cast<void*>(metadata), &owner) != 0 && owner.dli_fbase != nullptr,
+                 "Mach-O retention: metadata has no native owner");
+    // Native executable images are process-owned on both macOS and iOS.
+    if (owner.dli_fbase == _dyld_get_image_header(0)) { return true; }
+    CHECK_DETAIL(owner.dli_fname != nullptr && owner.dli_fname[0] != '\0',
+                 "Mach-O retention: native image name unavailable");
+    void* lookup = dlopen(owner.dli_fname, RTLD_NOW | RTLD_LOCAL | RTLD_FIRST | RTLD_NOLOAD);
+    CHECK_DETAIL(lookup != nullptr, "Mach-O retention: actual loaded image lookup failed");
+    const auto matches = [&](void* handle) {
+        auto* slot = static_cast<const Uptr*>(dlsym(handle, "_CJMetadataStart"));
+        Dl_info slotOwner {};
+        return slot != nullptr && dladdr(slot, &slotOwner) != 0 &&
+            slotOwner.dli_fbase == owner.dli_fbase && *slot == metadata;
+    };
+    CHECK_DETAIL(matches(lookup), "Mach-O retention: lookup resolved another metadata image");
+    // dyld returns early for NOLOAD, before late NODELETE promotion. The
+    // identity-checked lookup keeps this exact image live across the second
+    // call, which must not use NOLOAD. Keep the resulting native reference:
+    // NODELETE alone preserves mappings but need not suppress terminators or
+    // keep the loader's dependent closure registered when refcount reaches 0.
+    void* retained = dlopen(owner.dli_fname, RTLD_NOW | RTLD_LOCAL | RTLD_FIRST | RTLD_NODELETE);
+    CHECK_DETAIL(retained != nullptr && matches(retained),
+                 "Mach-O retention: promotion resolved another metadata image");
+    nativeReference = retained; // process-owned; never passed to dlclose
+    CHECK_DETAIL(dlclose(lookup) == 0, "Mach-O retention: temporary lookup release failed");
+    return true;
+}
+#endif
+
+bool RetainNativeImage(Uptr metadata, NativeImageRetainerV1 retainer, void*& nativeReference)
+{
+    (void)nativeReference;
+#if defined(_WIN64)
+    (void)retainer;
+    // Pin the module owning this address, not a pathname which could resolve
+    // to a second image. This Kernel32 call neither loads a DLL nor executes
+    // another initializer. It must precede runtime catalog locks, including
+    // when entered from the native CRT constructor under the loader lock.
+    MEMORY_BASIC_INFORMATION memory {};
+    CHECK_DETAIL(VirtualQuery(reinterpret_cast<const void*>(metadata), &memory, sizeof(memory)) != 0 &&
+                     memory.Type == MEM_IMAGE && memory.AllocationBase != nullptr,
+                 "CJ image pin: metadata has no native module");
+    HMODULE module = nullptr;
+    CHECK_DETAIL(GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                     reinterpret_cast<LPCSTR>(metadata), &module) != 0 &&
+                     reinterpret_cast<void*>(module) == memory.AllocationBase,
+                 "CJ image pin: exact native module retention failed");
+    // The pinned module's static dependency references stay owned by it. Do
+    // not FreeLibrary this handle: PIN is a process-lifetime native policy.
+    return true;
+#elif defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+    // The v1 producer/consumer can also be exercised in an actual glibc
+    // namespace. Existing images keep the original exact link_map/LMID path.
+    if (retainer != nullptr) { return RetainImageViaLocalCallback(metadata, retainer); }
     Dl_info info {};
     void* extra = nullptr;
     CHECK_DETAIL(dladdr1(reinterpret_cast<void*>(metadata), &info, &extra, RTLD_DL_LINKMAP) != 0 && extra != nullptr,
@@ -224,8 +347,14 @@ bool RetainNativeImage(Uptr metadata)
     CHECK_DETAIL(dlclose(pinned) == 0 && dlclose(handle) == 0,
                  "ELF no-unload pin: temporary reference release failed");
     return true;
+#elif defined(__ANDROID__) || defined(__OHOS__)
+    return RetainImageViaLocalCallback(metadata, retainer);
+#elif defined(__APPLE__)
+    (void)retainer;
+    return RetainMachImage(metadata, nativeReference);
 #else
     (void)metadata;
+    (void)retainer;
     CHECK_DETAIL(false, "ELF no-unload pin: native NODELETE API unavailable");
     return false;
 #endif
@@ -360,7 +489,9 @@ Uptr ElfUnloadQuiescence::ImageAddressMap::FindFunctionDescriptor(Uptr startPC) 
 Uptr ElfUnloadQuiescence::FindFunctionDescriptor(Uptr startPC)
 {
     // CodeCache::find_blob selects the owning heap, then delegates its lookup.
-    AssertReaderActive();
+    if constexpr (!RetainsNativeImages()) {
+        AssertReaderActive();
+    }
     const auto image = RegisteredImageForAddress(startPC);
     return image != nullptr ? image->FindFunctionDescriptor(startPC) : 0;
 }
@@ -373,13 +504,13 @@ Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
     return image->identity;
 }
 
-ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
+void ElfUnloadQuiescence::ReadScope::Enter(ReaderKind kind)
 {
     (void)kind;
     // Nested scopes only bump the thread-local depth. Keep that path a small
     // leaf: GetMTable/IsSubType walks enter nested scopes far more often than
     // outermost ones, and the admission protocol below needs a large frame.
-    if (RetainsNativeImages() || readerDepth != 0 || unloadWriter) {
+    if (readerDepth != 0 || unloadWriter) {
         ++readerDepth;
         return;
     }
@@ -425,10 +556,10 @@ ATTR_NO_INLINE void ElfUnloadQuiescence::ReadScope::AdmitOutermost()
     }
 }
 
-ElfUnloadQuiescence::ReadScope::~ReadScope()
+void ElfUnloadQuiescence::ReadScope::Exit()
 {
     CHECK_DETAIL(readerDepth != 0, "ELF unload reader depth underflow");
-    if (--readerDepth != 0 || RetainsNativeImages() || unloadWriter) {
+    if (--readerDepth != 0 || unloadWriter) {
         return;
     }
     ReleaseOutermost();
@@ -723,15 +854,31 @@ ElfUnloadQuiescence::PurgeAuthorizationScope::~PurgeAuthorizationScope()
     purgeAdmission = previousAdmission;
 }
 
+#ifdef _WIN64
+void ElfUnloadQuiescence::RetainUnpublishedNativeImage(Uptr imageAddress)
+{
+    void* reference = nullptr;
+    CHECK_DETAIL(RetainNativeImage(imageAddress, nullptr, reference),
+                 "CJ pending image: native storage retention failed");
+}
+#endif
+
 std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::LinkImage(Uptr imageAddress)
 {
+    return LinkImage(imageAddress, nullptr);
+}
+
+std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::LinkImage(
+    Uptr imageAddress, NativeImageRetainerV1 retainer)
+{
+    if (auto existing = RegisteredImage(imageAddress)) { return existing; }
     // Capture once while the image is being registered, before runtime locks.
     // Dependency Begin and pending checks must not call into the platform
     // loader while dlclose is waiting in an image's fini callback.
     auto image = std::make_shared<ImageAddressMap>();
     image->metadata = imageAddress;
     if (RetainsNativeImages()) {
-        image->retained = RetainNativeImage(imageAddress);
+        image->retained = RetainNativeImage(imageAddress, retainer, image->nativeReference);
     }
     image->identity = ResolveImageIdentity(imageAddress);
     CHECK_DETAIL(image->identity != 0, "ELF load image identity is unavailable");
@@ -810,6 +957,11 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     CHECK_DETAIL(image->Contains(imageAddress), "registered image must contain its metadata");
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
+    // Concurrent native registration may have retained the same immutable
+    // image while our platform queries ran without runtime catalog locks.
+    for (const auto& existing : maps.images) {
+        if (existing->metadata == imageAddress) { return existing; }
+    }
     maps.images.push_back(image);
     for (auto& slot : linkedImages) {
         Uptr observed = slot.load(std::memory_order_acquire);
@@ -898,7 +1050,7 @@ bool ElfUnloadQuiescence::CallerProtectionHasPendingForImage(Uptr imageAddress)
     return purgeAdmission->HasPendingForImage(imageAddress);
 }
 
-void ElfUnloadQuiescence::AssertReaderActive()
+void ElfUnloadQuiescence::CheckReaderActive()
 {
     CHECK_DETAIL(readerDepth != 0, "ELF metadata must be consumed inside a reader scope");
 }

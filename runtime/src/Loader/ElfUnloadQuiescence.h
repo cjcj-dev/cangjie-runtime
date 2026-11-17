@@ -12,8 +12,10 @@
 #include <vector>
 #include <shared_mutex>
 #include <unordered_set>
+#include <type_traits>
 
 #include "Base/Types.h"
+#include "Loader/NativeImageRetention.h"
 
 namespace MapleRuntime {
 
@@ -30,11 +32,11 @@ class ElfUnloadQuiescence final {
     friend class CJFileLoader;
     friend class LoaderManager;
 public:
-    // Native capability, not a runtime option. Other loaders still require
-    // reader quiescence until they provide equivalent object/namespace pinning.
+    // Native capability, not a runtime option. Staged platform producers must
+    // establish exact-image retention before their readers can bypass admission.
     static constexpr bool RetainsNativeImages()
     {
-#if defined(__linux__) && defined(__GLIBC__) && !defined(__OHOS__) && !defined(__ANDROID__)
+#if defined(__APPLE__) || defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
         return true;
 #else
         return false;
@@ -51,6 +53,9 @@ public:
         Uptr identity { 0 };
         U64 generation { 0 };
         bool retained { false };
+        // Apple keeps a native reference as well as NODELETE: mapping lifetime
+        // alone does not prevent native fini/registry removal at refcount zero.
+        void* nativeReference { nullptr };
         std::vector<Range> ranges;
 #ifdef __APPLE__
         // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.
@@ -67,13 +72,33 @@ public:
 
     class ReadScope final {
     public:
-        explicit ReadScope(ReaderKind kind = ReaderKind::GENERIC);
-        ~ReadScope();
+#if defined(__APPLE__) || defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
+        // Trivial even in Debug/O0: an empty user-provided inline constructor
+        // can still become a call when inlining is disabled. Publication has
+        // already retained the complete metadata dependency closure here.
+        ReadScope() = default;
+        ~ReadScope() = default;
+#else
+        explicit ReadScope(ReaderKind kind = ReaderKind::GENERIC)
+        {
+            if (!RetainsNativeImages()) {
+                Enter(kind);
+            }
+        }
+        ~ReadScope()
+        {
+            if (!RetainsNativeImages()) {
+                Exit();
+            }
+        }
+#endif
 
         ReadScope(const ReadScope&) = delete;
         ReadScope& operator=(const ReadScope&) = delete;
 
     private:
+        void Enter(ReaderKind kind);
+        static void Exit();
         // Outermost admission and release; nested scopes never reach them.
         void AdmitOutermost();
         static void ReleaseOutermost();
@@ -190,7 +215,12 @@ public:
     // and dladdr result may both have disappeared by the time close commits.
     static void CommitImageClosing(Uptr imageIdentity);
     static bool IsImageClosing(Uptr imageAddress);
+#ifdef _WIN64
+    // Retain storage without publishing it in the address/metadata directory.
+    static void RetainUnpublishedNativeImage(Uptr imageAddress);
+#endif
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
+    static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress, NativeImageRetainerV1 retainer);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
 #ifdef __APPLE__
@@ -200,9 +230,17 @@ public:
     static bool IsPurgeAuthorized(Uptr imageAddress);
     static bool HasCallerPurgeProtection();
     static bool CallerProtectionHasPendingForImage(Uptr imageAddress);
-    static void AssertReaderActive();
+    static void AssertReaderActive()
+    {
+        // Published metadata has the same lifetime as its retained image.
+        // A loader that can reclaim it must still admit a real reader.
+        if (!RetainsNativeImages()) {
+            CheckReaderActive();
+        }
+    }
 
 private:
+    static void CheckReaderActive();
     static constexpr U64 WRITER_BIT = U64 { 1 } << 63;
     static constexpr U64 READER_MASK = ~WRITER_BIT;
 
@@ -224,6 +262,12 @@ private:
     static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
     static Uptr RegisteredIdentity(Uptr metadata);
 };
+
+// This is a structural build obligation, not an optimization-level assumption.
+static_assert(!ElfUnloadQuiescence::RetainsNativeImages() ||
+                  (std::is_trivially_default_constructible<ElfUnloadQuiescence::ReadScope>::value &&
+                   std::is_trivially_destructible<ElfUnloadQuiescence::ReadScope>::value),
+              "process-lifetime metadata reads must not construct or destroy a reader token");
 
 } // namespace MapleRuntime
 

@@ -1,0 +1,64 @@
+{
+  "owner": "metadata-platform",
+  "editWorkflow": false,
+  "readyForNativeExecution": false,
+  "packageDir": ".",
+  "packages": [
+    "ndk;27.3.13750724",
+    "platform-tools",
+    "emulator",
+    "system-images;android-31;google_apis;x86_64"
+  ],
+  "scripts": [
+    "scene.mjs",
+    "capture.py",
+    "lldb-commands.txt"
+  ],
+  "requiredEnv": [
+    "SCENE_COMMANDS",
+    "HOST_SYMBOLS",
+    "RUNTIME_SO",
+    "ANDROID_SDK_ROOT",
+    "ANDROID_SERIAL",
+    "SCENE_DEADLINE_MS"
+  ],
+  "notUsed": [
+    "SCENE_OBSERVER",
+    "classifyFullImageExit",
+    "EXIT_SHELL"
+  ],
+  "prepare": "node scene.mjs self-test && node scene.mjs calibrate",
+  "execute": "SCENE_EXECUTE=1 node scene.mjs execute",
+  "executeThisLane": "not invoked",
+  "sameDrive": true,
+  "hostCheck": "node scene.mjs host-check",
+  "hostLauncher": "ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh",
+  "hostClosure": "ldd rc 0 is not a complete dependency result. libpython3.11.so.1.0 is closed only by lldb.sh prepending the packaged python3/lib. Foreground lldb.sh is one process group. Timeout signals that group while the leader starttime matches, then signals only recorded members that are still in the group. Background adb is not in that group.",
+  "version": "Host and device version text is accepted from stdout or stderr. Both must be rc 0, not timed out, and carry the same lldb version and revision. Empty text, nonzero rc, timeout, or a different version stays rejected.",
+  "connect": "platform connect uses connect://<adb serial>:5039. The host is the device serial, never 127.0.0.1 or localhost. ANDROID_PLATFORM_LOCAL_PORT=5039 tells lldb which host port to forward; this driver does not create that forward. A listen row is the server only when its inode is in that pid fd table. Cleanup probes the device before reaping the host adb session. The signal shell rechecks the recorded pid, starttime, cmdline and 5039 listen inode before the signal and on every wait iteration. A mismatch or a missing piece is UNKNOWN, not REAPED. /proc disappearing or a reused pid is not a reap. This is not a pidfd wait.",
+  "consumer": "node scene.mjs host-check before any AVD. node scene.mjs execute uses the same lldb.sh argv for version, platform list and launch, stops at SCENE_DEADLINE_MS, and never past its own 300s. Detach completion is only Process <id> detached. Host reap requires an observed close",
+  "budget": {
+    "minutes": 45,
+    "jobs": 2,
+    "core": 0,
+    "activeSeconds": 60,
+    "totalSeconds": 300
+  },
+  "mode": "preinit/full-image",
+  "forbid": [
+    "runtime-fini",
+    "no-image",
+    "NoFP",
+    "retry",
+    "ndk-gdb",
+    "simulated sceneSuccess",
+    "host-pid kill",
+    "-S before target",
+    "synthetic EXIT_SHELL",
+    "literal build-id token",
+    "shell classifier",
+    "lldb rc as business exit",
+    "lldb uuid as gnu build id",
+    "relink to add a note"
+  ]
+}

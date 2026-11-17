@@ -1,10 +1,20 @@
 name: Windows native runtime product
 on:
   workflow_dispatch:
+    inputs:
+      readscope_lifetime:
+        description: Build the fixed runtime and exercise native image lifetime entry/rollback.
+        type: boolean
+        default: false
+      readscope_target_inputs:
+        description: Normal installed runtime/startup/import prerequisites only; no lifecycle repetitions.
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   windows:
+    if: ${{ !inputs.readscope_lifetime && !inputs.readscope_target_inputs }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -35,3 +45,55 @@ jobs:
             ${{ runner.temp }}/runtime-windows/*.def
             ${{ runner.temp }}/runtime-windows/*.cmake
             ${{ runner.temp }}/runtime-windows/product/*
+  readscope-lifetime:
+    if: ${{ inputs.readscope_lifetime != inputs.readscope_target_inputs }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the fixed bounds source with Git
+        shell: pwsh
+        run: |
+          $bounds = 'runtime/third_party/third_party_bounds_checking_function'
+          git init $bounds
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $bounds remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+          git -C $bounds fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $bounds checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: msys2/setup-msys2@v2
+        id: readscope-msys
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+            mingw-w64-x86_64-binutils
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Normal runtime production and native lifecycle consumer
+        env:
+          READSCOPE_CLANG64: ${{ steps.readscope-msys.outputs.msys2-location }}/clang64/bin
+          READSCOPE_TARGET_INPUTS_ONLY: ${{ inputs.readscope_target_inputs }}
+        shell: pwsh
+        run: node runtime/tests/readscope_native_retention/native.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readscope-windows-native
+          path: |
+            ${{ runner.temp }}/readscope-native/*.json
+            ${{ runner.temp }}/readscope-native/*.stdout
+            ${{ runner.temp }}/readscope-native/*.stderr
+            ${{ runner.temp }}/readscope-native/*.dll
+            ${{ runner.temp }}/readscope-native/*.exe
+            ${{ runner.temp }}/readscope-native/install/runtime/lib/**/*.dll
+            ${{ runner.temp }}/readscope-native/install/lib/windows_x86_64_cjnative/**
+            ${{ runner.temp }}/readscope-native/install/include/**
+            ${{ runner.temp }}/readscope-native/target-inputs/**
+            ${{ runner.temp }}/readscope-native/install/include/**
+          if-no-files-found: error

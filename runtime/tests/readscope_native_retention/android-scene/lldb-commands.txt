@@ -1,0 +1,4 @@
+settings set auto-confirm true
+settings set target.process.run-all-threads true
+settings set stop-line-count-before 0
+settings set stop-line-count-after 0

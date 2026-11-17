@@ -175,6 +175,14 @@ void TypeInfoManager::Init()
 
 void TypeInfoManager::Fini()
 {
+    // Published method tables and generated TypeInfos contain image metadata
+    // pointers, and image TypeInfos in turn retain pointers into this arena.
+    // Native image retention alone cannot preserve that dependency closure.
+    // The manager is immortal and runtime reinitialization is forbidden, so
+    // leave the published closure intact through native process finalization.
+    if (ElfUnloadQuiescence::RetainsNativeImages()) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(allocationMutex);
     // release resources
     registeredTypeInfos.clear();
@@ -375,6 +383,8 @@ void TypeInfoManager::RemoveTypeInfosForImage(uintptr_t begin, size_t size, uint
     if (size == 0 && imageAddress == 0) {
         return;
     }
+    CHECK_DETAIL(!ElfUnloadQuiescence::RetainsNativeImages(),
+                 "published TypeInfo purge conflicts with process-lifetime image retention");
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
     auto inRange = [begin, size, imageAddress](const void* ptr) {
         uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
@@ -579,6 +589,8 @@ void TypeInfoManager::GenericTiDescHashMap::RemoveInRange(uintptr_t begin, size_
 void TypeInfoManager::GenericTiDescHashMap::RemoveForImage(
     uintptr_t begin, size_t size, uintptr_t imageAddress, const std::unordered_set<TypeInfo*>& removed)
 {
+    CHECK_DETAIL(!ElfUnloadQuiescence::RetainsNativeImages(),
+                 "published GenericDesc purge conflicts with process-lifetime image retention");
     auto inRange = [begin, size, imageAddress](const void* ptr) {
         uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
         if (imageAddress != 0) { return ElfUnloadQuiescence::IsAddressInImage(address, imageAddress); }

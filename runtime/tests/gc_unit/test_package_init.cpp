@@ -1011,6 +1011,61 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBod
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
 namespace {
+std::atomic<U32> failedInitBodyCalls { 0 };
+void FailedManagedInitBody()
+{
+    failedInitBodyCalls.fetch_add(1, std::memory_order_relaxed);
+    alignas(TypeInfo) static DYN_TypeInfo type {};
+    type.typeInfoName = "gc.lock:RetainedInitFailure";
+    auto* ti = reinterpret_cast<TypeInfo*>(&type);
+    ti->SetType(TypeKind::TYPE_KIND_CLASS);
+    ti->SetInstanceSize(64);
+    auto* exception = MCC_NewObject(ti, 64 + TYPEINFO_PTR_SIZE);
+    Target("failed-libinit-real-pending-reference", exception != nullptr);
+    Mutator::GetMutator()->GetExceptionWrapper().SetExceptionRef(exception);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RetainedFailedInitializerIsNotReopened)
+{
+    metadata.namedType.typeInfoName = "gc.lock:RetainedFailedOwner";
+    secondaryMetadata.namedType.typeInfoName = "gc.lock:RetainedIndependentOwner";
+    Init();
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* failedTi = reinterpret_cast<TypeInfo*>(&metadata.namedType);
+    loader->RecordTypeInfo(failedTi);
+    Target("failed-libinit-original-type-discoverable",
+           loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == failedTi);
+    packageBody = FailedManagedInitBody;
+    std::atomic<bool> done { false };
+    Start([](void* argument) {
+        auto* manager = LoaderManager::GetInstance();
+        Target("failed-libinit-original-body-rejected", !manager->LibInit("package-init-main"));
+        Target("failed-libinit-retained-identity", image->HasLoadFailed() && image->IsRegistered());
+        Target("failed-libinit-second-entry-rejected", !manager->LibInit("package-init-main"));
+        Target("failed-libinit-body-not-reexecuted", failedInitBodyCalls.load(std::memory_order_relaxed) == 1);
+        Target("failed-libinit-no-pending-exception-leak", !ExceptionManager::HasPendingException());
+        auto* loader = static_cast<CJFileLoader*>(manager->GetLoader());
+        Target("failed-libinit-type-no-longer-discoverable",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == nullptr);
+        secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageB);
+        RegisterMetadata(secondaryMetadata, "retained-independent-init");
+        Target("failed-libinit-independent-metadata-owner-initializes", manager->LibInit("retained-independent-init"));
+        // Both headers are in the same native executable. Successful ownership
+        // of that image must not republish the failed header's metadata range.
+        loader->RecordTypeInfo(reinterpret_cast<TypeInfo*>(&metadata.namedType));
+        Target("failed-libinit-shared-image-does-not-republish-failed-owner",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedFailedOwner") == nullptr);
+        auto* independentTi = reinterpret_cast<TypeInfo*>(&secondaryMetadata.namedType);
+        loader->RecordTypeInfo(independentTi);
+        Target("failed-libinit-independent-type-remains-discoverable",
+               loader->FindTypeInfoFromLoadedFiles("gc.lock:RetainedIndependentOwner") == independentTi);
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &done);
+    Target("failed-libinit-consumer-completed", Await(done));
+    packageBody = nullptr;
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+namespace {
 std::string FixtureBesideExecutable(const char* name)
 {
     char executable[4096] {};
@@ -1609,13 +1664,24 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLifetimeControlsTypePublication)
     if (ElfUnloadQuiescence::RetainsNativeImages()) {
         Target("publication-native-close", dlclose(library) == 0);
         Target("publication-metadata-still-linked", loader->GetBaseFileByMetaAddr(address) == file);
-        ElfUnloadQuiescence::ReadScope retainedReader;
+        // LinkImage verified the native pin before publication. Its metadata
+        // remains readable after direct close without a TLS reader token.
+        ElfUnloadQuiescence::AssertReaderActive();
+        Target("retained-uuid-without-reader-token", ti->GetUUIDInReadScope() == interfaceUUID);
         loader->RecordTypeInfo(ti);
         lateTi->AddMTable(ti, ed);
         Target("retained-publication-cache-valid", loader->FindTypeInfoFromLoadedFiles(ti->GetName()) == ti);
         Target("retained-publication-early-mtable-valid", earlyTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
         Target("retained-publication-late-mtable-valid", lateTi->GetMTableDesc()->mTable.count(interfaceUUID) == 1);
+        const auto publishedShape = manager.GetTypeInfoIndexShape();
+        auto* publishedTable = lateTi->GetMTableDesc();
         Target("publication-runtime-finish", FiniCJRuntime() == E_OK);
+        // Native finalizers can still hold the published metadata closure.
+        // No managed execution or allocation is permitted after runtime Fini.
+        Target("retained-published-index-after-runtime-fini",
+               manager.GetTypeInfoIndexShape() == publishedShape && publishedShape.first != 0);
+        Target("retained-published-mtable-after-runtime-fini",
+               publishedTable->mTable.count(interfaceUUID) == 1);
         return;
     }
     auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
@@ -1649,6 +1715,97 @@ GC_TEST(PackageInit, UnattachedNativeUnavailable)
     void* token = reinterpret_cast<void*>(1);
     GC_EXPECT_EQ(Begin(P(), U(), 0, &token), Code(Result::Unavailable));
     GC_EXPECT_TRUE(token == nullptr);
+}
+namespace MapleRuntime {
+extern "C" void MRT_LibraryOnLoadRetainedV1(uint64_t, bool, NativeImageRetainerV1);
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ImageLocalRetentionV1)
+{
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("v1-native-open", library != nullptr);
+    auto metadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto retainer = reinterpret_cast<NativeImageRetainerV1>(dlsym(library, "__CJ_ImageRetainV1"));
+    auto wrongInstance = reinterpret_cast<NativeImageRetainerV1>(dlsym(library, "PackageInitImageWrongInstance"));
+    auto calls = reinterpret_cast<unsigned int (*)()>(dlsym(library, "PackageInitImageRetainCalls"));
+    Target("v1-native-symbols", metadata && retainer && wrongInstance && calls);
+    const Uptr address = reinterpret_cast<Uptr>(metadata());
+    // Before positive registration: a retained map is intentionally reusable,
+    // and would make these invalid callbacks irrelevant on a subsequent call.
+    for (int mode = 0; mode != 2; ++mode) {
+        int output[2];
+        Target("v1-negative-pipe", pipe(output) == 0);
+        const pid_t child = fork();
+        Target("v1-negative-fork", child >= 0);
+        if (child == 0) {
+            close(output[0]);
+            (void)dup2(output[1], STDERR_FILENO);
+            close(output[1]);
+            std::fprintf(stderr, "V1_REJECT_TARGET mode=%d entered\n", mode);
+            MRT_LibraryOnLoadRetainedV1(address, true,
+                mode == 0 ? reinterpret_cast<NativeImageRetainerV1>(&dlopen) : wrongInstance);
+            std::_Exit(77);
+        }
+        close(output[1]);
+        std::string transcript;
+        char bytes[1024];
+        ssize_t count;
+        while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+        close(output[0]);
+        int status = 0;
+        Target("v1-negative-wait", waitpid(child, &status, 0) == child);
+        const char* message = mode == 0 ? "callback is not owned by metadata image" :
+            "lookup resolved another image instance";
+        const bool reached = transcript.find("V1_REJECT_TARGET") != std::string::npos &&
+            transcript.find(message) != std::string::npos;
+        std::fprintf(stderr, "V1_REJECT mode=%d raw_status=%d target=%d\n", mode, status, reached);
+        Target("v1-wrong-identity-rejected", reached && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    }
+    Init();
+    MRT_LibraryOnLoadRetainedV1(address, true, retainer);
+    Target("v1-both-native-lookup-and-promotion", calls() == 2);
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    auto* file = loader->GetBaseFileByMetaAddr(address);
+    Target("v1-entry-publishes-owner", file != nullptr);
+    Target("v1-native-close", dlclose(library) == 0);
+    Target("v1-native-close-keeps-metadata", loader->GetBaseFileByMetaAddr(address) == file && metadata() != nullptr);
+    void* reopened = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
+    Target("v1-reopen-same-native-instance", reopened != nullptr &&
+        dlsym(reopened, "__CJ_ImageRetainV1") == reinterpret_cast<void*>(retainer));
+    MRT_LibraryOnLoadRetainedV1(address, true, retainer);
+    Target("v1-registration-reuse-no-repin", calls() == 2 && loader->GetBaseFileByMetaAddr(address) == file);
+    Target("v1-reopen-close", dlclose(reopened) == 0);
+    Target("v1-runtime-finish", FiniCJRuntime() == E_OK);
+}
+
+GC_TEST(PackageInit, RetainedMetadataRejectsIndependentPurge)
+{
+    if (!ElfUnloadQuiescence::RetainsNativeImages()) { return; }
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        (void)dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        std::fprintf(stderr, "PACKAGE_INIT_PURGE_TARGET entered\n");
+        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(1, 1);
+        std::_Exit(77);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[1024];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = transcript.find("PACKAGE_INIT_PURGE_TARGET entered") != std::string::npos &&
+        transcript.find("published TypeInfo purge conflicts with process-lifetime image retention") != std::string::npos;
+    std::fprintf(stderr, "PACKAGE_INIT_PURGE_GUARD status=%d target=%d\n", status, target);
+    GC_EXPECT_TRUE(target);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 GC_TEST(PackageInit, AbortUsesNativeExit70)
 {

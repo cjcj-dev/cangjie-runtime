@@ -167,11 +167,13 @@ void StackManager::GetStackTraceByLiteFrameInfo(const uint64_t ip, const uint64_
 
 void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator)
 {
-    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
+    ElfUnloadQuiescence::ReadScope metadataReader;
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     gcStackInfo.VisitStackRoots(func, mutator);
 }
 
@@ -184,11 +186,13 @@ void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, con
 void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
     const RootVisitor& slotRootVisitor, const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator, bool young)
 {
-    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
+    ElfUnloadQuiescence::ReadScope metadataReader;
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator, young);
 }
 
@@ -196,12 +200,14 @@ void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPt
                                     const StackPtrVisitor& fixPtrVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                     Mutator& mutator)
 {
-    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
+    ElfUnloadQuiescence::ReadScope metadataReader;
     // Reuse gcStackInfo for stack unwind.
     StackGrowStackInfo stackInfo(&topFrame);
     stackInfo.SetProcessingOwner(&mutator);
     stackInfo.FillInStackTrace();
-    ElfUnloadQuiescence::AssertReaderActive();
+    if constexpr (!ElfUnloadQuiescence::RetainsNativeImages()) {
+        ElfUnloadQuiescence::AssertReaderActive();
+    }
     stackInfo.RecordStackPtrs(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, mutator);
 }
 
