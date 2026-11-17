@@ -10,6 +10,28 @@ package std.process
 
 import std.io.*
 
+// JDK io_util.c readBytes/writeBytes: the blocking read/write runs on a native
+// buffer and only the bounded copy holds the array raw data. A thread blocked in
+// I/O inside acquireArrayRawData would hold a ZJNICritical region, so a GC pause
+// would wait on it and every later acquirer would wait on the pause.
+foreign func memcpy_s(dest: CPointer<UInt8>, destMax: UIntNative, src: CPointer<UInt8>, count: UIntNative): Int32
+
+private let NATIVE_COPY_MAX_LEN: Int64 = Int64(Int32.Max)
+
+private unsafe func copyNativeBytes(dest: CPointer<Byte>, src: CPointer<Byte>, count: Int64): Int32 {
+    var offset: Int64 = 0
+    while (offset < count) {
+        let remain = count - offset
+        let n = if (remain < NATIVE_COPY_MAX_LEN) { remain } else { NATIVE_COPY_MAX_LEN }
+        let rc = memcpy_s(dest + offset, UIntNative(n), src + offset, UIntNative(n))
+        if (rc != 0) {
+            return rc
+        }
+        offset += n
+    }
+    return 0
+}
+
 /**
  * ProcessOutputStream implement OutputStream & Resource interface
  *
@@ -97,10 +119,19 @@ class PipeOutputStream <: OutputStream & Resource {
     private func directWrite(buffer: Array<Byte>): Unit {
         unsafe {
             let bufSize: Int64 = buffer.size
-            var bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
-            let writeSuccess: Bool = CJ_OS_FileWrite(this._fileDescriptor._fileHandle, bufPtr.pointer,
-                UIntNative(bufSize))
+            let native: CPointer<Byte> = LibC.malloc<Byte>(count: bufSize)
+            if (native.isNull()) {
+                throw ProcessException("Stream I/O error: failed to allocate a native buffer of ${bufSize} bytes.")
+            }
+            let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
+            let rc = copyNativeBytes(native, bufPtr.pointer, bufSize)
             releaseArrayRawData(bufPtr)
+            if (rc != 0) {
+                LibC.free(native)
+                throw ProcessException("Stream write error: copy failed with error code '${rc}'.")
+            }
+            let writeSuccess: Bool = CJ_OS_FileWrite(this._fileDescriptor._fileHandle, native, UIntNative(bufSize))
+            LibC.free(native)
             if (!writeSuccess) {
                 throw ProcessException("Stream write error.")
             }
@@ -156,10 +187,22 @@ class PipeInputStream <: InputStream & Resource {
      */
     private func directRead(buffer: Array<Byte>): Int64 {
         unsafe {
-            let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
-            let readSize: Int64 = CJ_OS_FileRead(this._fileDescriptor._fileHandle, bufPtr.pointer,
-                UIntNative(buffer.size))
-            releaseArrayRawData(bufPtr)
+            let bufSize: Int64 = buffer.size
+            let native: CPointer<Byte> = LibC.malloc<Byte>(count: bufSize)
+            if (native.isNull()) {
+                throw ProcessException("Stream I/O error: failed to allocate a native buffer of ${bufSize} bytes.")
+            }
+            let readSize: Int64 = CJ_OS_FileRead(this._fileDescriptor._fileHandle, native, UIntNative(bufSize))
+            var rc: Int32 = 0
+            if (readSize > 0) {
+                let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
+                rc = copyNativeBytes(bufPtr.pointer, native, readSize)
+                releaseArrayRawData(bufPtr)
+            }
+            LibC.free(native)
+            if (rc != 0) {
+                throw ProcessException("Stream read error: copy failed with error code '${rc}'.")
+            }
             return readSize
         }
     }

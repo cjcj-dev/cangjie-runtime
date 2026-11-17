@@ -15,6 +15,28 @@ package std.fs
 
 import std.io.*
 
+// JDK io_util.c readBytes/writeBytes: the blocking read/write runs on a native
+// buffer and only the bounded copy holds the array raw data. A thread blocked in
+// I/O inside acquireArrayRawData would hold a ZJNICritical region, so a GC pause
+// would wait on it and every later acquirer would wait on the pause.
+foreign func memcpy_s(dest: CPointer<UInt8>, destMax: UIntNative, src: CPointer<UInt8>, count: UIntNative): Int32
+
+private let NATIVE_COPY_MAX_LEN: Int64 = Int64(Int32.Max)
+
+private unsafe func copyNativeBytes(dest: CPointer<Byte>, src: CPointer<Byte>, count: Int64): Int32 {
+    var offset: Int64 = 0
+    while (offset < count) {
+        let remain = count - offset
+        let n = if (remain < NATIVE_COPY_MAX_LEN) { remain } else { NATIVE_COPY_MAX_LEN }
+        let rc = memcpy_s(dest + offset, UIntNative(n), src + offset, UIntNative(n))
+        if (rc != 0) {
+            return rc
+        }
+        offset += n
+    }
+    return 0
+}
+
 const SEEK_SET: Int32 = 0 /* Seek from beginning of file.  */
 const SEEK_CUR: Int32 = 1 /* Seek from current position.  */
 const SEEK_END: Int32 = 2 /* Seek from end of file.  */
@@ -537,9 +559,22 @@ public class File <: Resource & IOStream & Seekable {
      */
     private func directRead(buffer: Array<Byte>): Int64 {
         unsafe {
-            let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
-            let readSize: Int64 = CJ_FS_FileRead(fileHandle, bufPtr.pointer, UIntNative(buffer.size))
-            releaseArrayRawData(bufPtr)
+            let bufSize: Int64 = buffer.size
+            let native: CPointer<Byte> = LibC.malloc<Byte>(count: bufSize)
+            if (native.isNull()) {
+                throw FSException("Failed to allocate a native buffer of ${bufSize} bytes for file '${_fileInfo.path}'.")
+            }
+            let readSize: Int64 = CJ_FS_FileRead(fileHandle, native, UIntNative(bufSize))
+            var rc: Int32 = 0
+            if (readSize > 0) {
+                let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
+                rc = copyNativeBytes(bufPtr.pointer, native, readSize)
+                releaseArrayRawData(bufPtr)
+            }
+            LibC.free(native)
+            if (rc != 0) {
+                throw FSException("Failed to read from file '${_fileInfo.path}': copy failed with error code '${rc}'.")
+            }
             return readSize
         }
     }
@@ -556,9 +591,19 @@ public class File <: Resource & IOStream & Seekable {
     private func directWrite(buffer: Array<Byte>): Unit {
         unsafe {
             let bufSize: Int64 = buffer.size
-            var bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
-            let writeSuccess: Bool = CJ_FS_FileWrite(fileHandle, bufPtr.pointer, UIntNative(bufSize))
+            let native: CPointer<Byte> = LibC.malloc<Byte>(count: bufSize)
+            if (native.isNull()) {
+                throw FSException("Failed to allocate a native buffer of ${bufSize} bytes for file '${_fileInfo.path}'.")
+            }
+            let bufPtr: CPointerHandle<Byte> = acquireArrayRawData(buffer)
+            let rc = copyNativeBytes(native, bufPtr.pointer, bufSize)
             releaseArrayRawData(bufPtr)
+            if (rc != 0) {
+                LibC.free(native)
+                throw FSException("Failed to write to file '${_fileInfo.path}': copy failed with error code '${rc}'.")
+            }
+            let writeSuccess: Bool = CJ_FS_FileWrite(fileHandle, native, UIntNative(bufSize))
+            LibC.free(native)
             if (!writeSuccess) {
                 throw FSException("Failed to write to file '${_fileInfo.path}'.")
             }
