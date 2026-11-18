@@ -20,6 +20,12 @@ public:
     static void initialize();
     static void block();
     static void unblock();
+    // Bounded, shareable variant used by the collector. Waits at most `millis`
+    // for current holders to leave. On success the caller owns (or shares) the
+    // block and must call unblock_bounded(); on timeout the count is restored,
+    // waiting acquirers are released, and false is returned.
+    static bool block_bounded(uint64_t millis);
+    static void unblock_bounded();
     static void enter();
     static void exit();
     static int64_t count_snapshot() { return count.load(std::memory_order_acquire); }
@@ -30,6 +36,8 @@ private:
 
     static std::atomic<int64_t> count;
     static ZConditionLock* lock;
+    // Collector parties sharing a drained (-1) bounded block; guarded by lock.
+    static int64_t boundedBlockers;
 };
 
 } // namespace MapleRuntime

@@ -132,7 +132,13 @@ public:
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
     void select_relocation_set(bool promote_all);
+    // Set by collect() from the selection-time raw-data gate: when raw-data
+    // holders could not be excluded up to relocate start, this cycle selects no
+    // page for relocation, so every live object stays at its address.
+    void set_defer_relocation(bool defer) { _defer_relocation = defer; }
+    bool defer_relocation() const { return _defer_relocation; }
 protected:
+    bool _defer_relocation = false;
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif

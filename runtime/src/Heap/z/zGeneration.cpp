@@ -213,15 +213,49 @@ public:
     }
     bool pause()
     {
-        if (block_jni_critical()) {
-            ZJNICritical::block();
-        }
+        // ZGC zGeneration.cpp:470-485 blocks JNI critical regions without a
+        // bound. A raw-data holder may legally block in a foreign call, so the
+        // wait is bounded; a timed-out pause runs with holders inside. That is
+        // safe here because a raw pointer is a decoded address (see
+        // MCC_AcquireRawData) that a colour change cannot invalidate, and no
+        // pause moves objects: relocation is gated at selection instead
+        // (ZRawDataRelocationGate).
+        const bool blocked = block_jni_critical() && ZJNICritical::block_bounded(kRawDataDrainMillis);
         VMThread::execute(this);
-        if (block_jni_critical()) {
-            ZJNICritical::unblock();
+        if (blocked) {
+            ZJNICritical::unblock_bounded();
         }
         return success;
     }
+    static constexpr uint64_t kRawDataDrainMillis = 50;
+};
+
+// Excludes raw-data holders from selection through relocate start. JDK ZGC
+// blocks only around the relocate-start pause; with a bounded wait a holder could
+// otherwise enter between selection and that pause and keep a pointer into a
+// page that is then relocated. If holders do not leave within the bound, the
+// cycle selects no page (ZGeneration::select_relocation_set), so a held array
+// stays in place and the collection still completes. Empty pages are still freed.
+class ZRawDataRelocationGate {
+public:
+    ZRawDataRelocationGate() = default;
+    ~ZRawDataRelocationGate() { release(); }
+    ZRawDataRelocationGate(const ZRawDataRelocationGate&) = delete;
+    ZRawDataRelocationGate& operator=(const ZRawDataRelocationGate&) = delete;
+    bool acquire()
+    {
+        held = ZJNICritical::block_bounded(VM_ZOperation::kRawDataDrainMillis);
+        return held;
+    }
+    void release()
+    {
+        if (held) {
+            held = false;
+            ZJNICritical::unblock_bounded();
+        }
+    }
+private:
+    bool held = false;
 };
 
 class VM_ZYoungOperation : public VM_ZOperation {
@@ -282,7 +316,8 @@ public:
         ZGeneration::young()->relocate_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
+    // Covered by ZRawDataRelocationGate from selection to after this pause.
+    bool block_jni_critical() const override { return false; }
 };
 
 class VM_ZMarkEndOld : public VM_ZOperation {
@@ -306,7 +341,8 @@ public:
         ZGeneration::old()->relocate_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
+    // Covered by ZRawDataRelocationGate from selection to after this pause.
+    bool block_jni_critical() const override { return false; }
 };
 
 class VM_ZVerifyOld : public VMOperation {
@@ -377,9 +413,12 @@ void ZGenerationYoung::collect(ZYoungType type, void* timer)
     abortpoint();
     concurrent_reset_relocation_set();
     abortpoint();
+    ZRawDataRelocationGate gate;
+    set_defer_relocation(!gate.acquire());
     concurrent_select_relocation_set();
     abortpoint();
     pause_relocate_start();
+    gate.release();
     concurrent_relocate();
 }
 
@@ -862,6 +901,8 @@ void ZGenerationOld::collect(void* timer)
     concurrent_reset_relocation_set();
     abortpoint();
     pause_verify();
+    ZRawDataRelocationGate gate;
+    set_defer_relocation(!gate.acquire());
     concurrent_select_relocation_set();
     abortpoint();
     {
@@ -870,6 +911,7 @@ void ZGenerationOld::collect(void* timer)
         abortpoint();
         pause_relocate_start();
     }
+    gate.release();
     concurrent_relocate();
 }
 
@@ -1135,7 +1177,11 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 
 void ZGeneration::select_relocation_set(bool promote_all)
 {
-    ZRelocationSetSelector selector(FragmentationLimit());
+    // A deferred cycle uses the selector's own criterion with a limit no page
+    // can exceed (diff_reclaimable > 100 is never true): no page is selected,
+    // live pages take the not-selected path (age flip / in-place promotion) and
+    // empty pages are still freed below.
+    ZRelocationSetSelector selector(_defer_relocation ? 100.0 : FragmentationLimit());
     const ZGenerationId id = _id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, &Heap::GetHeap().page_allocator());
