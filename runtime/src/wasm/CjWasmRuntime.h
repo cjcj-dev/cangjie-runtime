@@ -22,6 +22,10 @@ void* cjw_alloc(size_t size, size_t align);
 void cjw_collect(void);
 size_t cjw_arena_bytes(void);
 
+// ---- process arguments (recorded by CJ_MRT_SetCommandLineArgs) -----------
+int cjw_argc(void);
+const char** cjw_argv(void);
+
 // ---- unsupported features (fail loudly, distinct exit codes) --------------
 _Noreturn void cjw_unsupported(const char* feature, int code);
 #define CJW_RC_EXCEPTION 134

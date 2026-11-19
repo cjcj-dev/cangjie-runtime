@@ -122,6 +122,8 @@ static const char** g_argv = NULL;
 
 void CJ_MRT_CjRuntimeInit(void) {}
 void CJ_MRT_SetCommandLineArgs(int argc, const char** argv) { g_argc = argc; g_argv = argv; }
+int cjw_argc(void) { return g_argc; }
+const char** cjw_argv(void) { return g_argv; }
 void CJ_MRT_PreInitializePackage(void* packageInfo) { (void)packageInfo; }
 
 void CJ_MRT_CjRuntimeStart(int (*entry)(void))
