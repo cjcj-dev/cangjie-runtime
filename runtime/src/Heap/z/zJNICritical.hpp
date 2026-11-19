@@ -33,22 +33,27 @@ class ZRelocationSetSelector;
 // Per generation, once per cycle:
 //   collector: select() -> publish the selected pages (open_selection, seq_cst)
 //              -> fence -> scan every mutator's slots -> deselect the selected
-//              pages that hold an array -> install ... relocate-start pause
-//              -> close_selection.
+//              pages that hold an array -> install ... -> final scan right
+//              before the relocate-start pause (finish_selection: seq_cst flag,
+//              fence, scan) -> drop the forwardings of the pages held by then
+//              -> relocate-start pause -> close_selection.
 //   acquirer:  store the array in a slot (seq_cst) -> fence -> look the array's
-//              page up in the open selections; if it is there and no earlier hold
-//              of the same mutator already covers that page, clear the slot,
-//              wait in saferegion until that selection closes (after its
-//              relocate-start pause), reload the array from its root and retry.
-// Either the collector's scan sees the slot or the acquirer sees the selection,
-// so an array is never held on a page that is relocated while it is held.
+//              page up in the open selections. Before the final scan of that
+//              selection it holds the page at once (the final scan sees the
+//              slot). After it, if no earlier hold of the same mutator already
+//              covers that page, it clears the slot, waits in saferegion until
+//              that selection closes (after its relocate-start pause), reloads
+//              the array from its root and retries.
+// Either the collector's final scan sees the slot or the acquirer sees the final
+// scan flag, so an array is never held on a page that is relocated while it is
+// held, and an acquirer waits at most for final scan -> drop -> pause.
 //
-// Old generation: between select and its relocate-start pause lie the driver
-// lock and the young-root remap (zGeneration.cpp, JDK zGeneration.cpp:1050-1063).
-// The collector therefore scans once more right before that pause
-// (finish_selection) and drops the forwardings of pages held by then; until that
-// final scan an acquirer on a selected old page holds it without waiting, and only
-// acquirers that arrive after it wait, for the pause alone.
+// The final scan runs where no further collector work precedes the pause: old,
+// inside the driver lock after the young-root remap (JDK zGeneration.cpp:1050-1063);
+// young, after select_relocation_set (install, flip_age_pages with its handshake
+// and promotion barrier, forwarding table). A late-dropped old page needs nothing
+// more; a late-dropped young page is aged in place and stays young
+// (ZRelocate::flip_age_dropped_pages).
 class ZJNICritical {
 public:
     static void initialize();
@@ -65,7 +70,7 @@ public:
     // Collector side (ZGeneration::select_relocation_set / collect).
     // Returns the number of selected pages that were deselected for holders.
     static size_t open_selection(ZGenerationId id, ZRelocationSetSelector* selector);
-    // Old generation, immediately before the relocate-start pause: final scan.
+    // Either generation, immediately before the relocate-start pause: final scan.
     // Fills `held` (sorted) with the selected pages that hold an array, or sets
     // `all` if a holder overflowed its slots.
     static void finish_selection(ZGenerationId id, std::vector<ZPage*>& held, bool& all);
@@ -78,7 +83,7 @@ public:
     static uint64_t closed_selections(ZGenerationId id);
     static uint64_t retreats();               // acquirer waits since start
     static uint64_t deselected_pages();       // selected pages kept for holders, cumulative
-    static uint64_t late_dropped_pages();     // old pages dropped by the final scan, cumulative
+    static uint64_t late_dropped_pages();     // pages dropped by the final scans, cumulative
     static void note_late_dropped(size_t n);
     // Unit tests only: publish `pages` as the open selection of `id` without a
     // selector. Returns the number of those pages that scanned holders keep (all

@@ -166,23 +166,35 @@ void ZRelocationSet::reset(RegionManager* page_allocator)
     _relocate_promoted_pages.clear();
 }
 
-size_t ZRelocationSet::remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table)
+size_t ZRelocationSet::remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table,
+                                    ZArray<ZPage*>* removed)
 {
     size_t kept = 0;
-    size_t removed = 0;
+    size_t dropped = 0;
     for (size_t i = 0; i < _nforwardings; ++i) {
         ZForwarding* const forwarding = _forwardings[i];
-        if (all || std::binary_search(pages.begin(), pages.end(), forwarding->page())) {
-            CHECK(!forwarding->is_promotion());
+        ZPage* const page = forwarding->page();
+        if (all || std::binary_search(pages.begin(), pages.end(), page)) {
+            if (forwarding->is_promotion()) {
+                // Young page that install registered for relocate promotion
+                // (track_if_promoted). It stays young, so it leaves that list. The
+                // promotion barrier has already made its fields store good, and the
+                // page keeps refusing raw nulls (ZPage::allows_raw_null), so its
+                // stores stay coloured, which is valid on every page.
+                CHECK(_generation->is_young());
+                std::lock_guard<std::mutex> locker(_promotion_lock);
+                _relocate_promoted_pages.remove(page);
+            }
             table->remove(forwarding);
             forwarding->~ZForwarding();
-            ++removed;
+            removed->push(page);
+            ++dropped;
         } else {
             _forwardings[kept++] = forwarding;
         }
     }
     _nforwardings = kept;
-    return removed;
+    return dropped;
 }
 
 void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)

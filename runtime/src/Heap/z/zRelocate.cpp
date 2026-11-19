@@ -813,6 +813,38 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
     workers.run(&task);
 }
 
+// The not-selected path of flip_age_pages, taken late by a young page whose
+// forwarding was dropped right before the relocate-start pause. Flip promotion is
+// ordered before this cycle's rendezvous handshake and promotion barrier
+// (ZGeneration::flip_age_pages), which have already
+// run, so the page is not promoted: it is aged as a survivor, capped at the oldest
+// young age, and is collected as a young page again in a later cycle.
+void ZRelocate::flip_age_dropped_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
+{
+    class ZFlipAgeDroppedPagesTask : public ZTask {
+    public:
+        explicit ZFlipAgeDroppedPagesTask(const ZArray<ZPage*>* pages)
+            : ZTask("ZFlipAgeDroppedPagesTask"), iter(pages)
+        {}
+        void work() override
+        {
+            SuspendibleThreadSetJoiner stsJoiner;
+            constexpr uint32_t oldestYoung = static_cast<uint32_t>(PageAge::survivor14);
+            for (ZPage* page; iter.next(&page);) {
+                const uint32_t fromAge = static_cast<uint32_t>(page->age());
+                CHECK(fromAge <= oldestYoung);
+                const PageAge toAge = static_cast<PageAge>(fromAge < oldestYoung ? fromAge + 1 : oldestYoung);
+                page->reset(toAge)->reset_livemap();
+                SuspendibleThreadSet::yield();
+            }
+        }
+    private:
+        ZArrayParallelIterator<ZPage*> iter;
+    };
+    ZFlipAgeDroppedPagesTask task(pages);
+    workers.run(&task);
+}
+
 void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted)
 {

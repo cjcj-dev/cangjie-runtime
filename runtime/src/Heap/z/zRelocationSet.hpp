@@ -43,10 +43,12 @@ public:
 
     void install(const ZRelocationSetSelector* selector);
     void reset(RegionManager* page_allocator);
-    // Raw-data holders (ZJNICritical::finish_selection), old generation, before
-    // relocate start: drops the forwardings of `pages` (sorted), or of every page
-    // if `all`. An old forwarding has no promotion bookkeeping on its page.
-    size_t remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table);
+    // Raw-data holders (ZJNICritical::finish_selection), before relocate start:
+    // drops the forwardings of `pages` (sorted), or of every page if `all`, and
+    // appends the pages whose forwarding was dropped to `removed`. A young page
+    // registered for relocate promotion leaves _relocate_promoted_pages.
+    size_t remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table,
+                        ZArray<ZPage*>* removed);
     ZGeneration* generation() const { return _generation; }
     ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }
     ZArray<ZPage*>* relocate_promoted_pages() { return &_relocate_promoted_pages; }

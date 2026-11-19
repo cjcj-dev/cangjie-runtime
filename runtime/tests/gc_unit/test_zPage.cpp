@@ -735,6 +735,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, AcquireOnOpenSelectionWaitsInSaferegion)
     ZPage* selected = Heap::page(static_cast<MAddress>(result.array.load(std::memory_order_acquire)));
     const uint64_t retreatsBefore = ZJNICritical::retreats();
     GC_EXPECT_EQ(ZJNICritical::open_selection_for_test(ZGenerationId::young, &selected, 1), static_cast<size_t>(0));
+    // An acquirer waits only once the final scan of the selection has run.
+    std::vector<ZPage*> heldAtFinal;
+    bool allAtFinal = true;
+    ZJNICritical::finish_selection(ZGenerationId::young, heldAtFinal, allAtFinal);
+    GC_EXPECT_TRUE(heldAtFinal.empty());
+    GC_EXPECT_FALSE(allAtFinal);
     result.proceed.store(true, std::memory_order_release);
     while (!result.entering.load(std::memory_order_acquire)) {
         std::this_thread::yield();
@@ -1679,8 +1685,8 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireOnOpenSelection)
 namespace {
 // Selection scan over per-mutator holds: exactly the selected pages that hold an
 // array are kept; an overflowed (anonymous) hold keeps every selected page; holds
-// released in any order leave nothing behind; an old selection lets an acquirer
-// hold until its final scan, which then reports the page.
+// released in any order leave nothing behind; a young or old selection lets an
+// acquirer hold until its final scan, which then reports the page.
 struct RawScanResult {
     bool distinct = false;
     size_t keptTwo = SIZE_MAX;
@@ -1695,6 +1701,9 @@ struct RawScanResult {
     size_t oldOpenKept = SIZE_MAX;
     bool oldFinalHeld = false;
     uint64_t oldRetreats = UINT64_MAX;
+    size_t youngOpenKept = SIZE_MAX;
+    bool youngFinalHeld = false;
+    uint64_t youngRetreats = UINT64_MAX;
 };
 void* RawScanTask(void* context)
 {
@@ -1768,8 +1777,19 @@ void* RawScanTask(void* context)
     }
     MCC_ReleaseRawData(at(first[0]), r0);
     MCC_ReleaseRawData(at(first[1]), r1);
-    // Old generation: until the final scan before the pause, an acquirer on a
+    // Young generation: until the final scan before the pause, an acquirer on a
     // selected page holds it at once; the final scan then reports that page.
+    const uint64_t youngRetreatsBefore = ZJNICritical::retreats();
+    result.youngOpenKept = ZJNICritical::open_selection_for_test(ZGenerationId::young, &pages[1], 1);
+    void* youngLate = MCC_AcquireRawData(at(first[1]), nullptr);
+    std::vector<ZPage*> youngHeldAtFinal;
+    bool youngAllAtFinal = true;
+    ZJNICritical::finish_selection(ZGenerationId::young, youngHeldAtFinal, youngAllAtFinal);
+    result.youngFinalHeld = youngHeldAtFinal.size() == 1 && youngHeldAtFinal[0] == pages[1] && !youngAllAtFinal;
+    result.youngRetreats = ZJNICritical::retreats() - youngRetreatsBefore;
+    MCC_ReleaseRawData(at(first[1]), youngLate);
+    ZJNICritical::close_selection(ZGenerationId::young);
+    // Old generation likewise.
     const uint64_t oldRetreatsBefore = ZJNICritical::retreats();
     result.oldOpenKept = ZJNICritical::open_selection_for_test(ZGenerationId::old, &pages[1], 1);
     void* late = MCC_AcquireRawData(at(first[1]), nullptr);
@@ -1799,10 +1819,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, SelectionScanKeepsExactlyHeldPages)
     ReleaseHandle(task);
     std::fprintf(stderr, "RAW_SCAN_TARGET distinct=%d kept_two=%zu kept_covered=%zu covered_retreats=%llu "
         "neighbour=%d holds_overflow=%lld kept_overflow=%zu kept_overflow_released=%zu kept_after=%zu "
-        "holds_after=%lld old_open_kept=%zu old_final_held=%d old_retreats=%llu\n", result.distinct, result.keptTwo, result.keptCovered,
+        "holds_after=%lld old_open_kept=%zu old_final_held=%d old_retreats=%llu young_open_kept=%zu "
+        "young_final_held=%d young_retreats=%llu\n", result.distinct, result.keptTwo, result.keptCovered,
         (unsigned long long)result.coveredRetreats, result.coveredNeighbour, (long long)result.holdsOverflow,
         result.keptOverflow, result.keptOverflowReleased, result.keptAfter, (long long)result.holdsAfter,
-        result.oldOpenKept, result.oldFinalHeld, (unsigned long long)result.oldRetreats);
+        result.oldOpenKept, result.oldFinalHeld, (unsigned long long)result.oldRetreats, result.youngOpenKept,
+        result.youngFinalHeld, (unsigned long long)result.youngRetreats);
     GC_EXPECT_TRUE(result.distinct);
     GC_EXPECT_EQ(result.keptTwo, static_cast<size_t>(2));
     GC_EXPECT_EQ(result.keptCovered, static_cast<size_t>(1));
@@ -1816,6 +1838,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, SelectionScanKeepsExactlyHeldPages)
     GC_EXPECT_EQ(result.oldOpenKept, static_cast<size_t>(0));
     GC_EXPECT_TRUE(result.oldFinalHeld);
     GC_EXPECT_EQ(result.oldRetreats, static_cast<uint64_t>(0));
+    GC_EXPECT_EQ(result.youngOpenKept, static_cast<size_t>(0));
+    GC_EXPECT_TRUE(result.youngFinalHeld);
+    GC_EXPECT_EQ(result.youngRetreats, static_cast<uint64_t>(0));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, MarkKeepsPreviousForwarding)

@@ -394,6 +394,7 @@ void ZGenerationYoung::collect(ZYoungType type, void* timer)
     ZRawDataSelectionScope rawDataSelection(ZGenerationId::young);
     concurrent_select_relocation_set();
     abortpoint();
+    drop_raw_data_held_pages();
     pause_relocate_start();
     rawDataSelection.close();
     concurrent_relocate();
@@ -1154,12 +1155,26 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 
 void ZGeneration::drop_raw_data_held_pages()
 {
+    const bool young = _id == ZGenerationId::young;
     std::vector<ZPage*> held;
     bool all = false;
-    ZJNICritical::finish_selection(_id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old, held, all);
-    if (all || !held.empty()) {
-        ZJNICritical::note_late_dropped(_relocation_set.remove_pages(held, all, &_forwarding_table));
+    ZJNICritical::finish_selection(young ? ZGenerationId::young : ZGenerationId::old, held, all);
+    if (!all && held.empty()) {
+        return;
     }
+    // This cycle's forwardings are not used before its relocate-start pause:
+    // nothing has been relocated yet and pointers become remap-bad for them only
+    // at that pause (flip_relocate_start). The table is filled concurrently in the
+    // same way (select_relocation_set). So a dropped page is exactly a page that
+    // was not selected. Old: nothing else to do. Young: the not-selected path
+    // (flip_age_pages) has already run for this cycle, so the dropped pages are
+    // aged in place now and stay young (ZRelocate::flip_age_dropped_pages).
+    ZArray<ZPage*> dropped;
+    _relocation_set.remove_pages(held, all, &_forwarding_table, &dropped);
+    if (young && !dropped.is_empty()) {
+        ZRelocate::flip_age_dropped_pages(*Workers(), &dropped);
+    }
+    ZJNICritical::note_late_dropped(static_cast<size_t>(dropped.length()));
 }
 
 void ZGeneration::select_relocation_set(bool promote_all)

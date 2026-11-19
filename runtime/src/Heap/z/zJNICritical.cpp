@@ -28,8 +28,7 @@ const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
 struct ZRawDataSelection {
     uint64_t epoch;
     std::vector<ZPage*> pages;
-    // Old generation: a final scan precedes the relocate-start pause.
-    bool lateScan = false;
+    // Set by the final scan right before the relocate-start pause (finish_selection).
     std::atomic<bool> finalScan{ false };
     bool contains(const ZPage* page) const { return std::binary_search(pages.begin(), pages.end(), page); }
 };
@@ -110,7 +109,6 @@ ZRawDataSelection* Publish(size_t g, std::vector<ZPage*>&& pages, std::vector<ZP
     }
     std::sort(pages.begin(), pages.end());
     auto* selection = new ZRawDataSelection{ epoch, std::move(pages) };
-    selection->lateScan = g == GenerationIndex(ZGenerationId::old);
     openSelection[g].store(selection, std::memory_order_seq_cst);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     ScanHolds(*selection, held, overflow);
@@ -164,7 +162,7 @@ bool ZJNICritical::enter(Mutator& mutator, uintptr_t array)
             }
         }
         if (selection->contains(page) && !CoveredByEarlierHold(mutator, slot, page)) {
-            if (selection->lateScan && !selection->finalScan.load(std::memory_order_seq_cst)) {
+            if (!selection->finalScan.load(std::memory_order_seq_cst)) {
                 // The final scan before the pause sees this slot and drops the page.
                 continue;
             }
