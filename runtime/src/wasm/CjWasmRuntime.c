@@ -75,13 +75,16 @@ static int8_t TiKind(const void* ti) { return *(const int8_t*)((const uint8_t*)t
 static uint32_t TiSize(const void* ti) { return *(const uint32_t*)((const uint8_t*)ti + CJW_TI_SIZE_OFFSET); }
 static const void* TiSuper(const void* ti) { return *(const void* const*)((const uint8_t*)ti + CJW_TI_SUPER_OFFSET); }
 
-// Element width of a RawArray TypeInfo: reference size for object kinds (all negative),
-// otherwise the component size stored in the array TypeInfo (MClass.h union, MArray.inline.h).
+// Element width of a RawArray TypeInfo, as MArray::GetElementSize / MArray::NewArray: the reference
+// size for reference components (all negative kinds), otherwise the component TypeInfo's own size
+// (TypeInfo::GetComponentSize of the component). Runtime-instantiated RawArray<T> TypeInfos carry the
+// pointer size as their instance size (TypeInfoManager), so the array TypeInfo size is not the width.
 static size_t ArrayElemBytes(const void* arrayInfo)
 {
     const void* component = TiSuper(arrayInfo);
-    if (component != NULL && TiKind(component) < 0) { return sizeof(void*); }
-    return TiSize(arrayInfo);
+    if (component == NULL) { cjw_unsupported("array TypeInfo without a component TypeInfo", CJW_RC_TYPEQUERY); }
+    if (TiKind(component) < 0) { return sizeof(void*); }
+    return TiSize(component);
 }
 
 void* CJ_MCC_NewArray16(const void* arrayInfo, int64_t nElems, int64_t unused) { (void)unused; return NewArrayOf(arrayInfo, nElems, 2); }
