@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <stddef.h>
+#include <wasi/api.h>
 
 // ---------------------------------------------------------------------------
 // Unsupported features
@@ -422,8 +423,15 @@ int64_t CJ_MRT_GetCJThreadId(void* handle) { (void)handle; return 1; } // the on
 void CJ_MRT_Sleep(int64_t ns)
 {
     if (ns <= 0) { return; }
-    struct timespec ts = { (time_t)(ns / 1000000000LL), (long)(ns % 1000000000LL) };
-    while (nanosleep(&ts, &ts) != 0) {}
+    // One relative CLOCK_MONOTONIC subscription, as wasi-libc clock_nanosleep does.
+    __wasi_subscription_t sub;
+    memset(&sub, 0, sizeof sub);
+    sub.u.tag = __WASI_EVENTTYPE_CLOCK;
+    sub.u.u.clock.id = __WASI_CLOCKID_MONOTONIC;
+    sub.u.u.clock.timeout = (__wasi_timestamp_t)ns;
+    __wasi_event_t ev;
+    __wasi_size_t n = 0;
+    (void)__wasi_poll_oneoff(&sub, &ev, 1, &n);
 }
 
 // Nobody else can be waiting, so notification has no one to wake.
