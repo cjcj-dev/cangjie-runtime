@@ -62,6 +62,13 @@ static void* NewArr(TestTI* ti, int64_t len, uint32_t elem)
     *(int64_t*)(o + CJW_ARRAY_LENGTH_OFFSET) = len;
     return o;
 }
+// Raw blob of `size` bytes typed as a leaf (no references): every heap object carries a TypeInfo.
+static uint8_t* NewBlob(size_t size)
+{
+    uint8_t* o = (uint8_t*)cjw_heap_alloc(size);
+    *(const void**)o = &tiLeaf;
+    return o;
+}
 static void** Slot(void* obj, uint32_t i) { return (void**)((uint8_t*)obj + CJW_OBJECT_HEADER_SIZE + 4 * i); }
 static void** ArrSlot(void* arr, uint32_t i) { return (void**)((uint8_t*)arr + CJW_ARRAY_HEADER_SIZE + 4 * i); }
 static int Alive(const void* p) { return cjw_heap_is_object(p); }
@@ -290,7 +297,7 @@ static void TestDeepChain(void)
     (void)cjw_gc_collect_precise();
     CHECK(Stats().lastMarkedObjects == N);
     int count = 0, inOrder = 1;
-    for (void* p = f->slots[0]; p != NULL; p = *Slot(p, 0)) {
+    for (void* p = f->slots[0]; p != NULL && Alive(p); p = *Slot(p, 0)) {
         if (*(uint32_t*)Slot(p, 1) != (uint32_t)(N - 1 - count)) { inOrder = 0; }
         count++;
     }
@@ -308,7 +315,7 @@ static void TestLargeReuse(void)
     (void)cjw_gc_collect_precise();
     size_t heapAfterFirst = 0;
     for (int i = 0; i < 40; ++i) {
-        uint8_t* big = (uint8_t*)cjw_heap_alloc(3u << 20);
+        uint8_t* big = NewBlob(3u << 20);
         big[(3u << 20) - 1] = 1;
         (void)cjw_gc_collect_precise();
         CHECK(!Alive(big));
@@ -328,7 +335,7 @@ static void TestAutoThreshold(void)
     cjw_root_frame_push(f);
     void* keep = NewObj(&tiLeaf); f->slots[0] = keep;
     *(uint64_t*)((uint8_t*)keep + 4) = 0xC0FFEEull;
-    for (int i = 0; i < (64 << 20) / 64; ++i) { (void)cjw_heap_alloc(60); }
+    for (int i = 0; i < (64 << 20) / 64; ++i) { (void)NewBlob(60); }
     CjwGcStats s1 = Stats();
     CHECK(s1.collections - s0.collections >= 32);
     CHECK(s1.heapBytes - s0.heapBytes <= (4u << 20));
@@ -344,21 +351,25 @@ static void TestMallocCoexist(void)
     (void)cjw_gc_collect_precise();
     cjw_gc_set_auto_threshold(0);
     enum { N = 20, MS = 200000, HS = 300000 };
-    uint8_t* m[N]; uint8_t* h[N];
+    uint8_t* m[N];
+    static uint8_t* h[N];   // rooted: a full heap collects before growing even with the threshold off
+    static int registered = 0;
+    if (!registered) { cjw_static_roots_register((void**)h, N); registered = 1; }
     for (int i = 0; i < N; ++i) {
         m[i] = (uint8_t*)malloc(MS);
         CHECK(m[i] != NULL);
         memset(m[i], i, MS);
-        h[i] = (uint8_t*)cjw_heap_alloc(HS);
-        memset(h[i], 0x80 + i, HS);
+        h[i] = NewBlob(HS);
+        memset(h[i] + 4, 0x80 + i, HS - 4);
     }
     for (int i = 0; i < N; ++i) {
         CHECK(!cjw_heap_contains(m[i]) && !cjw_heap_contains(m[i] + MS - 1));
         for (size_t k = 0; k < MS; k += 997) { if (m[i][k] != (uint8_t)i) { CHECK(!"malloc block clobbered"); break; } }
-        for (size_t k = 0; k < HS; k += 997) { if (h[i][k] != (uint8_t)(0x80 + i)) { CHECK(!"heap block clobbered"); break; } }
+        for (size_t k = 4; k < HS; k += 997) { if (h[i][k] != (uint8_t)(0x80 + i)) { CHECK(!"heap block clobbered"); break; } }
         free(m[i]);
     }
     CHECK(Stats().chunks >= 2);
+    memset(h, 0, sizeof(h));
     cjw_gc_set_auto_threshold(CJW_GC_DEFAULT_AUTO_THRESHOLD);
     (void)cjw_gc_collect_precise();
     Report("malloc_coexist", ok);
@@ -388,10 +399,39 @@ static void TestM0Boundary(void)
     int ok = 1;
     (void)cjw_gc_collect_precise();
     void* p = cjw_alloc(16, 8);
+    *(const void**)p = &tiLeaf;
     CHECK(Alive(p) && cjw_arena_bytes() == Stats().liveBytes);
     cjw_collect();          // precise roots declared: collects instead of exiting
     CHECK(!Alive(p));
     Report("m0_boundary", ok);
+}
+
+static uint64_t g_nonHeapThing[2];
+static void TestVerifyHeap(void)
+{
+    int ok = 1;
+    (void)cjw_gc_collect_precise();
+    CjwHeapVerifyStats v;
+    cjw_gc_verify_heap(&v);
+    CHECK(v.objects == 0 && v.heapRefs == 0);
+    FrameStore fs; CjwRootFrame* f = Frame(&fs, 6);
+    cjw_root_frame_push(f);
+    void* n = NewObj(&tiNode); f->slots[0] = n;
+    void* b = NewObj(&tiLeaf); f->slots[1] = b;
+    void* c = NewObj(&tiLeaf); f->slots[2] = c;
+    *Slot(n, 0) = b; *Slot(n, 2) = &g_nonHeapThing;                 // heap ref + non-heap ref
+    *(uint32_t*)Slot(n, 1) = (uint32_t)(uintptr_t)c + 4;            // integer field: never checked
+    void* arr = NewArr(&tiRefArr, 3, 4); f->slots[3] = arr;
+    *ArrSlot(arr, 0) = b; *ArrSlot(arr, 2) = c;
+    void* sarr = NewArr(&tiStructArr, 2, 8); f->slots[4] = sarr;
+    *ArrSlot(sarr, 0) = c; *(uint32_t*)ArrSlot(sarr, 1) = 7;
+    f->slots[5] = NewObj(&tiNoTib);
+    cjw_gc_verify_heap(&v);
+    CHECK(v.objects == 6 && v.heapRefs == 4 && v.nonHeapRefs == 1 && v.untraceable == 1);
+    CHECK(Stats().collections > 0 && Alive(n) && Alive(b) && Alive(c));   // verification frees nothing
+    f->slots[5] = NULL;
+    cjw_root_frame_pop(f);
+    Report("verify_heap", ok);
 }
 
 // ---- gate and negative modes -------------------------------------------------
@@ -399,7 +439,7 @@ static int ModeGateNoAutoCollect(void)
 {
     // No precise roots: allocation must never collect, the heap only grows.
     int ok = 1;
-    for (int i = 0; i < (48 << 20) / 64; ++i) { (void)cjw_alloc(60, 8); }
+    for (int i = 0; i < (48 << 20) / 64; ++i) { *(const void**)cjw_alloc(60, 8) = &tiLeaf; }
     CjwGcStats s = Stats();
     CHECK(s.collections == 0 && s.heapBytes >= (48u << 20) && s.freedBytesTotal == 0);
     Report("gate_no_auto_collect", ok);
@@ -411,12 +451,22 @@ int main(int argc, char** argv)
     InitTypes();
     const char* mode = argc > 1 ? argv[1] : "all";
     if (strcmp(mode, "gate") == 0) { return ModeGateNoAutoCollect(); }
+    if (strcmp(mode, "verify_interior") == 0) {   // verifier without precise roots, metadata points mid-object
+        void* n = NewObj(&tiNode); void* b = NewObj(&tiLeaf);
+        *Slot(n, 2) = (uint8_t*)b + 8;
+        CjwHeapVerifyStats v; cjw_gc_verify_heap(&v);
+        return 0;
+    }
     if (strcmp(mode, "collect_unprecise") == 0) { (void)cjw_alloc(16, 8); cjw_collect(); return 0; }
     cjw_gc_declare_precise_roots();
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
         TestStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestInternalRoots();
-        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary();
+        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap();
+        // Every object the suite left behind (live or garbage) must satisfy the TypeInfo contract.
+        CjwHeapVerifyStats v;
+        cjw_gc_verify_heap(&v);
+        printf("PASS verify_all_leftovers objects=%zu heap_refs=%zu\n", v.objects, v.heapRefs);
         printf("HEAP_UNIT_FAILS=%d\n", g_fails);
         return g_fails;
     }

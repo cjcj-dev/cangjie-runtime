@@ -102,6 +102,21 @@ typedef struct {
 } CjwGcStats;
 void cjw_gc_get_stats(CjwGcStats* out);
 
+// Heap verifier: walks every allocated object and checks its TypeInfo and each
+// reference slot its metadata describes (NULL, outside the heap, or the start of
+// a live object). Never marks or frees, so it is sound without precise roots and
+// can validate the metadata contract on objects of real compiled programs.
+// Objects whose TypeInfo has references but no GC tib are counted, not fatal.
+// Integrity failures exit with CJW_RC_GC_INTEGRITY. CJ_WASM_GC_VERIFY=1 runs it
+// at exit and prints one line on stderr (=2 also names each untraceable TypeInfo).
+typedef struct {
+    size_t objects;
+    size_t heapRefs;      // slots pointing at live heap objects
+    size_t nonHeapRefs;   // non-NULL slots pointing outside the heap
+    size_t untraceable;   // objects with references but no GC tib
+} CjwHeapVerifyStats;
+void cjw_gc_verify_heap(CjwHeapVerifyStats* out);
+
 // Hook called at the begin/end of every collection (stats are current).
 enum { CJW_GC_PHASE_BEGIN = 0, CJW_GC_PHASE_END = 1 };
 typedef void (*CjwGcHook)(int phase, const CjwGcStats* stats, void* arg);

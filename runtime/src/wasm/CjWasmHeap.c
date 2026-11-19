@@ -60,6 +60,9 @@ static size_t g_nstatic = 0, g_capStatic = 0;
 static void*** g_internal = NULL;
 static size_t g_ninternal = 0, g_capInternal = 0;
 
+static int g_verify = 0;
+static CjwHeapVerifyStats g_vstats;
+
 static void** g_markStack = NULL;
 static size_t g_markSp = 0, g_markCap = 0;
 
@@ -357,13 +360,17 @@ static void MarkRef(void* ref, const char* what, const void* where)
     uintptr_t a = (uintptr_t)ref;
     CjwChunk* c = FindChunk(a);
     if (c == NULL) {
-        g_stats.nonHeapRefsSeen++;
+        if (g_verify) { g_vstats.nonHeapRefs++; } else { g_stats.nonHeapRefsSeen++; }
         return;
     }
     size_t g = GranuleOf(c, a);
     if ((a & (CJW_GRANULE - 1)) != 0 || !TestBit(c->allocBits, g)) {
         GcIntegrity("%s at %p holds %p, which points into the managed heap but not at the start of a live object",
                     what, where, ref);
+    }
+    if (g_verify) {
+        g_vstats.heapRefs++;
+        return;
     }
     if (TestBit(c->markBits, g)) { return; }
     SetBit(c->markBits, g);
@@ -374,6 +381,22 @@ static void MarkRef(void* ref, const char* what, const void* where)
         g_markStack = (void**)XRealloc(g_markStack, g_markCap * sizeof(void*));
     }
     g_markStack[g_markSp++] = ref;
+}
+
+// A reference-carrying object the M1 collector cannot trace: fatal when collecting,
+// counted by the verifier.
+static int g_verifyVerbose = 0;
+static void Untraceable(const char* what, const uint8_t* ti)
+{
+    if (g_verify) {
+        g_vstats.untraceable++;
+        if (g_verifyVerbose) {
+            const char* name = ti != NULL ? *(const char* const*)ti : NULL;
+            fprintf(stderr, "cangjie wasm32 runtime: gc verify: untraceable %s: %s\n", name ? name : "?", what);
+        }
+        return;
+    }
+    cjw_unsupported(what, CJW_RC_UNSUPPORTED);
 }
 
 // Visits the reference slots that `gctib` marks in [base, base+limit).
@@ -405,7 +428,8 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
     size_t room = objBytes - CJW_ARRAY_HEADER_SIZE;
     if (cjw_kind_is_ref(ck)) {
         if (ck == CJW_KIND_GENERIC_TI || ck == CJW_KIND_GENERIC_CUSTOM) {
-            cjw_unsupported("tracing a RawArray whose component is an unresolved generic TypeInfo", CJW_RC_UNSUPPORTED);
+            Untraceable("tracing a RawArray whose component is an unresolved generic TypeInfo", ti);
+            return;
         }
         if ((uint64_t)len > room / sizeof(void*)) {
             GcIntegrity("RawArray %p of %lld references exceeds its %zu-byte cell", (void*)obj, (long long)len, objBytes);
@@ -418,8 +442,8 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
         if ((cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
         const CjwGCTib* gctib = cjw_ti_gctib(comp);
         if (gctib == NULL) {
-            cjw_unsupported("tracing a struct array whose component TypeInfo has references but no GC tib",
-                            CJW_RC_UNSUPPORTED);
+            Untraceable("tracing a struct array whose component TypeInfo has references but no GC tib", ti);
+            return;
         }
         uint32_t elem = cjw_ti_size(ti);   // RawArray TypeInfo: component size (MClass.h union)
         if (elem == 0 || elem != cjw_ti_size(comp)) {
@@ -434,7 +458,7 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
         return;
     }
     if (ck == CJW_KIND_VARRAY || (cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) != 0) {
-        cjw_unsupported("tracing a RawArray of VArray or other reference-carrying value components", CJW_RC_UNSUPPORTED);
+        Untraceable("tracing a RawArray of VArray or other reference-carrying value components", ti);
     }
     // primitive components: nothing to trace
 }
@@ -462,8 +486,9 @@ static void TraceObject(void* ref)
     if ((cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
     const CjwGCTib* gctib = cjw_ti_gctib(ti);
     if (gctib == NULL) {
-        cjw_unsupported("tracing an object whose TypeInfo has reference fields but no GC tib (runtime-instantiated "
-                        "generic TypeInfo)", CJW_RC_UNSUPPORTED);
+        Untraceable("tracing an object whose TypeInfo has reference fields but no GC tib (runtime-instantiated "
+                    "generic TypeInfo)", ti);
+        return;
     }
     VisitGCTib(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE, ref);
 }
@@ -578,6 +603,36 @@ size_t cjw_gc_collect_precise(void)
 
 void cjw_gc_get_stats(CjwGcStats* out) { *out = g_stats; }
 
+void cjw_gc_verify_heap(CjwHeapVerifyStats* out)
+{
+    if (g_inGc) { GcIntegrity("heap verification during a collection"); }
+    g_inGc = 1;
+    g_verify = 1;
+    memset(&g_vstats, 0, sizeof(g_vstats));
+    for (uint32_t ci = 0; ci < g_nchunks; ++ci) {
+        CjwChunk* c = &g_chunks[ci];
+        for (uint32_t b = 0; b < c->nblocks; ++b) {
+            CjwBlock* blk = &c->blocks[b];
+            uintptr_t start = BlockAddr(c, b);
+            if (blk->kind == BK_SMALL) {
+                uint32_t cell = kClassBytes[blk->cls];
+                for (uint32_t i = 0; i < CJW_BLOCK_BYTES / cell; ++i) {
+                    uintptr_t a = start + (uintptr_t)i * cell;
+                    if (!TestBit(c->allocBits, GranuleOf(c, a))) { continue; }
+                    g_vstats.objects++;
+                    TraceObject((void*)a);
+                }
+            } else if (blk->kind == BK_LARGE_HEAD && TestBit(c->allocBits, GranuleOf(c, start))) {
+                g_vstats.objects++;
+                TraceObject((void*)start);
+            }
+        }
+    }
+    g_verify = 0;
+    g_inGc = 0;
+    *out = g_vstats;
+}
+
 // ---------------------------------------------------------------------------
 // M0 collector boundary (CjWasmRuntime.h): every managed allocation of the
 // runtime entry points goes through cjw_alloc.
@@ -591,6 +646,14 @@ static void PrintStatsAtExit(void)
             g_stats.collections, g_stats.chunks, g_precise);
 }
 
+static void VerifyAtExit(void)
+{
+    CjwHeapVerifyStats v;
+    cjw_gc_verify_heap(&v);
+    fprintf(stderr, "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu\n",
+            v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable);
+}
+
 void* cjw_alloc(size_t size, size_t align)
 {
     if (align > CJW_GRANULE) { cjw_unsupported("managed allocation aligned above 8 bytes", CJW_RC_UNSUPPORTED); }
@@ -598,6 +661,11 @@ void* cjw_alloc(size_t size, size_t align)
         g_statsAtExit = 1;
         const char* s = getenv("CJ_WASM_GC_STATS");
         if (s != NULL && s[0] == '1') { atexit(PrintStatsAtExit); }
+        const char* v = getenv("CJ_WASM_GC_VERIFY");
+        if (v != NULL && (v[0] == '1' || v[0] == '2')) {
+            g_verifyVerbose = v[0] == '2';
+            atexit(VerifyAtExit);
+        }
     }
     return cjw_heap_alloc(size);
 }
