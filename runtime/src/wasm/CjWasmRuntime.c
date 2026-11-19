@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stddef.h>
 
 // ---------------------------------------------------------------------------
 // Unsupported features
@@ -123,7 +124,7 @@ void CJ_MCC_ReadStructField(void* dst, void* obj, const void* src, size_t size, 
 void CJ_MCC_WriteGeneric(void* obj, void* fieldPtr, const void* src, size_t size)
 {
     (void)obj;
-    if (size != 0) { memmove(fieldPtr, (const uint8_t*)src + CJW_OBJECT_HEADER_SIZE, size); }
+    if (src != NULL && size != 0) { memmove(fieldPtr, (const uint8_t*)src + CJW_OBJECT_HEADER_SIZE, size); }
 }
 void CJ_MCC_ReadGeneric(void* dst, void* obj, const void* fieldPtr, size_t size)
 {
@@ -150,26 +151,212 @@ void* CJ_MCC_AcquireRawData(void* array, uint8_t* isCopy)
 void CJ_MCC_ReleaseRawData(void* array, void* rawPtr, int32_t unused) { (void)array; (void)rawPtr; (void)unused; }
 
 // ---------------------------------------------------------------------------
-// Type queries. Class inheritance is answered from the TypeInfo super chain;
-// interface conformance and runtime generic instantiation need the MTable /
-// TypeTemplate machinery of the native runtime and are explicit gaps (M1).
+// TypeInfo / TypeTemplate as emitted by cjcj for 32-bit pointers (%TypeInfo,
+// %TypeTemplate; stdlib typetemplate.c structs).
+typedef struct CjwTI CjwTI;
+typedef CjwTI* (*CjwGenericFn)(int32_t argc, CjwTI** args);
+typedef struct {
+    const char* name; int8_t kind; uint8_t flag; uint16_t fieldsNum; uint16_t typeArgsNum;
+    CjwGenericFn* fieldsFns; CjwGenericFn superFn; void* finalizer; void* reflection;
+    void** extensionDefPtr; uint16_t inheritedClassNum;
+} CjwTT;
+struct CjwTI {
+    const char* name; int8_t kind; uint8_t flag; uint16_t fieldsNum; uint32_t size; const void* gctib;
+    uint32_t uuid; uint8_t align; uint8_t typeArgNum; uint16_t inheritedClassNum; uint32_t* offsets;
+    const void* sourceGeneric; CjwTI** typeArgs; CjwTI** fields; CjwTI* super; void** extensionDefPtr;
+    void* mtable; void* reflection;
+};
+_Static_assert(sizeof(void*) == 4, "wasm32 layout");
+_Static_assert(offsetof(CjwTI, size) == CJW_TI_SIZE_OFFSET, "TypeInfo.size offset");
+_Static_assert(offsetof(CjwTI, super) == CJW_TI_SUPER_OFFSET, "TypeInfo.super offset");
+_Static_assert(sizeof(CjwTI) == 56, "TypeInfo size");
+_Static_assert(offsetof(CjwTT, fieldsFns) == 12 && sizeof(CjwTT) == 36, "TypeTemplate layout");
+
+enum {
+    K_CLASS = -128, K_INTERFACE = -127, K_RAWARRAY = -126, K_FUNC = -125, K_TEMP_ENUM = -124,
+    K_WEAKREF_CLASS = -123, K_FOREIGN_PROXY = -122, K_EXPORTED_REF = -121, K_FINALREF_CLASS = -120,
+    K_NOTHING = 0, K_UNIT = 1, K_CSTRING = 17, K_CPOINTER = 18, K_CFUNC = 19, K_VARRAY = 20, K_TUPLE = 21,
+    K_STRUCT = 22, K_ENUM = 23, K_MAX = 24
+};
+#define CJW_FLAG_HAS_REF_FIELD 0x1u
+#define CJW_SYNC_FLAGS ((1u << 2) | (1u << 3) | (1u << 4) | (1u << 5)) // future, mutex, monitor, wait queue
+#define CJW_SYNC_OBJECT_SIZE 168u // runtime/src/Sync/Sync.h SYNC_OBJECT_SIZE
+
+static int IsClassLike(int8_t k)
+{
+    return k == K_CLASS || k == K_WEAKREF_CLASS || k == K_FINALREF_CLASS || k == K_FOREIGN_PROXY || k == K_EXPORTED_REF;
+}
+static uint32_t AlignUp(uint32_t v, uint32_t a) { return a <= 1 ? v : (v + a - 1) / a * a; }
+
+// Two TypeInfos denote the same type if they are the same object or instantiate the same
+// TypeTemplate with equal arguments. wasm32 has no static-generic-TI registry, so a runtime
+// instantiation and a compiler-emitted one of the same type can be distinct objects.
+static int SameType(const CjwTI* a, const CjwTI* b)
+{
+    if (a == b) { return 1; }
+    if (a == NULL || b == NULL || a->typeArgNum == 0 || a->typeArgNum != b->typeArgNum ||
+        a->sourceGeneric == NULL || a->sourceGeneric != b->sourceGeneric) { return 0; }
+    for (uint32_t i = 0; i < a->typeArgNum; ++i) {
+        if (!SameType(a->typeArgs[i], b->typeArgs[i])) { return 0; }
+    }
+    return 1;
+}
+
+// TypeInfoManager::GetTypeSize
+static uint32_t TypeSize(const CjwTI* ti)
+{
+    int8_t k = ti->kind;
+    if (k == K_NOTHING || k == K_UNIT) { return 0; }
+    if (k < 0) {
+        if (k == -1 || k == -2) { cjw_unsupported("size of an unresolved generic TypeInfo", CJW_RC_TYPEQUERY); }
+        return sizeof(void*);
+    }
+    if (k == K_ENUM && ti->fieldsNum == 0) { return ti->size; }
+    if (k == K_ENUM || k == K_STRUCT || k == K_TUPLE) {
+        uint32_t total = 0;
+        for (uint32_t i = 0; i < ti->fieldsNum; ++i) {
+            const CjwTI* f = ti->fields[i];
+            if (f->kind == K_NOTHING || f->kind == K_UNIT) { continue; }
+            total = AlignUp(total, f->kind < 0 ? sizeof(void*) : f->align);
+            total += TypeSize(f);
+        }
+        return AlignUp(total, ti->align);
+    }
+    if (k == K_VARRAY || k >= K_MAX) { cjw_unsupported("size of a VArray/unknown TypeInfo kind", CJW_RC_TYPEQUERY); }
+    return ti->size; // primitives, CString, CPointer, CFunc
+}
+
+// Cache of runtime instantiations, keyed by (template, args).
+typedef struct { const CjwTT* tt; uint32_t argc; CjwTI** args; CjwTI* ti; } CjwInst;
+static CjwInst* g_insts = NULL;
+static uint32_t g_instCount = 0, g_instCap = 0;
+
+static CjwTI* FindInst(const CjwTT* tt, uint32_t argc, CjwTI** args)
+{
+    for (uint32_t i = 0; i < g_instCount; ++i) {
+        CjwInst* e = &g_insts[i];
+        if (e->tt != tt || e->argc != argc) { continue; }
+        uint32_t j = 0;
+        while (j < argc && SameType(e->args[j], args[j])) { ++j; }
+        if (j == argc) { return e->ti; }
+    }
+    return NULL;
+}
+
+static char* InstName(const CjwTT* tt, uint32_t argc, CjwTI** args)
+{
+    size_t n = strlen(tt->name) + 3;
+    for (uint32_t i = 0; i < argc; ++i) { n += strlen(args[i]->name) + 1; }
+    char* s = (char*)malloc(n);
+    if (s == NULL) { cjw_unsupported("memory for a TypeInfo name", CJW_RC_UNSUPPORTED); }
+    strcpy(s, tt->name);
+    strcat(s, "<");
+    for (uint32_t i = 0; i < argc; ++i) { if (i) { strcat(s, ","); } strcat(s, args[i]->name); }
+    strcat(s, ">");
+    return s;
+}
+
+// Port of TypeInfoManager::CreatedTypeInfoImpl + FillRemainingField + FillOffsets
+// (runtime/src/TypeInfoManager.cpp:870-1300). Not ported: GC tib (no collector),
+// interface MTable (AddMTable: interface dispatch traps in GetMTableAndOuterTI) and
+// reflection/enum debug info (reflection is disabled for wasm32).
+void* CJ_MCC_GetOrCreateTypeInfo(const void* typeTemplate, uint32_t argSize, void** typeArgs)
+{
+    const CjwTT* tt = (const CjwTT*)typeTemplate;
+    CjwTI** args = (CjwTI**)typeArgs;
+    CjwTI* found = FindInst(tt, argSize, args);
+    if (found != NULL) { return found; } // also the in-progress TypeInfo for a recursive request
+    if (tt->kind == K_VARRAY) { cjw_unsupported("instantiating a VArray TypeInfo", CJW_RC_TYPEQUERY); }
+
+    CjwTI* ti = (CjwTI*)calloc(1, sizeof(CjwTI));
+    CjwTI** argCopy = (CjwTI**)calloc(argSize ? argSize : 1, sizeof(CjwTI*));
+    if (ti == NULL || argCopy == NULL) { cjw_unsupported("memory for a TypeInfo", CJW_RC_UNSUPPORTED); }
+    memcpy(argCopy, args, argSize * sizeof(CjwTI*));
+    ti->name = InstName(tt, argSize, args);
+    ti->kind = tt->kind;
+    ti->flag = tt->flag;
+    ti->inheritedClassNum = tt->inheritedClassNum;
+    ti->extensionDefPtr = tt->extensionDefPtr;
+    ti->sourceGeneric = tt;
+    ti->typeArgs = argCopy;
+    if (g_instCount == g_instCap) {
+        g_instCap = g_instCap ? g_instCap * 2 : 64;
+        g_insts = (CjwInst*)realloc(g_insts, g_instCap * sizeof(CjwInst));
+        if (g_insts == NULL) { cjw_unsupported("memory for the TypeInfo cache", CJW_RC_UNSUPPORTED); }
+    }
+    g_insts[g_instCount++] = (CjwInst){ tt, argSize, argCopy, ti };
+
+    uint32_t fieldNum = tt->fieldsNum, typeArgNum = tt->typeArgsNum;
+    if (tt->kind == K_CFUNC) {
+        typeArgNum = argSize;
+    } else if (tt->kind == K_TUPLE || tt->kind == K_FUNC || tt->kind == K_RAWARRAY) {
+        fieldNum = argSize;
+        typeArgNum = argSize;
+    }
+    ti->fieldsNum = (uint16_t)fieldNum;
+    ti->typeArgNum = (uint8_t)typeArgNum;
+    if (tt->kind == K_RAWARRAY || tt->kind == K_CPOINTER) {
+        ti->super = args[0]; // component TypeInfo (union with super)
+        ti->size = sizeof(void*);
+        ti->align = sizeof(void*);
+        return ti;
+    }
+    if (tt->kind == K_CFUNC) {
+        ti->size = sizeof(void*);
+        ti->align = sizeof(void*);
+        return ti;
+    }
+    ti->offsets = (uint32_t*)calloc(fieldNum ? fieldNum : 1, sizeof(uint32_t));
+    ti->fields = (CjwTI**)calloc(fieldNum ? fieldNum : 1, sizeof(CjwTI*));
+    if (ti->offsets == NULL || ti->fields == NULL) { cjw_unsupported("memory for TypeInfo fields", CJW_RC_UNSUPPORTED); }
+
+    uint32_t offset = 0, align = 1, hasRef = 0;
+    int fromArgs = tt->kind == K_TUPLE || tt->kind == K_FUNC;
+    for (uint32_t f = 0; f < fieldNum; ++f) {
+        CjwTI* fti = fromArgs ? args[f] : tt->fieldsFns[f]((int32_t)argSize, args);
+        ti->fields[f] = fti;
+        if (fti->kind == K_NOTHING || fti->kind == K_UNIT) { continue; }
+        if (fti->kind < 0 || (fti->flag & CJW_FLAG_HAS_REF_FIELD)) { hasRef = 1; }
+        uint32_t fa = fti->kind < 0 ? sizeof(void*) : fti->align;
+        offset = AlignUp(offset, fa);
+        ti->offsets[f] = offset;
+        if (fa > align) { align = fa; }
+        offset += TypeSize(fti);
+    }
+    if (hasRef) { ti->flag |= CJW_FLAG_HAS_REF_FIELD; }
+    ti->align = (uint8_t)(ti->kind < 0 ? sizeof(void*) : align);
+    uint32_t instanceSize = AlignUp(offset, align);
+    ti->size = (ti->flag & CJW_SYNC_FLAGS) ? CJW_SYNC_OBJECT_SIZE - 8u : instanceSize;
+    ti->super = tt->superFn != NULL ? tt->superFn((int32_t)argSize, args) : NULL;
+    return ti;
+}
+
+// Class inheritance is answered from the TypeInfo super chain. Interface conformance needs
+// the extension/MTable tables that wasm32 does not build yet, so it traps (M1).
 uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
 {
-    if (typeInfo == superTypeInfo) { return 1; }
-    if (superTypeInfo == NULL || typeInfo == NULL) { return 0; }
-    if (TiKind(superTypeInfo) == CJW_KIND_CLASS) {
-        for (const void* t = typeInfo; t != NULL; t = TiKind(t) == CJW_KIND_CLASS ? TiSuper(t) : NULL) {
-            if (t == superTypeInfo) { return 1; }
+    const CjwTI* t = (const CjwTI*)typeInfo;
+    const CjwTI* sup = (const CjwTI*)superTypeInfo;
+    if (SameType(t, sup)) { return 1; }
+    if (t == NULL || sup == NULL) { return 0; }
+    if (IsClassLike(sup->kind)) {
+        if (!IsClassLike(t->kind)) {
+            if (t->kind == K_INTERFACE || t->kind == -1 || t->kind == -2 || t->kind >= K_MAX) {
+                cjw_unsupported("subtype query from a non-concrete TypeInfo (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
+            }
+            return 0; // values, arrays, functions and enums never extend a class
+        }
+        for (const CjwTI* c = t->super; c != NULL; c = IsClassLike(c->kind) ? c->super : NULL) {
+            if (SameType(c, sup)) { return 1; }
         }
         return 0;
     }
-    cjw_unsupported("interface or generic subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
+    if (sup->kind >= 0 && sup->kind < K_MAX && sup->kind != K_TUPLE && sup->kind != K_VARRAY) {
+        return 0; // value types have no proper subtypes (tuples: CJ_MCC_IsTupleTypeOf)
+    }
+    cjw_unsupported("interface, function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
 }
-void* CJ_MCC_GetOrCreateTypeInfo(const void* typeTemplate, uint32_t argSize, void** typeArgs)
-{
-    (void)typeTemplate; (void)argSize; (void)typeArgs;
-    cjw_unsupported("runtime generic type instantiation (CJ_MCC_GetOrCreateTypeInfo)", CJW_RC_TYPEQUERY);
-}
+
 void* CJ_MCC_GetMethodOuterTI(const void* ti, const void* itf, uint64_t index)
 {
     (void)ti; (void)itf; (void)index;
@@ -215,7 +402,7 @@ void CJ_MCC_SetReferenceMethods(void* a, void* b, void* c) { (void)a; (void)b; (
 void CJ_MCC_RegisterImplicitExceptionRaisers(void* raisers) { (void)raisers; }
 void CJ_MCC_ReferenceInvokeFinalize(void* obj) { (void)obj; }
 uint8_t CJ_MCC_ReferenceRuntimeRunning(void) { return 0; }
-void* CJ_MCC_ReferenceWaitPending(void) { return NULL; }
+void* CJ_MCC_ReferenceWaitPending(void) { cjw_unsupported("waiting for reference processing (no collector thread)", CJW_RC_THREADS); }
 int64_t CJ_MCC_ReferenceNanoTime(void)
 {
     struct timespec ts;
@@ -225,7 +412,13 @@ int64_t CJ_MCC_ReferenceNanoTime(void)
 
 // ---------------------------------------------------------------------------
 // Stack traces: no unwinder/stackmaps on wasm32 yet. Exceptions carry no trace.
-void* CJ_MCC_FillInStackTrace(void* typeInfo, void* exception) { (void)typeInfo; (void)exception; return NULL; }
+// The trace is an empty array of the requested array TypeInfo (never NULL).
+void* CJ_MCC_FillInStackTrace(void* arrayTypeInfo, void* exception)
+{
+    (void)exception;
+    if (arrayTypeInfo == NULL) { cjw_unsupported("stack traces without an array TypeInfo", CJW_RC_UNSUPPORTED); }
+    return NewArrayOf(arrayTypeInfo, 0, 0);
+}
 void CJ_MCC_DecodeStackTrace(void* out, int64_t pc, int64_t fa, int64_t id, void* ti)
 {
     (void)out; (void)pc; (void)fa; (void)id; (void)ti;
