@@ -427,6 +427,9 @@ static int EdTargetsType(const CjwExtData* ed, const CjwTI* cur)
     return cur->sourceGeneric != NULL && ed->target == cur->sourceGeneric;
 }
 
+// TypeInfo::GetValidInheritNum: bit 15 of validInheritNum is a flag, the count is the low 15 bits.
+static uint32_t ValidInheritNum(const CjwTI* ti) { return ti->inheritedClassNum & 0x7FFFu; }
+
 static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
 {
     for (const CjwTI* cur = ti; cur != NULL; cur = IsClassLike(cur->kind) ? cur->super : NULL) {
@@ -437,7 +440,7 @@ static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
         for (uint32_t i = 0;; ++i) {
             CjwExtData* ed = v[i];
             if (ed == NULL) { break; }
-            if (i >= cur->inheritedClassNum && !EdTargetsType(ed, cur)) { break; }
+            if (i >= ValidInheritNum(cur) && !EdTargetsType(ed, cur)) { break; }
             if (ed->whereCondFn != NULL &&
                 (((uintptr_t(*)(int32_t, CjwTI**))ed->whereCondFn)((int32_t)argc, args) & 0x1u) == 0) {
                 continue;
@@ -456,7 +459,7 @@ static void TryUpdateExtData(const CjwTI* ti, const CjwTI* itf, CjwExtData* ed)
     if ((ed->flag & CJW_ED_FT_UPDATED) == CJW_ED_FT_UPDATED || ti == itf) { return; }
     CjwExtData** iv = (CjwExtData**)itf->extensionDefPtr;
     if (iv == NULL) { cjw_unsupported("interface TypeInfo without extension data", CJW_RC_TYPEQUERY); }
-    const CjwExtData* itfEd = itf->kind == K_INTERFACE ? iv[0] : iv[itf->inheritedClassNum - 1];
+    const CjwExtData* itfEd = itf->kind == K_INTERFACE ? iv[0] : iv[ValidInheritNum(itf) - 1];
     if (itfEd->funcTableSize == ed->funcTableSize) {
         ed->flag |= CJW_ED_FT_UPDATED;
         return;
@@ -510,12 +513,16 @@ void* CJ_MCC_GetMethodOuterTI(const void* ti, const void* itf, uint64_t index)
     return (void*)ti;
 }
 
-
+// TypeInfo::GetMTableAndOuterTI: outside the native stable-table fast path it is GetMTable followed by
+// GetMethodOuterTI.
 void* CJ_MCC_GetMTableAndOuterTI(const void* ti, const void* itf, uint64_t index, void** outerTI)
 {
-    (void)ti; (void)itf; (void)index; (void)outerTI;
-    cjw_unsupported("interface method table lookup (CJ_MCC_GetMTableAndOuterTI)", CJW_RC_TYPEQUERY);
+    void* funcTable = CJ_MCC_GetMTable(ti, itf);
+    *outerTI = CJ_MCC_GetMethodOuterTI(ti, itf, index);
+    return funcTable;
 }
+
+
 uint8_t CJ_MCC_IsTupleTypeOf(const void* obj, const void* typeInfo, const void* targetTypeInfo)
 {
     (void)typeInfo;
