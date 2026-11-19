@@ -21,27 +21,7 @@ _Noreturn void cjw_unsupported(const char* feature, int code)
 }
 
 // ---------------------------------------------------------------------------
-// Arena (collector boundary)
-static size_t g_arenaBytes = 0;
-
-void* cjw_alloc(size_t size, size_t align)
-{
-    if (align < 8) { align = 8; }
-    size_t rounded = (size + align - 1) & ~(align - 1);
-    void* p = aligned_alloc(align, rounded == 0 ? align : rounded);
-    if (p == NULL) {
-        fprintf(stderr, "cangjie wasm32 runtime: out of memory allocating %zu bytes (arena %zu bytes)\n",
-                size, g_arenaBytes);
-        exit(CJW_RC_UNSUPPORTED);
-    }
-    memset(p, 0, rounded);
-    g_arenaBytes += rounded;
-    return p;
-}
-
-void cjw_collect(void) { cjw_unsupported("garbage collection (arena only, M0)", CJW_RC_UNSUPPORTED); }
-
-size_t cjw_arena_bytes(void) { return g_arenaBytes; }
+// Arena (collector boundary): cjw_alloc / cjw_collect / cjw_arena_bytes live in CjWasmHeap.c.
 
 // ---------------------------------------------------------------------------
 // Allocation entry points used by compiled code

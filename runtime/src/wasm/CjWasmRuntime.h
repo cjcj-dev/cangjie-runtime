@@ -16,11 +16,11 @@
 #define CJW_ARRAY_HEADER_SIZE 12u
 
 // ---- arena / collector boundary ------------------------------------------
-// Every managed allocation goes through cjw_alloc. M0: bump arena on top of
-// wasi-libc malloc, never reclaimed. M1 replaces the collector side (mark from
-// the shadow root stack + static roots, sweep) without changing callers.
+// Every managed allocation goes through cjw_alloc: zeroed, 8-byte aligned memory
+// from the linear-memory heap of CjWasmHeap.c (mark-sweep, see CjWasmHeap.h).
 void* cjw_alloc(size_t size, size_t align);
-// Collection request; M0 has no collector and reports it explicitly.
+// Collection request; exits with CJW_RC_UNSUPPORTED unless the roots were
+// declared precise (cjw_gc_declare_precise_roots, CjWasmHeap.h).
 void cjw_collect(void);
 size_t cjw_arena_bytes(void);
 
