@@ -178,6 +178,18 @@ void CJ_MCC_UpdateVMT(void* ti, void* itf, void* extensionData)
     cjw_unsupported("runtime virtual-method-table update (CJ_MCC_UpdateVMT)", CJW_RC_TYPEQUERY);
 }
 
+void* CJ_MCC_GetMTableAndOuterTI(const void* ti, const void* itf, uint64_t index, void** outerTI)
+{
+    (void)ti; (void)itf; (void)index; (void)outerTI;
+    cjw_unsupported("interface method table lookup (CJ_MCC_GetMTableAndOuterTI)", CJW_RC_TYPEQUERY);
+}
+uint8_t CJ_MCC_IsTupleTypeOf(const void* obj, const void* typeInfo, const void* targetTypeInfo)
+{
+    (void)typeInfo;
+    if (obj == NULL || targetTypeInfo == NULL) { return 0; }
+    cjw_unsupported("tuple type test (CJ_MCC_IsTupleTypeOf)", CJW_RC_TYPEQUERY);
+}
+
 // ---------------------------------------------------------------------------
 // Threads and monitors: one wasm instance runs one Cangjie thread. Locks can never
 // be contended; waiting would block forever and is reported instead.
@@ -185,6 +197,9 @@ uint8_t CJ_MCC_MutexInit(void* mutex) { (void)mutex; return 1; }
 void CJ_MCC_MutexLock(void* mutex) { (void)mutex; }
 void CJ_MCC_MutexUnlock(void* mutex) { (void)mutex; }
 uint8_t CJ_MCC_WaitQueueForMonitorInit(void* monitor) { (void)monitor; return 1; }
+// Nobody else can be waiting, so notification has no one to wake.
+void CJ_MCC_MonitorNotify(void* monitor) { (void)monitor; }
+void CJ_MCC_MonitorNotifyAll(void* monitor) { (void)monitor; }
 uint8_t CJ_MCC_MonitorWait(void* monitor, int64_t timeoutNs)
 {
     (void)monitor; (void)timeoutNs;
@@ -228,6 +243,52 @@ CjwU128 __multi3_impl(uint64_t alo, uint64_t ahi, uint64_t blo, uint64_t bhi)
     r.lo = (mid << 32) | (p00 & 0xffffffffu);
     r.hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + alo * bhi + ahi * blo;
     return r;
+}
+
+// IEEE-754 binary16 <-> binary32 (Float16), compiler-rt __extendhfsf2/__truncsfhf2 ABI:
+// the half value travels in the low 16 bits of an i32.
+float cjw_extendhfsf2(uint32_t h) __asm__("__extendhfsf2");
+float cjw_extendhfsf2(uint32_t h)
+{
+    uint32_t sign = (h & 0x8000u) << 16, exp = (h >> 10) & 0x1fu, mant = h & 0x3ffu, bits;
+    if (exp == 0) {
+        if (mant == 0) { bits = sign; }
+        else { // subnormal half -> normal float
+            int e = -1;
+            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
+            bits = sign | ((uint32_t)(127 - 15 - e) << 23) | ((mant & 0x3ffu) << 13);
+        }
+    } else if (exp == 0x1fu) {
+        bits = sign | 0x7f800000u | (mant << 13);
+    } else {
+        bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+    float f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+uint32_t cjw_truncsfhf2(float f) __asm__("__truncsfhf2");
+uint32_t cjw_truncsfhf2(float f)
+{
+    uint32_t x;
+    memcpy(&x, &f, sizeof x);
+    uint32_t sign = (x >> 16) & 0x8000u, absx = x & 0x7fffffffu;
+    if (absx >= 0x7f800000u) { // Inf or NaN (keep NaN quiet and non-zero)
+        return sign | 0x7c00u | (absx > 0x7f800000u ? (0x200u | ((absx >> 13) & 0x3ffu)) : 0u);
+    }
+    if (absx >= 0x477ff000u) { return sign | 0x7c00u; } // rounds to >= 65520 -> Inf
+    if (absx < 0x38800000u) { // result is subnormal or zero
+        if (absx < 0x33000000u) { return sign; }
+        uint32_t m = (absx & 0x7fffffu) | 0x800000u;
+        uint32_t shift = 126u - (absx >> 23); // 14..24
+        uint32_t half = m >> shift, rem = m & ((1u << shift) - 1u), mid = 1u << (shift - 1u);
+        if (rem > mid || (rem == mid && (half & 1u))) { ++half; }
+        return sign | half;
+    }
+    uint32_t half = ((absx >> 13) - ((127u - 15u) << 10));
+    uint32_t rem = absx & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) { ++half; }
+    return sign | half;
 }
 
 // ---------------------------------------------------------------------------
