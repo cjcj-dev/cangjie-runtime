@@ -399,7 +399,11 @@ uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
         if (t->kind == -1 || t->kind == -2 || t->kind >= K_MAX) {
             cjw_unsupported("subtype query from a non-concrete TypeInfo (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
         }
-        return (uint8_t)ImplementsInterface(t, sup);
+        if (ImplementsInterface(t, sup)) { return 1; }
+        // Native also consults the outer extension defs (`extend T <: I` in other TypeInfos' packages, e.g.
+        // std.core's `extend Int64 <: ToString`) through the loader registry, which wasm32 does not build
+        // yet. "Not found in the type's own tables" is therefore not a proof of `false`: trap explicitly.
+        cjw_unsupported("interface subtype query that needs outer extension defs (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
     }
     cjw_unsupported("function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
 }
