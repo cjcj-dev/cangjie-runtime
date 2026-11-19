@@ -368,8 +368,10 @@ void* CJ_MCC_GetOrCreateTypeInfo(const void* typeTemplate, uint32_t argSize, voi
     return ti;
 }
 
-// Class inheritance is answered from the TypeInfo super chain. Interface conformance needs
-// the extension/MTable tables that wasm32 does not build yet, so it traps (M1).
+static int ImplementsInterface(const CjwTI* t, const CjwTI* itf); // interface dispatch section below
+
+// TypeInfo::IsSubType: class inheritance from the super chain; interface conformance from the
+// ExtensionData tables (FindExtensionData), Any always; function and tuple subtyping still trap.
 uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
 {
     const CjwTI* t = (const CjwTI*)typeInfo;
@@ -391,7 +393,15 @@ uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
     if (sup->kind >= 0 && sup->kind < K_MAX && sup->kind != K_TUPLE && sup->kind != K_VARRAY) {
         return 0; // value types have no proper subtypes (tuples: CJ_MCC_IsTupleTypeOf)
     }
-    cjw_unsupported("interface, function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
+    if (sup->kind == K_INTERFACE) {
+        if (t->kind == K_TEMP_ENUM && t->super != NULL) { return CJ_MCC_IsSubType(t->super, sup); }
+        if (sup->name != NULL && strcmp(sup->name, "std.core:Any") == 0) { return 1; }
+        if (t->kind == -1 || t->kind == -2 || t->kind >= K_MAX) {
+            cjw_unsupported("subtype query from a non-concrete TypeInfo (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
+        }
+        return (uint8_t)ImplementsInterface(t, sup);
+    }
+    cjw_unsupported("function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +480,8 @@ static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
     }
     return NULL;
 }
+
+static int ImplementsInterface(const CjwTI* t, const CjwTI* itf) { return FindExtData(t, itf) != NULL; }
 
 static void TryUpdateExtData(const CjwTI* ti, const CjwTI* itf, CjwExtData* ed)
 {
