@@ -12,6 +12,9 @@ _Noreturn void cjw_unsupported(const char* feature, int code)
 {
     fprintf(stderr, "cangjie wasm32 runtime: %s is not supported on the wasm32-wasi target yet\n", feature);
     fflush(stderr);
+    // Diagnostics: trap instead of exiting so the host prints the wasm call stack.
+    const char* trap = getenv("CJ_WASM_TRAP_ON_UNSUPPORTED");
+    if (trap != NULL && trap[0] == '1') { __builtin_trap(); }
     exit(code);
 }
 
