@@ -317,6 +317,27 @@ static void TestStaticRoots(void)
     Report("static_roots", ok);
 }
 
+static void* g_tabA; static void* g_tabB;
+static void** const kRootTable[2] = { &g_tabA, &g_tabB };
+static void TestStaticRootTable(void)
+{
+    int ok = 1;
+    (void)cjw_gc_collect_precise();
+    static int registered = 0;
+    if (!registered) { cjw_static_root_table_register(kRootTable, 2); registered = 1; }
+    void* a = NewObj(&tiLeaf); void* b = NewObj(&tiLeaf);
+    g_tabA = a; g_tabB = b;
+    (void)cjw_gc_collect_precise();
+    CHECK(Alive(a) && Alive(b));
+    g_tabA = NULL;
+    (void)cjw_gc_collect_precise();
+    CHECK(!Alive(a) && Alive(b));
+    g_tabB = NULL;
+    (void)cjw_gc_collect_precise();
+    CHECK(!Alive(b));
+    Report("static_root_table", ok);
+}
+
 static void TestInternalRoots(void)
 {
     int ok = 1;
@@ -543,7 +564,7 @@ int main(int argc, char** argv)
     cjw_gc_declare_precise_roots();
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
-        TestStructArray(); TestRuntimeStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestInternalRoots();
+        TestStructArray(); TestRuntimeStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestStaticRootTable(); TestInternalRoots();
         TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap(); TestRuntimeTypeInfoTib();
         // Every object the suite left behind (live or garbage) must satisfy the TypeInfo contract.
         CjwHeapVerifyStats v;
@@ -561,6 +582,11 @@ int main(int argc, char** argv)
         void* o = NewObj(&tiLeaf);
         *(uintptr_t*)o = 0xA0A0A0A0u;
         f->slots[0] = o;
+    } else if (strcmp(mode, "table_in_heap") == 0) {
+        static void** entries[1];
+        entries[0] = (void**)NewObj(&tiLeaf);   // a "slot" inside the managed heap is rejected
+        cjw_static_root_table_register((void** const*)entries, 1);
+        return 0;
     } else if (strcmp(mode, "rt_varray") == 0) {
         void* o = cjw_heap_alloc(4 + 8); *(const void**)o = &tiRtVArrClass;
         f->slots[0] = o;

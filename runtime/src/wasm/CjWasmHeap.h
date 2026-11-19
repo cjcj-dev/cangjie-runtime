@@ -54,6 +54,13 @@ void cjw_root_frame_pop(CjwRootFrame* frame);
 // A static root range is `count` consecutive reference slots outside the
 // managed heap (package globals, static fields). Registration is permanent.
 void cjw_static_roots_register(void** slots, size_t count);
+// A static root table is `count` slot ADDRESSES (entries[i] is the address of one
+// reference slot outside the heap), for non-contiguous globals: the form a
+// compiler can emit per package and register from the package initializer.
+// Entries must be non-NULL and outside the heap (GC integrity failure otherwise).
+// (A linker-collected section is not used: the wasm-ld of this toolchain does not
+// define __start_/__stop_ symbols for data sections.)
+void cjw_static_root_table_register(void** const* entries, size_t count);
 // A runtime-internal root is one slot owned by runtime C code that holds a
 // managed reference across an allocation (exception in flight, init state).
 void cjw_add_root(void** slot);

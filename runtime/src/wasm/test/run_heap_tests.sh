@@ -40,6 +40,7 @@ wild_ti 139 outside linear memory
 tib_beyond 139 beyond its
 array_bounds 139 exceeds its
 pop_order 139 popped while
+table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
 MODES
 echo "HEAP_TEST_FAILS=$FAILS"

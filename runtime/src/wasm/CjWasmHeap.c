@@ -57,6 +57,9 @@ CjwRootFrame* __cj_root_top = NULL;
 typedef struct { void** slots; size_t count; } CjwStaticRange;
 static CjwStaticRange* g_static = NULL;
 static size_t g_nstatic = 0, g_capStatic = 0;
+typedef struct { void** const* entries; size_t count; } CjwRootTable;
+static CjwRootTable* g_tables = NULL;
+static size_t g_ntables = 0, g_capTables = 0;
 static void*** g_internal = NULL;
 static size_t g_ninternal = 0, g_capInternal = 0;
 
@@ -331,6 +334,25 @@ void cjw_static_roots_register(void** slots, size_t count)
     g_static[g_nstatic].slots = slots;
     g_static[g_nstatic].count = count;
     g_nstatic++;
+}
+
+void cjw_static_root_table_register(void** const* entries, size_t count)
+{
+    if (count == 0) { return; }
+    if (entries == NULL) { GcIntegrity("static root table of %zu entries is NULL", count); }
+    for (size_t i = 0; i < count; ++i) {
+        if (entries[i] == NULL || FindChunk((uintptr_t)entries[i]) != NULL) {
+            GcIntegrity("static root table %p entry %zu (%p) is NULL or inside the managed heap", (const void*)entries, i,
+                        (void*)entries[i]);
+        }
+    }
+    if (g_ntables == g_capTables) {
+        g_capTables = g_capTables ? g_capTables * 2 : 16;
+        g_tables = (CjwRootTable*)XRealloc(g_tables, g_capTables * sizeof(CjwRootTable));
+    }
+    g_tables[g_ntables].entries = entries;
+    g_tables[g_ntables].count = count;
+    g_ntables++;
 }
 
 void cjw_add_root(void** slot)
@@ -621,6 +643,12 @@ static void MarkRoots(void)
             MarkRef(g_static[r].slots[i], "static root slot", &g_static[r].slots[i]);
         }
     }
+    for (size_t t = 0; t < g_ntables; ++t) {
+        for (size_t i = 0; i < g_tables[t].count; ++i) {
+            void** slot = g_tables[t].entries[i];
+            MarkRef(*slot, "static root table slot", slot);
+        }
+    }
     for (size_t r = 0; r < g_ninternal; ++r) { MarkRef(*g_internal[r], "internal root slot", g_internal[r]); }
 }
 
@@ -767,9 +795,9 @@ static void VerifyAtExit(void)
     cjw_gc_verify_heap(&v);
     fprintf(stderr,
             "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
-            "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_ranges=%zu\n",
+            "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_ranges=%zu static_tables=%zu\n",
             v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs, v.unmarkedHeapWords,
-            g_ninternal, g_nstatic);
+            g_ninternal, g_nstatic, g_ntables);
 }
 
 // Diagnostic redzones (CJ_WASM_HEAP_REDZONE=1): every cjw_alloc request gets 16 extra bytes and the
