@@ -1,4 +1,5 @@
 // Cangjie runtime entry points for wasm32-wasi (M0 subset). See CjWasmRuntime.h.
+#define _POSIX_C_SOURCE 200809L // clock_gettime under -std=c11
 #include "CjWasmRuntime.h"
 #include <stdio.h>
 #include <stdlib.h>
