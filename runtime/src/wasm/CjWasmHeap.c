@@ -534,7 +534,14 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
         return;
     }
     if (cjw_kind_is_struct(ck)) {
-        if ((cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
+        if ((cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) {
+            // Verifier: a flagless struct/tuple/enum component claims to hold no references; probe that claim.
+            uint32_t w = cjw_ti_size(comp);
+            if (g_verify && w != 0 && (uint64_t)len <= room / w) {
+                for (int64_t i = 0; i < len; ++i) { ProbeUnmarked(NULL, content + (size_t)i * w, w); }
+            }
+            return;
+        }
         const CjwGCTib* gctib = EnsureGCTib(comp, 0);
         if (gctib == NULL) {
             Untraceable("tracing a struct array whose component TypeInfo has references but no GC tib", ti);

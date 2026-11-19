@@ -121,7 +121,8 @@ typedef struct {
     size_t untraceable;   // objects with references but no GC tib
     // Completeness probe: payload words the metadata does NOT mark as references
     // whose value is nevertheless the start of a live object (class payloads and
-    // struct-array elements; primitive arrays are not probed). A missing GC tib
+    // struct/tuple/enum array elements with or without the has-ref flag; arrays of
+    // builtin primitives and boxed VArrays are not probed). A missing GC tib
     // bit shows up here; an integer that equals an object address is a false hit.
     size_t unmarkedHeapWords;
 } CjwHeapVerifyStats;

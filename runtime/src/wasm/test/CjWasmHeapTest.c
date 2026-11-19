@@ -36,7 +36,7 @@ static TestTib kStructTib = {1, {0x01}};    // struct { ref @0; u32 @4 }
 static TestTib kBeyondTib = {1, {0x20}};    // slot 5: beyond an 8-byte payload
 static TestTI tiLeaf, tiNode, tiRefArr, tiStruct, tiStructArr, tiU32, tiU32Arr, tiNoTib, tiBeyond;
 // Runtime-instantiated TypeInfos (no GC tib; offsets/fields/sourceGeneric like CjWasmRuntime.c CjwTI).
-static TestTI tiRtStruct, tiRtClass, tiVArr, tiRtVArrClass, tiRtStructArr;
+static TestTI tiRtStruct, tiRtClass, tiVArr, tiRtVArrClass, tiRtStructArr, tiPlainStruct, tiPlainStructArr;
 static uint32_t kRtStructOffs[2] = {0, 4};
 static const void* kRtStructFields[2];
 static uint32_t kRtClassOffs[3] = {0, 4, 8};
@@ -72,6 +72,8 @@ static void InitTypes(void)
     // RawArray<S> instantiated at run time: its own size field is the pointer size (TypeInfoManager), the
     // element width comes from the component (MArray::GetElementSize, CjWasmRuntime.c ArrayElemBytes).
     TiInit(&tiRtStructArr, CJW_KIND_RAWARRAY, 0, 4, NULL, &tiStruct);
+    TiInit(&tiPlainStruct, CJW_KIND_STRUCT, 0, 8, NULL, NULL);            // struct { u32; u32 } without references
+    TiInit(&tiPlainStructArr, CJW_KIND_RAWARRAY, 0, 4, NULL, &tiPlainStruct);
     TiInit(&tiVArr, CJW_KIND_VARRAY, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, &tiLeaf);
     TiInit(&tiRtVArrClass, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, NULL);
     kRtVArrFields[0] = &tiVArr;
@@ -503,6 +505,11 @@ static void TestVerifyHeap(void)
     cjw_gc_verify_heap(&v);
     CHECK(v.objects == 6 && v.heapRefs == 4 && v.nonHeapRefs == 1 && v.untraceable == 1);
     CHECK(v.unmarkedHeapWords == 1);                                   // the completeness probe sees it
+    // a flagless struct array whose element nevertheless holds an object start (wrong has-ref classification)
+    void* parr = NewArr(&tiPlainStructArr, 2, 8); f->slots[5] = parr;
+    *(uint32_t*)ArrSlot(parr, 3) = (uint32_t)(uintptr_t)b;
+    cjw_gc_verify_heap(&v);
+    CHECK(v.unmarkedHeapWords == 2 && v.untraceable == 1);        // the NoTib object is unrooted but not yet swept
     CHECK(Stats().collections > 0 && Alive(n) && Alive(b) && Alive(c));   // verification frees nothing
     f->slots[5] = NULL;
     cjw_root_frame_pop(f);
