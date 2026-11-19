@@ -222,7 +222,14 @@ static uint32_t TypeSize(const CjwTI* ti)
         }
         return AlignUp(total, ti->align);
     }
-    if (k == K_VARRAY || k >= K_MAX) {
+    if (k == K_VARRAY) { // fieldsNum elements of the component TypeInfo (union with super)
+        const CjwTI* c = ti->super;
+        if (c == NULL) { cjw_unsupported("VArray TypeInfo without a component", CJW_RC_TYPEQUERY); }
+        uint32_t a = c->align, total = 0, csize = TypeSize(c);
+        for (uint32_t i = 0; i < ti->fieldsNum; ++i) { total = AlignUp(total, a) + csize; }
+        return AlignUp(total, a);
+    }
+    if (k >= K_MAX) {
         fprintf(stderr, "cangjie wasm32 runtime: TypeInfo %s has kind %d\n", ti->name ? ti->name : "?", (int)k);
         cjw_unsupported("size of a VArray/unknown TypeInfo kind", CJW_RC_TYPEQUERY);
     }
