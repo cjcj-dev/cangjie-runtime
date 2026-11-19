@@ -393,10 +393,11 @@ uint8_t CJ_MCC_IsTupleTypeOf(const void* obj, const void* typeInfo, const void* 
 // ---------------------------------------------------------------------------
 // Threads and monitors: one wasm instance runs one Cangjie thread. Locks can never
 // be contended; waiting would block forever and is reported instead.
-uint8_t CJ_MCC_MutexInit(void* mutex) { (void)mutex; return 1; }
+// Sync.cpp MCC_MutexInit / MCC_WaitQueueForMonitorInit: int status, 0 = success.
+int32_t CJ_MCC_MutexInit(void* mutex) { (void)mutex; return 0; }
 void CJ_MCC_MutexLock(void* mutex) { (void)mutex; }
 void CJ_MCC_MutexUnlock(void* mutex) { (void)mutex; }
-uint8_t CJ_MCC_WaitQueueForMonitorInit(void* monitor) { (void)monitor; return 1; }
+int32_t CJ_MCC_WaitQueueForMonitorInit(void* monitor) { (void)monitor; return 0; }
 // Nobody else can be waiting, so notification has no one to wake.
 void CJ_MCC_MonitorNotify(void* monitor) { (void)monitor; }
 void CJ_MCC_MonitorNotifyAll(void* monitor) { (void)monitor; }
