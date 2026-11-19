@@ -143,6 +143,29 @@ void CJ_MCC_ArrayCopyGeneric(void* dstObj, void* dstField, size_t dstSize, void*
     (void)dstObj; (void)srcObj;
     memmove(dstField, srcField, srcSize < dstSize ? srcSize : dstSize);
 }
+// Unsplit struct barriers on 32-bit targets (CJBarrierLowering: dst, size, src, size, gctib) and
+// array copies (dstObj, dstField, dstSize, srcObj, srcField, srcSize): plain bounded copies.
+void CJ_MCC_ReadStaticStruct(void* dst, size_t dstSize, const void* src, size_t srcSize, const void* gctib)
+{
+    (void)gctib;
+    memmove(dst, src, srcSize < dstSize ? srcSize : dstSize);
+}
+void CJ_MCC_WriteStaticStruct(void* dst, size_t dstSize, const void* src, size_t srcSize, const void* gctib)
+{
+    (void)gctib;
+    memmove(dst, src, srcSize < dstSize ? srcSize : dstSize);
+}
+void CJ_MCC_ArrayCopyRef(void* dstObj, void* dstField, size_t dstSize, void* srcObj, const void* srcField, size_t srcSize)
+{
+    (void)dstObj; (void)srcObj;
+    memmove(dstField, srcField, srcSize < dstSize ? srcSize : dstSize);
+}
+void CJ_MCC_ArrayCopyStruct(void* dstObj, void* dstField, size_t dstSize, void* srcObj, const void* srcField, size_t srcSize)
+{
+    (void)dstObj; (void)srcObj;
+    memmove(dstField, srcField, srcSize < dstSize ? srcSize : dstSize);
+}
+
 // Raw data of primitive arrays is addressed in place (no copy, nothing to unpin).
 void* CJ_MCC_AcquireRawData(void* array, uint8_t* isCopy)
 {
