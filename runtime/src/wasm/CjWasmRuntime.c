@@ -394,25 +394,122 @@ uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
     cjw_unsupported("interface, function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
 }
 
-void* CJ_MCC_GetMethodOuterTI(const void* ti, const void* itf, uint64_t index)
+// ---------------------------------------------------------------------------
+// Interface dispatch, M1 subset: a direct C port of the non-generic path of TypeInfo::GetMTable /
+// FindExtensionData / ResolveInnerExtensionDefs / TryUpdateExtensionData (ObjectModel/MClass.cpp,
+// ExtensionData.h). Each TypeInfo's vExtensionDataStart lists its class-chain ExtensionDatas
+// ([0, validInheritNum)) followed by the ExtensionDatas whose target is the type itself; the super
+// chain is searched next. Generic targets, interfaceFn-computed interfaces, where-conditions and
+// incremental (default-method) function tables are explicit traps until they are ported.
+typedef struct __attribute__((packed, aligned(4))) {
+    uint32_t argNum; uint8_t isInterfaceTypeInfo; uint8_t flag; uint16_t funcTableSize;
+    const void* target; const void* interface; void* whereCondFn; void** funcTable;
+} CjwExtData;
+_Static_assert(sizeof(CjwExtData) == 8 + 4 * sizeof(void*), "ExtensionData layout (ATTR_PACKED(4))");
+#define CJW_ED_FT_UPDATED 0x06u // ExtensionData flag bits 1&2 = 11: funcTable updated
+
+// ExtensionData type arguments of `resolveTi` (ResolveExtensionData): the component for RawArray /
+// CPointer, otherwise the TypeInfo's own type arguments.
+static uint32_t EdTypeArgs(const CjwTI* resolveTi, CjwTI*** args)
 {
-    (void)ti; (void)itf; (void)index;
-    cjw_unsupported("interface method dispatch lookup (CJ_MCC_GetMethodOuterTI)", CJW_RC_TYPEQUERY);
-}
-void CJ_MCC_UpdateVMT(void* ti, void* itf, void* extensionData)
-{
-    (void)ti; (void)itf; (void)extensionData;
-    cjw_unsupported("runtime virtual-method-table update (CJ_MCC_UpdateVMT)", CJW_RC_TYPEQUERY);
+    if (resolveTi->kind == K_RAWARRAY || resolveTi->kind == K_CPOINTER) {
+        *args = (CjwTI**)&((CjwTI*)resolveTi)->super;
+        return 1;
+    }
+    *args = resolveTi->typeArgs;
+    return resolveTi->typeArgNum;
 }
 
-// Interface dispatch (CompilerCalls.cpp CJ_MCC_GetMTable -> TypeInfo::GetMTable) resolves the
-// interface function table from the MTableDesc / ExtensionData tables that the native loader
-// registers per package. wasm32 registers none yet (M1), so the lookup is an explicit trap.
+// ResolveExtensionData(needCheckStop): does `ed` (past the class-chain prefix) still belong to `cur`?
+static int EdTargetsType(const CjwExtData* ed, const CjwTI* cur)
+{
+    if (ed->argNum == 0) { return ed->target == (const void*)cur || SameType((const CjwTI*)ed->target, cur); }
+    return cur->sourceGeneric != NULL && ed->target == cur->sourceGeneric;
+}
+
+static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
+{
+    for (const CjwTI* cur = ti; cur != NULL; cur = IsClassLike(cur->kind) ? cur->super : NULL) {
+        CjwExtData** v = (CjwExtData**)cur->extensionDefPtr;
+        if (v == NULL) { continue; }
+        CjwTI** args = NULL;
+        uint32_t argc = EdTypeArgs(cur, &args);
+        for (uint32_t i = 0;; ++i) {
+            CjwExtData* ed = v[i];
+            if (ed == NULL) { break; }
+            if (i >= cur->inheritedClassNum && !EdTargetsType(ed, cur)) { break; }
+            if (ed->whereCondFn != NULL &&
+                (((uintptr_t(*)(int32_t, CjwTI**))ed->whereCondFn)((int32_t)argc, args) & 0x1u) == 0) {
+                continue;
+            }
+            const CjwTI* edItf = ed->isInterfaceTypeInfo ? (const CjwTI*)ed->interface
+                                                         : ((CjwGenericFn)ed->interface)((int32_t)argc, args);
+            if (edItf == itf || SameType(edItf, itf)) { return ed; }
+        }
+        if (cur->kind == K_RAWARRAY || cur->kind == K_CPOINTER) { break; }
+    }
+    return NULL;
+}
+
+static void TryUpdateExtData(const CjwTI* ti, const CjwTI* itf, CjwExtData* ed)
+{
+    if ((ed->flag & CJW_ED_FT_UPDATED) == CJW_ED_FT_UPDATED || ti == itf) { return; }
+    CjwExtData** iv = (CjwExtData**)itf->extensionDefPtr;
+    if (iv == NULL) { cjw_unsupported("interface TypeInfo without extension data", CJW_RC_TYPEQUERY); }
+    const CjwExtData* itfEd = itf->kind == K_INTERFACE ? iv[0] : iv[itf->inheritedClassNum - 1];
+    if (itfEd->funcTableSize == ed->funcTableSize) {
+        ed->flag |= CJW_ED_FT_UPDATED;
+        return;
+    }
+    cjw_unsupported("incremental interface function table (default methods from a super type)", CJW_RC_TYPEQUERY);
+}
+
+void CJ_MCC_UpdateVMT(void* ti, void* itf, void* extensionData)
+{
+    TryUpdateExtData((const CjwTI*)ti, (const CjwTI*)itf, (CjwExtData*)extensionData);
+}
+
 void* CJ_MCC_GetMTable(const void* ti, const void* itf)
 {
-    (void)ti; (void)itf;
-    cjw_unsupported("interface method table lookup (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY);
+    const CjwTI* t = (const CjwTI*)ti;
+    if (t->kind == K_TEMP_ENUM && t->super != NULL) { t = t->super; }
+    CjwExtData* ed = FindExtData(t, (const CjwTI*)itf);
+    if (ed == NULL) { cjw_unsupported("interface method table lookup: no extension data (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY); }
+    TryUpdateExtData(t, (const CjwTI*)itf, ed);
+    return ed->funcTable;
 }
+
+// TypeInfo::GetMethodOuterTI, non-generic path: the TypeInfo that defines method `index` of `itf`
+// for `ti`. With the codegen fast path (flag bit 0) the concrete outer TypeInfo follows the function
+// table (OuterTiUnion array); otherwise walk the supers for the same function pointer, else `ti`.
+void* CJ_MCC_GetMethodOuterTI(const void* ti, const void* itf, uint64_t index)
+{
+    const CjwTI* t = (const CjwTI*)ti;
+    if (ti == itf) { return (void*)ti; }
+    if (t->kind == K_TEMP_ENUM && t->super != NULL) { return CJ_MCC_GetMethodOuterTI(t->super, itf, index); }
+    CjwExtData* ed = FindExtData(t, (const CjwTI*)itf);
+    if (ed == NULL) { cjw_unsupported("interface method outer TypeInfo: no extension data (CJ_MCC_GetMethodOuterTI)", CJW_RC_TYPEQUERY); }
+    TryUpdateExtData(t, (const CjwTI*)itf, ed);
+    if (index >= ed->funcTableSize) { cjw_unsupported("interface method index out of the function table", CJW_RC_TYPEQUERY); }
+    if (ed->flag & 0x1u) { // ExtensionData::GetOuterTi
+        void* const* outer = (void* const*)(ed->funcTable + ed->funcTableSize);
+        if (t->typeArgNum == 0) {
+            if (outer[index] != NULL) { return outer[index]; }
+        } else if (outer[index] != NULL) {
+            if (!EdTargetsType(ed, t)) { cjw_unsupported("generic outer TypeInfo via a super type (CJ_MCC_GetMethodOuterTI)", CJW_RC_TYPEQUERY); }
+            return ((CjwTI*(*)(const CjwTI*))outer[index])(t);
+        }
+    }
+    void* fn = ed->funcTable[index];
+    for (const CjwTI* s = IsClassLike(t->kind) ? t->super : NULL; s != NULL; s = IsClassLike(s->kind) ? s->super : NULL) {
+        CjwExtData* sed = FindExtData(s, (const CjwTI*)itf);
+        if (sed != NULL && index < sed->funcTableSize && sed->funcTable[index] == fn) {
+            return CJ_MCC_GetMethodOuterTI(s, itf, index);
+        }
+    }
+    return (void*)ti;
+}
+
 
 void* CJ_MCC_GetMTableAndOuterTI(const void* ti, const void* itf, uint64_t index, void** outerTI)
 {
