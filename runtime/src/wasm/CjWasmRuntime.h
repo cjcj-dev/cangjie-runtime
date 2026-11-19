@@ -6,12 +6,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Object model shared with cjcj codegen (packages/codegen/src/RuntimeLayout.cj,
-// 32-bit pointer path): [TypeInfo* | 4 bytes][payload...];
-// arrays: [TypeInfo* | 4 bytes][int64 length][elements...].
-#define CJW_OBJECT_HEADER_SIZE 8u
-#define CJW_ARRAY_LENGTH_OFFSET 8u
-#define CJW_ARRAY_HEADER_SIZE 16u
+// Object model shared with cjcj codegen for 32-bit pointers (IRBuilder.GetPayloadFromObject:
+// one pointer slot of header; %ArrayLayout = { %ArrayBase{i64 length}, [0 x T] } follows it):
+//   objects: [TypeInfo* (4)][payload...]
+//   arrays:  [TypeInfo* (4)][int64 length @4][elements @12...]
+// The native runtime's TYPEINFO_PTR_SIZE is likewise sizeof(TypeInfo*).
+#define CJW_OBJECT_HEADER_SIZE 4u
+#define CJW_ARRAY_LENGTH_OFFSET 4u
+#define CJW_ARRAY_HEADER_SIZE 12u
 
 // ---- arena / collector boundary ------------------------------------------
 // Every managed allocation goes through cjw_alloc. M0: bump arena on top of
