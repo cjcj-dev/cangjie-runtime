@@ -430,17 +430,34 @@ static int EdTargetsType(const CjwExtData* ed, const CjwTI* cur)
 // TypeInfo::GetValidInheritNum: bit 15 of validInheritNum is a flag, the count is the low 15 bits.
 static uint32_t ValidInheritNum(const CjwTI* ti) { return ti->inheritedClassNum & 0x7FFFu; }
 
+// A TypeInfo's ExtensionData list and class-chain count. Compiler-emitted static instances of generic
+// types (linkonce_odr `Foo<Int64>.ti`) carry no list of their own; theirs is the TypeTemplate's, as the
+// native outer traversal resolves it through sourceGeneric. sourceGeneric is only meaningful for
+// generic instances (it shares storage with the finalizer of non-generic classes).
+static CjwExtData** ExtDataList(const CjwTI* ti, uint32_t* classChain)
+{
+    if (ti->extensionDefPtr != NULL) { *classChain = ValidInheritNum(ti); return (CjwExtData**)ti->extensionDefPtr; }
+    if (ti->typeArgNum != 0 && ti->sourceGeneric != NULL) {
+        const CjwTT* tt = (const CjwTT*)ti->sourceGeneric;
+        *classChain = tt->inheritedClassNum & 0x7FFFu;
+        return (CjwExtData**)tt->extensionDefPtr;
+    }
+    *classChain = 0;
+    return NULL;
+}
+
 static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
 {
     for (const CjwTI* cur = ti; cur != NULL; cur = IsClassLike(cur->kind) ? cur->super : NULL) {
-        CjwExtData** v = (CjwExtData**)cur->extensionDefPtr;
+        uint32_t classChain = 0;
+        CjwExtData** v = ExtDataList(cur, &classChain);
         if (v == NULL) { continue; }
         CjwTI** args = NULL;
         uint32_t argc = EdTypeArgs(cur, &args);
         for (uint32_t i = 0;; ++i) {
             CjwExtData* ed = v[i];
             if (ed == NULL) { break; }
-            if (i >= ValidInheritNum(cur) && !EdTargetsType(ed, cur)) { break; }
+            if (i >= classChain && !EdTargetsType(ed, cur)) { break; }
             if (ed->whereCondFn != NULL &&
                 (((uintptr_t(*)(int32_t, CjwTI**))ed->whereCondFn)((int32_t)argc, args) & 0x1u) == 0) {
                 continue;
@@ -457,9 +474,10 @@ static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
 static void TryUpdateExtData(const CjwTI* ti, const CjwTI* itf, CjwExtData* ed)
 {
     if ((ed->flag & CJW_ED_FT_UPDATED) == CJW_ED_FT_UPDATED || ti == itf) { return; }
-    CjwExtData** iv = (CjwExtData**)itf->extensionDefPtr;
+    uint32_t itfChain = 0;
+    CjwExtData** iv = ExtDataList(itf, &itfChain);
     if (iv == NULL) { cjw_unsupported("interface TypeInfo without extension data", CJW_RC_TYPEQUERY); }
-    const CjwExtData* itfEd = itf->kind == K_INTERFACE ? iv[0] : iv[ValidInheritNum(itf) - 1];
+    const CjwExtData* itfEd = itf->kind == K_INTERFACE ? iv[0] : iv[itfChain - 1];
     if (itfEd->funcTableSize == ed->funcTableSize) {
         ed->flag |= CJW_ED_FT_UPDATED;
         return;
