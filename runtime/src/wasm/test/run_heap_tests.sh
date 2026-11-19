@@ -4,7 +4,10 @@
 # Exit status = number of failed expectations (0 = all met). Prints HEAP_TEST_FAILS=<n>.
 set -u
 CC=$1; LD=$2; SR=$3; RUN=$4; OUT=$5
-NODE=${NODE:-node}   # node v20.19.0 segfaults at exit after large linear memories; prefer v22
+NODE=${NODE:-node}
+# V8 crashes in a GC triggered from the WASI fd_write fast-API callback once the linear memory is large
+# (InnerPointerToCodeCache::GetCacheEntry, node v20.19.0 and v22.23.3); disable fast API calls.
+NODE_FLAGS=${NODE_FLAGS:---no-turbo-fast-api-calls}
 HERE=$(cd "$(dirname "$0")" && pwd); SRC=$(dirname "$HERE")
 HEAPC=${6:-$SRC/CjWasmHeap.c}
 mkdir -p "$OUT"; cd "$OUT" || exit 99
@@ -15,14 +18,14 @@ FAILS=0
 "$LD" -o heap_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" heap.o heap_test.o -L"$SR/lib/wasm32-wasi" -lc; c3=$?
 echo "build cc_heap=$c1 cc_test=$c2 ld=$c3"
 if [ $c1 -ne 0 ] || [ $c2 -ne 0 ] || [ $c3 -ne 0 ]; then echo "HEAP_TEST_FAILS=99"; exit 99; fi
-sha256sum heap_test.wasm; echo "node=$("$NODE" --version)"
-"$NODE" "$RUN" heap_test.wasm all > all.out 2> all.err; r=$?
+sha256sum heap_test.wasm; echo "node=$("$NODE" --version) flags=$NODE_FLAGS"
+"$NODE" $NODE_FLAGS "$RUN" heap_test.wasm all > all.out 2> all.err; r=$?
 cat all.out
 grep -q '^HEAP_UNIT_FAILS=0$' all.out && [ $r -eq 0 ] || FAILS=$((FAILS+1))
 echo "mode all rc=$r"
 # mode expected_rc expected_stderr_fragment
 while read -r mode want frag; do
-  "$NODE" "$RUN" heap_test.wasm "$mode" > "$mode.out" 2> "$mode.err"; r=$?
+  "$NODE" $NODE_FLAGS "$RUN" heap_test.wasm "$mode" > "$mode.out" 2> "$mode.err"; r=$?
   msg=$(grep -v -i 'experimentalwarning\|trace-warnings' "$mode.err" | head -c 220 | tr '\n' '|')
   v=FAIL; if [ "$r" = "$want" ] && { [ "$frag" = - ] || grep -q -- "$frag" "$mode.err"; }; then v=PASS; fi
   [ $v = PASS ] || FAILS=$((FAILS+1))

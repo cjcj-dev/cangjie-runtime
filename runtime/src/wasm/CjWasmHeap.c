@@ -480,6 +480,20 @@ static void ProbeUnmarked(const CjwGCTib* gctib, const uint8_t* base, size_t lim
     }
 }
 
+// Verifier level 3: print each distinct traced TypeInfo with its GC tib bytes once.
+static const uint8_t* g_dumped[256];
+static uint32_t g_ndumped = 0;
+static void DumpTib(const uint8_t* ti, const CjwGCTib* gctib)
+{
+    for (uint32_t i = 0; i < g_ndumped; ++i) { if (g_dumped[i] == ti) { return; } }
+    if (g_ndumped < 256u) { g_dumped[g_ndumped++] = ti; }
+    const char* name = *(const char* const*)ti;
+    fprintf(stderr, "cangjie wasm32 runtime: gc verify: tib %s kind=%d size=%u nBytes=%u bits=", name ? name : "?",
+            cjw_ti_kind(ti), cjw_ti_size(ti), gctib->nBytes);
+    for (uint32_t i = 0; i < gctib->nBytes && i < 16u; ++i) { fprintf(stderr, "%02x", gctib->bits[i]); }
+    fputc('\n', stderr);
+}
+
 // Visits the reference slots that `gctib` marks in [base, base+limit).
 static void VisitGCTib(const CjwGCTib* gctib, uint8_t* base, size_t limit, const void* owner)
 {
@@ -581,7 +595,10 @@ static void TraceObject(void* ref)
         return;
     }
     VisitGCTib(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE, ref);
-    if (g_verify) { ProbeUnmarked(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE); }
+    if (g_verify) {
+        ProbeUnmarked(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE);
+        if (g_verifyVerbose >= 2) { DumpTib(ti, gctib); }
+    }
 }
 
 static void MarkRoots(void)
@@ -794,8 +811,8 @@ void* cjw_alloc(size_t size, size_t align)
             atexit(RedzonesAtExit);
         }
         const char* v = getenv("CJ_WASM_GC_VERIFY");
-        if (v != NULL && (v[0] == '1' || v[0] == '2')) {
-            g_verifyVerbose = v[0] == '2';
+        if (v != NULL && v[0] >= '1' && v[0] <= '3') {
+            g_verifyVerbose = v[0] - '1';   // 1: counts, 2: +names of derived/untraceable, 3: +every tib
             atexit(VerifyAtExit);
         }
     }
