@@ -1,6 +1,7 @@
 #ifndef MRT_Z_RELOCATION_SET_HPP
 #define MRT_Z_RELOCATION_SET_HPP
 
+#include <vector>
 #include <cstddef>
 #include <mutex>
 
@@ -15,6 +16,8 @@ class ZPage;
 class RegionManager;
 class ZRelocationSetSelector;
 class ZWorkers;
+
+class ZForwardingTable;
 
 class ZRelocationSet {
     template <bool>
@@ -40,6 +43,10 @@ public:
 
     void install(const ZRelocationSetSelector* selector);
     void reset(RegionManager* page_allocator);
+    // Raw-data holders (ZJNICritical::finish_selection), old generation, before
+    // relocate start: drops the forwardings of `pages` (sorted), or of every page
+    // if `all`. An old forwarding has no promotion bookkeeping on its page.
+    size_t remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table);
     ZGeneration* generation() const { return _generation; }
     ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }
     ZArray<ZPage*>* relocate_promoted_pages() { return &_relocate_promoted_pages; }

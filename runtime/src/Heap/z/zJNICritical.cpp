@@ -3,190 +3,317 @@
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
-
 #include "Heap/z/zJNICritical.hpp"
 
-#include <chrono>
-#include "Heap/z/zStat.hpp"
-#include "Heap/z/zLock.inline.hpp"
+#include <algorithm>
+#include <cstdint>
+#include <utility>
+#include <vector>
 #include "Base/Log.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zLock.inline.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/ThreadSMR.h"
 
 namespace MapleRuntime {
-static const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
+namespace {
+const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
 
-std::atomic<int64_t> ZJNICritical::count{ 0 };
-ZConditionLock* ZJNICritical::lock = nullptr;
-int64_t ZJNICritical::boundedBlockers = 0;
-std::atomic<bool> ZJNICritical::stuck{ false };
+// Pages selected for relocation in one cycle of one generation, sorted. Immutable
+// once published.
+struct ZRawDataSelection {
+    uint64_t epoch;
+    std::vector<ZPage*> pages;
+    // Old generation: a final scan precedes the relocate-start pause.
+    bool lateScan = false;
+    std::atomic<bool> finalScan{ false };
+    bool contains(const ZPage* page) const { return std::binary_search(pages.begin(), pages.end(), page); }
+};
+
+constexpr size_t kGenerations = 2;
+size_t GenerationIndex(ZGenerationId id) { return id == ZGenerationId::young ? 0 : 1; }
+
+std::atomic<ZRawDataSelection*> openSelection[kGenerations]{};
+// A closed selection is freed when the next selection of the same generation
+// opens. An acquirer dereferences a selection only in managed state, between two
+// safepoint polls, and at least the next cycle's mark-start pause lies between a
+// close and the next open of the same generation, so no reader can still use it.
+ZRawDataSelection* retiredSelection[kGenerations]{};
+std::atomic<uint64_t> openedEpoch[kGenerations]{};
+std::atomic<uint64_t> closedEpoch[kGenerations]{};
+std::atomic<uint64_t> retreatCount{ 0 };
+std::atomic<uint64_t> deselectedCount{ 0 };
+std::atomic<uint64_t> lateDroppedCount{ 0 };
+// Acquirers that met an open selection wait here (in saferegion) for it to close.
+ZConditionLock* lock = nullptr;
+
+ZPage* PageOf(uintptr_t array) { return array == 0 ? nullptr : Heap::page(static_cast<MAddress>(array)); }
+
+// An earlier hold of the same mutator on `page` that is still in place keeps the
+// page out of every selection that opened after that hold was published (the
+// collector's scan sees its slot), and that hold itself did not conflict with any
+// selection open at its time. So the page cannot be relocated while it is held.
+bool CoveredByEarlierHold(const Mutator& mutator, int self, const ZPage* page)
+{
+    for (int i = 0; i < Mutator::kRawDataSlots; ++i) {
+        if (i == self) {
+            continue;
+        }
+        const uintptr_t held = mutator.rawDataSlots[i].load(std::memory_order_relaxed);
+        if (held != 0 && PageOf(held) == page) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Selected pages of `selection` that hold an array of some mutator (sorted,
+// unique); `overflow` if some mutator holds more arrays than it has slots for.
+void ScanHolds(const ZRawDataSelection& selection, std::vector<ZPage*>& held, bool& overflow)
+{
+    overflow = false;
+    // HotSpot threadSMR: a stable list of every registered mutator, usable from
+    // the collector thread without registration locks (as zStackWatermark.cpp).
+    ThreadsListHandle threads;
+    for (size_t t = 0; t < threads.length(); ++t) {
+        const Mutator& mutator = *threads.thread_at(t);
+        if (mutator.rawDataOverflow.load(std::memory_order_seq_cst) != 0) {
+            overflow = true;
+        }
+        for (int i = 0; i < Mutator::kRawDataSlots; ++i) {
+            ZPage* const page = PageOf(mutator.rawDataSlots[i].load(std::memory_order_seq_cst));
+            if (page != nullptr && selection.contains(page)) {
+                held.push_back(page);
+            }
+        }
+    }
+    std::sort(held.begin(), held.end());
+    held.erase(std::unique(held.begin(), held.end()), held.end());
+}
+
+// Publishes `pages` as the open selection of generation `g`, then scans every
+// mutator's holds. Returns the selected pages that hold an array (sorted, unique)
+// and whether some mutator holds more arrays than it has slots for.
+ZRawDataSelection* Publish(size_t g, std::vector<ZPage*>&& pages, std::vector<ZPage*>& held, bool& overflow)
+{
+    CHECK_DETAIL(openSelection[g].load(std::memory_order_relaxed) == nullptr, "Raw-data selection already open");
+    delete retiredSelection[g];
+    retiredSelection[g] = nullptr;
+    const uint64_t epoch = openedEpoch[g].fetch_add(1, std::memory_order_relaxed) + 1;
+    overflow = false;
+    if (pages.empty()) {
+        return nullptr;
+    }
+    std::sort(pages.begin(), pages.end());
+    auto* selection = new ZRawDataSelection{ epoch, std::move(pages) };
+    selection->lateScan = g == GenerationIndex(ZGenerationId::old);
+    openSelection[g].store(selection, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    ScanHolds(*selection, held, overflow);
+    return selection;
+}
+} // namespace
 
 void ZJNICritical::initialize()
 {
-    CHECK_DETAIL(count.load(std::memory_order_relaxed) == 0, "Invalid initial count");
-    lock = new ZConditionLock();
-}
-
-// A raw-data holder may legally block in a foreign call until another mutator
-// acts (std.core acquireArrayRawData only forbids the holder itself from
-// allocating). An unbounded block (JDK zJNICritical.cpp block()) would then wait
-// forever. The collector instead waits a bounded time; if holders remain it
-// restores the count and proceeds without excluding them, and its caller must
-// then not move any object for that operation (ZRawDataRelocationGate). While
-// such a holder stays inside (`stuck`), later calls report the timeout at once.
-// A drained block may be shared by more than one collector party; the last
-// unblock_bounded() ends it.
-bool ZJNICritical::block_bounded(uint64_t millis)
-{
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(millis);
-    auto remaining = [&deadline]() -> uint64_t {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= deadline) {
-            return 0;
-        }
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-        return left > 0 ? static_cast<uint64_t>(left) : 1;
-    };
-    ZLocker<ZConditionLock> guard(lock);
-    for (;;) {
-        const int64_t n = count.load(std::memory_order_acquire);
-        if (n > 0 && stuck.load(std::memory_order_acquire)) {
-            // A holder that outlived an earlier bound is still inside: report the
-            // timeout now rather than keep every other acquirer out for a full bound.
-            return false;
-        }
-        if (n < 0) {
-            if (n == -1 && boundedBlockers > 0) {
-                // Another collector party owns a drained block: no holder can be
-                // inside and none can enter until the last party unblocks.
-                boundedBlockers++;
-                return true;
-            }
-            // An exclusive block(), or another party still draining.
-            const uint64_t left = remaining();
-            if (left == 0) {
-                return false;
-            }
-            (void)lock->wait(left);
-            continue;
-        }
-        int64_t expected = n;
-        if (!count.compare_exchange_strong(expected, -(n + 1), std::memory_order_acq_rel)) {
-            continue;
-        }
-        boundedBlockers = 1;
-        while (count.load(std::memory_order_acquire) != -1) {
-            const uint64_t left = remaining();
-            if (left == 0) {
-                // Holders are still inside (e.g. blocked in a foreign call).
-                // Restore -(m + 1) -> m; exit_inner may race, hence the CAS loop.
-                // Mark stuck before the restore so that the exit which later drains
-                // the count to 0 is the one that clears it.
-                stuck.store(true, std::memory_order_release);
-                for (;;) {
-                    int64_t c = count.load(std::memory_order_acquire);
-                    if (c >= 0) {
-                        break;
-                    }
-                    if (count.compare_exchange_strong(c, -(c + 1), std::memory_order_acq_rel)) {
-                        if (c == -1) {
-                            // The last holder left during the timeout path.
-                            stuck.store(false, std::memory_order_release);
-                        }
-                        break;
-                    }
-                }
-                boundedBlockers = 0;
-                lock->notify_all();
-                return false;
-            }
-            (void)lock->wait(left);
-        }
-        return true;
+    // A runtime may be initialized again in the same process (unit tests): no
+    // selection survives a finished runtime.
+    for (size_t g = 0; g < kGenerations; ++g) {
+        delete openSelection[g].exchange(nullptr, std::memory_order_relaxed);
+        delete retiredSelection[g];
+        retiredSelection[g] = nullptr;
+        closedEpoch[g].store(openedEpoch[g].load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    if (lock == nullptr) {
+        lock = new ZConditionLock();
     }
 }
 
-void ZJNICritical::unblock_bounded()
+bool ZJNICritical::enter(Mutator& mutator, uintptr_t array)
 {
-    ZLocker<ZConditionLock> guard(lock);
-    CHECK_DETAIL(boundedBlockers > 0, "Invalid bounded blockers");
-    CHECK_DETAIL(count.load(std::memory_order_acquire) == -1, "Invalid count");
-    if (--boundedBlockers == 0) {
-        count.store(0, std::memory_order_release);
-        lock->notify_all();
+    int slot = -1;
+    for (int i = 0; i < Mutator::kRawDataSlots; ++i) {
+        if (mutator.rawDataSlots[i].load(std::memory_order_relaxed) == 0) {
+            slot = i;
+            break;
+        }
     }
-}
-
-void ZJNICritical::enter_inner()
-{
-    for (;;) {
-        const int64_t n = count.load(std::memory_order_acquire);
-        if (n < 0) {
-            ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
-            // ZGC zJNICritical.cpp:108-116: publish a blockable thread state
-            // before taking the condition lock, so a concurrent handshake can
-            // complete while this mutator waits for JNI critical to unblock.
-            ScopedEnterSaferegion enterSaferegion(true);
-            ZLocker<ZConditionLock> guard(lock);
-            while (count.load(std::memory_order_acquire) < 0) {
-                lock->wait();
+    // seq_cst store, then seq_cst loads of the selections: pairs with the
+    // collector's publication store and its seq_cst scan (Publish/finish_selection).
+    if (slot >= 0) {
+        mutator.rawDataSlots[slot].store(array, std::memory_order_seq_cst);
+    } else {
+        mutator.rawDataOverflow.fetch_add(1, std::memory_order_seq_cst);
+    }
+    ZRawDataSelection* conflict = nullptr;
+    size_t generation = 0;
+    ZPage* page = nullptr;
+    for (size_t g = 0; g < kGenerations && conflict == nullptr; ++g) {
+        ZRawDataSelection* const selection = openSelection[g].load(std::memory_order_seq_cst);
+        if (selection == nullptr) {
+            continue;
+        }
+        if (page == nullptr) {
+            page = PageOf(array);
+            if (page == nullptr) {
+                break;
             }
-            continue;
         }
-        int64_t expected = n;
-        if (!count.compare_exchange_strong(expected, n + 1, std::memory_order_acq_rel)) {
-            continue;
-        }
-        return;
-    }
-}
-
-void ZJNICritical::enter()
-{
-    Mutator* thread = Mutator::GetMutator();
-    // ZGC zJNICritical.cpp:132-140: only the outermost region enters globally.
-    if (!thread->InCritical()) {
-        enter_inner();
-    }
-    thread->EnterCritical();
-}
-
-void ZJNICritical::exit_inner()
-{
-    for (;;) {
-        const int64_t n = count.load(std::memory_order_acquire);
-        CHECK_DETAIL(n != 0, "Invalid count");
-        if (n > 0) {
-            int64_t expected = n;
-            if (!count.compare_exchange_strong(expected, n - 1, std::memory_order_acq_rel)) {
+        if (selection->contains(page) && !CoveredByEarlierHold(mutator, slot, page)) {
+            if (selection->lateScan && !selection->finalScan.load(std::memory_order_seq_cst)) {
+                // The final scan before the pause sees this slot and drops the page.
                 continue;
             }
-            if (n == 1) {
-                stuck.store(false, std::memory_order_release);
-            }
-            return;
+            conflict = selection;
+            generation = g;
         }
-        int64_t expected = n;
-        if (!count.compare_exchange_strong(expected, n + 1, std::memory_order_acq_rel)) {
-            continue;
-        }
-        if (n == -2) {
-            stuck.store(false, std::memory_order_release);
-            ZLocker<ZConditionLock> guard(lock);
-            lock->notify_all();
-        }
-        return;
     }
+    if (conflict == nullptr) {
+        return true;
+    }
+    // The page may be relocated in this cycle: do not hold it now. Wait until the
+    // relocate-start pause of that cycle has passed; the reloaded array is then
+    // either in place or in a to-space page that this cycle no longer moves.
+    const uint64_t epoch = conflict->epoch;
+    if (slot >= 0) {
+        mutator.rawDataSlots[slot].store(0, std::memory_order_release);
+    } else {
+        mutator.rawDataOverflow.fetch_sub(1, std::memory_order_release);
+    }
+    retreatCount.fetch_add(1, std::memory_order_relaxed);
+    ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
+    ScopedEnterSaferegion enterSaferegion(true);
+    ZLocker<ZConditionLock> guard(lock);
+    while (closedEpoch[generation].load(std::memory_order_acquire) < epoch) {
+        lock->wait();
+    }
+    return false;
 }
 
-void ZJNICritical::exit()
+void ZJNICritical::exit(Mutator& mutator, uintptr_t array)
 {
-    Mutator* thread = Mutator::GetMutator();
-    // ZGC zJNICritical.cpp:177-184: release globally after the last nested exit.
-    thread->ExitCritical();
-    if (!thread->InCritical()) {
-        exit_inner();
+    for (int i = Mutator::kRawDataSlots - 1; i >= 0; --i) {
+        if (mutator.rawDataSlots[i].load(std::memory_order_relaxed) == array) {
+            mutator.rawDataSlots[i].store(0, std::memory_order_release);
+            return;
+        }
     }
+    if (mutator.rawDataOverflow.load(std::memory_order_relaxed) != 0) {
+        mutator.rawDataOverflow.fetch_sub(1, std::memory_order_release);
+        return;
+    }
+    // Protection is per page: dropping another hold of this mutator on the same
+    // page leaves that page exactly as protected as before.
+    const ZPage* const page = PageOf(array);
+    for (int i = Mutator::kRawDataSlots - 1; i >= 0; --i) {
+        const uintptr_t held = mutator.rawDataSlots[i].load(std::memory_order_relaxed);
+        if (held != 0 && PageOf(held) == page) {
+            mutator.rawDataSlots[i].store(0, std::memory_order_release);
+            return;
+        }
+    }
+    CHECK_DETAIL(false, "Raw data released without a matching acquire: %p", reinterpret_cast<void*>(array));
 }
+
+size_t ZJNICritical::open_selection(ZGenerationId id, ZRelocationSetSelector* selector)
+{
+    std::vector<ZPage*> pages;
+    for (const ZArray<ZPage*>* group : { selector->selected_small(), selector->selected_medium() }) {
+        ZArrayIterator<ZPage*> iter(group);
+        for (ZPage* page; iter.next(&page);) {
+            pages.push_back(page);
+        }
+    }
+    std::vector<ZPage*> held;
+    bool overflow = false;
+    if (Publish(GenerationIndex(id), std::move(pages), held, overflow) == nullptr) {
+        return 0;
+    }
+    const size_t deselected = selector->deselect(held, overflow);
+    deselectedCount.fetch_add(deselected, std::memory_order_relaxed);
+    return deselected;
+}
+
+size_t ZJNICritical::open_selection_for_test(ZGenerationId id, ZPage* const* pages, size_t n)
+{
+    if (openSelection[GenerationIndex(id)].load(std::memory_order_acquire) != nullptr) {
+        return SIZE_MAX;
+    }
+    std::vector<ZPage*> held;
+    bool overflow = false;
+    ZRawDataSelection* const selection = Publish(GenerationIndex(id), std::vector<ZPage*>(pages, pages + n), held, overflow);
+    if (selection == nullptr) {
+        return 0;
+    }
+    return overflow ? selection->pages.size() : held.size();
+}
+
+void ZJNICritical::finish_selection(ZGenerationId id, std::vector<ZPage*>& held, bool& all)
+{
+    held.clear();
+    all = false;
+    ZRawDataSelection* const selection = openSelection[GenerationIndex(id)].load(std::memory_order_acquire);
+    if (selection == nullptr) {
+        return;
+    }
+    selection->finalScan.store(true, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    ScanHolds(*selection, held, all);
+}
+
+void ZJNICritical::note_late_dropped(size_t n) { lateDroppedCount.fetch_add(n, std::memory_order_relaxed); }
+
+uint64_t ZJNICritical::late_dropped_pages() { return lateDroppedCount.load(std::memory_order_relaxed); }
+
+void ZJNICritical::close_selection(ZGenerationId id)
+{
+    const size_t g = GenerationIndex(id);
+    ZRawDataSelection* const selection = openSelection[g].exchange(nullptr, std::memory_order_seq_cst);
+    if (selection == nullptr) {
+        return;
+    }
+    delete retiredSelection[g];
+    retiredSelection[g] = selection;
+    ZLocker<ZConditionLock> guard(lock);
+    closedEpoch[g].store(selection->epoch, std::memory_order_release);
+    lock->notify_all();
+}
+
+int64_t ZJNICritical::holds(const Mutator& mutator)
+{
+    int64_t n = mutator.rawDataOverflow.load(std::memory_order_acquire);
+    for (int i = 0; i < Mutator::kRawDataSlots; ++i) {
+        n += mutator.rawDataSlots[i].load(std::memory_order_acquire) != 0 ? 1 : 0;
+    }
+    return n;
+}
+
+int64_t ZJNICritical::count_snapshot()
+{
+    int64_t holders = 0;
+    ThreadsListHandle threads;
+    for (size_t t = 0; t < threads.length(); ++t) {
+        holders += holds(*threads.thread_at(t)) != 0 ? 1 : 0;
+    }
+    return holders;
+}
+
+bool ZJNICritical::selection_open(ZGenerationId id)
+{
+    return openSelection[GenerationIndex(id)].load(std::memory_order_acquire) != nullptr;
+}
+
+uint64_t ZJNICritical::closed_selections(ZGenerationId id)
+{
+    return closedEpoch[GenerationIndex(id)].load(std::memory_order_acquire);
+}
+
+uint64_t ZJNICritical::retreats() { return retreatCount.load(std::memory_order_relaxed); }
+
+uint64_t ZJNICritical::deselected_pages() { return deselectedCount.load(std::memory_order_relaxed); }
 
 } // namespace MapleRuntime

@@ -176,26 +176,34 @@ void ZRelocationSetSelectorGroup::select()
     }
 }
 
-// Raw-data deferral (ZGeneration::select_relocation_set): nothing is selected.
-// Live young pages take the not-selected path, as the tail rejected by
-// select_inner does, so they are age-flipped or promoted in place.
-void ZRelocationSetSelectorGroup::select_none()
+// Raw-data holders (ZJNICritical::open_selection). A deselected page takes the
+// path of the tail that select_inner rejects: young pages are age-flipped or
+// promoted in place, old pages are left as they are. Statistics and forwarding
+// entries follow, so install() and the tenuring inputs see the final set.
+size_t ZRelocationSetSelectorGroup::deselect(const std::vector<ZPage*>& held, bool all)
 {
-    if (is_disabled()) {
-        return;
+    if (is_disabled() || !is_selectable() || (!all && held.empty())) {
+        return 0;
     }
-    if (!is_selectable()) {
-        select();
-        return;
-    }
-    ZArrayIterator<ZPage*> iter(&_live_pages);
-    for (ZPage* page; iter.next(&page);) {
-        if (page->is_young()) {
-            _not_selected_pages.append(page);
+    size_t removed = 0;
+    int kept = 0;
+    for (int i = 0; i < _live_pages.length(); i++) {
+        ZPage* const page = _live_pages.at(i);
+        if (all || std::binary_search(held.begin(), held.end(), page)) {
+            if (page->is_young()) {
+                _not_selected_pages.append(page);
+            }
+            ZRelocationSetSelectorGroupStats& stats = _stats[untype(page->age())];
+            stats._relocate -= page->live_bytes();
+            stats._npages_selected -= 1;
+            _forwarding_entries -= ZForwarding::nentries(page);
+            removed++;
+        } else {
+            _live_pages.at_put(kept++, page);
         }
     }
-    _live_pages.trunc_to(0);
-    _forwarding_entries = 0;
+    _live_pages.trunc_to(kept);
+    return removed;
 }
 
 ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
@@ -212,11 +220,9 @@ void ZRelocationSetSelector::select()
     _small.select();
 }
 
-void ZRelocationSetSelector::select_none()
+size_t ZRelocationSetSelector::deselect(const std::vector<ZPage*>& held, bool all)
 {
-    _large.select_none();
-    _medium.select_none();
-    _small.select_none();
+    return _medium.deselect(held, all) + _small.deselect(held, all);
 }
 
 ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const

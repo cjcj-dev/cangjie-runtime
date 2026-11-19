@@ -27,7 +27,6 @@ class ReferenceDiscoverer;
 struct ThreadGCData;
 class ZRelocate;
 class ZRelocationSetSelector;
-class ZRawDataRelocationGate;
 enum class zaddress : Uptr;
 struct TenuringInputs;
 // ZGC zGeneration.hpp:79-80: phase and sequence are generation-owned.
@@ -132,9 +131,9 @@ public:
     void desynchronize_relocation();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
-    // `gate` (young collection) is acquired immediately before the selector
-    // decides; if raw-data holders stay inside past its bound, nothing is selected.
-    void select_relocation_set(bool promote_all, ZRawDataRelocationGate* gate = nullptr);
+    void select_relocation_set(bool promote_all);
+    // Old generation, right before relocate start: final raw-data scan (ZJNICritical).
+    void drop_raw_data_held_pages();
 protected:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
@@ -210,7 +209,7 @@ public:
     void concurrent_mark_continue();
     void concurrent_mark_free();
     void concurrent_reset_relocation_set();
-    void concurrent_select_relocation_set(ZRawDataRelocationGate* gate = nullptr);
+    void concurrent_select_relocation_set();
     void relocate_start();
     void pause_relocate_start();
     void concurrent_relocate();

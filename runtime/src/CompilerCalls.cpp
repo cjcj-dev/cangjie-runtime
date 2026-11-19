@@ -920,19 +920,9 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
-static void PinArray(const ArrayRef /* array */)
-{
-    Mutator* mutator = Mutator::GetMutator();
-    CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
-    CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // ZGC zCollectedHeap.cpp:275-277 / zJNICritical.cpp:132-140:
-    // the caller supplies a decoded object. A retained forwarding entry can
-    // cover a newly allocated page at the same address; it is not a colour.
-    ZJNICritical::enter();
-}
-
-// ZGC jni.cpp:2868-2886: every heap array, including an empty array,
-// enters the critical region and returns its content address without copying.
+// ZGC jni.cpp:2868-2886: every heap array, including an empty array, is held in
+// place and its content address is returned without copying. ZJNICritical keeps
+// the page of a held array out of every relocation set until it is released.
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
     // Cangjie stack arrays and null do not participate in heap pinning.
@@ -944,27 +934,33 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     if (isCopy != nullptr) {
         *isCopy = false;
     }
-    // ZGC jni.cpp:2870-2881: pinning may block across a safepoint. Keep
-    // the decoded array in a root slot and reload it after pinning returns.
-    HandleMark handleMark(*Mutator::GetMutator());
-    Handle arrayHandle(Mutator::GetMutator(), plain);
+    Mutator* mutator = Mutator::GetMutator();
+    CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
+    CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
+    // ZGC jni.cpp:2870-2881: entering may wait across a safepoint. Keep the
+    // decoded array in a root slot and reload it after every wait.
+    HandleMark handleMark(*mutator);
+    Handle arrayHandle(mutator, plain);
     (void)CJThreadPreemptOffCntAdd();
-    PinArray(static_cast<ArrayRef>(arrayHandle()));
-    ArrayRef pArray = static_cast<ArrayRef>(arrayHandle());
-    return pArray->ConvertToCArray();
+    for (;;) {
+        ArrayRef current = static_cast<ArrayRef>(arrayHandle());
+        if (ZJNICritical::enter(*mutator, reinterpret_cast<uintptr_t>(current))) {
+            return current->ConvertToCArray();
+        }
+    }
 }
 
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    // ZGC jni.cpp:2890-2896 / zCollectedHeap.cpp:279-281: unpin re-resolves the
-    // reference and never dereferences the object header; the exit path must not
-    // depend on the caller-supplied reference still designating a valid object.
+    // ZGC jni.cpp:2890-2896 / zCollectedHeap.cpp:279-281: release never
+    // dereferences the object header. A held array has not moved, so the caller's
+    // reference is the address that was acquired.
     ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    ZJNICritical::exit();
+    ZJNICritical::exit(*Mutator::GetMutator(), reinterpret_cast<uintptr_t>(plain));
     (void)CJThreadPreemptOffCntSub();
     (void)rawPtr;
 }

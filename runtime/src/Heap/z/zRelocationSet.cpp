@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -163,6 +164,25 @@ void ZRelocationSet::reset(RegionManager* page_allocator)
     destroy_and_clear(page_allocator, &_in_place_relocate_promoted_pages);
     destroy_and_clear(page_allocator, &_flip_promoted_pages);
     _relocate_promoted_pages.clear();
+}
+
+size_t ZRelocationSet::remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table)
+{
+    size_t kept = 0;
+    size_t removed = 0;
+    for (size_t i = 0; i < _nforwardings; ++i) {
+        ZForwarding* const forwarding = _forwardings[i];
+        if (all || std::binary_search(pages.begin(), pages.end(), forwarding->page())) {
+            CHECK(!forwarding->is_promotion());
+            table->remove(forwarding);
+            forwarding->~ZForwarding();
+            ++removed;
+        } else {
+            _forwardings[kept++] = forwarding;
+        }
+    }
+    _nforwardings = kept;
+    return removed;
 }
 
 void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
