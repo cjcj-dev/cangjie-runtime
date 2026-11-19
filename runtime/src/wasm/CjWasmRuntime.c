@@ -398,6 +398,34 @@ int32_t CJ_MCC_MutexInit(void* mutex) { (void)mutex; return 0; }
 void CJ_MCC_MutexLock(void* mutex) { (void)mutex; }
 void CJ_MCC_MutexUnlock(void* mutex) { (void)mutex; }
 int32_t CJ_MCC_WaitQueueForMonitorInit(void* monitor) { (void)monitor; return 0; }
+// Cangjie threads (spawn) need wasm threads or a cooperative scheduler (M1+).
+void* CJ_MCC_NewCJThread(void* entry, void* closure, void* typeInfo)
+{
+    (void)entry; (void)closure; (void)typeInfo;
+    cjw_unsupported("spawning a Cangjie thread", CJW_RC_THREADS);
+}
+void CJ_MCC_FutureInit(void* future) { (void)future; } // Sync.cpp MCC_FutureInit: no runtime state here
+void CJ_MCC_FutureNotifyAll(void* future) { (void)future; }
+uint8_t CJ_MCC_FutureIsComplete(const void* future)
+{
+    (void)future;
+    cjw_unsupported("querying a Future (no spawned threads)", CJW_RC_THREADS);
+}
+void CJ_MCC_FutureWait(void* future, int64_t timeoutNs)
+{
+    (void)future; (void)timeoutNs;
+    cjw_unsupported("waiting on a Future (no spawned threads)", CJW_RC_THREADS);
+}
+static void* g_currentThreadObject = NULL;
+void CJ_MCC_SetCurrentCJThreadObject(void* thread) { g_currentThreadObject = thread; }
+int64_t CJ_MRT_GetCJThreadId(void* handle) { (void)handle; return 1; } // the only Cangjie thread
+void CJ_MRT_Sleep(int64_t ns)
+{
+    if (ns <= 0) { return; }
+    struct timespec ts = { (time_t)(ns / 1000000000LL), (long)(ns % 1000000000LL) };
+    while (nanosleep(&ts, &ts) != 0) {}
+}
+
 // Nobody else can be waiting, so notification has no one to wake.
 void CJ_MCC_MonitorNotify(void* monitor) { (void)monitor; }
 void CJ_MCC_MonitorNotifyAll(void* monitor) { (void)monitor; }
