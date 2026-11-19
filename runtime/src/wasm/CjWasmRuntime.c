@@ -222,7 +222,10 @@ static uint32_t TypeSize(const CjwTI* ti)
         }
         return AlignUp(total, ti->align);
     }
-    if (k == K_VARRAY || k >= K_MAX) { cjw_unsupported("size of a VArray/unknown TypeInfo kind", CJW_RC_TYPEQUERY); }
+    if (k == K_VARRAY || k >= K_MAX) {
+        fprintf(stderr, "cangjie wasm32 runtime: TypeInfo %s has kind %d\n", ti->name ? ti->name : "?", (int)k);
+        cjw_unsupported("size of a VArray/unknown TypeInfo kind", CJW_RC_TYPEQUERY);
+    }
     return ti->size; // primitives, CString, CPointer, CFunc
 }
 
