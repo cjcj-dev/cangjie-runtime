@@ -31,4 +31,15 @@ _Noreturn void cjw_unsupported(const char* feature, int code);
 #define CJW_RC_EXCEPTION 134
 #define CJW_RC_UNSUPPORTED 135
 #define CJW_RC_PKGINIT 136
+#define CJW_RC_TYPEQUERY 137   // runtime generic/interface type queries (M1)
+#define CJW_RC_THREADS 138     // blocking on a monitor/condition in a single-threaded instance
+
+// TypeInfo layout as emitted by cjcj for 32-bit pointers (CGTypeInfo.cj, %TypeInfo):
+// name@0 kind@4 flag@5 fieldNum@6 size(instance|component)@8 gctib@12 uuid@16
+// align@20 typeArgNum@21 inheritNum@22 offsets@24 ... fields@36 super|component@40 mTable@44
+#define CJW_TI_KIND_OFFSET 4u
+#define CJW_TI_SIZE_OFFSET 8u
+#define CJW_TI_SUPER_OFFSET 40u
+#define CJW_KIND_CLASS (-128)
+#define CJW_KIND_INTERFACE (-127)
 #endif
