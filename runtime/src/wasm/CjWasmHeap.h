@@ -64,6 +64,8 @@ void cjw_remove_root(void** slot);
 // exits with CJW_RC_UNSUPPORTED like the M0 arena). With precise roots it may
 // collect first: when the automatic threshold is reached, or when no free
 // cell/block run fits the request (collect before growing linear memory).
+// Growth policy: once the live set fills the heap, precise mode therefore runs a
+// full collection roughly every chunk's worth (1 MiB) of allocation, then grows.
 // Contract: the caller stores the object's TypeInfo* at offset 0 before the
 // next allocation or collection point (the collector traces by TypeInfo).
 void* cjw_heap_alloc(size_t size);
@@ -107,6 +109,8 @@ void cjw_gc_get_stats(CjwGcStats* out);
 // reference slot its metadata describes (NULL, outside the heap, or the start of
 // a live object). Never marks or frees, so it is sound without precise roots and
 // can validate the metadata contract on objects of real compiled programs.
+// It is one-sided for marked slots (a marked slot must be valid) and only
+// probes the converse (unmarked words that look like object starts).
 // Objects whose TypeInfo has references but no GC tib are counted, not fatal.
 // Integrity failures exit with CJW_RC_GC_INTEGRITY. CJ_WASM_GC_VERIFY=1 runs it
 // at exit and prints one line on stderr (=2 also names each untraceable TypeInfo).
@@ -115,6 +119,11 @@ typedef struct {
     size_t heapRefs;      // slots pointing at live heap objects
     size_t nonHeapRefs;   // non-NULL slots pointing outside the heap
     size_t untraceable;   // objects with references but no GC tib
+    // Completeness probe: payload words the metadata does NOT mark as references
+    // whose value is nevertheless the start of a live object (class payloads and
+    // struct-array elements; primitive arrays are not probed). A missing GC tib
+    // bit shows up here; an integer that equals an object address is a false hit.
+    size_t unmarkedHeapWords;
 } CjwHeapVerifyStats;
 void cjw_gc_verify_heap(CjwHeapVerifyStats* out);
 

@@ -1,6 +1,7 @@
 // Cangjie runtime entry points for wasm32-wasi (M0 subset). See CjWasmRuntime.h.
 #define _POSIX_C_SOURCE 200809L // clock_gettime under -std=c11
 #include "CjWasmRuntime.h"
+#include "CjWasmHeap.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -571,7 +572,12 @@ void CJ_MCC_FutureWait(void* future, int64_t timeoutNs)
     cjw_unsupported("waiting on a Future (no spawned threads)", CJW_RC_THREADS);
 }
 static void* g_currentThreadObject = NULL;
-void CJ_MCC_SetCurrentCJThreadObject(void* thread) { g_currentThreadObject = thread; }
+void CJ_MCC_SetCurrentCJThreadObject(void* thread)
+{
+    static int rooted = 0;   // runtime-held managed reference: an internal GC root (CjWasmHeap.h)
+    if (!rooted) { cjw_add_root(&g_currentThreadObject); rooted = 1; }
+    g_currentThreadObject = thread;
+}
 int64_t CJ_MRT_GetCJThreadId(void* handle) { (void)handle; return 1; } // the only Cangjie thread
 void CJ_MRT_Sleep(int64_t ns)
 {

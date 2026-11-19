@@ -36,7 +36,7 @@ static TestTib kStructTib = {1, {0x01}};    // struct { ref @0; u32 @4 }
 static TestTib kBeyondTib = {1, {0x20}};    // slot 5: beyond an 8-byte payload
 static TestTI tiLeaf, tiNode, tiRefArr, tiStruct, tiStructArr, tiU32, tiU32Arr, tiNoTib, tiBeyond;
 // Runtime-instantiated TypeInfos (no GC tib; offsets/fields/sourceGeneric like CjWasmRuntime.c CjwTI).
-static TestTI tiRtStruct, tiRtClass, tiVArr, tiRtVArrClass;
+static TestTI tiRtStruct, tiRtClass, tiVArr, tiRtVArrClass, tiRtStructArr;
 static uint32_t kRtStructOffs[2] = {0, 4};
 static const void* kRtStructFields[2];
 static uint32_t kRtClassOffs[3] = {0, 4, 8};
@@ -69,6 +69,9 @@ static void InitTypes(void)
     TiInit(&tiRtClass, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 16, NULL, NULL);
     kRtClassFields[0] = &tiLeaf; kRtClassFields[1] = &tiU32; kRtClassFields[2] = &tiRtStruct;
     RtLayout(&tiRtClass, 3, kRtClassOffs, kRtClassFields);
+    // RawArray<S> instantiated at run time: its own size field is the pointer size (TypeInfoManager), the
+    // element width comes from the component (MArray::GetElementSize, CjWasmRuntime.c ArrayElemBytes).
+    TiInit(&tiRtStructArr, CJW_KIND_RAWARRAY, 0, 4, NULL, &tiStruct);
     TiInit(&tiVArr, CJW_KIND_VARRAY, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, &tiLeaf);
     TiInit(&tiRtVArrClass, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, NULL);
     kRtVArrFields[0] = &tiVArr;
@@ -241,6 +244,25 @@ static void TestStructArray(void)
     for (int i = 0; i < 4; ++i) { CHECK(Alive(r[i])); CHECK(!Alive(x[i])); }
     cjw_root_frame_pop(f);
     Report("struct_array", ok);
+}
+
+static void TestRuntimeStructArray(void)
+{
+    int ok = 1;
+    (void)cjw_gc_collect_precise();
+    FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
+    cjw_root_frame_push(f);
+    void* arr = NewArr(&tiRtStructArr, 4, 8); f->slots[0] = arr;   // allocated with the component width (8)
+    void* r[4]; void* x[4];
+    for (int i = 0; i < 4; ++i) {
+        r[i] = NewObj(&tiLeaf); x[i] = NewObj(&tiLeaf);
+        *ArrSlot(arr, (uint32_t)(2 * i)) = r[i];
+        *(uint32_t*)ArrSlot(arr, (uint32_t)(2 * i + 1)) = (uint32_t)(uintptr_t)x[i];
+    }
+    (void)cjw_gc_collect_precise();
+    for (int i = 0; i < 4; ++i) { CHECK(Alive(r[i])); CHECK(!Alive(x[i])); }
+    cjw_root_frame_pop(f);
+    Report("runtime_struct_array", ok);
 }
 
 static void TestPrimArray(void)
@@ -472,7 +494,7 @@ static void TestVerifyHeap(void)
     void* b = NewObj(&tiLeaf); f->slots[1] = b;
     void* c = NewObj(&tiLeaf); f->slots[2] = c;
     *Slot(n, 0) = b; *Slot(n, 2) = &g_nonHeapThing;                 // heap ref + non-heap ref
-    *(uint32_t*)Slot(n, 1) = (uint32_t)(uintptr_t)c + 4;            // integer field: never checked
+    *(uint32_t*)Slot(n, 1) = (uint32_t)(uintptr_t)c;                // integer field equal to an object start
     void* arr = NewArr(&tiRefArr, 3, 4); f->slots[3] = arr;
     *ArrSlot(arr, 0) = b; *ArrSlot(arr, 2) = c;
     void* sarr = NewArr(&tiStructArr, 2, 8); f->slots[4] = sarr;
@@ -480,6 +502,7 @@ static void TestVerifyHeap(void)
     f->slots[5] = NewObj(&tiNoTib);
     cjw_gc_verify_heap(&v);
     CHECK(v.objects == 6 && v.heapRefs == 4 && v.nonHeapRefs == 1 && v.untraceable == 1);
+    CHECK(v.unmarkedHeapWords == 1);                                   // the completeness probe sees it
     CHECK(Stats().collections > 0 && Alive(n) && Alive(b) && Alive(c));   // verification frees nothing
     f->slots[5] = NULL;
     cjw_root_frame_pop(f);
@@ -513,12 +536,13 @@ int main(int argc, char** argv)
     cjw_gc_declare_precise_roots();
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
-        TestStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestInternalRoots();
+        TestStructArray(); TestRuntimeStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestInternalRoots();
         TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap(); TestRuntimeTypeInfoTib();
         // Every object the suite left behind (live or garbage) must satisfy the TypeInfo contract.
         CjwHeapVerifyStats v;
         cjw_gc_verify_heap(&v);
-        printf("PASS verify_all_leftovers objects=%zu heap_refs=%zu\n", v.objects, v.heapRefs);
+        printf("PASS verify_all_leftovers objects=%zu heap_refs=%zu unmarked_heap_words=%zu\n", v.objects, v.heapRefs,
+               v.unmarkedHeapWords);
         printf("HEAP_UNIT_FAILS=%d\n", g_fails);
         return g_fails;
     }

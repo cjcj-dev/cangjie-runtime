@@ -61,6 +61,7 @@ static void*** g_internal = NULL;
 static size_t g_ninternal = 0, g_capInternal = 0;
 
 static int g_verify = 0;
+static int g_verifyVerbose = 0;
 static CjwHeapVerifyStats g_vstats;
 
 static void** g_markStack = NULL;
@@ -385,7 +386,6 @@ static void MarkRef(void* ref, const char* what, const void* where)
 
 // A reference-carrying object the M1 collector cannot trace: fatal when collecting,
 // counted by the verifier.
-static int g_verifyVerbose = 0;
 static void Untraceable(const char* what, const uint8_t* ti)
 {
     if (g_verify) {
@@ -455,10 +455,30 @@ static const CjwGCTib* EnsureGCTib(const uint8_t* ti, int depth)
     }
     *(const CjwGCTib**)(uintptr_t)(ti + CJW_TI_GCTIB_OFFSET) = tib;   // cache, like TypeInfo::SetGCTib
     g_stats.derivedGCTibs++;
+    if (g_verifyVerbose) {
+        const char* name = *(const char* const*)ti;
+        fprintf(stderr, "cangjie wasm32 runtime: gc verify: derived tib for %s: size=%u bits[0]=%#x\n", name ? name : "?",
+                size, nBytes ? tib->bits[0] : 0u);
+    }
     return tib;
 }
 
 const void* cjw_ti_ensure_gctib(const void* typeInfo) { return EnsureGCTib((const uint8_t*)typeInfo, 0); }
+
+static int TibMarks(const CjwGCTib* gctib, size_t slot)
+{
+    return gctib != NULL && slot / 8u < gctib->nBytes && ((gctib->bits[slot / 8u] >> (slot % 8u)) & 1u) != 0;
+}
+
+// Verifier only: unmarked words of [base, base+limit) that hold a live object start.
+static void ProbeUnmarked(const CjwGCTib* gctib, const uint8_t* base, size_t limit)
+{
+    for (size_t slot = 0; (slot + 1u) * CJW_GCTIB_SLOT_BYTES <= limit; ++slot) {
+        if (TibMarks(gctib, slot)) { continue; }
+        const void* v = *(const void* const*)(base + slot * CJW_GCTIB_SLOT_BYTES);
+        if (v != NULL && cjw_heap_is_object(v)) { g_vstats.unmarkedHeapWords++; }
+    }
+}
 
 // Visits the reference slots that `gctib` marks in [base, base+limit).
 static void VisitGCTib(const CjwGCTib* gctib, uint8_t* base, size_t limit, const void* owner)
@@ -506,16 +526,18 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
             Untraceable("tracing a struct array whose component TypeInfo has references but no GC tib", ti);
             return;
         }
-        uint32_t elem = cjw_ti_size(ti);   // RawArray TypeInfo: component size (MClass.h union)
-        if (elem == 0 || elem != cjw_ti_size(comp)) {
-            GcIntegrity("struct array %p: element size %u disagrees with component size %u", (void*)obj, elem,
-                        cjw_ti_size(comp));
-        }
+        // Element width = the component TypeInfo's size, as MArray::GetElementSize and the allocation side
+        // (CjWasmRuntime.c ArrayElemBytes); runtime-instantiated RawArray TypeInfos carry the pointer size.
+        uint32_t elem = cjw_ti_size(comp);
+        if (elem == 0) { GcIntegrity("struct array %p: component TypeInfo has size 0", (void*)obj); }
         if ((uint64_t)len > room / elem) {
             GcIntegrity("struct array %p of %lld x %u bytes exceeds its %zu-byte cell", (void*)obj, (long long)len,
                         elem, objBytes);
         }
-        for (int64_t i = 0; i < len; ++i) { VisitGCTib(gctib, content + (size_t)i * elem, elem, obj); }
+        for (int64_t i = 0; i < len; ++i) {
+            VisitGCTib(gctib, content + (size_t)i * elem, elem, obj);
+            if (g_verify) { ProbeUnmarked(gctib, content + (size_t)i * elem, elem); }
+        }
         return;
     }
     if (ck == CJW_KIND_VARRAY || (cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) != 0) {
@@ -541,10 +563,17 @@ static void TraceObject(void* ref)
         TraceArray(obj, ti, objBytes);
         return;
     }
-    if (kind == CJW_KIND_GENERIC_TI || kind == CJW_KIND_GENERIC_CUSTOM || kind == CJW_KIND_VARRAY) {
+    if (kind == CJW_KIND_GENERIC_TI || kind == CJW_KIND_GENERIC_CUSTOM) {
         GcIntegrity("managed object %p has a non-instantiable TypeInfo kind %d", ref, kind);
     }
-    if ((cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
+    if (kind == CJW_KIND_VARRAY) {   // a boxed VArray value: component layout not traced in M1
+        if ((cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) != 0) { Untraceable("tracing a boxed VArray with references", ti); }
+        return;
+    }
+    if ((cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) {
+        if (g_verify) { ProbeUnmarked(NULL, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE); }
+        return;
+    }
     const CjwGCTib* gctib = EnsureGCTib(ti, 0);
     if (gctib == NULL) {
         Untraceable("tracing an object whose TypeInfo has reference fields but no GC tib (and no derivable runtime "
@@ -552,6 +581,7 @@ static void TraceObject(void* ref)
         return;
     }
     VisitGCTib(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE, ref);
+    if (g_verify) { ProbeUnmarked(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE); }
 }
 
 static void MarkRoots(void)
@@ -713,9 +743,43 @@ static void VerifyAtExit(void)
     cjw_gc_verify_heap(&v);
     fprintf(stderr,
             "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
-            "derived_tibs=%u\n",
-            v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs);
+            "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_ranges=%zu\n",
+            v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs, v.unmarkedHeapWords,
+            g_ninternal, g_nstatic);
 }
+
+// Diagnostic redzones (CJ_WASM_HEAP_REDZONE=1): every cjw_alloc request gets 16 extra bytes and the
+// unused tail of its cell is filled with a pattern; before each allocation and at exit every live
+// object's tail is checked, so a write past the requested size names the object instead of silently
+// corrupting a neighbour (or a free-list link). Debug only: O(objects) per allocation.
+#define CJW_RZ_BYTES 16u
+#define CJW_RZ_FILL 0xC5
+typedef struct { uint8_t* p; uint32_t size; uint32_t cell; } CjwRedzone;
+static int g_redzone = 0;
+static CjwRedzone* g_rz = NULL;
+static size_t g_nrz = 0, g_caprz = 0;
+
+static void CheckRedzones(void)
+{
+    size_t keep = 0;
+    for (size_t i = 0; i < g_nrz; ++i) {
+        CjwRedzone* r = &g_rz[i];
+        if (!cjw_heap_is_object(r->p)) { continue; }   // reclaimed: drop the record
+        for (uint32_t k = r->size; k < r->cell; ++k) {
+            if (r->p[k] != CJW_RZ_FILL) {
+                const uint8_t* ti = cjw_obj_ti(r->p);
+                uintptr_t memEnd = (uintptr_t)__builtin_wasm_memory_size(0) * CJW_WASM_PAGE;
+                const char* name = (ti != NULL && (uintptr_t)ti < memEnd) ? *(const char* const*)ti : NULL;
+                GcIntegrity("redzone of object %p (TypeInfo %p %s, requested %u bytes) overwritten at +%u "
+                            "(byte %#x)", (void*)r->p, (const void*)ti, name ? name : "?", r->size, k, r->p[k]);
+            }
+        }
+        g_rz[keep++] = *r;
+    }
+    g_nrz = keep;
+}
+
+static void RedzonesAtExit(void) { CheckRedzones(); }
 
 void* cjw_alloc(size_t size, size_t align)
 {
@@ -724,13 +788,28 @@ void* cjw_alloc(size_t size, size_t align)
         g_statsAtExit = 1;
         const char* s = getenv("CJ_WASM_GC_STATS");
         if (s != NULL && s[0] == '1') { atexit(PrintStatsAtExit); }
+        const char* rz = getenv("CJ_WASM_HEAP_REDZONE");
+        if (rz != NULL && rz[0] == '1') {
+            g_redzone = 1;
+            atexit(RedzonesAtExit);
+        }
         const char* v = getenv("CJ_WASM_GC_VERIFY");
         if (v != NULL && (v[0] == '1' || v[0] == '2')) {
             g_verifyVerbose = v[0] == '2';
             atexit(VerifyAtExit);
         }
     }
-    return cjw_heap_alloc(size);
+    if (!g_redzone) { return cjw_heap_alloc(size); }
+    CheckRedzones();
+    uint8_t* p = (uint8_t*)cjw_heap_alloc(size + CJW_RZ_BYTES);
+    uint32_t cell = (uint32_t)cjw_heap_object_bytes(p);
+    memset(p + size, CJW_RZ_FILL, cell - size);
+    if (g_nrz == g_caprz) {
+        g_caprz = g_caprz ? g_caprz * 2 : 256;
+        g_rz = (CjwRedzone*)XRealloc(g_rz, g_caprz * sizeof(CjwRedzone));
+    }
+    g_rz[g_nrz++] = (CjwRedzone){ p, (uint32_t)size, cell };
+    return p;
 }
 
 void cjw_collect(void) { (void)cjw_gc_collect_precise(); }
