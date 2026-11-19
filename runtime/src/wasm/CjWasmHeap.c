@@ -718,6 +718,8 @@ void cjw_gc_set_hook(CjwGcHook hook, void* arg)
     g_hookArg = arg;
 }
 
+static void RedzonesAfterCollect(void);
+
 size_t cjw_gc_collect_precise(void)
 {
     if (!g_precise) {
@@ -739,6 +741,7 @@ size_t cjw_gc_collect_precise(void)
     g_stats.lastFreedBytes = freed;
     g_stats.collections++;
     g_sinceGc = 0;
+    RedzonesAfterCollect();   // drop records of reclaimed objects before their cells can be reused
     if (g_hook != NULL) { g_hook(CJW_GC_PHASE_END, &g_stats, g_hookArg); }
     g_inGc = 0;
     return freed;
@@ -832,6 +835,10 @@ static void CheckRedzones(void)
 }
 
 static void RedzonesAtExit(void) { CheckRedzones(); }
+static void RedzonesAfterCollect(void)
+{
+    if (g_redzone) { CheckRedzones(); }   // reclaimed objects fail cjw_heap_is_object and are dropped here
+}
 
 void* cjw_alloc(size_t size, size_t align)
 {

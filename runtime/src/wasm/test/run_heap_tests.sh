@@ -43,5 +43,13 @@ pop_order 139 popped while
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
 MODES
+# Runtime-held roots: full runtime (CjWasmRuntime.c + heap) with a test-supplied Cangjie entry.
+RTC=${7:-$SRC/CjWasmRuntime.c}
+"$CC" $FLAGS -c "$RTC" -o rt.o && "$CC" $FLAGS -c "$HERE/CjWasmRuntimeRootTest.c" -o rt_root_test.o && \
+  "$LD" -o rt_root_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" rt.o heap.o rt_root_test.o -L"$SR/lib/wasm32-wasi" -lc; c4=$?
+r=NA; [ $c4 -eq 0 ] && { "$NODE" $NODE_FLAGS "$RUN" rt_root_test.wasm > rt_root.out 2> rt_root.err; r=$?; }
+v=FAIL; [ "$r" = 0 ] && grep -q '^THREAD_ROOT_FAILS=0$' rt_root.out && v=PASS
+[ $v = PASS ] || FAILS=$((FAILS+1))
+echo "$v mode=rt_thread_root rc=$r want=0 build=$c4 out=$(tr '\n' '|' < rt_root.out 2>/dev/null)"
 echo "HEAP_TEST_FAILS=$FAILS"
 exit $FAILS
