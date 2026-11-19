@@ -7,13 +7,22 @@
 #include "CjWasmRuntime.h"
 
 #define CJW_TI_FLAG_OFFSET 5u
+#define CJW_TI_FIELDNUM_OFFSET 6u        // u16
 #define CJW_TI_GCTIB_OFFSET 12u
+// Field layout of TypeInfos instantiated at run time (CjWasmRuntime.c CjwTI, filled like
+// TypeInfoManager::FillOffsets): u32 offsets[fieldNum] relative to the payload, TypeInfo* fields[fieldNum],
+// and the TypeTemplate they come from.
+#define CJW_TI_OFFSETS_OFFSET 24u
+#define CJW_TI_SOURCE_GENERIC_OFFSET 28u
+#define CJW_TI_FIELDS_OFFSET 36u
 #define CJW_FLAG_HAS_REF_FIELD_BIT 0x1u   // runtime/src/ObjectModel/Flags.h:58
 
 // TypeKind (runtime/src/ObjectModel/Flags.h:17-50); every negative kind is a reference.
 #define CJW_KIND_RAWARRAY (-126)
 #define CJW_KIND_GENERIC_TI (-1)
 #define CJW_KIND_GENERIC_CUSTOM (-2)
+#define CJW_KIND_NOTHING 0
+#define CJW_KIND_UNIT 1
 #define CJW_KIND_VARRAY 20
 #define CJW_KIND_TUPLE 21
 #define CJW_KIND_STRUCT 22

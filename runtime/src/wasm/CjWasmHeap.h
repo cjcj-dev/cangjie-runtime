@@ -99,6 +99,7 @@ typedef struct {
     size_t nonHeapRefsSeen;    // references outside the heap met while tracing (not traced)
     uint32_t collections;
     uint32_t chunks;
+    uint32_t derivedGCTibs;    // GC tibs computed for runtime-instantiated TypeInfos
 } CjwGcStats;
 void cjw_gc_get_stats(CjwGcStats* out);
 
@@ -117,6 +118,13 @@ typedef struct {
 } CjwHeapVerifyStats;
 void cjw_gc_verify_heap(CjwHeapVerifyStats* out);
 
+// GC tib of a TypeInfo, computing and caching it (in the TypeInfo's gctib slot)
+// for TypeInfos instantiated at run time from a TypeTemplate, from their field
+// offsets and field TypeInfos (the data native TypeGCInfo::GetGCTibStr walks).
+// NULL when the TypeInfo has no reference fields or its layout cannot be
+// described (VArray fields, misaligned or out-of-size references).
+const void* cjw_ti_ensure_gctib(const void* typeInfo);
+
 // Hook called at the begin/end of every collection (stats are current).
 enum { CJW_GC_PHASE_BEGIN = 0, CJW_GC_PHASE_END = 1 };
 typedef void (*CjwGcHook)(int phase, const CjwGcStats* stats, void* arg);
@@ -133,8 +141,9 @@ void cjw_gc_set_hook(CjwGcHook hook, void* arg);
 // * Interior/derived pointers as roots or fields: integrity failure.
 // * References stored inside non-heap memory (data segment, malloc) are not
 //   traced unless the slot is registered as a static or internal root.
-// * TypeInfos with reference fields but no GCTib (runtime-instantiated
-//   generic TypeInfos, CjWasmRuntime.c) cannot be traced: exits 135.
+// * TypeInfos with reference fields but no GCTib that are not runtime
+//   instantiations with field metadata (cjw_ti_ensure_gctib), or whose fields
+//   include VArrays, cannot be traced: exits 135.
 // * Weak references are traced as strong references; finalizers never run;
 //   VArray-of-reference array components exit 135.
 // * No moving/compaction, no generations, no incremental or concurrent work,

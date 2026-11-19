@@ -35,6 +35,21 @@ static TestTib kNodeTib = {1, {0x05}};      // payload slots 0 and 2 are referen
 static TestTib kStructTib = {1, {0x01}};    // struct { ref @0; u32 @4 }
 static TestTib kBeyondTib = {1, {0x20}};    // slot 5: beyond an 8-byte payload
 static TestTI tiLeaf, tiNode, tiRefArr, tiStruct, tiStructArr, tiU32, tiU32Arr, tiNoTib, tiBeyond;
+// Runtime-instantiated TypeInfos (no GC tib; offsets/fields/sourceGeneric like CjWasmRuntime.c CjwTI).
+static TestTI tiRtStruct, tiRtClass, tiVArr, tiRtVArrClass;
+static uint32_t kRtStructOffs[2] = {0, 4};
+static const void* kRtStructFields[2];
+static uint32_t kRtClassOffs[3] = {0, 4, 8};
+static const void* kRtClassFields[3];
+static uint32_t kRtVArrOffs[1] = {0};
+static const void* kRtVArrFields[1];
+static void RtLayout(TestTI* t, uint16_t n, uint32_t* offs, const void** fields)
+{
+    *(uint16_t*)(t->b + CJW_TI_FIELDNUM_OFFSET) = n;
+    *(uint32_t**)(t->b + CJW_TI_OFFSETS_OFFSET) = offs;
+    *(const void**)(t->b + CJW_TI_SOURCE_GENERIC_OFFSET) = t;   // any non-NULL TypeTemplate
+    *(const void***)(t->b + CJW_TI_FIELDS_OFFSET) = fields;
+}
 
 static void InitTypes(void)
 {
@@ -47,6 +62,17 @@ static void InitTypes(void)
     TiInit(&tiU32Arr, CJW_KIND_RAWARRAY, 0, 4, NULL, &tiU32);
     TiInit(&tiNoTib, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 4 + 8, NULL, NULL);
     TiInit(&tiBeyond, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 4 + 8, &kBeyondTib, NULL);
+    // struct S<T> { ref @0; u32 @4 } and class C<T> { ref @0; u32 @4; S<T> @8 } instantiated at run time
+    TiInit(&tiRtStruct, CJW_KIND_STRUCT, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, NULL);
+    kRtStructFields[0] = &tiLeaf; kRtStructFields[1] = &tiU32;
+    RtLayout(&tiRtStruct, 2, kRtStructOffs, kRtStructFields);
+    TiInit(&tiRtClass, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 16, NULL, NULL);
+    kRtClassFields[0] = &tiLeaf; kRtClassFields[1] = &tiU32; kRtClassFields[2] = &tiRtStruct;
+    RtLayout(&tiRtClass, 3, kRtClassOffs, kRtClassFields);
+    TiInit(&tiVArr, CJW_KIND_VARRAY, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, &tiLeaf);
+    TiInit(&tiRtVArrClass, KIND_CLASS, CJW_FLAG_HAS_REF_FIELD_BIT, 8, NULL, NULL);
+    kRtVArrFields[0] = &tiVArr;
+    RtLayout(&tiRtVArrClass, 1, kRtVArrOffs, kRtVArrFields);
 }
 
 static void* NewObj(TestTI* ti)
@@ -406,6 +432,32 @@ static void TestM0Boundary(void)
     Report("m0_boundary", ok);
 }
 
+static void TestRuntimeTypeInfoTib(void)
+{
+    int ok = 1;
+    (void)cjw_gc_collect_precise();
+    uint32_t derived0 = Stats().derivedGCTibs;
+    FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
+    cjw_root_frame_push(f);
+    // instance size 16 + header: payload {ref a @0, u32 @4 = &c, S{ref b @8, u32 @12}}
+    void* o = cjw_heap_alloc(4 + 16); *(const void**)o = &tiRtClass; f->slots[0] = o;
+    void* a = NewObj(&tiLeaf); void* b = NewObj(&tiLeaf); void* c = NewObj(&tiLeaf);
+    *Slot(o, 0) = a; *(uint32_t*)Slot(o, 1) = (uint32_t)(uintptr_t)c; *Slot(o, 2) = b; *(uint32_t*)Slot(o, 3) = 9;
+    (void)cjw_gc_collect_precise();
+    CHECK(Alive(o) && Alive(a) && Alive(b) && !Alive(c));
+    const CjwGCTib* tib = (const CjwGCTib*)cjw_ti_ensure_gctib(&tiRtClass);
+    CHECK(tib != NULL && tib->nBytes == 1 && tib->bits[0] == 0x05);          // slots 0 and 2
+    const CjwGCTib* stib = (const CjwGCTib*)cjw_ti_ensure_gctib(&tiRtStruct);
+    CHECK(stib != NULL && stib->bits[0] == 0x01);
+    CHECK(Stats().derivedGCTibs - derived0 == 2);                            // class + nested struct, cached once
+    (void)cjw_gc_collect_precise();
+    CHECK(Stats().derivedGCTibs - derived0 == 2);
+    CHECK(cjw_ti_ensure_gctib(&tiRtVArrClass) == NULL);                      // VArray field: not derivable
+    CHECK(cjw_ti_ensure_gctib(&tiNoTib) == NULL);                            // compiled TypeInfo without metadata
+    cjw_root_frame_pop(f);
+    Report("runtime_ti_gctib", ok);
+}
+
 static uint64_t g_nonHeapThing[2];
 static void TestVerifyHeap(void)
 {
@@ -462,7 +514,7 @@ int main(int argc, char** argv)
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
         TestStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestInternalRoots();
-        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap();
+        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap(); TestRuntimeTypeInfoTib();
         // Every object the suite left behind (live or garbage) must satisfy the TypeInfo contract.
         CjwHeapVerifyStats v;
         cjw_gc_verify_heap(&v);
@@ -477,6 +529,9 @@ int main(int argc, char** argv)
     } else if (strcmp(mode, "wild_ti") == 0) {
         void* o = NewObj(&tiLeaf);
         *(uintptr_t*)o = 0xA0A0A0A0u;
+        f->slots[0] = o;
+    } else if (strcmp(mode, "rt_varray") == 0) {
+        void* o = cjw_heap_alloc(4 + 8); *(const void**)o = &tiRtVArrClass;
         f->slots[0] = o;
     } else if (strcmp(mode, "no_gctib") == 0) {
         f->slots[0] = NewObj(&tiNoTib);

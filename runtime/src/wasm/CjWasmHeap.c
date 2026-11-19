@@ -399,6 +399,67 @@ static void Untraceable(const char* what, const uint8_t* ti)
     cjw_unsupported(what, CJW_RC_UNSUPPORTED);
 }
 
+// ---------------------------------------------------------------------------
+// GC tibs for TypeInfos instantiated at run time
+#define CJW_MAX_DERIVED_SLOTS 65536u
+static int SetDerivedSlot(uint8_t* bits, uint32_t slot, uint32_t size)
+{
+    if (slot >= CJW_MAX_DERIVED_SLOTS || ((size_t)slot + 1u) * CJW_GCTIB_SLOT_BYTES > size) { return 0; }
+    bits[slot >> 3] |= (uint8_t)(1u << (slot & 7u));
+    return 1;
+}
+
+static const CjwGCTib* EnsureGCTib(const uint8_t* ti, int depth)
+{
+    const CjwGCTib* have = cjw_ti_gctib(ti);
+    if (have != NULL) { return have; }
+    if (depth > 32 || (cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return NULL; }
+    int8_t kind = cjw_ti_kind(ti);
+    if (kind == CJW_KIND_RAWARRAY || kind == CJW_KIND_VARRAY || kind == CJW_KIND_GENERIC_TI ||
+        kind == CJW_KIND_GENERIC_CUSTOM) {
+        return NULL;
+    }
+    uint16_t n = *(const uint16_t*)(ti + CJW_TI_FIELDNUM_OFFSET);
+    const uint32_t* offs = *(const uint32_t* const*)(ti + CJW_TI_OFFSETS_OFFSET);
+    const void* source = *(const void* const*)(ti + CJW_TI_SOURCE_GENERIC_OFFSET);
+    const uint8_t* const* fields = *(const uint8_t* const* const*)(ti + CJW_TI_FIELDS_OFFSET);
+    uint32_t size = cjw_ti_size(ti);
+    if (source == NULL || offs == NULL || fields == NULL || n == 0 || size == 0) { return NULL; }
+    uint32_t nBytes = (size / CJW_GCTIB_SLOT_BYTES + 7u) / 8u;
+    CjwGCTib* tib = (CjwGCTib*)calloc(1, sizeof(CjwGCTib) + nBytes);
+    if (tib == NULL) { OutOfMemory(sizeof(CjwGCTib) + nBytes); }
+    tib->nBytes = nBytes;
+    for (uint16_t f = 0; f < n; ++f) {
+        const uint8_t* fti = fields[f];
+        if (fti == NULL) { free(tib); return NULL; }
+        int8_t fk = cjw_ti_kind(fti);
+        if (fk == CJW_KIND_NOTHING || fk == CJW_KIND_UNIT) { continue; }
+        uint32_t off = offs[f];
+        if (cjw_kind_is_ref(fk)) {
+            if (off % CJW_GCTIB_SLOT_BYTES != 0 || !SetDerivedSlot(tib->bits, off / CJW_GCTIB_SLOT_BYTES, size)) {
+                free(tib); return NULL;
+            }
+            continue;
+        }
+        if ((cjw_ti_flag(fti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { continue; }
+        const CjwGCTib* sub = cjw_kind_is_struct(fk) ? EnsureGCTib(fti, depth + 1) : NULL;
+        if (sub == NULL || off % CJW_GCTIB_SLOT_BYTES != 0) { free(tib); return NULL; }   // VArray or untraceable value field
+        for (uint32_t i = 0; i < sub->nBytes; ++i) {
+            for (uint32_t j = 0; j < 8u; ++j) {
+                if (((sub->bits[i] >> j) & 1u) != 0 &&
+                    !SetDerivedSlot(tib->bits, off / CJW_GCTIB_SLOT_BYTES + i * 8u + j, size)) {
+                    free(tib); return NULL;
+                }
+            }
+        }
+    }
+    *(const CjwGCTib**)(uintptr_t)(ti + CJW_TI_GCTIB_OFFSET) = tib;   // cache, like TypeInfo::SetGCTib
+    g_stats.derivedGCTibs++;
+    return tib;
+}
+
+const void* cjw_ti_ensure_gctib(const void* typeInfo) { return EnsureGCTib((const uint8_t*)typeInfo, 0); }
+
 // Visits the reference slots that `gctib` marks in [base, base+limit).
 static void VisitGCTib(const CjwGCTib* gctib, uint8_t* base, size_t limit, const void* owner)
 {
@@ -440,7 +501,7 @@ static void TraceArray(uint8_t* obj, const uint8_t* ti, size_t objBytes)
     }
     if (cjw_kind_is_struct(ck)) {
         if ((cjw_ti_flag(comp) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
-        const CjwGCTib* gctib = cjw_ti_gctib(comp);
+        const CjwGCTib* gctib = EnsureGCTib(comp, 0);
         if (gctib == NULL) {
             Untraceable("tracing a struct array whose component TypeInfo has references but no GC tib", ti);
             return;
@@ -484,10 +545,10 @@ static void TraceObject(void* ref)
         GcIntegrity("managed object %p has a non-instantiable TypeInfo kind %d", ref, kind);
     }
     if ((cjw_ti_flag(ti) & CJW_FLAG_HAS_REF_FIELD_BIT) == 0) { return; }
-    const CjwGCTib* gctib = cjw_ti_gctib(ti);
+    const CjwGCTib* gctib = EnsureGCTib(ti, 0);
     if (gctib == NULL) {
-        Untraceable("tracing an object whose TypeInfo has reference fields but no GC tib (runtime-instantiated "
-                    "generic TypeInfo)", ti);
+        Untraceable("tracing an object whose TypeInfo has reference fields but no GC tib (and no derivable runtime "
+                    "field layout)", ti);
         return;
     }
     VisitGCTib(gctib, obj + CJW_OBJECT_HEADER_SIZE, objBytes - CJW_OBJECT_HEADER_SIZE, ref);
@@ -650,8 +711,10 @@ static void VerifyAtExit(void)
 {
     CjwHeapVerifyStats v;
     cjw_gc_verify_heap(&v);
-    fprintf(stderr, "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu\n",
-            v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable);
+    fprintf(stderr,
+            "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
+            "derived_tibs=%u\n",
+            v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs);
 }
 
 void* cjw_alloc(size_t size, size_t align)
