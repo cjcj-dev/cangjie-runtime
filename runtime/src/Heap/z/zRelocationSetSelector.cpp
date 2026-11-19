@@ -176,6 +176,28 @@ void ZRelocationSetSelectorGroup::select()
     }
 }
 
+// Raw-data deferral (ZGeneration::select_relocation_set): nothing is selected.
+// Live young pages take the not-selected path, as the tail rejected by
+// select_inner does, so they are age-flipped or promoted in place.
+void ZRelocationSetSelectorGroup::select_none()
+{
+    if (is_disabled()) {
+        return;
+    }
+    if (!is_selectable()) {
+        select();
+        return;
+    }
+    ZArrayIterator<ZPage*> iter(&_live_pages);
+    for (ZPage* page; iter.next(&page);) {
+        if (page->is_young()) {
+            _not_selected_pages.append(page);
+        }
+    }
+    _live_pages.trunc_to(0);
+    _forwarding_entries = 0;
+}
+
 ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
     : _small("Small", ZPageType::small, ZPageSizeSmall, ZObjectSizeLimitSmall, fragmentation_limit),
       _medium("Medium", ZPageType::medium, ZPageSizeMediumMax, ZObjectSizeLimitMedium, fragmentation_limit),
@@ -188,6 +210,13 @@ void ZRelocationSetSelector::select()
     _large.select();
     _medium.select();
     _small.select();
+}
+
+void ZRelocationSetSelector::select_none()
+{
+    _large.select_none();
+    _medium.select_none();
+    _small.select_none();
 }
 
 ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const

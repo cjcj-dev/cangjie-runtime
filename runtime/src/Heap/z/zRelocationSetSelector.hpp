@@ -178,6 +178,7 @@ public:
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
     void select();
+    void select_none();
     const ZArray<ZPage*>* selected_pages() const;
     const ZArray<ZPage*>* not_selected_pages() const;
     size_t forwarding_entries() const;
@@ -201,6 +202,7 @@ public:
     const ZArray<ZPage*>* empty_pages() const;
     void clear_empty_pages();
     void select();
+    void select_none();
     const ZArray<ZPage*>* selected_small() const;
     const ZArray<ZPage*>* selected_medium() const;
     const ZArray<ZPage*>* not_selected_small() const;

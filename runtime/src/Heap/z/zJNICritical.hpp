@@ -18,8 +18,6 @@ namespace MapleRuntime {
 class ZJNICritical {
 public:
     static void initialize();
-    static void block();
-    static void unblock();
     // Bounded, shareable variant used by the collector. Waits at most `millis`
     // for current holders to leave. On success the caller owns (or shares) the
     // block and must call unblock_bounded(); on timeout the count is restored,
@@ -38,6 +36,11 @@ private:
     static ZConditionLock* lock;
     // Collector parties sharing a drained (-1) bounded block; guarded by lock.
     static int64_t boundedBlockers;
+    // Set when a bounded block timed out on holders that are still inside;
+    // cleared when the count next drains to 0 (or -1). While set and holders
+    // remain, block_bounded() reports the timeout at once instead of holding the
+    // count negative, so other acquirers are not stalled for another bound.
+    static std::atomic<bool> stuck;
 };
 
 } // namespace MapleRuntime

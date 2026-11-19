@@ -230,12 +230,13 @@ public:
     static constexpr uint64_t kRawDataDrainMillis = 50;
 };
 
-// Excludes raw-data holders from selection through relocate start. JDK ZGC
-// blocks only around the relocate-start pause; with a bounded wait a holder could
-// otherwise enter between selection and that pause and keep a pointer into a
-// page that is then relocated. If holders do not leave within the bound, the
-// cycle selects no page (ZGeneration::select_relocation_set), so a held array
-// stays in place and the collection still completes. Empty pages are still freed.
+// Excludes raw-data holders before objects can move. Old collection: only around
+// the relocate-start pause, as JDK ZGC (zGeneration.cpp:475-482); on timeout the
+// installed set is dropped. Young collection: from the selector's decision
+// through relocate start, because a not-selected young page is age-flipped or
+// promoted in place while a selected one cannot be deselected after install; on
+// timeout nothing is selected (ZGeneration::select_relocation_set). Either way a
+// held array stays in place and the collection still completes.
 class ZRawDataRelocationGate {
 public:
     ZRawDataRelocationGate() = default;
@@ -414,8 +415,7 @@ void ZGenerationYoung::collect(ZYoungType type, void* timer)
     concurrent_reset_relocation_set();
     abortpoint();
     ZRawDataRelocationGate gate;
-    set_defer_relocation(!gate.acquire());
-    concurrent_select_relocation_set();
+    concurrent_select_relocation_set(&gate);
     abortpoint();
     pause_relocate_start();
     gate.release();
@@ -529,10 +529,10 @@ void ZGenerationYoung::concurrent_reset_relocation_set()
     reset_relocation_set();
 }
 
-void ZGenerationYoung::concurrent_select_relocation_set()
+void ZGenerationYoung::concurrent_select_relocation_set(ZRawDataRelocationGate* gate)
 {
     ZStatTimerYoung timer(ZPhaseConcurrentSelectRelocationSetYoung);
-    select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
+    select_relocation_set(YoungType() == ZYoungType::major_full_preclean, gate);
 }
 
 void ZGenerationYoung::pause_relocate_start()
@@ -901,17 +901,20 @@ void ZGenerationOld::collect(void* timer)
     concurrent_reset_relocation_set();
     abortpoint();
     pause_verify();
-    ZRawDataRelocationGate gate;
-    set_defer_relocation(!gate.acquire());
     concurrent_select_relocation_set();
     abortpoint();
     {
         DriverLocker locker;
         concurrent_remap_young_roots();
         abortpoint();
+        // Old pages have no not-selected bookkeeping (age flip is young-only), so a
+        // timed-out gate drops the installed set and the pause starts empty.
+        ZRawDataRelocationGate gate;
+        if (!gate.acquire()) {
+            reset_relocation_set();
+        }
         pause_relocate_start();
     }
-    gate.release();
     concurrent_relocate();
 }
 
@@ -1175,13 +1178,9 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
                                      _relocation_set.relocate_promoted_pages());
 }
 
-void ZGeneration::select_relocation_set(bool promote_all)
+void ZGeneration::select_relocation_set(bool promote_all, ZRawDataRelocationGate* gate)
 {
-    // A deferred cycle uses the selector's own criterion with a limit no page
-    // can exceed (diff_reclaimable > 100 is never true): no page is selected,
-    // live pages take the not-selected path (age flip / in-place promotion) and
-    // empty pages are still freed below.
-    ZRelocationSetSelector selector(_defer_relocation ? 100.0 : FragmentationLimit());
+    ZRelocationSetSelector selector(FragmentationLimit());
     const ZGenerationId id = _id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, &Heap::GetHeap().page_allocator());
@@ -1198,7 +1197,15 @@ void ZGeneration::select_relocation_set(bool promote_all)
         }
         free_empty_pages(&selector, 0);
     }
-    selector.select();
+    // Raw-data holders are excluded from here through relocate start. If they stay
+    // inside past the bound, nothing is selected: live young pages take the
+    // not-selected path and every object keeps its address. Empty pages were
+    // already freed above.
+    if (gate == nullptr || gate->acquire()) {
+        selector.select();
+    } else {
+        selector.select_none();
+    }
     if (_id == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;

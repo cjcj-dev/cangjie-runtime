@@ -19,6 +19,7 @@ static const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Sta
 std::atomic<int64_t> ZJNICritical::count{ 0 };
 ZConditionLock* ZJNICritical::lock = nullptr;
 int64_t ZJNICritical::boundedBlockers = 0;
+std::atomic<bool> ZJNICritical::stuck{ false };
 
 void ZJNICritical::initialize()
 {
@@ -26,49 +27,15 @@ void ZJNICritical::initialize()
     lock = new ZConditionLock();
 }
 
-void ZJNICritical::block()
-{
-    for (;;) {
-        const int64_t n = count.load(std::memory_order_acquire);
-        if (n < 0) {
-            ZLocker<ZConditionLock> guard(lock);
-            while (count.load(std::memory_order_acquire) < 0) {
-                lock->wait();
-            }
-            continue;
-        }
-        int64_t expected = n;
-        if (!count.compare_exchange_strong(expected, -(n + 1), std::memory_order_acq_rel)) {
-            continue;
-        }
-        if (n != 0) {
-            ZLocker<ZConditionLock> guard(lock);
-            while (count.load(std::memory_order_acquire) != -1) {
-                lock->wait();
-            }
-        }
-        return;
-    }
-}
-
-void ZJNICritical::unblock()
-{
-    const int64_t n = count.load(std::memory_order_acquire);
-    CHECK_DETAIL(n == -1, "Invalid count");
-    ZLocker<ZConditionLock> guard(lock);
-    count.store(0, std::memory_order_release);
-    lock->notify_all();
-}
-
 // A raw-data holder may legally block in a foreign call until another mutator
 // acts (std.core acquireArrayRawData only forbids the holder itself from
-// allocating). The unbounded block() above would then wait forever. The
-// collector instead waits a bounded time; if holders remain it restores the
-// count and proceeds without excluding them, and its caller must then not move
-// any object for that operation (ZGeneration::select_relocation_set selects no
-// page). A drained block may be shared by the young and old collections, whose
-// selection-to-relocate-start windows can overlap (the old window also waits for
-// the minor driver under DriverLocker).
+// allocating). An unbounded block (JDK zJNICritical.cpp block()) would then wait
+// forever. The collector instead waits a bounded time; if holders remain it
+// restores the count and proceeds without excluding them, and its caller must
+// then not move any object for that operation (ZRawDataRelocationGate). While
+// such a holder stays inside (`stuck`), later calls report the timeout at once.
+// A drained block may be shared by more than one collector party; the last
+// unblock_bounded() ends it.
 bool ZJNICritical::block_bounded(uint64_t millis)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(millis);
@@ -83,6 +50,11 @@ bool ZJNICritical::block_bounded(uint64_t millis)
     ZLocker<ZConditionLock> guard(lock);
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
+        if (n > 0 && stuck.load(std::memory_order_acquire)) {
+            // A holder that outlived an earlier bound is still inside: report the
+            // timeout now rather than keep every other acquirer out for a full bound.
+            return false;
+        }
         if (n < 0) {
             if (n == -1 && boundedBlockers > 0) {
                 // Another collector party owns a drained block: no holder can be
@@ -108,12 +80,19 @@ bool ZJNICritical::block_bounded(uint64_t millis)
             if (left == 0) {
                 // Holders are still inside (e.g. blocked in a foreign call).
                 // Restore -(m + 1) -> m; exit_inner may race, hence the CAS loop.
+                // Mark stuck before the restore so that the exit which later drains
+                // the count to 0 is the one that clears it.
+                stuck.store(true, std::memory_order_release);
                 for (;;) {
                     int64_t c = count.load(std::memory_order_acquire);
                     if (c >= 0) {
                         break;
                     }
                     if (count.compare_exchange_strong(c, -(c + 1), std::memory_order_acq_rel)) {
+                        if (c == -1) {
+                            // The last holder left during the timeout path.
+                            stuck.store(false, std::memory_order_release);
+                        }
                         break;
                     }
                 }
@@ -182,6 +161,9 @@ void ZJNICritical::exit_inner()
             if (!count.compare_exchange_strong(expected, n - 1, std::memory_order_acq_rel)) {
                 continue;
             }
+            if (n == 1) {
+                stuck.store(false, std::memory_order_release);
+            }
             return;
         }
         int64_t expected = n;
@@ -189,6 +171,7 @@ void ZJNICritical::exit_inner()
             continue;
         }
         if (n == -2) {
+            stuck.store(false, std::memory_order_release);
             ZLocker<ZConditionLock> guard(lock);
             lock->notify_all();
         }

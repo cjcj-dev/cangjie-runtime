@@ -70,6 +70,8 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 #include <chrono>
 #include <thread>
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zRelocationSet.inline.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "Common/Handle.h"
@@ -218,6 +220,16 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageGranule, MutatorAllocatesThreePageSizes)
 }
 
 namespace {
+static size_t CountYoungForwardings()
+{
+    size_t n = 0;
+    ZRelocationSetIterator iter(&ZGeneration::young()->relocation_set());
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        ++n;
+    }
+    return n;
+}
+
 struct ForwardingSelectionResult {
     size_t roots{0};
     size_t published{0};
@@ -243,6 +255,10 @@ struct ForwardingSelectionResult {
     bool collectionFinishedWhileHeld{false};
     bool movedWhileHeld{false};
     bool movedAfterRelease{false};
+    // Keep the raw holder inside until the collection finishes (bounded gate).
+    bool holdThroughCollection{false};
+    size_t forwardingsWhileHeld{0};
+    size_t forwardingsAfterRelease{0};
     bool collectionFinished{false};
     uintptr_t pinExpected{0};
     uintptr_t pinObserved{0};
@@ -334,7 +350,7 @@ void* SelectRealLivePages(void* context)
         });
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!finished.load(std::memory_order_acquire) &&
-               ZJNICritical::count_snapshot() != -2 &&
+               (result.holdThroughCollection || ZJNICritical::count_snapshot() != -2) &&
                std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -343,6 +359,7 @@ void* SelectRealLivePages(void* context)
         if (result.collectionFinishedWhileHeld) {
             result.movedWhileHeld = reinterpret_cast<uintptr_t>(
                 Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0])) != starts[0];
+            result.forwardingsWhileHeld = CountYoungForwardings();
         }
         mutator->LeaveSaferegion();
         array = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0]));
@@ -351,6 +368,7 @@ void* SelectRealLivePages(void* context)
         collector.join();
         mutator->LeaveSaferegion();
         result.collectionFinished = finished.load(std::memory_order_acquire);
+        result.forwardingsAfterRelease = CountYoungForwardings();
         result.movedAfterRelease = reinterpret_cast<uintptr_t>(
             Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0])) != starts[0];
     } else {
@@ -840,7 +858,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
         std::this_thread::yield();
     }
     GC_EXPECT_TRUE(result.ready.load(std::memory_order_acquire));
-    ZJNICritical::block();
+    GC_EXPECT_TRUE(ZJNICritical::block_bounded(1000));
     result.proceed.store(true, std::memory_order_release);
     while (!result.entering.load(std::memory_order_acquire)) {
         std::this_thread::yield();
@@ -861,7 +879,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
     std::fprintf(stderr, "JNI_BLOCKED_ENTER_TARGET stw=%d acquired=%d count=%lld\n",
                  stwFinishedWhileBlocked ? 1 : 0, acquiredWhileBlocked ? 1 : 0,
                  static_cast<long long>(ZJNICritical::count_snapshot()));
-    ZJNICritical::unblock();
+    ZJNICritical::unblock_bounded();
     collector.join();
     const auto acquireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!result.acquired.load(std::memory_order_acquire) &&
@@ -930,6 +948,36 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, RawHolderExcludesCollectionRelocation)
     GC_EXPECT_FALSE(result.movedWhileHeld);
     GC_EXPECT_FALSE(result.collectionFinishedWhileHeld);
     GC_EXPECT_TRUE(result.collectionFinished && result.movedAfterRelease);
+    // Positive control for the bounded test below: a drained gate selects pages.
+    GC_EXPECT_TRUE(result.forwardingsAfterRelease > 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// A raw holder that stays inside past the bound (here in a saferegion, as when
+// blocked in a foreign call) no longer stops the collection: the young cycle
+// completes with an empty relocation set and the held array keeps its address.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, RawHolderPastBoundCompletesWithEmptyRelocationSet)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyCritical = true;
+    result.holdThroughCollection = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "JNI_BOUNDED_RELOCATION_TARGET held_finished=%d held_moved=%d held_forwardings=%zu "
+                 "released_finished=%d roots=%zu\n",
+                 result.collectionFinishedWhileHeld, result.movedWhileHeld, result.forwardingsWhileHeld,
+                 result.collectionFinished, result.roots);
+    GC_EXPECT_TRUE(result.collectionFinishedWhileHeld);
+    GC_EXPECT_FALSE(result.movedWhileHeld);
+    GC_EXPECT_EQ(result.forwardingsWhileHeld, static_cast<size_t>(0));
+    GC_EXPECT_TRUE(result.collectionFinished);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -1737,9 +1785,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
     while (!result.entered.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     std::atomic<bool> blocked{false};
     std::thread blocker([&] {
-        ZJNICritical::block();
-        blocked.store(true, std::memory_order_release);
-        ZJNICritical::unblock();
+        if (ZJNICritical::block_bounded(10000)) {
+            blocked.store(true, std::memory_order_release);
+            ZJNICritical::unblock_bounded();
+        }
     });
     while (ZJNICritical::count_snapshot() != -2) { std::this_thread::yield(); }
     result.proceed.store(true, std::memory_order_release);
