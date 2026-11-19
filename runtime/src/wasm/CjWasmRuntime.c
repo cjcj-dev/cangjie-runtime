@@ -405,6 +405,15 @@ void CJ_MCC_UpdateVMT(void* ti, void* itf, void* extensionData)
     cjw_unsupported("runtime virtual-method-table update (CJ_MCC_UpdateVMT)", CJW_RC_TYPEQUERY);
 }
 
+// Interface dispatch (CompilerCalls.cpp CJ_MCC_GetMTable -> TypeInfo::GetMTable) resolves the
+// interface function table from the MTableDesc / ExtensionData tables that the native loader
+// registers per package. wasm32 registers none yet (M1), so the lookup is an explicit trap.
+void* CJ_MCC_GetMTable(const void* ti, const void* itf)
+{
+    (void)ti; (void)itf;
+    cjw_unsupported("interface method table lookup (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY);
+}
+
 void* CJ_MCC_GetMTableAndOuterTI(const void* ti, const void* itf, uint64_t index, void** outerTI)
 {
     (void)ti; (void)itf; (void)index; (void)outerTI;
