@@ -28,6 +28,48 @@ def directory_identity(directory):
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
+ENTRY_MAGIC = 'cjcj-sdk-entry-v1'
+
+
+def launcher_entry(sdk, launcher):
+    """Entity and search directories named by a cjcj native-launcher entry.
+
+    Returns None when the launcher has no sibling .entry (legacy direct ELF).
+    The launcher stub itself is shared by cjc/llc/opt, so its hash alone does
+    not identify the compiler or LLVM entity it executes.
+    """
+    resolved = launcher.resolve(strict=True)
+    entry = resolved.with_name(resolved.name + '.entry')
+    if not entry.is_file():
+        return None
+    lines = entry.read_text().splitlines()
+    if len(lines) < 5 or lines[0] != ENTRY_MAGIC:
+        raise ValueError('LANGUAGE_SDK_ENTRY_INVALID')
+    entity = (sdk / lines[2]).resolve(strict=True)
+    search = [line for line in lines[5:] if line]
+    if not entity.is_relative_to(sdk) or any(Path(line).is_absolute() or '..' in Path(line).parts for line in search):
+        raise ValueError('LANGUAGE_SDK_ENTRY_INVALID')
+    return {'entry': entry, 'entity': entity, 'search': search}
+
+
+def compiler_host_dirs(sdk):
+    """The compiler-execution host: legacy host/compiler or the launcher's .compiler-exec dirs."""
+    legacy = sdk / 'host/compiler'
+    if legacy.is_dir():
+        return [legacy], True
+    launcher = launcher_entry(sdk, sdk / 'bin/cjc')
+    dirs = [sdk / line for line in launcher['search'] if line.startswith('.compiler-exec/')] if launcher else []
+    if not dirs or not all(directory.is_dir() for directory in dirs):
+        raise ValueError('LANGUAGE_COMPILER_HOST_INCOMPATIBLE')
+    return dirs, False
+
+
+def host_set_identity(sdk, dirs):
+    files = {str(path.relative_to(sdk)): sha256(path)
+             for directory in dirs for path in sorted(directory.iterdir()) if path.is_file()}
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
 def sdk_identity(sdk):
     compiler = sdk / 'bin/cjc'
     resolved = compiler.resolve(strict=True)
@@ -36,6 +78,12 @@ def sdk_identity(sdk):
     identity = {'sdk': str(sdk), 'cjc': sha256(compiler)}
     for component in ('llc', 'opt'):
         identity[component] = sha256(sdk / f'third_party/llvm/bin/{component}')
+    for component, launcher in (('cjc', compiler), ('llc', sdk / 'third_party/llvm/bin/llc'),
+                                ('opt', sdk / 'third_party/llvm/bin/opt')):
+        target = launcher_entry(sdk, launcher)
+        if target:
+            identity[f'{component}_entry'] = sha256(target['entry'])
+            identity[f'{component}_entity'] = sha256(target['entity'])
     archives = {str(path.relative_to(sdk)): sha256(path) for path in
                 sorted((sdk / 'lib/linux_x86_64_cjnative').glob('libcangjie-std-*.a'))}
     if 'lib/linux_x86_64_cjnative/libcangjie-std-core.a' not in archives:
@@ -68,9 +116,14 @@ def admit():
         if sha256(sdk / relative) != expected:
             raise ValueError(f'LANGUAGE_TOOLCHAIN_INCOMPATIBLE component={relative}')
     host_hash = sha256(host / 'libcangjie-runtime.so')
-    host_identity = directory_identity(host)
-    if (host_hash != proof['compiler_host'] or host_identity != proof['compiler_host_set'] or
-            directory_identity(sdk / 'host/compiler') != host_identity):
+    host_dirs, legacy_host = compiler_host_dirs(sdk)
+    if legacy_host:
+        host_identity = directory_identity(host)
+        host_bound = directory_identity(sdk / 'host/compiler') == host_identity
+    else:
+        host_identity = host_set_identity(sdk, host_dirs)
+        host_bound = host in [directory.resolve(strict=True) for directory in host_dirs]
+    if host_hash != proof['compiler_host'] or host_identity != proof['compiler_host_set'] or not host_bound:
         raise ValueError('LANGUAGE_COMPILER_HOST_INCOMPATIBLE')
     if sha256(checker) != proof['colour_checker'] or sha256(colour_host) != proof['colour_host']:
         raise ValueError('LANGUAGE_COLOUR_REFERENCE_INCOMPATIBLE')
