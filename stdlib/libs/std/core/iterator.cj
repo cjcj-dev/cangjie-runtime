@@ -14,6 +14,15 @@ package std.core
 public interface Iterable<E> {
     /* Returns an iterator over elements of type E. */
     func iterator(): Iterator<E>
+
+    @When[local_mode_api == "on"]
+    func iterator(this @local!): Iterator<E> @local! {
+        throw IllegalStateException("Current Type does not implement 'iterator' method for its @local! instance")
+    }
+    @When[local_mode_api == "on"]
+    func iterator(this @local?): Iterator<E> @local? {
+        throw IllegalStateException("Current Type does not implement 'iterator' method for its @local? instance")
+    }
 }
 
 /**
@@ -21,9 +30,32 @@ public interface Iterable<E> {
  */
 public abstract class Iterator<T> <: Iterable<T> {
     public func next(): Option<T>
+    /**
+     * Returns the next local value. Generic match-unpacking of its local Option
+     * result has the known GC limitation documented on Option; use a heap-mode
+     * iterator or consume a concrete payload type in non-generic code.
+     */
+    @When[local_mode_api == "on"]
+    public open func next(this @local!): ?T @local! {
+        throw IllegalStateException("Current Iterator does not implement 'next' method for its @local! instance")
+    }
+    /**
+     * When this iterator is local, its result has the same generic
+     * match-unpacking limitation as next(this @local!); see Option.
+     */
+    @When[local_mode_api == "on"]
+    public open func next(this @local?): ?T @local? {
+        throw IllegalStateException("Current Iterator does not implement 'next' method for its @local? instance")
+    }
 
     @Frozen
     public init() {}
+    @Frozen
+    @When[local_mode_api == "on"]
+    public exclave init(this @local!) {}
+    @Frozen
+    @When[local_mode_api == "on"]
+    public exclave init(this @local?) {}
 
     /*
      * Iterator.
@@ -32,6 +64,12 @@ public abstract class Iterator<T> <: Iterable<T> {
      */
     @Frozen
     public func iterator(): Iterator<T> { this }
+    @Frozen
+    @When[local_mode_api == "on"]
+    public func iterator(this @local!): Iterator<T> @local! { this }
+    @Frozen
+    @When[local_mode_api == "on"]
+    public func iterator(this @local?): Iterator<T> @local? { this }
 }
 
 class FilterIterator<T> <: Iterator<T> {
