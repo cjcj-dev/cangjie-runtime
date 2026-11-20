@@ -15,11 +15,9 @@ FLAGS="--target=wasm32-wasi --sysroot=$SR -O2 -std=c11 -Wall -Wextra -Werror -fn
 FAILS=0
 "$CC" $FLAGS -c "$HEAPC" -o heap.o; c1=$?
 "$CC" $FLAGS -c "$HERE/CjWasmHeapTest.c" -o heap_test.o; c2=$?
-# Legacy frame hooks live in their own member (CjWasmLegacyRoots.c); the unit tests push such frames.
-"$CC" $FLAGS -c "$SRC/CjWasmLegacyRoots.c" -o legacy.o; c5=$?
-"$LD" -o heap_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" heap.o legacy.o heap_test.o -L"$SR/lib/wasm32-wasi" -lc; c3=$?
-echo "build cc_heap=$c1 cc_test=$c2 cc_legacy=$c5 ld=$c3"
-if [ $c1 -ne 0 ] || [ $c2 -ne 0 ] || [ $c5 -ne 0 ] || [ $c3 -ne 0 ]; then echo "HEAP_TEST_FAILS=99"; exit 99; fi
+"$LD" -o heap_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" heap.o heap_test.o -L"$SR/lib/wasm32-wasi" -lc; c3=$?
+echo "build cc_heap=$c1 cc_test=$c2 ld=$c3"
+if [ $c1 -ne 0 ] || [ $c2 -ne 0 ] || [ $c3 -ne 0 ]; then echo "HEAP_TEST_FAILS=99"; exit 99; fi
 sha256sum heap_test.wasm; echo "node=$("$NODE" --version) flags=$NODE_FLAGS"
 "$NODE" $NODE_FLAGS "$RUN" heap_test.wasm all > all.out 2> all.err; r=$?
 cat all.out
@@ -35,7 +33,6 @@ while read -r mode want frag; do
 done <<'MODES'
 gate 0 -
 collect_unprecise 135 garbage collection without precise roots
-interior_root 139 not at the start of a live object
 no_gctib 135 no GC tib
 rt_varray 135 no derivable runtime field layout
 wild_ti 139 outside linear memory
@@ -44,21 +41,11 @@ array_bounds 139 exceeds its
 pop_order 139 popped while
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
-gate_legacy 0 -
 MODES
-# Root-completeness gate: heap without the legacy frame member, module records only.
-"$CC" $FLAGS -c "$HERE/CjWasmRootGateTest.c" -o gate_test.o && \
-  "$LD" -o root_gate_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" heap.o gate_test.o -L"$SR/lib/wasm32-wasi" -lc; c6=$?
-for mode in complete incomplete unrecorded_table no_record; do
-  r=NA; [ $c6 -eq 0 ] && { "$NODE" $NODE_FLAGS "$RUN" root_gate_test.wasm "$mode" > "gate_$mode.out" 2> "gate_$mode.err"; r=$?; }
-  v=FAIL; [ "$r" = 0 ] && grep -q "^PASS gate_$mode " "gate_$mode.out" && v=PASS
-  [ $v = PASS ] || FAILS=$((FAILS+1))
-  echo "$v mode=gate_$mode rc=$r want=0 build=$c6 out=$(tr '\n' '|' < "gate_$mode.out" 2>/dev/null)"
-done
 # Runtime-held roots: full runtime (CjWasmRuntime.c + heap) with a test-supplied Cangjie entry.
 RTC=${7:-$SRC/CjWasmRuntime.c}
 "$CC" $FLAGS -c "$RTC" -o rt.o && "$CC" $FLAGS -c "$HERE/CjWasmRuntimeRootTest.c" -o rt_root_test.o && \
-  "$LD" -o rt_root_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" rt.o heap.o legacy.o rt_root_test.o -L"$SR/lib/wasm32-wasi" -lc; c4=$?
+  "$LD" -o rt_root_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" rt.o heap.o rt_root_test.o -L"$SR/lib/wasm32-wasi" -lc; c4=$?
 r=NA; [ $c4 -eq 0 ] && { "$NODE" $NODE_FLAGS "$RUN" rt_root_test.wasm > rt_root.out 2> rt_root.err; r=$?; }
 v=FAIL; [ "$r" = 0 ] && grep -q '^THREAD_ROOT_FAILS=0$' rt_root.out && v=PASS
 [ $v = PASS ] || FAILS=$((FAILS+1))

@@ -660,19 +660,22 @@ static void MarkRoots(void)
     for (CjwRootFrame* f = __cj_root_top; f != NULL; f = f->prev) {
         if (FindChunk((uintptr_t)f) != NULL) { GcIntegrity("root frame %p lies inside the managed heap", (void*)f); }
         if (++frames > (1u << 24)) { GcIntegrity("shadow root stack longer than 2^24 frames (cycle?)"); }
-        if ((f->nslots & CJW_ROOT_FRAME_COMPLETE) == 0) {
-            for (uint32_t i = 0; i < f->nslots; ++i) { MarkRef(f->slots[i], "shadow root slot", &f->slots[i]); }
-            continue;
-        }
-        uint32_t n = f->nslots & ~CJW_ROOT_FRAME_COMPLETE;
-        for (uint32_t i = 0; i < n; ++i) { MarkFrameWord(f->slots[i], &f->slots[i]); }
+        for (uint32_t i = 0; i < f->nslots; ++i) { MarkFrameWord(f->slots[i], &f->slots[i]); }
         const CjwFrameRanges* r = (const CjwFrameRanges*)f->funcDesc;
         if (r == NULL) { continue; }
         if (FindChunk((uintptr_t)r) != NULL) { GcIntegrity("frame range table %p lies inside the managed heap", (const void*)r); }
         for (uint32_t k = 0; k < r->nranges; ++k) {
-            void* const* w = (void* const*)r->ranges[k].start;
-            if (FindChunk((uintptr_t)w) != NULL) { GcIntegrity("frame range %p lies inside the managed heap", (const void*)w); }
-            for (uint32_t i = 0; i < r->ranges[k].words; ++i) { MarkFrameWord(w[i], &w[i]); }
+            const uint8_t* start = r->ranges[k].start;
+            if (FindChunk((uintptr_t)start) != NULL) { GcIntegrity("frame range %p lies inside the managed heap", (const void*)start); }
+            // Stack-backed aggregates may be packed or written through a
+            // borrowed address. Read full pointer representations, including
+            // unaligned ones, without crossing the allocation boundary.
+            for (size_t end = sizeof(void*); end <= r->ranges[k].bytes; ++end) {
+                void* word;
+                const void* slot = start + end - sizeof(word);
+                memcpy(&word, slot, sizeof(word));
+                MarkFrameWord(word, slot);
+            }
         }
     }
     for (size_t r = 0; r < g_nstatic; ++r) {
@@ -743,75 +746,6 @@ static size_t Sweep(void)
     }
     return freed;
 }
-
-// ---------------------------------------------------------------------------
-// Root completeness of the program
-static uint32_t g_completeModules = 0, g_incompleteModules = 0;
-// The final wasm linker calls this from __wasm_call_ctors only after
-// checking every selected input. Ordinary module constructors cannot set it.
-static uint32_t g_linkModules;
-__attribute__((used, retain, visibility("hidden")))
-void __cj_wasm_linked_roots_v2(uint32_t modules) { g_linkModules = modules; }
-static int g_legacyFrames = 0;
-static void** const** g_claimed = NULL;
-static size_t g_nclaimed = 0, g_capClaimed = 0;
-static const char* g_rootsGate = "not-evaluated";
-
-void cjw_roots_module_complete(void** const* table)
-{
-    g_completeModules++;
-    if (table == NULL) { return; }
-    if (g_nclaimed == g_capClaimed) {
-        g_capClaimed = g_capClaimed ? g_capClaimed * 2 : 16;
-        g_claimed = (void** const**)XRealloc((void*)g_claimed, g_capClaimed * sizeof(*g_claimed));
-    }
-    g_claimed[g_nclaimed++] = table;
-}
-
-void cjw_roots_module_incomplete(void** const* table)
-{
-    (void)table;
-    g_incompleteModules++;
-}
-
-void cjw_roots_note_legacy_frames(void) { g_legacyFrames = 1; }
-
-static int Claimed(void** const* table)
-{
-    for (size_t i = 0; i < g_nclaimed; ++i) {
-        if (g_claimed[i] == table) { return 1; }
-    }
-    return 0;
-}
-
-void cjw_gc_evaluate_roots_gate(void)
-{
-    if (g_precise) {
-        g_rootsGate = "declared";
-        return;
-    }
-    const char* why = NULL;
-    if (g_legacyFrames) {
-        why = "legacy-frames";
-    } else if (g_incompleteModules != 0) {
-        why = "incomplete-module";
-    } else if (g_completeModules == 0) {
-        why = "no-root-record";
-    } else if (g_nstatic != 0) {
-        why = "untyped-static-range";
-    } else {
-        for (size_t t = 0; t < g_ntables && why == NULL; ++t) {
-            if (!Claimed(g_tables[t].entries)) { why = "unrecorded-static-table"; }
-        }
-    }
-    if (why == NULL && (!g_linkModules || g_linkModules != g_completeModules)) {
-        why = "unproven-link";
-    }
-    g_rootsGate = why != NULL ? why : "complete";
-    if (why == NULL) { g_precise = 1; }
-}
-
-const char* cjw_gc_roots_gate(void) { return g_rootsGate; }
 
 // ---------------------------------------------------------------------------
 // Collection
@@ -893,9 +827,9 @@ static void PrintStatsAtExit(void)
 {
     fprintf(stderr,
             "cangjie wasm32 runtime: gc stats: heap=%zu live=%zu allocated=%zu freed=%zu collections=%u chunks=%u "
-            "precise=%d roots=%s\n",
+            "precise=%d\n",
             g_stats.heapBytes, g_stats.liveBytes, g_stats.allocatedBytesTotal, g_stats.freedBytesTotal,
-            g_stats.collections, g_stats.chunks, g_precise, g_rootsGate);
+            g_stats.collections, g_stats.chunks, g_precise);
 }
 
 static void VerifyAtExit(void)

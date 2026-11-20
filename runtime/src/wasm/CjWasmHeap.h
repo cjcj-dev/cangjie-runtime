@@ -12,32 +12,20 @@
 //     targets (see CjWasmObjectModel.h);
 //   * explicit allocation and collection hooks.
 //
-// Soundness gate (read first): code compiled by the M0 toolchain does NOT push
-// shadow root frames and does not register its static reference slots, so a
-// collection inside such a program would free live objects. The collector
-// therefore never runs unless the embedder (or, later, compiled code) has
-// declared the roots precise with cjw_gc_declare_precise_roots(). Until then
-// cjw_collect() exits with CJW_RC_UNSUPPORTED and allocation only grows the
-// heap. Unsupported features are listed at the end of this header.
+// The WASI command runs static root constructors before Cangjie startup
+// enables collection. Compiled code uses one non-moving shadow-frame ABI.
 #ifndef CJ_WASM_HEAP_H
 #define CJ_WASM_HEAP_H
 #include <stddef.h>
 #include <stdint.h>
 
 // ---- shadow root stack (compiler <-> runtime ABI) --------------------------
-// A function that keeps managed references live across a call that may
-// allocate owns one frame record in linear memory (typically on the C shadow
-// stack at __stack_pointer). Prologue: frame.prev = __cj_root_top;
-// __cj_root_top = &frame. Every exit restores __cj_root_top = frame.prev
-// (catch landing pads restore the value saved at entry). Before each call that
-// may allocate, every live managed base pointer is stored into its slot; after
-// the call it is reloaded (keeps a future moving collector correct).
-// Legacy frames: slots hold NULL or the *start* of a managed object;
-// derived/interior pointers are rejected (GC integrity failure). Complete
-// frames (below) may hold derived pointers.
+// A frame surrounds a possibly allocating call. Slots contain live
+// managed references. A non-moving collector can retain the containing
+// allocation for an interior pointer; slots are never rewritten.
 typedef struct CjwRootFrame {
     struct CjwRootFrame* prev;
-    const void* funcDesc;   // opaque, diagnostics only (may be NULL)
+    const void* funcDesc;   // optional CjwFrameRanges
     uint32_t nslots;
     void* slots[];
 } CjwRootFrame;
@@ -46,23 +34,11 @@ _Static_assert(__builtin_offsetof(CjwRootFrame, nslots) == 8, "root frame: nslot
 _Static_assert(__builtin_offsetof(CjwRootFrame, slots) == 12, "root frame: slots at 12");
 
 extern CjwRootFrame* __cj_root_top;
-// Legacy (proof-based) frames: code that pushes them was not compiled under the
-// complete root contract. They live in their own archive member, whose
-// constructor keeps the collector off for the program (see the gate below).
-void cjw_root_frame_push(CjwRootFrame* frame);
-// Pops `frame`, which must be the current top (GC integrity failure otherwise).
-void cjw_root_frame_pop(CjwRootFrame* frame);
-
-// Complete frames (the complete root contract of the Cangjie LLVM). nslots has
-// CJW_ROOT_FRAME_COMPLETE set; a slot may hold any address that is live in the
-// compiled function, including a derived pointer: the collector is non-moving,
-// marks the object containing the address and never writes slots back.
-// funcDesc is NULL or a CjwFrameRanges naming the function's stack memory that
-// may hold references; every 4-byte word of a range is treated like a slot.
-#define CJW_ROOT_FRAME_COMPLETE 0x80000000u
+// funcDesc is NULL or names bounded stack ranges. Candidate addresses
+// found in these bytes can conservatively retain extra allocations.
 typedef struct {
     void* start;
-    uint32_t words;
+    uint32_t bytes;
 } CjwFrameRange;
 typedef struct {
     uint32_t nranges;
@@ -72,24 +48,6 @@ _Static_assert(__builtin_offsetof(CjwFrameRanges, ranges) == 4, "frame ranges at
 _Static_assert(sizeof(CjwFrameRange) == 8, "frame range is 8 bytes");
 void cjw_root_frame_push_complete(CjwRootFrame* frame);
 void cjw_root_frame_pop_complete(CjwRootFrame* frame);
-
-// ---- root completeness of the program ---------------------------------------
-// Each module compiled under the complete contract reports itself from a
-// constructor, naming its static root table (or NULL): complete, or incomplete
-// when some function had a shape the contract cannot cover.
-void cjw_roots_module_complete(void** const* table);
-void cjw_roots_module_incomplete(void** const* table);
-// Called by the legacy frame member's constructor.
-void cjw_roots_note_legacy_frames(void);
-// Evaluated once, after all constructors and before the Cangjie entry: the roots
-// require the final linker's exact nonzero partition count, that many complete
-// constructors, none
-// reported incomplete, no legacy frame code is linked, every registered static
-// root table belongs to a complete module and no untyped static range exists.
-// Otherwise the program runs without collection (allocation only grows the heap).
-void cjw_gc_evaluate_roots_gate(void);
-// "complete", "declared" (embedder), "not-evaluated" or the first failed condition.
-const char* cjw_gc_roots_gate(void);
 
 // ---- static and runtime-internal roots ------------------------------------
 // A static root range is `count` consecutive reference slots outside the

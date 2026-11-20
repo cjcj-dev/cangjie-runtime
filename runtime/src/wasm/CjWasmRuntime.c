@@ -773,7 +773,7 @@ void CJ_MRT_PreInitializePackage(void* packageInfo) { (void)packageInfo; }
 
 void CJ_MRT_CjRuntimeStart(int (*entry)(void))
 {
-    cjw_gc_evaluate_roots_gate();   // every module constructor has run
+    cjw_gc_declare_precise_roots(); // static root constructors have finished
     int rc = entry();
     fflush(stdout);
     fflush(stderr);
