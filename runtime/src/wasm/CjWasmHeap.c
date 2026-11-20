@@ -308,13 +308,13 @@ size_t cjw_heap_object_bytes(const void* p)
 
 // ---------------------------------------------------------------------------
 // Roots
-void cjw_root_frame_push_complete(CjwRootFrame* frame)
+void cjw_push_frame(CjwRootFrame* frame)
 {
     frame->prev = __cj_root_top;
     __cj_root_top = frame;
 }
 
-void cjw_root_frame_pop_complete(CjwRootFrame* frame)
+void cjw_pop_frame(CjwRootFrame* frame)
 {
     if (__cj_root_top != frame) {
         GcIntegrity("root frame %p popped while %p is the top of the shadow root stack", (void*)frame,

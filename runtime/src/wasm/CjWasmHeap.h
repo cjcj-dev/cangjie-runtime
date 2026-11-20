@@ -46,8 +46,8 @@ typedef struct {
 } CjwFrameRanges;
 _Static_assert(__builtin_offsetof(CjwFrameRanges, ranges) == 4, "frame ranges at 4");
 _Static_assert(sizeof(CjwFrameRange) == 8, "frame range is 8 bytes");
-void cjw_root_frame_push_complete(CjwRootFrame* frame);
-void cjw_root_frame_pop_complete(CjwRootFrame* frame);
+void cjw_push_frame(CjwRootFrame* frame);
+void cjw_pop_frame(CjwRootFrame* frame);
 
 // ---- static and runtime-internal roots ------------------------------------
 // A static root range is `count` consecutive reference slots outside the
