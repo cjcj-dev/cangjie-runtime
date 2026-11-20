@@ -16,6 +16,22 @@ _Noreturn void cjw_unsupported(const char* feature, int code)
     exit(code);
 }
 
+
+// Test frames are linked by hand, the way compiled code links them (CjWasmHeap.h).
+static void TestLinkFrame(CjwRootFrame* f) { f->prev = __cj_root_top; __cj_root_top = f; }
+static void TestUnlinkFrame(CjwRootFrame* f)
+{
+    if (__cj_root_top != f) { fprintf(stderr, "test frame %p unlinked out of order\n", (void*)f); exit(90); }
+    __cj_root_top = f->prev;
+}
+// Registers `n` consecutive slots through the static root table form.
+static void TestRegisterSlots(void** slots, size_t n)
+{
+    void*** table = (void***)malloc(n * sizeof(void**));
+    for (size_t i = 0; i < n; ++i) { table[i] = &slots[i]; }
+    cjw_static_root_table_register((void** const*)table, n);
+}
+
 typedef struct { _Alignas(8) uint8_t b[56]; } TestTI;
 typedef struct { uint32_t nBytes; uint8_t bits[8]; } TestTib;
 
@@ -128,9 +144,9 @@ static void TestAllocBasic(void)
     int ok = 1;
     static const size_t sizes[] = {4, 8, 9, 24, 100, 2048, 2049, 4096, 5000, 70000, 1u << 21};
     enum { N = sizeof(sizes) / sizeof(sizes[0]) };
-    // Rooted: with precise roots an allocation that finds no free space collects before growing.
+    // Rooted: once collection is enabled an allocation that finds no free space collects before growing.
     static uint8_t* p[N];
-    cjw_static_roots_register((void**)p, N);
+    TestRegisterSlots((void**)p, N);
     for (int i = 0; i < N; ++i) {
         p[i] = (uint8_t*)cjw_heap_alloc(sizes[i]);
         CHECK(((uintptr_t)p[i] & 7u) == 0);
@@ -153,16 +169,16 @@ static void TestAllocBasic(void)
 static void TestUnrootedReclaimed(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     enum { N = 1000 };
     static void* objs[N];
     for (int i = 0; i < N; ++i) { objs[i] = NewObj(&tiLeaf); }
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
     void* kept = NewObj(&tiLeaf);
     f->slots[0] = kept;
-    cjw_push_frame(f);
-    size_t freed = cjw_gc_collect_precise();
-    cjw_pop_frame(f);
+    TestLinkFrame(f);
+    size_t freed = cjw_gc_collect();
+    TestUnlinkFrame(f);
     int alive = 0;
     for (int i = 0; i < N; ++i) { alive += Alive(objs[i]); }
     CHECK(alive == 0);
@@ -175,17 +191,17 @@ static void TestUnrootedReclaimed(void)
 static void TestFrameRoot(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 2);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* a = NewObj(&tiLeaf);
     *(uint64_t*)((uint8_t*)a + 4) = 0x1122334455667788ull;
     f->slots[0] = a;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(a) && *(const void**)a == &tiLeaf && *(uint64_t*)((uint8_t*)a + 4) == 0x1122334455667788ull);
     CHECK(Stats().lastMarkedObjects == 1);
-    cjw_pop_frame(f);
-    (void)cjw_gc_collect_precise();
+    TestUnlinkFrame(f);
+    (void)cjw_gc_collect();
     CHECK(!Alive(a));
     CHECK(__cj_root_top == NULL);
     Report("frame_root", ok);
@@ -194,9 +210,9 @@ static void TestFrameRoot(void)
 static void TestGctibFields(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* n = NewObj(&tiNode); f->slots[0] = n;
     void* b = NewObj(&tiLeaf);
     void* c = NewObj(&tiLeaf);
@@ -204,37 +220,37 @@ static void TestGctibFields(void)
     *Slot(n, 0) = b;
     *(uint32_t*)Slot(n, 1) = (uint32_t)(uintptr_t)d;   // integer field that happens to equal d's address
     *Slot(n, 2) = c;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(n) && Alive(b) && Alive(c));
     CHECK(!Alive(d));
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("gctib_fields", ok);
 }
 
 static void TestRefArray(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* arr = NewArr(&tiRefArr, 5, 4); f->slots[0] = arr;
     void* e[5];
     for (int i = 0; i < 5; ++i) { e[i] = NewObj(&tiLeaf); *ArrSlot(arr, (uint32_t)i) = e[i]; }
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     for (int i = 0; i < 5; ++i) { CHECK(Alive(e[i])); }
     *ArrSlot(arr, 2) = NULL;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(e[2]) && Alive(e[0]) && Alive(e[4]) && Alive(arr));
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("ref_array", ok);
 }
 
 static void TestStructArray(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* arr = NewArr(&tiStructArr, 4, 8); f->slots[0] = arr;
     void* r[4]; void* x[4];
     for (int i = 0; i < 4; ++i) {
@@ -242,18 +258,18 @@ static void TestStructArray(void)
         *ArrSlot(arr, (uint32_t)(2 * i)) = r[i];                               // element i: ref @0
         *(uint32_t*)ArrSlot(arr, (uint32_t)(2 * i + 1)) = (uint32_t)(uintptr_t)x[i];   // u32 @4
     }
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     for (int i = 0; i < 4; ++i) { CHECK(Alive(r[i])); CHECK(!Alive(x[i])); }
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("struct_array", ok);
 }
 
 static void TestRuntimeStructArray(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* arr = NewArr(&tiRtStructArr, 4, 8); f->slots[0] = arr;   // allocated with the component width (8)
     void* r[4]; void* x[4];
     for (int i = 0; i < 4; ++i) {
@@ -261,42 +277,42 @@ static void TestRuntimeStructArray(void)
         *ArrSlot(arr, (uint32_t)(2 * i)) = r[i];
         *(uint32_t*)ArrSlot(arr, (uint32_t)(2 * i + 1)) = (uint32_t)(uintptr_t)x[i];
     }
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     for (int i = 0; i < 4; ++i) { CHECK(Alive(r[i])); CHECK(!Alive(x[i])); }
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("runtime_struct_array", ok);
 }
 
 static void TestPrimArray(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* arr = NewArr(&tiU32Arr, 3, 4); f->slots[0] = arr;
     void* x = NewObj(&tiLeaf);
     *(uint32_t*)ArrSlot(arr, 1) = (uint32_t)(uintptr_t)x;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(arr) && !Alive(x));
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("prim_array", ok);
 }
 
 static void TestCycles(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     void* a = NewObj(&tiNode); void* b = NewObj(&tiNode);
     *Slot(a, 0) = b; *Slot(b, 0) = a;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(a) && !Alive(b));
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     a = NewObj(&tiNode); b = NewObj(&tiNode);
     *Slot(a, 2) = b; *Slot(b, 2) = a; f->slots[0] = b;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(a) && Alive(b));
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("cycles", ok);
 }
 
@@ -304,15 +320,15 @@ static void* g_staticSlots[3];
 static void TestStaticRoots(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     static int registered = 0;
-    if (!registered) { cjw_static_roots_register(g_staticSlots, 3); registered = 1; }
+    if (!registered) { TestRegisterSlots(g_staticSlots, 3); registered = 1; }
     void* o = NewObj(&tiLeaf);
     g_staticSlots[1] = o;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(o));
     g_staticSlots[1] = NULL;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(o));
     Report("static_roots", ok);
 }
@@ -322,18 +338,18 @@ static void** const kRootTable[2] = { &g_tabA, &g_tabB };
 static void TestStaticRootTable(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     static int registered = 0;
     if (!registered) { cjw_static_root_table_register(kRootTable, 2); registered = 1; }
     void* a = NewObj(&tiLeaf); void* b = NewObj(&tiLeaf);
     g_tabA = a; g_tabB = b;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(a) && Alive(b));
     g_tabA = NULL;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(a) && Alive(b));
     g_tabB = NULL;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(b));
     Report("static_root_table", ok);
 }
@@ -341,13 +357,13 @@ static void TestStaticRootTable(void)
 static void TestInternalRoots(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     void* local = NewObj(&tiLeaf);
     cjw_add_root(&local);
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(local));
     cjw_remove_root(&local);
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(!Alive(local));
     Report("internal_roots", ok);
 }
@@ -355,17 +371,17 @@ static void TestInternalRoots(void)
 static void TestDeepChain(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     enum { N = 200000 };
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     for (int i = 0; i < N; ++i) {
         void* n = NewObj(&tiNode);           // may collect: the chain so far is rooted by slot 0
         *Slot(n, 0) = f->slots[0];
         *(uint32_t*)Slot(n, 1) = (uint32_t)i;
         f->slots[0] = n;
     }
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Stats().lastMarkedObjects == N);
     int count = 0, inOrder = 1;
     for (void* p = f->slots[0]; p != NULL && Alive(p); p = *Slot(p, 0)) {
@@ -374,8 +390,8 @@ static void TestDeepChain(void)
     }
     CHECK(count == N && inOrder);
     void* head = f->slots[0];
-    cjw_pop_frame(f);
-    (void)cjw_gc_collect_precise();
+    TestUnlinkFrame(f);
+    (void)cjw_gc_collect();
     CHECK(!Alive(head) && Stats().lastMarkedObjects == 0);
     Report("deep_chain", ok);
 }
@@ -383,12 +399,12 @@ static void TestDeepChain(void)
 static void TestLargeReuse(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     size_t heapAfterFirst = 0;
     for (int i = 0; i < 40; ++i) {
         uint8_t* big = NewBlob(3u << 20);
         big[(3u << 20) - 1] = 1;
-        (void)cjw_gc_collect_precise();
+        (void)cjw_gc_collect();
         CHECK(!Alive(big));
         if (i == 0) { heapAfterFirst = Stats().heapBytes; }
     }
@@ -399,11 +415,11 @@ static void TestLargeReuse(void)
 static void TestAutoThreshold(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     cjw_gc_set_auto_threshold(1u << 20);
     CjwGcStats s0 = Stats();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* keep = NewObj(&tiLeaf); f->slots[0] = keep;
     *(uint64_t*)((uint8_t*)keep + 4) = 0xC0FFEEull;
     for (int i = 0; i < (64 << 20) / 64; ++i) { (void)NewBlob(60); }
@@ -411,7 +427,7 @@ static void TestAutoThreshold(void)
     CHECK(s1.collections - s0.collections >= 32);
     CHECK(s1.heapBytes - s0.heapBytes <= (4u << 20));
     CHECK(Alive(keep) && *(uint64_t*)((uint8_t*)keep + 4) == 0xC0FFEEull);
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     cjw_gc_set_auto_threshold(CJW_GC_DEFAULT_AUTO_THRESHOLD);
     Report("auto_threshold", ok);
 }
@@ -419,13 +435,13 @@ static void TestAutoThreshold(void)
 static void TestMallocCoexist(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     cjw_gc_set_auto_threshold(0);
     enum { N = 20, MS = 200000, HS = 300000 };
     uint8_t* m[N];
     static uint8_t* h[N];   // rooted: a full heap collects before growing even with the threshold off
     static int registered = 0;
-    if (!registered) { cjw_static_roots_register((void**)h, N); registered = 1; }
+    if (!registered) { TestRegisterSlots((void**)h, N); registered = 1; }
     for (int i = 0; i < N; ++i) {
         m[i] = (uint8_t*)malloc(MS);
         CHECK(m[i] != NULL);
@@ -442,7 +458,7 @@ static void TestMallocCoexist(void)
     CHECK(Stats().chunks >= 2);
     memset(h, 0, sizeof(h));
     cjw_gc_set_auto_threshold(CJW_GC_DEFAULT_AUTO_THRESHOLD);
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     Report("malloc_coexist", ok);
 }
 
@@ -458,9 +474,9 @@ static void TestHooks(void)
     int ok = 1;
     uint32_t before = Stats().collections;
     cjw_gc_set_hook(Hook, NULL);
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     cjw_gc_set_hook(NULL, NULL);
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(g_hookBegin == 1 && g_hookEnd == 1 && g_hookEndCollections == before + 1);
     Report("hooks", ok);
 }
@@ -468,11 +484,11 @@ static void TestHooks(void)
 static void TestM0Boundary(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     void* p = cjw_alloc(16, 8);
     *(const void**)p = &tiLeaf;
     CHECK(Alive(p) && cjw_arena_bytes() == Stats().liveBytes);
-    cjw_collect();          // precise roots declared: collects instead of exiting
+    cjw_collect();          // collection enabled: collects
     CHECK(!Alive(p));
     Report("m0_boundary", ok);
 }
@@ -480,26 +496,26 @@ static void TestM0Boundary(void)
 static void TestRuntimeTypeInfoTib(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     uint32_t derived0 = Stats().derivedGCTibs;
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     // instance size 16 + header: payload {ref a @0, u32 @4 = &c, S{ref b @8, u32 @12}}
     void* o = cjw_heap_alloc(4 + 16); *(const void**)o = &tiRtClass; f->slots[0] = o;
     void* a = NewObj(&tiLeaf); void* b = NewObj(&tiLeaf); void* c = NewObj(&tiLeaf);
     *Slot(o, 0) = a; *(uint32_t*)Slot(o, 1) = (uint32_t)(uintptr_t)c; *Slot(o, 2) = b; *(uint32_t*)Slot(o, 3) = 9;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(o) && Alive(a) && Alive(b) && !Alive(c));
     const CjwGCTib* tib = (const CjwGCTib*)cjw_ti_ensure_gctib(&tiRtClass);
     CHECK(tib != NULL && tib->nBytes == 1 && tib->bits[0] == 0x05);          // slots 0 and 2
     const CjwGCTib* stib = (const CjwGCTib*)cjw_ti_ensure_gctib(&tiRtStruct);
     CHECK(stib != NULL && stib->bits[0] == 0x01);
     CHECK(Stats().derivedGCTibs - derived0 == 2);                            // class + nested struct, cached once
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Stats().derivedGCTibs - derived0 == 2);
     CHECK(cjw_ti_ensure_gctib(&tiRtVArrClass) == NULL);                      // VArray field: not derivable
     CHECK(cjw_ti_ensure_gctib(&tiNoTib) == NULL);                            // compiled TypeInfo without metadata
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("runtime_ti_gctib", ok);
 }
 
@@ -507,12 +523,12 @@ static uint64_t g_nonHeapThing[2];
 static void TestVerifyHeap(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CjwHeapVerifyStats v;
     cjw_gc_verify_heap(&v);
     CHECK(v.objects == 0 && v.heapRefs == 0);
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 6);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     void* n = NewObj(&tiNode); f->slots[0] = n;
     void* b = NewObj(&tiLeaf); f->slots[1] = b;
     void* c = NewObj(&tiLeaf); f->slots[2] = c;
@@ -533,7 +549,7 @@ static void TestVerifyHeap(void)
     CHECK(v.unmarkedHeapWords == 2 && v.untraceable == 1);        // the NoTib object is unrooted but not yet swept
     CHECK(Stats().collections > 0 && Alive(n) && Alive(b) && Alive(c));   // verification frees nothing
     f->slots[5] = NULL;
-    cjw_pop_frame(f);
+    TestUnlinkFrame(f);
     Report("verify_heap", ok);
 }
 
@@ -544,11 +560,11 @@ static void TestVerifyHeap(void)
 static void TestCompleteFrame(void)
 {
     int ok = 1;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 2);
     void* stack[3] = {0};
     struct { uint32_t n; CjwFrameRange r[1]; } ranges = {1, {{stack, sizeof(stack)}}};
-    f->funcDesc = &ranges;
+    f->ranges = &ranges;
     void* a = NewObj(&tiNode);
     void* child = NewObj(&tiLeaf);
     *Slot(a, 0) = child;
@@ -560,15 +576,15 @@ static void TestCompleteFrame(void)
     stack[0] = (void*)g_nonHeapThing;
     stack[1] = b;
     stack[2] = (void*)(uintptr_t)0x13;
-    cjw_push_frame(f);
-    (void)cjw_gc_collect_precise();
+    TestLinkFrame(f);
+    (void)cjw_gc_collect();
     CHECK(Alive(a) && Alive(child) && Alive(big) && Alive(b));
     CHECK(!Alive(garbage));
     stack[2] = (uint8_t*)garbage + 4;
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     CHECK(Alive(a) && Alive(big) && Alive(b) && !Alive(garbage));
-    cjw_pop_frame(f);
-    (void)cjw_gc_collect_precise();
+    TestUnlinkFrame(f);
+    (void)cjw_gc_collect();
     CHECK(!Alive(a) && !Alive(child) && !Alive(big) && !Alive(b));
     CHECK(__cj_root_top == NULL);
     Report("complete_frame", ok);
@@ -576,7 +592,7 @@ static void TestCompleteFrame(void)
 
 static int ModeGateNoAutoCollect(void)
 {
-    // No precise roots: allocation must never collect, the heap only grows.
+    // Collection not enabled: allocation must never collect, the heap only grows.
     int ok = 1;
     for (int i = 0; i < (48 << 20) / 64; ++i) { *(const void**)cjw_alloc(60, 8) = &tiLeaf; }
     CjwGcStats s = Stats();
@@ -590,14 +606,17 @@ int main(int argc, char** argv)
     InitTypes();
     const char* mode = argc > 1 ? argv[1] : "all";
     if (strcmp(mode, "gate") == 0) { return ModeGateNoAutoCollect(); }
-    if (strcmp(mode, "verify_interior") == 0) {   // verifier without precise roots, metadata points mid-object
+    if (strcmp(mode, "verify_interior") == 0) {   // verifier before collection is enabled, metadata points mid-object
         void* n = NewObj(&tiNode); void* b = NewObj(&tiLeaf);
         *Slot(n, 2) = (uint8_t*)b + 8;
         CjwHeapVerifyStats v; cjw_gc_verify_heap(&v);
         return 0;
     }
-    if (strcmp(mode, "collect_unprecise") == 0) { (void)cjw_alloc(16, 8); cjw_collect(); return 0; }
-    cjw_gc_declare_precise_roots();
+    if (strcmp(mode, "collect_before_enable") == 0) {   // I-BOOT: an explicit collection before enabling does nothing
+        void* o = cjw_alloc(16, 8); *(const void**)o = &tiLeaf; cjw_collect();
+        return cjw_heap_is_object(o) && Stats().collections == 0 ? 0 : 1;
+    }
+    cjw_gc_enable();
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
         TestStructArray(); TestRuntimeStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestStaticRootTable(); TestInternalRoots();
@@ -611,7 +630,7 @@ int main(int argc, char** argv)
         return g_fails;
     }
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 1);
-    cjw_push_frame(f);
+    TestLinkFrame(f);
     if (strcmp(mode, "wild_ti") == 0) {
         void* o = NewObj(&tiLeaf);
         *(uintptr_t*)o = 0xA0A0A0A0u;
@@ -632,15 +651,19 @@ int main(int argc, char** argv)
         void* arr = NewArr(&tiRefArr, 2, 4);
         *(int64_t*)((uint8_t*)arr + CJW_ARRAY_LENGTH_OFFSET) = 100000;
         f->slots[0] = arr;
-    } else if (strcmp(mode, "pop_order") == 0) {
-        FrameStore fs2; CjwRootFrame* g = Frame(&fs2, 0);
-        cjw_push_frame(g);
-        cjw_pop_frame(f);
-        return 0;
+    } else if (strcmp(mode, "frame_order") == 0) {
+        // I-FRAME: a caller frame must lie above its callee on the wasm stack.
+        static FrameStore other;   // static data and the stack frame `f` are in different regions
+        CjwRootFrame* g = Frame(&other, 0);
+        CjwRootFrame* lo = (uintptr_t)g < (uintptr_t)f ? g : f;
+        CjwRootFrame* hi = lo == g ? f : g;
+        hi->prev = lo;   // the caller (prev) is at a LOWER address: violates I-FRAME
+        lo->prev = NULL;
+        __cj_root_top = hi;
     } else {
         fprintf(stderr, "unknown mode %s\n", mode);
         return 90;
     }
-    (void)cjw_gc_collect_precise();
+    (void)cjw_gc_collect();
     return 0;
 }

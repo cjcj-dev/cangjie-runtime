@@ -24,7 +24,7 @@ void cjw_root_test_main(int argc, char** argv)
     void* thread = CJ_MCC_NewObject(&tiLeaf, 12);
     void* control = CJ_MCC_NewObject(&tiLeaf, 12);              // only a C local: not a root
     CJ_MCC_SetCurrentCJThreadObject(thread);
-    cjw_gc_declare_precise_roots();
+    cjw_gc_enable();
     cjw_collect();
     if (!cjw_heap_is_object(thread)) { puts("check failed: thread object freed while it is the current thread"); fails++; }
     if (cjw_heap_is_object(control)) { puts("check failed: unrooted control object survived"); fails++; }

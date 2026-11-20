@@ -773,7 +773,7 @@ void CJ_MRT_PreInitializePackage(void* packageInfo) { (void)packageInfo; }
 
 void CJ_MRT_CjRuntimeStart(int (*entry)(void))
 {
-    cjw_gc_declare_precise_roots(); // static root constructors have finished
+    cjw_gc_enable(); // I-BOOT: every linked partition's static root table is registered by now
     int rc = entry();
     fflush(stdout);
     fflush(stderr);

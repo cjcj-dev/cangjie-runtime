@@ -44,7 +44,9 @@ static uint32_t g_nchunks = 0;
 static uint32_t g_capChunks = 0;
 static void* g_freeList[CJW_NCLASSES];
 
-static int g_precise = 0;
+static int g_collecting = 0;   // set by cjw_gc_enable
+static int g_gcEvery = 0;      // CJ_WASM_GC_EVERY=1: collect at every allocation
+static int g_growFirst = 0;    // growth rule: the last collection left > 1/2 of the heap live
 static int g_inGc = 0;
 static size_t g_autoThreshold = CJW_GC_DEFAULT_AUTO_THRESHOLD;
 static size_t g_sinceGc = 0;
@@ -54,9 +56,6 @@ static void* g_hookArg = NULL;
 
 CjwRootFrame* __cj_root_top = NULL;
 
-typedef struct { void** slots; size_t count; } CjwStaticRange;
-static CjwStaticRange* g_static = NULL;
-static size_t g_nstatic = 0, g_capStatic = 0;
 typedef struct { void** const* entries; size_t count; } CjwRootTable;
 static CjwRootTable* g_tables = NULL;
 static size_t g_ntables = 0, g_capTables = 0;
@@ -263,17 +262,23 @@ void* cjw_heap_alloc(size_t size)
     if (size == 0) { size = CJW_GRANULE; }
     if (size > ((size_t)1 << 31)) { OutOfMemory(size); }
     if (g_inGc) { GcIntegrity("managed allocation of %zu bytes during a collection", size); }
-    if (g_precise && g_autoThreshold != 0 && g_sinceGc + size > g_autoThreshold) { (void)cjw_gc_collect_precise(); }
-    void* p = TryAlloc(size);
-    if (p == NULL && g_precise && g_sinceGc != 0) {
-        (void)cjw_gc_collect_precise();
-        p = TryAlloc(size);
+    // I-SLACK: reserve at least one byte more than requested, so a one-past
+    // address of the object still lies inside its own allocation unit.
+    size_t unit = size + 1;
+    if (g_collecting && (g_gcEvery || (g_autoThreshold != 0 && g_sinceGc + size > g_autoThreshold))) {
+        (void)cjw_gc_collect();
+    }
+    void* p = TryAlloc(unit);
+    if (p == NULL && g_collecting && g_sinceGc != 0 && !g_growFirst) {
+        (void)cjw_gc_collect();
+        p = TryAlloc(unit);
     }
     if (p == NULL) {
-        uint32_t cls = SizeClass(size);
-        uint32_t blocks = cls < CJW_NCLASSES ? 1u : (uint32_t)((size + CJW_BLOCK_BYTES - 1) >> CJW_BLOCK_SHIFT);
+        uint32_t cls = SizeClass(unit);
+        uint32_t blocks = cls < CJW_NCLASSES ? 1u : (uint32_t)((unit + CJW_BLOCK_BYTES - 1) >> CJW_BLOCK_SHIFT);
         if (NewChunk(blocks) == NULL) { OutOfMemory(size); }
-        p = TryAlloc(size);
+        g_growFirst = g_stats.liveBytes * 2 > g_stats.heapBytes;
+        p = TryAlloc(unit);
         if (p == NULL) { GcIntegrity("fresh heap chunk cannot satisfy %zu bytes", size); }
     }
     size_t got = cjw_heap_object_bytes(p);
@@ -308,34 +313,6 @@ size_t cjw_heap_object_bytes(const void* p)
 
 // ---------------------------------------------------------------------------
 // Roots
-void cjw_push_frame(CjwRootFrame* frame)
-{
-    frame->prev = __cj_root_top;
-    __cj_root_top = frame;
-}
-
-void cjw_pop_frame(CjwRootFrame* frame)
-{
-    if (__cj_root_top != frame) {
-        GcIntegrity("root frame %p popped while %p is the top of the shadow root stack", (void*)frame,
-                    (void*)__cj_root_top);
-    }
-    __cj_root_top = frame->prev;
-}
-
-void cjw_static_roots_register(void** slots, size_t count)
-{
-    if (slots == NULL || count == 0) { return; }
-    if (FindChunk((uintptr_t)slots) != NULL) { GcIntegrity("static root range %p lies inside the managed heap", (void*)slots); }
-    if (g_nstatic == g_capStatic) {
-        g_capStatic = g_capStatic ? g_capStatic * 2 : 16;
-        g_static = (CjwStaticRange*)XRealloc(g_static, g_capStatic * sizeof(CjwStaticRange));
-    }
-    g_static[g_nstatic].slots = slots;
-    g_static[g_nstatic].count = count;
-    g_nstatic++;
-}
-
 void cjw_static_root_table_register(void** const* entries, size_t count)
 {
     if (count == 0) { return; }
@@ -630,9 +607,11 @@ static void TraceObject(void* ref)
     }
 }
 
-// A complete-frame word: NULL, a non-heap address, or any address inside the
-// heap. Marks the live object containing it; free cells, free blocks and a small
-// block's unused tail hold no object and are ignored (stale stack words).
+// A shadow-frame word (slot or range byte window): NULL, a non-heap address, or
+// any address inside the heap. Interpreted conservatively by address: marks the
+// live allocation unit containing it (I-SLACK makes a one-past address belong to
+// its own unit); free cells, free blocks and a small block's unused tail hold no
+// object and are ignored (stale stack words).
 static void MarkFrameWord(void* v, const void* where)
 {
     uintptr_t a = (uintptr_t)v;
@@ -651,22 +630,32 @@ static void MarkFrameWord(void* v, const void* where)
         return;
     }
     if (!TestBit(c->allocBits, GranuleOf(c, start))) { return; }
-    MarkRef((void*)start, "complete shadow root", where);
+    MarkRef((void*)start, "shadow frame word", where);
 }
 
 static void MarkRoots(void)
 {
     size_t frames = 0;
+    // MarkRoots order follows the ZGC root task split (zMark.cpp root tasks):
+    // stack frames, then static tables, then runtime-internal roots.
     for (CjwRootFrame* f = __cj_root_top; f != NULL; f = f->prev) {
+        // I-FRAME diagnostics: frames live on the wasm stack (not the heap), the
+        // chain ascends strictly in stack address and every length is bounded.
         if (FindChunk((uintptr_t)f) != NULL) { GcIntegrity("root frame %p lies inside the managed heap", (void*)f); }
         if (++frames > (1u << 24)) { GcIntegrity("shadow root stack longer than 2^24 frames (cycle?)"); }
+        if (f->prev != NULL && (uintptr_t)f->prev <= (uintptr_t)f) {
+            GcIntegrity("root frame %p is not below its caller frame %p", (void*)f, (void*)f->prev);
+        }
+        if (f->nslots > (1u << 20)) { GcIntegrity("root frame %p claims %u slots", (void*)f, f->nslots); }
         for (uint32_t i = 0; i < f->nslots; ++i) { MarkFrameWord(f->slots[i], &f->slots[i]); }
-        const CjwFrameRanges* r = (const CjwFrameRanges*)f->funcDesc;
+        const CjwFrameRanges* r = f->ranges;
         if (r == NULL) { continue; }
         if (FindChunk((uintptr_t)r) != NULL) { GcIntegrity("frame range table %p lies inside the managed heap", (const void*)r); }
+        if (r->nranges > (1u << 16)) { GcIntegrity("root frame %p claims %u stack ranges", (void*)f, r->nranges); }
         for (uint32_t k = 0; k < r->nranges; ++k) {
             const uint8_t* start = r->ranges[k].start;
             if (FindChunk((uintptr_t)start) != NULL) { GcIntegrity("frame range %p lies inside the managed heap", (const void*)start); }
+            if (r->ranges[k].bytes > (1u << 26)) { GcIntegrity("frame range %p claims %u bytes", (const void*)start, r->ranges[k].bytes); }
             // Stack-backed aggregates may be packed or written through a
             // borrowed address. Read full pointer representations, including
             // unaligned ones, without crossing the allocation boundary.
@@ -676,11 +665,6 @@ static void MarkRoots(void)
                 memcpy(&word, slot, sizeof(word));
                 MarkFrameWord(word, slot);
             }
-        }
-    }
-    for (size_t r = 0; r < g_nstatic; ++r) {
-        for (size_t i = 0; i < g_static[r].count; ++i) {
-            MarkRef(g_static[r].slots[i], "static root slot", &g_static[r].slots[i]);
         }
     }
     for (size_t t = 0; t < g_ntables; ++t) {
@@ -749,8 +733,8 @@ static size_t Sweep(void)
 
 // ---------------------------------------------------------------------------
 // Collection
-void cjw_gc_declare_precise_roots(void) { g_precise = 1; }
-int cjw_gc_roots_precise(void) { return g_precise; }
+void cjw_gc_enable(void) { g_collecting = 1; }
+int cjw_gc_enabled(void) { return g_collecting; }
 void cjw_gc_set_auto_threshold(size_t bytes) { g_autoThreshold = bytes; }
 void cjw_gc_set_hook(CjwGcHook hook, void* arg)
 {
@@ -760,12 +744,9 @@ void cjw_gc_set_hook(CjwGcHook hook, void* arg)
 
 static void RedzonesAfterCollect(void);
 
-size_t cjw_gc_collect_precise(void)
+size_t cjw_gc_collect(void)
 {
-    if (!g_precise) {
-        cjw_unsupported("garbage collection without precise roots (compiled code does not maintain the shadow root "
-                        "stack yet)", CJW_RC_UNSUPPORTED);
-    }
+    if (!g_collecting) { return 0; }   // before CJ_MRT_CjRuntimeStart: nothing collects (I-BOOT)
     if (g_inGc) { GcIntegrity("re-entrant collection"); }
     g_inGc = 1;
     if (g_hook != NULL) { g_hook(CJW_GC_PHASE_BEGIN, &g_stats, g_hookArg); }
@@ -781,6 +762,7 @@ size_t cjw_gc_collect_precise(void)
     g_stats.lastFreedBytes = freed;
     g_stats.collections++;
     g_sinceGc = 0;
+    g_growFirst = g_stats.liveBytes * 2 > g_stats.heapBytes;
     RedzonesAfterCollect();   // drop records of reclaimed objects before their cells can be reused
     if (g_hook != NULL) { g_hook(CJW_GC_PHASE_END, &g_stats, g_hookArg); }
     g_inGc = 0;
@@ -827,9 +809,9 @@ static void PrintStatsAtExit(void)
 {
     fprintf(stderr,
             "cangjie wasm32 runtime: gc stats: heap=%zu live=%zu allocated=%zu freed=%zu collections=%u chunks=%u "
-            "precise=%d\n",
+            "collecting=%d\n",
             g_stats.heapBytes, g_stats.liveBytes, g_stats.allocatedBytesTotal, g_stats.freedBytesTotal,
-            g_stats.collections, g_stats.chunks, g_precise);
+            g_stats.collections, g_stats.chunks, g_collecting);
 }
 
 static void VerifyAtExit(void)
@@ -838,9 +820,9 @@ static void VerifyAtExit(void)
     cjw_gc_verify_heap(&v);
     fprintf(stderr,
             "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
-            "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_ranges=%zu static_tables=%zu\n",
+            "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_tables=%zu\n",
             v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs, v.unmarkedHeapWords,
-            g_ninternal, g_nstatic, g_ntables);
+            g_ninternal, g_ntables);
 }
 
 // Diagnostic redzones (CJ_WASM_HEAP_REDZONE=1): every cjw_alloc request gets 16 extra bytes and the
@@ -887,6 +869,8 @@ void* cjw_alloc(size_t size, size_t align)
         g_statsAtExit = 1;
         const char* s = getenv("CJ_WASM_GC_STATS");
         if (s != NULL && s[0] == '1') { atexit(PrintStatsAtExit); }
+        const char* every = getenv("CJ_WASM_GC_EVERY");
+        if (every != NULL && every[0] == '1') { g_gcEvery = 1; }
         const char* rz = getenv("CJ_WASM_HEAP_REDZONE");
         if (rz != NULL && rz[0] == '1') {
             g_redzone = 1;
@@ -911,6 +895,6 @@ void* cjw_alloc(size_t size, size_t align)
     return p;
 }
 
-void cjw_collect(void) { (void)cjw_gc_collect_precise(); }
+void cjw_collect(void) { (void)cjw_gc_collect(); }
 
 size_t cjw_arena_bytes(void) { return g_stats.liveBytes; }

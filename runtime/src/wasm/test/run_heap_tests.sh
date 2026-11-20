@@ -32,13 +32,13 @@ while read -r mode want frag; do
   echo "$v mode=$mode rc=$r want=$want out=$(tr '\n' '|' < "$mode.out") err=$msg"
 done <<'MODES'
 gate 0 -
-collect_unprecise 135 garbage collection without precise roots
+collect_before_enable 0 -
 no_gctib 135 no GC tib
 rt_varray 135 no derivable runtime field layout
 wild_ti 139 outside linear memory
 tib_beyond 139 beyond its
 array_bounds 139 exceeds its
-pop_order 139 popped while
+frame_order 139 is not below its caller frame
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
 MODES

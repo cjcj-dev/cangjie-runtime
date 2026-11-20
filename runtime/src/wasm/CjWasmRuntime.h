@@ -20,7 +20,7 @@
 // from the linear-memory heap of CjWasmHeap.c (mark-sweep, see CjWasmHeap.h).
 void* cjw_alloc(size_t size, size_t align);
 // Collection request; exits with CJW_RC_UNSUPPORTED unless the roots were
-// declared precise (cjw_gc_declare_precise_roots, CjWasmHeap.h).
+// enabled (cjw_gc_enable, CjWasmHeap.h).
 void cjw_collect(void);
 size_t cjw_arena_bytes(void);
 

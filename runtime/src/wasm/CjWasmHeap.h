@@ -7,9 +7,14 @@
 //     large objects as block runs, side alloc/mark bitmaps per 8-byte granule);
 //   * a shadow root stack ABI for compiled code, a static root registry and
 //     runtime-internal root slots;
-//   * a precise, non-moving mark-sweep collector that traces objects with the
-//     TypeInfo/GCTib metadata emitted by cjcj + the Cangjie LLVM for 32-bit
-//     targets (see CjWasmObjectModel.h);
+//   * a non-moving, single-threaded stop-the-world mark-sweep collector. Heap
+//     objects are traced precisely with the TypeInfo/GCTib metadata emitted by
+//     cjcj + the Cangjie LLVM for 32-bit targets (see CjWasmObjectModel.h);
+//     static roots are precise slot addresses; stack roots are the words that
+//     compiled code publishes in its shadow frames and the bytes of the stack
+//     ranges those frames name. Stack words are interpreted conservatively by
+//     address (an interior or one-past address keeps the whole allocation unit
+//     alive), so this is not a precise collector;
 //   * explicit allocation and collection hooks.
 //
 // The WASI command runs static root constructors before Cangjie startup
@@ -20,12 +25,17 @@
 #include <stdint.h>
 
 // ---- shadow root stack (compiler <-> runtime ABI) --------------------------
-// A frame surrounds a possibly allocating call. Slots contain live
-// managed references. A non-moving collector can retain the containing
-// allocation for an interior pointer; slots are never rewritten.
+// One frame per activation of a compiled function that needs one (I-FRAME).
+// The root pass, the last IR pass of the Cangjie pipeline, emits inline code:
+// on entry it clears the frame's ranges, stores `ranges`, `nslots = 0`,
+// `prev = __cj_root_top` and links `__cj_root_top = &frame`; before every call
+// that may collect it stores the live managed values in slots[0..k) and
+// `nslots = k`; before every return it unlinks `__cj_root_top = prev`. Slots are
+// never rewritten (the collector does not move objects).
+struct CjwFrameRanges;
 typedef struct CjwRootFrame {
     struct CjwRootFrame* prev;
-    const void* funcDesc;   // optional CjwFrameRanges
+    const struct CjwFrameRanges* ranges;   // NULL or the frame's stack ranges
     uint32_t nslots;
     void* slots[];
 } CjwRootFrame;
@@ -34,25 +44,21 @@ _Static_assert(__builtin_offsetof(CjwRootFrame, nslots) == 8, "root frame: nslot
 _Static_assert(__builtin_offsetof(CjwRootFrame, slots) == 12, "root frame: slots at 12");
 
 extern CjwRootFrame* __cj_root_top;
-// funcDesc is NULL or names bounded stack ranges. Candidate addresses
-// found in these bytes can conservatively retain extra allocations.
+// Stack ranges are scanned byte by byte; candidate addresses found in these
+// bytes can conservatively retain extra allocations.
 typedef struct {
     void* start;
     uint32_t bytes;
 } CjwFrameRange;
-typedef struct {
+typedef struct CjwFrameRanges {
     uint32_t nranges;
     CjwFrameRange ranges[];
 } CjwFrameRanges;
+_Static_assert(__builtin_offsetof(CjwRootFrame, ranges) == 4, "root frame: ranges at 4");
 _Static_assert(__builtin_offsetof(CjwFrameRanges, ranges) == 4, "frame ranges at 4");
 _Static_assert(sizeof(CjwFrameRange) == 8, "frame range is 8 bytes");
-void cjw_push_frame(CjwRootFrame* frame);
-void cjw_pop_frame(CjwRootFrame* frame);
 
 // ---- static and runtime-internal roots ------------------------------------
-// A static root range is `count` consecutive reference slots outside the
-// managed heap (package globals, static fields). Registration is permanent.
-void cjw_static_roots_register(void** slots, size_t count);
 // A static root table is `count` slot ADDRESSES (entries[i] is the address of one
 // reference slot outside the heap), for non-contiguous globals: the form a
 // compiler can emit per package and register from the package initializer.
@@ -67,11 +73,13 @@ void cjw_remove_root(void** slot);
 
 // ---- allocation ------------------------------------------------------------
 // Zeroed, 8-byte aligned managed memory; never returns NULL (out of memory
-// exits with CJW_RC_UNSUPPORTED like the M0 arena). With precise roots it may
-// collect first: when the automatic threshold is reached, or when no free
-// cell/block run fits the request (collect before growing linear memory).
-// Growth policy: once the live set fills the heap, precise mode therefore runs a
-// full collection roughly every chunk's worth (1 MiB) of allocation, then grows.
+// exits with CJW_RC_UNSUPPORTED like the M0 arena). Once collection is enabled it
+// may collect first: when the automatic threshold is reached, when
+// CJ_WASM_GC_EVERY=1, or when no free cell/block run fits the request (collect
+// before growing linear memory). Growth rule: when the previous collection left
+// more than half of the heap live, a failed fit grows the heap without another
+// collection. I-SLACK: every allocation unit is strictly larger than the
+// request, so any address in [base, base + size] belongs to the unit.
 // Contract: the caller stores the object's TypeInfo* at offset 0 before the
 // next allocation or collection point (the collector traces by TypeInfo).
 void* cjw_heap_alloc(size_t size);
@@ -83,18 +91,18 @@ size_t cjw_heap_object_bytes(const void* p);
 int cjw_heap_contains(const void* p);
 
 // ---- collection policy and entry points -----------------------------------
-// Declares that every managed reference that is live at an allocation or
-// collection point is reachable from the shadow root stack, the static root
-// ranges or the internal root slots. Irreversible for the instance.
-void cjw_gc_declare_precise_roots(void);
-int cjw_gc_roots_precise(void);
+// Enables collection (CJ_MRT_CjRuntimeStart, after the static root
+// constructors ran). Irreversible for the instance; before it no allocation
+// collects and an explicit collection does nothing.
+void cjw_gc_enable(void);
+int cjw_gc_enabled(void);
 // Bytes allocated since the last collection that trigger an automatic
-// collection (only with precise roots). 0 disables automatic collection.
+// collection (only once collection is enabled). 0 disables automatic collection.
 void cjw_gc_set_auto_threshold(size_t bytes);
 #define CJW_GC_DEFAULT_AUTO_THRESHOLD (8u << 20)
-// Runs one full collection; requires precise roots (exits with
-// CJW_RC_UNSUPPORTED otherwise). Returns the number of bytes reclaimed.
-size_t cjw_gc_collect_precise(void);
+// Runs one full collection and returns the number of bytes reclaimed (0 and
+// no collection before cjw_gc_enable).
+size_t cjw_gc_collect(void);
 
 typedef struct {
     size_t heapBytes;          // linear memory owned by the heap (all chunks)
@@ -113,7 +121,7 @@ void cjw_gc_get_stats(CjwGcStats* out);
 
 // Heap verifier: walks every allocated object and checks its TypeInfo and each
 // reference slot its metadata describes (NULL, outside the heap, or the start of
-// a live object). Never marks or frees, so it is sound without precise roots and
+// a live object). Never marks or frees, so it is sound before collection is enabled and
 // can validate the metadata contract on objects of real compiled programs.
 // It is one-sided for marked slots (a marked slot must be valid) and only
 // probes the converse (unmarked words that look like object starts).
@@ -153,7 +161,7 @@ void cjw_gc_set_hook(CjwGcHook hook, void* arg);
 
 // ---- unsupported in this M1 foundation (explicit, not silent) --------------
 // * Collection in compiled Cangjie programs: needs the shadow-stack lowering
-//   in the compiler and a static root table; until then cjw_collect() exits.
+//   in the compiler and a static root table; before cjw_gc_enable cjw_collect() does nothing.
 // * Interior/derived pointers as roots or fields: integrity failure.
 // * References stored inside non-heap memory (data segment, malloc) are not
 //   traced unless the slot is registered as a static or internal root.
