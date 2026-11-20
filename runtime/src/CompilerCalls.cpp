@@ -59,6 +59,7 @@
 #include <vector>
 #include "Sync/Sync.h"
 #include "UnwindStack/GcStackInfo.h"
+#include "ThreadCreatorInfo.h"
 #include "CpuProfiler/CpuProfiler.h"
 #ifdef __OHOS__
 #include "schedule.h"
@@ -642,7 +643,17 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
             liteFrameInfos.push_back(static_cast<uint64_t>(SofStackFlag::TOP_FOLDED));
         }
     }
-    MIndex size = liteFrameInfos.size();
+    const CreatorFrameInfo creator = CJThreadGetCreatorFrame();
+    std::vector<uint64_t> withCreator;
+    if (creator.ip != 0) {
+        withCreator = liteFrameInfos;
+        const bool folded = withCreator.size() % frameInfoPairLen == 1;
+        withCreator.insert(withCreator.end() - (folded ? 1 : 0),
+                           {creator.ip, creator.funcStart, creator.funcDesc});
+    }
+    // Keep ExceptionWrapper's physical frames unchanged for crash and platform reporting.
+    const auto& result = creator.ip != 0 ? withCreator : liteFrameInfos;
+    MIndex size = result.size();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (UNLIKELY(ENABLE_LOG(EXCEPTION))) {
         MIndex arraySize = size;
@@ -651,10 +662,8 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         }
         DLOG(EXCEPTION, "fill in stack info");
         DLOG(EXCEPTION, "layer\tframePC\t\tframeFuncStart\tsize : %zu", (arraySize / frameInfoPairLen));
-        for (int i = 0; i < arraySize; ++i) {
-            uint64_t framePC = liteFrameInfos[i];
-            uint64_t frameFuncStart = liteFrameInfos[++i];
-            DLOG(EXCEPTION, "#%x\t0x%x\t0x%x", ((i - 1) / frameInfoPairLen), framePC, frameFuncStart);
+        for (MIndex i = 0; i < arraySize; i += frameInfoPairLen) {
+            DLOG(EXCEPTION, "#%x\t0x%x\t0x%x", (i / frameInfoPairLen), result[i], result[i + 1]);
         }
     }
 #endif
@@ -678,7 +687,7 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         return nullptr;
     }
     for (MIndex i = 0; i < size; ++i) {
-        array->SetPrimitiveElement(i, static_cast<int64_t>(liteFrameInfos[i]));
+        array->SetPrimitiveElement(i, static_cast<int64_t>(result[i]));
     }
     return array;
 }

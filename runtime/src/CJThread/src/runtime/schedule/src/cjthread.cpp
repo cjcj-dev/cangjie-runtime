@@ -269,6 +269,7 @@ MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr 
     DulinkInit(&(newCJThread->schdDulink));
     atomic_store_explicit(&newCJThread->state, CJTHREAD_IDLE, std::memory_order_relaxed);
     newCJThread->name[0] = '\0';
+    newCJThread->creatorFrame = {};
 
     return 0;
 }
@@ -1277,10 +1278,15 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
     return newCJThread;
 }
 
-/* Create a cjthread in the cjthread context. */
-CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
-                           const void *argStart, unsigned int argSize, CJThreadCreateSource createSource, uintptr_t rootColor)
+/* Copy diagnostic metadata into the child before publishing it. */
+CJThreadHandle CJThreadNewWithCreator(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
+                                     const void *argStart, unsigned int argSize, CJThreadCreateSource createSource,
+                                     uintptr_t rootColor, const MapleRuntime::CreatorFrameInfo& creator)
 {
+    if (schedule == nullptr) {
+        LOG_ERROR(ERRNO_SCHD_INVALID, "schedule null invalid");
+        return nullptr;
+    }
     unsigned long long cjthreadId = CJThreadNewId();
 #ifdef __OHOS__
     TRACE_START_ASYNC(TRACE_CJTHREAD_NEW, cjthreadId);
@@ -1300,6 +1306,7 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
     }
     // Set cjthread id in CJThreadNew
     CJThreadSetId(newCJThread, cjthreadId);
+    newCJThread->creatorFrame = creator;
     CJThreadBuf buf = (CJThreadGet() == nullptr || currentSchedule != targetSchedule) ? GLOBAL_BUF : LOCAL_BUF;
 #ifdef __OHOS__
     TRACE_FINISH_ASYNC(TRACE_CJTHREAD_NEW, cjthreadId);
@@ -1340,6 +1347,18 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
     // Attempt to start a thread to perform scheduling.
     ProcessorWake(targetSchedule, nullptr);
     return newCJThread;
+}
+
+CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
+                           const void *argStart, unsigned int argSize, CJThreadCreateSource createSource, uintptr_t rootColor)
+{
+    return CJThreadNewWithCreator(schedule, attrUser, func, argStart, argSize, createSource, rootColor, {});
+}
+
+MapleRuntime::CreatorFrameInfo MapleRuntime::CJThreadGetCreatorFrame()
+{
+    const struct CJThread* thread = CJThreadGet();
+    return thread == nullptr || thread->isCJThread0 ? CreatorFrameInfo{} : thread->creatorFrame;
 }
 
 /* Submit tasks from an external thread to the scheduling framework. */
