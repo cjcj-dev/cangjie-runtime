@@ -12,6 +12,9 @@ _Noreturn void cjw_unsupported(const char* feature, int code)
     exit(code);
 }
 
+// Unit control for the linker-to-runtime count ABI. The SDK test exercises
+// the real linker; these unit cases only exercise the runtime consumer.
+extern void __cj_wasm_linked_roots_v2(uint32_t);
 static void* g_a;
 static void* g_b;
 static void** const kTable[2] = {&g_a, &g_b};
@@ -24,6 +27,12 @@ int main(int argc, char** argv)
         cjw_static_root_table_register(kTable, 2);
         cjw_roots_module_complete(kTable);
         cjw_roots_module_complete(NULL);
+        cjw_gc_evaluate_roots_gate();
+        if (cjw_gc_roots_precise() || strcmp(cjw_gc_roots_gate(), "unproven-link")) return 1;
+        __cj_wasm_linked_roots_v2(1);
+        cjw_gc_evaluate_roots_gate();
+        if (cjw_gc_roots_precise() || strcmp(cjw_gc_roots_gate(), "unproven-link")) return 1;
+        __cj_wasm_linked_roots_v2(2);
         want = "complete";
     } else if (strcmp(mode, "incomplete") == 0) {
         cjw_static_root_table_register(kTable, 2);

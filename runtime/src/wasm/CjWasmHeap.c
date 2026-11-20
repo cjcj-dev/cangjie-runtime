@@ -747,6 +747,11 @@ static size_t Sweep(void)
 // ---------------------------------------------------------------------------
 // Root completeness of the program
 static uint32_t g_completeModules = 0, g_incompleteModules = 0;
+// The final wasm linker calls this from __wasm_call_ctors only after
+// checking every selected input. Ordinary module constructors cannot set it.
+static uint32_t g_linkModules;
+__attribute__((used, retain, visibility("hidden")))
+void __cj_wasm_linked_roots_v2(uint32_t modules) { g_linkModules = modules; }
 static int g_legacyFrames = 0;
 static void** const** g_claimed = NULL;
 static size_t g_nclaimed = 0, g_capClaimed = 0;
@@ -798,6 +803,9 @@ void cjw_gc_evaluate_roots_gate(void)
         for (size_t t = 0; t < g_ntables && why == NULL; ++t) {
             if (!Claimed(g_tables[t].entries)) { why = "unrecorded-static-table"; }
         }
+    }
+    if (why == NULL && (!g_linkModules || g_linkModules != g_completeModules)) {
+        why = "unproven-link";
     }
     g_rootsGate = why != NULL ? why : "complete";
     if (why == NULL) { g_precise = 1; }

@@ -82,7 +82,8 @@ void cjw_roots_module_incomplete(void** const* table);
 // Called by the legacy frame member's constructor.
 void cjw_roots_note_legacy_frames(void);
 // Evaluated once, after all constructors and before the Cangjie entry: the roots
-// are declared precise only if at least one module reported complete, none
+// require the final linker's exact nonzero partition count, that many complete
+// constructors, none
 // reported incomplete, no legacy frame code is linked, every registered static
 // root table belongs to a complete module and no untyped static range exists.
 // Otherwise the program runs without collection (allocation only grows the heap).

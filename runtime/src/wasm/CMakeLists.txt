@@ -13,3 +13,13 @@ add_library(cangjie-runtime STATIC CjWasmRuntime.c CjWasmHeap.c CjWasmLegacyRoot
 target_compile_options(cangjie-runtime PRIVATE --target=wasm32-wasi --sysroot=${WASI_SYSROOT}
   -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions)
 install(TARGETS cangjie-runtime ARCHIVE DESTINATION runtime/lib/wasi_wasm32_cjnative)
+
+# Bind only these compiled C providers. Unlisted or externally supplied
+# members must prove themselves independently at the final link.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(native_marker "${CMAKE_CURRENT_SOURCE_DIR}/mark_native_objects.py")
+set_property(TARGET cangjie-runtime APPEND PROPERTY LINK_DEPENDS "${native_marker}")
+add_custom_command(TARGET cangjie-runtime POST_BUILD
+  COMMAND "${Python3_EXECUTABLE}" "${native_marker}" "${CMAKE_AR}" "$<TARGET_FILE:cangjie-runtime>"
+          CjWasmHeap.c.o CjWasmRuntime.c.o
+  VERBATIM)
