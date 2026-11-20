@@ -94,6 +94,7 @@ public:
     }
 
 protected:
+    friend class LocalObjectAllocator;
     friend class ZObjArrayAllocator;
     friend class MemAllocator;
     // HotSpot MemAllocator::mem_clear (memAllocator.cpp:366-374).

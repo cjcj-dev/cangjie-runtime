@@ -7,6 +7,7 @@
 
 #include "Mutator/Mutator.h"
 #include "Exception.h"
+#include "Heap/Allocator/LocalObjectAllocator.h"
 
 #include "Base/LogFile.h"
 #include "Base/Macros.h"
@@ -82,6 +83,9 @@ void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
             break;
         }
 
+        if (owner.GetLocalObjectAllocatorData() != nullptr) {
+            LocalObjectAllocator::Instance().EndRegionsForFrame(owner, framePtr->GetFA());
+        }
         if (framePtr->GetIP() == throwingSOFFramePc) {
             framePtr->RestoreToCallerContext(context, adjustedSize);
             adjustedSize = 0;
