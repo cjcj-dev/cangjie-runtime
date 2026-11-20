@@ -1843,6 +1843,300 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, SelectionScanKeepsExactlyHeldPages)
     GC_EXPECT_EQ(result.youngRetreats, static_cast<uint64_t>(0));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+namespace {
+// Two live arrays on one page and one array on another page. The caller keeps
+// `arrays` rooted for the rest of the task.
+struct RawPagePair {
+    bool ok = false;
+    std::vector<Handle> arrays;
+    size_t indexA = 0;
+    size_t indexB = 0;
+    size_t indexOther = 0;
+    ZPage* pageA = nullptr;
+    ZPage* pageOther = nullptr;
+};
+
+bool PrepareRawPagePair(Mutator* mutator, RawPagePair& out)
+{
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(types[0]);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(types[1]);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(types), sizeof(types));
+    for (size_t i = 0; i < 2 * ZPageSizeSmall / 4096 + 32; ++i) {
+        out.arrays.emplace_back(mutator, MCC_NewArray8(arrayType, 4096));
+    }
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
+    auto at = [&out](size_t i) { return static_cast<MArray*>(out.arrays[i]()); };
+    auto pageOf = [](MArray* array) { return Heap::page(reinterpret_cast<MAddress>(array)); };
+    for (size_t i = 0; i < out.arrays.size() && !out.ok; ++i) {
+        ZPage* page = pageOf(at(i));
+        if (page == nullptr) {
+            continue;
+        }
+        for (size_t j = i + 1; j < out.arrays.size(); ++j) {
+            if (pageOf(at(j)) == page) {
+                out.pageA = page;
+                out.indexA = i;
+                out.indexB = j;
+                out.ok = true;
+                break;
+            }
+        }
+    }
+    if (!out.ok) {
+        return false;
+    }
+    for (size_t i = 0; i < out.arrays.size(); ++i) {
+        ZPage* page = pageOf(at(i));
+        if (page != nullptr && page != out.pageA) {
+            out.pageOther = page;
+            out.indexOther = i;
+            return true;
+        }
+    }
+    out.ok = false;
+    return false;
+}
+
+struct SlotCoverResult {
+    std::atomic<bool> ready{ false };
+    std::atomic<bool> proceed{ false };
+    std::atomic<bool> entering{ false };
+    std::atomic<bool> acquired{ false };
+    std::atomic<bool> finish{ false };
+    std::atomic<uintptr_t> pageA{ 0 };
+    std::atomic<uintptr_t> pageOther{ 0 };
+    std::atomic<int> slot0State{ 0 };
+    std::atomic<int> slot1State{ 0 };
+    std::atomic<int64_t> holdsBefore{ -1 };
+    bool distinct = false;
+};
+
+void PublishSlotState(Mutator& mutator, ArrayRef arrayA, SlotCoverResult& result, bool handoff)
+{
+    const uintptr_t slot0 = mutator.rawDataSlots[0].load(std::memory_order_relaxed);
+    const uintptr_t slot1 = mutator.rawDataSlots[1].load(std::memory_order_relaxed);
+    const uintptr_t expectA = reinterpret_cast<uintptr_t>(arrayA);
+    if (handoff) {
+        result.slot0State.store(slot0 == 0 ? 1 : -1, std::memory_order_relaxed);
+        result.slot1State.store(slot1 == expectA ? 1 : -1, std::memory_order_relaxed);
+    } else {
+        result.slot0State.store(slot0 == expectA ? 1 : -1, std::memory_order_relaxed);
+        result.slot1State.store(slot1 == 0 ? 1 : -1, std::memory_order_relaxed);
+    }
+    result.holdsBefore.store(ZJNICritical::holds(mutator), std::memory_order_relaxed);
+}
+
+void* HigherSlotHandoffTask(void* context)
+{
+    auto& result = *static_cast<SlotCoverResult*>(context);
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    RawPagePair pages;
+    if (!PrepareRawPagePair(mutator, pages)) {
+        result.ready.store(true, std::memory_order_release);
+        return nullptr;
+    }
+    auto at = [&pages](size_t i) { return static_cast<MArray*>(pages.arrays[i]()); };
+    ArrayRef arrayA = at(pages.indexA);
+    void* rawOther = MCC_AcquireRawData(at(pages.indexOther), nullptr);
+    void* rawA = MCC_AcquireRawData(arrayA, nullptr);
+    MCC_ReleaseRawData(at(pages.indexOther), rawOther);
+    PublishSlotState(*mutator, arrayA, result, true);
+    result.pageA.store(reinterpret_cast<uintptr_t>(pages.pageA), std::memory_order_relaxed);
+    result.pageOther.store(reinterpret_cast<uintptr_t>(pages.pageOther), std::memory_order_relaxed);
+    result.distinct = true;
+    result.ready.store(true, std::memory_order_release);
+    while (!result.proceed.load(std::memory_order_acquire) && !result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    if (result.finish.load(std::memory_order_acquire)) {
+        MCC_ReleaseRawData(at(pages.indexA), rawA);
+        return nullptr;
+    }
+    result.entering.store(true, std::memory_order_release);
+    ArrayRef arrayB = at(pages.indexB);
+    void* rawB = MCC_AcquireRawData(arrayB, nullptr);
+    result.acquired.store(true, std::memory_order_release);
+    while (!result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    MCC_ReleaseRawData(at(pages.indexB), rawB);
+    MCC_ReleaseRawData(at(pages.indexA), rawA);
+    return nullptr;
+}
+
+void* LowerSlotCoverTask(void* context)
+{
+    auto& result = *static_cast<SlotCoverResult*>(context);
+    auto* mutator = Mutator::GetMutator();
+    HandleMark mark(*mutator);
+    RawPagePair pages;
+    if (!PrepareRawPagePair(mutator, pages)) {
+        result.ready.store(true, std::memory_order_release);
+        return nullptr;
+    }
+    auto at = [&pages](size_t i) { return static_cast<MArray*>(pages.arrays[i]()); };
+    ArrayRef arrayA = at(pages.indexA);
+    void* rawA = MCC_AcquireRawData(arrayA, nullptr);
+    PublishSlotState(*mutator, arrayA, result, false);
+    result.pageA.store(reinterpret_cast<uintptr_t>(pages.pageA), std::memory_order_relaxed);
+    result.pageOther.store(reinterpret_cast<uintptr_t>(pages.pageOther), std::memory_order_relaxed);
+    result.distinct = true;
+    result.ready.store(true, std::memory_order_release);
+    while (!result.proceed.load(std::memory_order_acquire) && !result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    if (result.finish.load(std::memory_order_acquire)) {
+        MCC_ReleaseRawData(at(pages.indexA), rawA);
+        return nullptr;
+    }
+    result.entering.store(true, std::memory_order_release);
+    ArrayRef arrayB = at(pages.indexB);
+    void* rawB = MCC_AcquireRawData(arrayB, nullptr);
+    result.acquired.store(true, std::memory_order_release);
+    while (!result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    MCC_ReleaseRawData(at(pages.indexB), rawB);
+    MCC_ReleaseRawData(at(pages.indexA), rawA);
+    return nullptr;
+}
+
+bool WaitFlag(const std::atomic<bool>& flag, std::chrono::milliseconds budget)
+{
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (!flag.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    return flag.load(std::memory_order_acquire);
+}
+
+struct SelectionGuard {
+    explicit SelectionGuard(std::atomic<bool>& finishFlag) : finishFlag(finishFlag) {}
+    ~SelectionGuard()
+    {
+        ZJNICritical::close_selection(ZGenerationId::young);
+        finishFlag.store(true, std::memory_order_release);
+    }
+    std::atomic<bool>& finishFlag;
+};
+}
+
+// A hold in slot 1 with slot 0 free does not cover an acquire of another array
+// on that page once the final scan has run. The new acquire waits until the
+// selection closes. The other selected page is not reported as held.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, HigherSlotHandoffRetreatsAfterFinalScan)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    SlotCoverResult result;
+    SelectionGuard guard(result.finish);
+    CJThreadHandle task = RunCJTask(HigherSlotHandoffTask, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    GC_EXPECT_TRUE(WaitFlag(result.ready, std::chrono::seconds(10)));
+    GC_EXPECT_TRUE(result.distinct);
+    GC_EXPECT_EQ(result.slot0State.load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(result.slot1State.load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(result.holdsBefore.load(std::memory_order_acquire), static_cast<int64_t>(1));
+    ZPage* pageA = reinterpret_cast<ZPage*>(result.pageA.load(std::memory_order_acquire));
+    ZPage* pageOther = reinterpret_cast<ZPage*>(result.pageOther.load(std::memory_order_acquire));
+    ZPage* selected[2] = { pageA, pageOther };
+    const uint64_t retreatsBefore = ZJNICritical::retreats();
+    const size_t kept = ZJNICritical::open_selection_for_test(ZGenerationId::young, selected, 2);
+    std::vector<ZPage*> heldAtFinal;
+    bool allAtFinal = true;
+    ZJNICritical::finish_selection(ZGenerationId::young, heldAtFinal, allAtFinal);
+    const bool finalOnlyA = heldAtFinal.size() == 1 && heldAtFinal[0] == pageA && !allAtFinal;
+    result.proceed.store(true, std::memory_order_release);
+    GC_EXPECT_TRUE(WaitFlag(result.entering, std::chrono::seconds(2)));
+    const auto decisionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ZJNICritical::retreats() == retreatsBefore && !result.acquired.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < decisionDeadline) {
+        std::this_thread::yield();
+    }
+    const bool acquiredWhileOpen = result.acquired.load(std::memory_order_acquire);
+    const uint64_t retreatsWhileOpen = ZJNICritical::retreats() - retreatsBefore;
+    const bool stillOpen = ZJNICritical::selection_open(ZGenerationId::young);
+    ZJNICritical::close_selection(ZGenerationId::young);
+    const bool acquiredAfterClose = WaitFlag(result.acquired, std::chrono::seconds(2));
+    const uint64_t retreatsAfterClose = ZJNICritical::retreats() - retreatsBefore;
+    const bool closed = !ZJNICritical::selection_open(ZGenerationId::young);
+    std::fprintf(stderr,
+        "HANDOFF_TARGET kept=%zu final_only_a=%d acquired_while_open=%d retreats_while_open=%llu "
+        "still_open=%d acquired_after_close=%d retreats_after_close=%llu closed=%d\n",
+        kept, finalOnlyA ? 1 : 0, acquiredWhileOpen ? 1 : 0, (unsigned long long)retreatsWhileOpen,
+        stillOpen ? 1 : 0, acquiredAfterClose ? 1 : 0, (unsigned long long)retreatsAfterClose, closed ? 1 : 0);
+    result.finish.store(true, std::memory_order_release);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    GC_EXPECT_EQ(kept, static_cast<size_t>(1));
+    GC_EXPECT_TRUE(finalOnlyA);
+    GC_EXPECT_FALSE(acquiredWhileOpen);
+    GC_EXPECT_EQ(retreatsWhileOpen, static_cast<uint64_t>(1));
+    GC_EXPECT_TRUE(stillOpen);
+    GC_EXPECT_TRUE(acquiredAfterClose);
+    GC_EXPECT_EQ(retreatsAfterClose, static_cast<uint64_t>(1));
+    GC_EXPECT_TRUE(closed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// The same acquire after the final scan is kept, without a wait, when slot 0
+// already holds the page. The other selected page is still not reported.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, LowerSlotCoverKeepsAcquireAfterFinalScan)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    SlotCoverResult result;
+    SelectionGuard guard(result.finish);
+    CJThreadHandle task = RunCJTask(LowerSlotCoverTask, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    GC_EXPECT_TRUE(WaitFlag(result.ready, std::chrono::seconds(10)));
+    GC_EXPECT_TRUE(result.distinct);
+    GC_EXPECT_EQ(result.slot0State.load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(result.slot1State.load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(result.holdsBefore.load(std::memory_order_acquire), static_cast<int64_t>(1));
+    ZPage* pageA = reinterpret_cast<ZPage*>(result.pageA.load(std::memory_order_acquire));
+    ZPage* pageOther = reinterpret_cast<ZPage*>(result.pageOther.load(std::memory_order_acquire));
+    ZPage* selected[2] = { pageA, pageOther };
+    const uint64_t retreatsBefore = ZJNICritical::retreats();
+    const size_t kept = ZJNICritical::open_selection_for_test(ZGenerationId::young, selected, 2);
+    std::vector<ZPage*> heldAtFinal;
+    bool allAtFinal = true;
+    ZJNICritical::finish_selection(ZGenerationId::young, heldAtFinal, allAtFinal);
+    const bool finalOnlyA = heldAtFinal.size() == 1 && heldAtFinal[0] == pageA && !allAtFinal;
+    result.proceed.store(true, std::memory_order_release);
+    GC_EXPECT_TRUE(WaitFlag(result.entering, std::chrono::seconds(2)));
+    const bool acquiredWhileOpen = WaitFlag(result.acquired, std::chrono::seconds(2));
+    const uint64_t retreatsWhileOpen = ZJNICritical::retreats() - retreatsBefore;
+    const bool stillOpen = ZJNICritical::selection_open(ZGenerationId::young);
+    std::fprintf(stderr,
+        "LOWER_COVER_TARGET kept=%zu final_only_a=%d acquired_while_open=%d retreats_while_open=%llu still_open=%d\n",
+        kept, finalOnlyA ? 1 : 0, acquiredWhileOpen ? 1 : 0, (unsigned long long)retreatsWhileOpen,
+        stillOpen ? 1 : 0);
+    ZJNICritical::close_selection(ZGenerationId::young);
+    result.finish.store(true, std::memory_order_release);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    GC_EXPECT_EQ(kept, static_cast<size_t>(1));
+    GC_EXPECT_TRUE(finalOnlyA);
+    GC_EXPECT_TRUE(acquiredWhileOpen);
+    GC_EXPECT_EQ(retreatsWhileOpen, static_cast<uint64_t>(0));
+    GC_EXPECT_TRUE(stillOpen);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, MarkKeepsPreviousForwarding)
 {
     RuntimeParam param{};

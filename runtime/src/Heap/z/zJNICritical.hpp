@@ -37,16 +37,22 @@ class ZRelocationSetSelector;
 //              before the relocate-start pause (finish_selection: seq_cst flag,
 //              fence, scan) -> drop the forwardings of the pages held by then
 //              -> relocate-start pause -> close_selection.
-//   acquirer:  store the array in a slot (seq_cst) -> fence -> look the array's
-//              page up in the open selections. Before the final scan of that
-//              selection it holds the page at once (the final scan sees the
-//              slot). After it, if no earlier hold of the same mutator already
-//              covers that page, it clears the slot, waits in saferegion until
-//              that selection closes (after its relocate-start pause), reloads
-//              the array from its root and retries.
-// Either the collector's final scan sees the slot or the acquirer sees the final
-// scan flag, so an array is never held on a page that is relocated while it is
-// held, and an acquirer waits at most for final scan -> drop -> pause.
+//   acquirer:  store the array in the lowest free slot (seq_cst), or count an
+//              overflow when every slot is full -> look the array's page up in
+//              the open selections. Before the final scan of that selection it
+//              holds the page at once (the final scan sees the slot). After it,
+//              a hold already published in a lower slot of the same mutator on
+//              that page covers this acquire. The collector reads
+//              rawDataOverflow and then the slots in ascending order, so a
+//              higher slot does not cover, and an overflow hold (read before
+//              every slot) is covered by nothing. Without a cover the acquirer
+//              clears the slot, waits in saferegion until that selection closes
+//              (after its relocate-start pause), reloads the array from its
+//              root and retries.
+// The final scan therefore sees this hold or a lower-slot hold of the same
+// mutator on the same page, or the acquirer sees the final-scan flag and waits.
+// An array is not left held on a page this cycle relocates, and an acquirer
+// waits at most for final scan -> drop -> pause.
 //
 // The final scan runs where no further collector work precedes the pause: old,
 // inside the driver lock after the young-root remap (JDK zGeneration.cpp:1050-1063);

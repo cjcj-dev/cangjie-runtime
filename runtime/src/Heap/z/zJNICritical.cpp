@@ -52,16 +52,17 @@ ZConditionLock* lock = nullptr;
 
 ZPage* PageOf(uintptr_t array) { return array == 0 ? nullptr : Heap::page(static_cast<MAddress>(array)); }
 
-// An earlier hold of the same mutator on `page` that is still in place keeps the
-// page out of every selection that opened after that hold was published (the
-// collector's scan sees its slot), and that hold itself did not conflict with any
-// selection open at its time. So the page cannot be relocated while it is held.
+// A hold in a strictly lower slot of the same mutator on `page`. ScanHolds reads
+// rawDataOverflow and then slots in ascending order, so only a slot it reads
+// before `self` can cover this acquire. If that lower slot is already clear when
+// the scan loads it, this hold was stored earlier on the same thread (the cover
+// was still present when this slot was published) and still sits in a slot the
+// scan has not read. A higher slot cannot cover: the scan may already have loaded
+// this slot before the higher one is cleared. An overflow hold (self < 0) is read
+// before every slot, so the loop covers nothing.
 bool CoveredByEarlierHold(const Mutator& mutator, int self, const ZPage* page)
 {
-    for (int i = 0; i < Mutator::kRawDataSlots; ++i) {
-        if (i == self) {
-            continue;
-        }
+    for (int i = 0; i < self; ++i) {
         const uintptr_t held = mutator.rawDataSlots[i].load(std::memory_order_relaxed);
         if (held != 0 && PageOf(held) == page) {
             return true;
@@ -72,6 +73,8 @@ bool CoveredByEarlierHold(const Mutator& mutator, int self, const ZPage* page)
 
 // Selected pages of `selection` that hold an array of some mutator (sorted,
 // unique); `overflow` if some mutator holds more arrays than it has slots for.
+// The load order is load-bearing for CoveredByEarlierHold: rawDataOverflow,
+// then slots 0 .. kRawDataSlots-1. A cover is only a lower slot.
 void ScanHolds(const ZRawDataSelection& selection, std::vector<ZPage*>& held, bool& overflow)
 {
     overflow = false;
