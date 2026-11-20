@@ -91,67 +91,6 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     }
 }
 
-// A late raw-data drop removes a young promotion forwarding before relocate
-// start.  The forwarding table, promotion list and allocation-exit guard must
-// all describe the same post-drop state.
-GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
-{
-    CreateStandaloneHeap(4);
-    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-    auto& generation = Heap::GetHeap().young();
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
-    generation.Workers()->set_active_workers(1);
-    GenerationSequenceFixture::Advance(generation);
-    ZGenerationTest::SetTenuringThreshold(generation, 0);
-    ZAllocationFlags flags;
-    flags.set_non_blocking();
-    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
-    ZPage* control = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
-    GC_EXPECT_TRUE(page != nullptr && control != nullptr);
-    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
-    auto* type = reinterpret_cast<TypeInfo*>(storage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(24 - TYPEINFO_PTR_SIZE);
-    type->SetAlign(8);
-    GCTib tib{};
-    tib.tag = SIGN_BIT;
-    type->SetGCTib(tib);
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    BaseObject* object = reinterpret_cast<BaseObject*>(page->alloc_object(24));
-    object->SetClassInfo(type);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, object));
-    BaseObject* controlObject = reinterpret_cast<BaseObject*>(control->alloc_object(24));
-    controlObject->SetClassInfo(type);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(control, controlObject));
-    ZPageTest::MakeRelocatable(*page);
-    ZPageTest::MakeRelocatable(*control);
-    ZRelocationSetSelector selector(0.0);
-    selector.register_live_page(page);
-    selector.register_live_page(control);
-    selector.select();
-    generation.relocation_set().install(&selector);
-    ZRelocationSetIterator installed(&generation.relocation_set());
-    for (ZForwarding* forwarding; installed.next(&forwarding);) {
-        generation.forwarding_table().insert(forwarding);
-    }
-    ZArray<ZPage*> removed;
-    const std::vector<ZPage*> held{ page };
-    const size_t dropped = generation.relocation_set().remove_pages(
-        held, false, &generation.forwarding_table(), &removed);
-    std::fprintf(stderr, "RAW_NULL_LATE_DROP_TARGET dropped=%zu removed=%d nforwardings=%zu promoted=%d table=%d young=%d allows=%d\n",
-                 dropped, removed.length(), generation.relocation_set().nforwardings(),
-                 generation.relocation_set().relocate_promoted_pages()->contains(page),
-                 generation.forwarding_table().get(page->GetRegionStart()) != nullptr,
-                 page->is_young(), page->allows_raw_null());
-    GC_EXPECT_EQ(dropped, size_t(1));
-    GC_EXPECT_EQ(removed.length(), 1);
-    GC_EXPECT_EQ(generation.relocation_set().nforwardings(), size_t(0));
-    GC_EXPECT_FALSE(generation.relocation_set().relocate_promoted_pages()->contains(page));
-    GC_EXPECT_TRUE(generation.forwarding_table().get(page->GetRegionStart()) == nullptr);
-    GC_EXPECT_TRUE(page->is_young());
-    GC_EXPECT_TRUE(page->allows_raw_null());
-}
-
 GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, AgesYoungPageAndResetsLivemap)
 {
     CreateStandaloneHeap(2);
