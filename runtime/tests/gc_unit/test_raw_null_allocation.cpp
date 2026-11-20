@@ -114,6 +114,7 @@ GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
     ZRelocationSetSelector selector(0.0);
     selector.register_live_page(page);
     selector.select();
+    GC_EXPECT_EQ(selector.selected_small()->length(), 1);
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* forwarding; installed.next(&forwarding);) {
