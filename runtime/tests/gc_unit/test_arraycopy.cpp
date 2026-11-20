@@ -438,17 +438,19 @@ GC_TEST(LocalRegionArrayCopy, KeepsOuterRootsAcrossInnerEnd)
     GcHeapFixture heap;
     ArrayCopyMutatorScope binding;
     Mutator& mutator = *ThreadLocal::GetMutator();
-    TypeInfo component{};
-    component.SetType(TypeKind::TYPE_KIND_CLASS);
-    TypeInfo arrayType{};
-    arrayType.SetType(TypeKind::TYPE_KIND_RAWARRAY);
-    arrayType.SetComponentTypeInfo(&component);
+    alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
+    component->SetType(TypeKind::TYPE_KIND_CLASS);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(component);
     FrameAddress outerFrame{};
     FrameAddress innerFrame{};
     MCC_StartLocalRegion(&outerFrame);
-    auto* outer = MCC_NewLocalObjArray(&arrayType, 2);
+    auto* outer = MCC_NewLocalObjArray(arrayType, 2);
     MCC_StartLocalRegion(&innerFrame);
-    auto* inner = MCC_NewLocalObjArray(&arrayType, 1);
+    auto* inner = MCC_NewLocalObjArray(arrayType, 1);
     if (outer == nullptr || inner == nullptr) {
         GC_EXPECT_TRUE(outer != nullptr && inner != nullptr);
         MCC_EndLocalRegion(&innerFrame);
