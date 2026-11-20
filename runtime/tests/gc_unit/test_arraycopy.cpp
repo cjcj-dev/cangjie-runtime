@@ -4,6 +4,8 @@
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/FieldInfo.h"
+#include "CompilerCalls.h"
+#include "Heap/Allocator/LocalObjectAllocator.h"
 #include "ObjectModel/MObject.inline.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -428,3 +430,57 @@ void CheckLayoutPayloadOffsets(size_t references)
 }
 GC_TEST(ValuePayloadOffsets, InlineLayoutOrder) { CheckLayoutPayloadOffsets(ValuePayload::OffsetList::INLINE_CAPACITY); }
 GC_TEST(ValuePayloadOffsets, SpillLayoutOrder) { CheckLayoutPayloadOffsets(ValuePayload::OffsetList::INLINE_CAPACITY + 4); }
+
+// Controlled native fixture: it exercises the product local array/copy/store
+// and slot registry. Compiler-generated region boundaries need a separate SDK test.
+GC_TEST(LocalRegionArrayCopy, KeepsOuterRootsAcrossInnerEnd)
+{
+    GcHeapFixture heap;
+    ArrayCopyMutatorScope binding;
+    Mutator& mutator = *ThreadLocal::GetMutator();
+    TypeInfo component{};
+    component.SetType(TypeKind::TYPE_KIND_CLASS);
+    TypeInfo arrayType{};
+    arrayType.SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType.SetComponentTypeInfo(&component);
+    FrameAddress outerFrame{};
+    FrameAddress innerFrame{};
+    MCC_StartLocalRegion(&outerFrame);
+    auto* outer = MCC_NewLocalObjArray(&arrayType, 2);
+    MCC_StartLocalRegion(&innerFrame);
+    auto* inner = MCC_NewLocalObjArray(&arrayType, 1);
+    if (outer == nullptr || inner == nullptr) {
+        GC_EXPECT_TRUE(outer != nullptr && inner != nullptr);
+        MCC_EndLocalRegion(&innerFrame);
+        MCC_EndLocalRegion(&outerFrame);
+        return;
+    }
+    auto* outerFields = reinterpret_cast<RefField<false>*>(outer->ConvertToCArray());
+    auto* innerField = reinterpret_cast<RefField<false>*>(inner->ConvertToCArray());
+    const MAddress innerAddress = reinterpret_cast<MAddress>(inner);
+    CJ_MCC_MaybeLocalWriteRef(heap.obj0, inner, innerField);
+    CJ_MCC_ArrayCopyRef(outer, reinterpret_cast<MAddress>(outerFields), sizeof(RootSlot),
+                        inner, reinterpret_cast<MAddress>(innerField), sizeof(RootSlot));
+    CJ_MCC_MaybeLocalWriteRef(outer, outer, outerFields + 1);
+    MCC_EndLocalRegion(&innerFrame);
+
+    size_t count = 0;
+    bool updatedOuterSlot = false;
+    mutator.VisitLocalRegionRoots([&](RootSlot& slot) {
+        ++count;
+        if (&slot == &RootSlotAt(outerFields)) {
+            updatedOuterSlot = true;
+            GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<MAddress>(heap.obj0));
+            StorePlain(slot, from_object(heap.obj1));
+        }
+    });
+    std::fprintf(stderr, "LOCAL_ARRAYCOPY_TARGET visited=%zu updated=%d\n", count, updatedOuterSlot);
+    GC_EXPECT_EQ(count, 1u);
+    GC_EXPECT_TRUE(updatedOuterSlot);
+    GC_EXPECT_FALSE(mutator.IsLocalRegionAddress(innerAddress));
+    GC_EXPECT_EQ(CJ_MCC_ReadRefField(outer, outerFields), heap.obj1);
+    GC_EXPECT_EQ(CJ_MCC_ReadRefField(outer, outerFields + 1), outer);
+    const MAddress outerAddress = reinterpret_cast<MAddress>(outer);
+    MCC_EndLocalRegion(&outerFrame);
+    GC_EXPECT_FALSE(mutator.IsLocalRegionAddress(outerAddress));
+}
