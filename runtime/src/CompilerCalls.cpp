@@ -57,10 +57,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#ifdef _WIN64
-#include "Mutator/MutatorManager.h"
-#include "Mutator/ThreadLocal.h"
-#endif
 #include "Sync/Sync.h"
 #include "UnwindStack/GcStackInfo.h"
 #include "CpuProfiler/CpuProfiler.h"
@@ -1881,7 +1877,14 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 
 static bool IsLocalAddress(const void* address)
 {
-    const Mutator* mutator = Mutator::GetMutator();
+    if (address == nullptr || Heap::IsHeapAddress(address)) {
+        return false;
+    }
+
+    // A running region belongs to the mutator bound to this thread. An
+    // unattached native caller has no region to query, even before scheduler
+    // initialization or after the logical mutator has been detached.
+    const Mutator* mutator = ThreadLocal::GetMutator();
     return mutator != nullptr && mutator->IsLocalRegionAddress(reinterpret_cast<MAddress>(address));
 }
 
