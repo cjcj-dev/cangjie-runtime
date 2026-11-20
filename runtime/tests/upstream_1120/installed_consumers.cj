@@ -36,7 +36,6 @@ func regex(): Int64 {
     return 0
 }
 
-@NeverInline
 func spawnForTrace(): Future<Array<StackTraceElement>> {
     spawn { Exception("child marker").getStackTrace() }
 }
