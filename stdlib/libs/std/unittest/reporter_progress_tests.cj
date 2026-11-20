@@ -425,10 +425,17 @@ private class TestProgressCollector {
             case None => ()
         }
         let pack = body.stepResult.caseId.suiteId.groupName
+        // A package is removed from the display together with its counters on the flush after its
+        // last test case finished. Class lifecycle steps (e.g. @AfterAll) still run and report after
+        // that, so the package may already be absent here. Such late results still count in the
+        // summary; they just no longer have a package row to update.
+        let packageTotal = totalPackageCasesCount.get(pack)
+        let packageProgress = packagesProgress.get(pack)
 
         if (body.isSkip) {
-            if (totalPackageCasesCount[pack] == 0) {
-                finishedPackages.add(pack)
+            match (packageTotal) {
+                case Some(total) where total == 0 => finishedPackages.add(pack)
+                case _ => ()
             }
             return
         }
@@ -438,25 +445,33 @@ private class TestProgressCollector {
             finishedPackageCasesCount[pack]++
         }
 
-        if (finishedPackageCasesCount[pack] >= totalPackageCasesCount[pack]) {
-            finishedPackages.add(pack)
+        if (let Some(total) <- packageTotal) {
+            if (finishedPackageCasesCount[pack] >= total) {
+                finishedPackages.add(pack)
+            }
         }
 
         if (body.isFailed) {
             if (body.isClassLifecycle) {
                 _totalCasesCount++
-                packagesProgress[pack].expand(1)
+                if (let Some(progress) <- packageProgress) {
+                    progress.expand(1)
+                }
                 summaryProgress.expand(1)
             }
 
             _failedCasesCount++
             _lastFailedStep = FailedTestCaseProgressData(body.toCaseName(), suiteId: body.stepResult.caseId.suiteId, check: body.firstFailedStep)
             failedPackages.add(pack)
-            packagesProgress[pack].update(positive: false)
+            if (let Some(progress) <- packageProgress) {
+                progress.update(positive: false)
+            }
             summaryProgress.update(positive: false)
         } else if (body.isPassed && !body.isClassLifecycle) {
             _passedCasesCount++
-            packagesProgress[pack].update(positive: true)
+            if (let Some(progress) <- packageProgress) {
+                progress.update(positive: true)
+            }
             summaryProgress.update(positive: true)
         }
     }
@@ -468,6 +483,11 @@ private class TestProgressCollector {
                 case None => ()
             }
             let packageName = header.suiteId.groupName
+            // Do not resurrect a package that has already finished and was removed from the display
+            // without its counters; a late lifecycle step is still shown among the running cases.
+            if (!totalPackageCasesCount.contains(packageName)) {
+                return
+            }
 
             packagesStartTime[packageName] = if (packagesStartTime.contains(packageName)) {
                 min(header.startTime, packagesStartTime[packageName])
