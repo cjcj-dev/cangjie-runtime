@@ -209,6 +209,87 @@ void TypeInfo::TryInitMTable()
 }
 
 MTableDesc::StableReaderStripe MTableDesc::stableReaderStripes[MTableDesc::STABLE_READER_STRIPES];
+#if defined(MRT_HAS_FUSED_LOOKUP_CACHE)
+std::atomic<U64> MTableDesc::stableGeneration { 1 };
+
+namespace {
+// Process-wide direct-mapped cache of GetMTableAndOuterTI stable hits, keyed by
+// (receiver TypeInfo, interface TypeInfo, method index). An entry is written
+// only with values just read from a published stable snapshot, tagged with the
+// stable generation sampled before that snapshot was loaded, and is used only
+// while the generation is unchanged. It holds no reference into the snapshot,
+// the map entry or its cached-TypeInfo array: the values are the same func
+// table and outer TypeInfo pointers the stable hit itself returns. Probes run
+// inside the caller's ElfUnloadQuiescence::ReadScope like every other read.
+// No thread-local storage: one shared static array, seqlock per entry.
+struct alignas(64) FusedLookupEntry {
+    std::atomic<U64> seq { 0 };
+    std::atomic<U64> generation { 0 };
+    std::atomic<TypeInfo*> receiver { nullptr };
+    std::atomic<TypeInfo*> itf { nullptr };
+    std::atomic<U64> index { 0 };
+    std::atomic<FuncPtr*> funcTable { nullptr };
+    std::atomic<TypeInfo*> outer { nullptr };
+};
+constexpr U32 FUSED_LOOKUP_CACHE_BITS = 8;
+FusedLookupEntry g_fusedLookupCache[size_t { 1 } << FUSED_LOOKUP_CACHE_BITS];
+
+inline FusedLookupEntry& FusedLookupSlot(const TypeInfo* receiver, const TypeInfo* itf, U64 index)
+{
+    U64 key = static_cast<U64>(reinterpret_cast<uintptr_t>(receiver)) >> 3;
+    key ^= (static_cast<U64>(reinterpret_cast<uintptr_t>(itf)) >> 3) * 0xC2B2AE3D27D4EB4FULL;
+    key ^= index * 0x165667B19E3779F9ULL;
+    return g_fusedLookupCache[(key * 0x9E3779B97F4A7C15ULL) >> (64 - FUSED_LOOKUP_CACHE_BITS)];
+}
+
+inline bool FusedLookupFind(TypeInfo* receiver, TypeInfo* itf, U64 index, FuncPtr*& funcTable, TypeInfo*& outer)
+{
+    FusedLookupEntry& e = FusedLookupSlot(receiver, itf, index);
+    const U64 s1 = e.seq.load(std::memory_order_acquire);
+    if ((s1 & 1) != 0) {
+        return false;
+    }
+    const U64 generation = e.generation.load(std::memory_order_relaxed);
+    TypeInfo* r = e.receiver.load(std::memory_order_relaxed);
+    TypeInfo* i = e.itf.load(std::memory_order_relaxed);
+    const U64 idx = e.index.load(std::memory_order_relaxed);
+    FuncPtr* ft = e.funcTable.load(std::memory_order_relaxed);
+    TypeInfo* o = e.outer.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (e.seq.load(std::memory_order_relaxed) != s1) {
+        return false;
+    }
+    if (r != receiver || i != itf || idx != index || ft == nullptr || o == nullptr) {
+        return false;
+    }
+    if (generation != MTableDesc::LoadStableGeneration()) {
+        return false;
+    }
+    funcTable = ft;
+    outer = o;
+    return true;
+}
+
+inline void FusedLookupFill(TypeInfo* receiver, TypeInfo* itf, U64 index, FuncPtr* funcTable, TypeInfo* outer,
+                            U64 generation)
+{
+    FusedLookupEntry& e = FusedLookupSlot(receiver, itf, index);
+    U64 s = e.seq.load(std::memory_order_relaxed);
+    if ((s & 1) != 0 || !e.seq.compare_exchange_strong(s, s + 1, std::memory_order_acquire,
+                                                       std::memory_order_relaxed)) {
+        return; // Another filler owns the slot; skipping a fill is always safe.
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    e.generation.store(generation, std::memory_order_relaxed);
+    e.receiver.store(receiver, std::memory_order_relaxed);
+    e.itf.store(itf, std::memory_order_relaxed);
+    e.index.store(index, std::memory_order_relaxed);
+    e.funcTable.store(funcTable, std::memory_order_relaxed);
+    e.outer.store(outer, std::memory_order_relaxed);
+    e.seq.store(s + 2, std::memory_order_release);
+}
+} // namespace
+#endif
 
 MTableDesc::MTableDesc(ArchUInt bitmap_)
 {
@@ -857,10 +938,22 @@ FuncPtr* TypeInfo::GetMTableAndOuterTI(TypeInfo* itf, U64 index, TypeInfo** oute
     // The guard and read scope end before that fallback, so no fallback that
     // registers, resolves or updates tables runs while this call still holds
     // a stable-table reader. Nothing is returned from inside the guard.
+    //
+    // In the paired build a repeated cache hit skips the guard. The cache
+    // contains only values with lifetime independent of the snapshot. Sample
+    // the generation before loading the snapshot so a fill from a snapshot
+    // being retired cannot be accepted under the new generation.
     FuncPtr* funcTable = nullptr;
     TypeInfo* outer = nullptr;
     {
         ElfUnloadQuiescence::ReadScope reader;
+#if defined(MRT_HAS_FUSED_LOOKUP_CACHE)
+        if (LIKELY(FusedLookupFind(this, itf, index, funcTable, outer))) {
+            *outerTI = outer;
+            return funcTable;
+        }
+        const U64 generation = MTableDesc::LoadStableGeneration();
+#endif
         MTableDesc* desc = GetMTableDesc();
         if (LIKELY(this != itf && GetUUIDInReadScope() != 0 && !(IsTempEnum() && GetSuperTypeInfo() != nullptr) &&
                    !IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
@@ -883,6 +976,11 @@ FuncPtr* TypeInfo::GetMTableAndOuterTI(TypeInfo* itf, U64 index, TypeInfo** oute
                 }
             }
         }
+#if defined(MRT_HAS_FUSED_LOOKUP_CACHE)
+        if (LIKELY(funcTable != nullptr)) {
+            FusedLookupFill(this, itf, index, funcTable, outer, generation);
+        }
+#endif
     }
     if (LIKELY(funcTable != nullptr)) {
         *outerTI = outer;

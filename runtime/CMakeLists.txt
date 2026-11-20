@@ -480,6 +480,23 @@ endif()
 
 link_directories(${OHOS_LIB} ${OHOS_PUBLIC_LINK_DIRS})
 include_directories(${BOUNDSCHECK_INCLUDE})
+# Only set this for a Release build paired with an approved Linux x86-64/glibc
+# metadata producer. Native image retention on its own does not qualify C5.
+# Use config.cmake's sanitizer flag: build.py passes the string None when unset.
+set(_paired_fused_lookup_default OFF)
+if ("$ENV{MRT_PAIRED_FUSED_LOOKUP}" STREQUAL "1")
+    set(_paired_fused_lookup_default ON)
+endif()
+option(MRT_PAIRED_FUSED_LOOKUP "Enable fused MTable caching for an approved native producer pair"
+       ${_paired_fused_lookup_default})
+if (MRT_PAIRED_FUSED_LOOKUP AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING
+    AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" AND NOT MRT_TESTABLE_INTERNALS
+    AND NOT MRT_GC_UNIT_TESTS AND NOT MRT_GC_UNIT_OHOS_HOST
+    AND NOT ANDROID_FLAG AND NOT OHOS_FLAG AND NOT HWASAN_FLAG AND NOT ASAN_FLAG AND NOT COV
+    AND NOT SANITIZER_SUPPORT_FLAG)
+    add_compile_definitions("$<$<CONFIG:Release>:MRT_PAIRED_FUSED_LOOKUP_RELEASE>")
+endif()
+
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_subdirectory(third_party/third_party_bounds_checking_function)
 target_sources(cangjie-runtime PRIVATE $<TARGET_OBJECTS:runtime-provenance>)

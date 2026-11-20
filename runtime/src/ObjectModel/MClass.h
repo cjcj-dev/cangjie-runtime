@@ -25,6 +25,14 @@
 #include "Flags.h"
 #include "PackageInfo.h"
 
+// Clang targets other Linux libcs and ILP32 on x86-64 too. Use the target
+// libc/ABI, and never bypass the stable reader rendezvous in a hook build.
+#if defined(MRT_PAIRED_FUSED_LOOKUP_RELEASE) && defined(__linux__) && defined(__ELF__) && \
+    defined(__x86_64__) && defined(__LP64__) && defined(__GLIBC__) && !defined(__ANDROID__) && \
+    !defined(__OHOS__) && !defined(MRT_STABLE_HIT_TEST_HOOK) && !defined(MRT_BROKEN_STABLE_WAIT)
+#define MRT_HAS_FUSED_LOOKUP_CACHE 1
+#endif
+
 namespace MapleRuntime {
 #if defined(MRT_STABLE_HIT_TEST_HOOK)
 extern "C" __attribute__((weak)) void MRT_TestStableMutationAttempt();
@@ -302,6 +310,21 @@ struct MTableDesc {
     // mutable cache/function-table storage. Unload uses the same retirement
     // rule after ElfUnloadQuiescence has drained readers.
     std::atomic<StableTable*> stableTable { nullptr };
+#if defined(MRT_HAS_FUSED_LOOKUP_CACHE)
+    // Retiring a snapshot invalidates values sampled from it. The generation
+    // cannot drain a reader that has already accepted a hit. Cache hits are
+    // allowed only in the paired configuration where ReadScope is trivial:
+    // exact native images are retained before publication and registered TIs
+    // keep their backing arena. Snapshot storage still waits for its stripe
+    // readers. Platforms that can unmap use only the old path: a State writer
+    // bit closes admission, slots and counted readers drain before purge, and
+    // reopening uses a release RMW. The slot reader's seq_cst State load or
+    // the counted reader's acquire CAS observes that reopen (or its release
+    // sequence). This handoff does not use the generation.
+    static std::atomic<U64> stableGeneration;
+    static U64 LoadStableGeneration() { return stableGeneration.load(std::memory_order_acquire); }
+    static void AdvanceStableGeneration() { (void)stableGeneration.fetch_add(1, std::memory_order_seq_cst); }
+#endif
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
@@ -320,6 +343,13 @@ struct MTableDesc {
         if (old == nullptr) {
             return;
         }
+#if defined(MRT_HAS_FUSED_LOOKUP_CACHE)
+        // Retire every generation-tagged result derived from a snapshot (of
+        // any table) loaded before this point. Ordered after the exchange, so a
+        // reader whose acquire load of the generation observes this advance
+        // also observes the detached table and cannot read `old`.
+        AdvanceStableGeneration();
+#endif
 #if defined(MRT_STABLE_HIT_TEST_HOOK)
         // The test rendezvous is after snapshot detachment and immediately
         // before the reader-quiescence wait.  It therefore proves that this
