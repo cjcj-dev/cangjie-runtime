@@ -8,12 +8,15 @@
 #include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -86,6 +89,86 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
         GC_EXPECT_EQ(allows, !promote);
         GC_EXPECT_TRUE(installedPage);
     }
+}
+
+// A late raw-data drop removes a young promotion forwarding before relocate
+// start.  The forwarding table, promotion list and allocation-exit guard must
+// all describe the same post-drop state.
+GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
+{
+    CreateStandaloneHeap(4);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    auto& generation = Heap::GetHeap().young();
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
+    generation.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(generation);
+    ZGenerationTest::SetTenuringThreshold(generation, 0);
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+    GC_EXPECT_TRUE(page != nullptr);
+    bool increment = false;
+    page->livemap().set(ZGenerationId::young, 0, false, increment);
+    page->inc_live(1, 24);
+    ZPageTest::MakeRelocatable(*page);
+    ZRelocationSetSelector selector(0.0);
+    selector.register_live_page(page);
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* forwarding; installed.next(&forwarding);) {
+        generation.forwarding_table().insert(forwarding);
+    }
+    ZArray<ZPage*> removed;
+    const std::vector<ZPage*> held{ page };
+    const size_t dropped = generation.relocation_set().remove_pages(
+        held, false, &generation.forwarding_table(), &removed);
+    std::fprintf(stderr, "RAW_NULL_LATE_DROP_TARGET dropped=%zu removed=%d nforwardings=%zu promoted=%d table=%d young=%d allows=%d\n",
+                 dropped, removed.length(), generation.relocation_set().nforwardings(),
+                 generation.relocation_set().relocate_promoted_pages()->contains(page),
+                 generation.forwarding_table().get(page->GetRegionStart()) != nullptr,
+                 page->is_young(), page->allows_raw_null());
+    GC_EXPECT_EQ(dropped, size_t(1));
+    GC_EXPECT_EQ(removed.length(), 1);
+    GC_EXPECT_EQ(generation.relocation_set().nforwardings(), size_t(0));
+    GC_EXPECT_FALSE(generation.relocation_set().relocate_promoted_pages()->contains(page));
+    GC_EXPECT_TRUE(generation.forwarding_table().get(page->GetRegionStart()) == nullptr);
+    GC_EXPECT_TRUE(page->is_young());
+    GC_EXPECT_TRUE(page->allows_raw_null());
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, AgesYoungPageAndResetsLivemap)
+{
+    CreateStandaloneHeap(2);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    auto& generation = Heap::GetHeap().young();
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
+    generation.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(generation);
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* survivor = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor13, flags);
+    ZPage* oldest = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor14, flags);
+    GC_EXPECT_TRUE(survivor != nullptr && oldest != nullptr);
+    bool increment = false;
+    survivor->livemap().set(ZGenerationId::young, 0, false, increment);
+    oldest->livemap().set(ZGenerationId::young, 0, false, increment);
+    ZArray<ZPage*> dropped;
+    dropped.push(survivor);
+    dropped.push(oldest);
+    generation.Workers()->set_active();
+    ZRelocate::flip_age_dropped_pages(*generation.Workers(), &dropped);
+    generation.Workers()->set_inactive();
+    std::fprintf(stderr, "RAW_NULL_LATE_DROP_AGE_TARGET survivor=%u oldest=%u young=%d/%d marked=%d/%d\n",
+                 static_cast<unsigned>(survivor->age()), static_cast<unsigned>(oldest->age()),
+                 survivor->is_young(), oldest->is_young(),
+                 survivor->livemap().is_marked(ZGenerationId::young),
+                 oldest->livemap().is_marked(ZGenerationId::young));
+    GC_EXPECT_EQ(survivor->age(), PageAge::survivor14);
+    GC_EXPECT_EQ(oldest->age(), PageAge::survivor14);
+    GC_EXPECT_TRUE(survivor->is_young() && oldest->is_young());
+    GC_EXPECT_FALSE(survivor->livemap().is_marked(ZGenerationId::young));
+    GC_EXPECT_FALSE(oldest->livemap().is_marked(ZGenerationId::young));
 }
 
 struct ExitCase { unsigned entry; bool reject; };

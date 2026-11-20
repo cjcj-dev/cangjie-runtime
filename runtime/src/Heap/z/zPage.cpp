@@ -63,6 +63,11 @@ void ZPage::set_is_relocate_promoted()
     __atomic_store_n(&_relocate_promoted, true, __ATOMIC_RELAXED);
 }
 
+void ZPage::clear_is_relocate_promoted()
+{
+    __atomic_store_n(&_relocate_promoted, false, __ATOMIC_RELAXED);
+}
+
 // Keep the empty allocation page identity in the product DSO. An inline
 // function-local object gives callers in another DSO a different sentinel.
 ZPage* ZPage::NullRegion()

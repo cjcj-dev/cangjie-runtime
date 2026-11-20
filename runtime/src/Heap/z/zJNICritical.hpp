@@ -58,7 +58,10 @@ class ZRelocationSetSelector;
 // inside the driver lock after the young-root remap (JDK zGeneration.cpp:1050-1063);
 // young, after select_relocation_set (install, flip_age_pages with its handshake
 // and promotion barrier, forwarding table). A late-dropped old page needs nothing
-// more; a late-dropped young page is aged in place and stays young
+// more; a late-dropped young page is aged in place and stays young. If its
+// forwarding was a promotion, remove_pages also clears the allocation-exit
+// guard; that guard is not a store barrier and no promotion barrier runs for a
+// page dropped before relocate-start.
 // (ZRelocate::flip_age_dropped_pages).
 class ZJNICritical {
 public:

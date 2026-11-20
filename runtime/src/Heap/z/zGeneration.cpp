@@ -1164,11 +1164,12 @@ void ZGeneration::drop_raw_data_held_pages()
     }
     // This cycle's forwardings are not used before its relocate-start pause:
     // nothing has been relocated yet and pointers become remap-bad for them only
-    // at that pause (flip_relocate_start). The table is filled concurrently in the
-    // same way (select_relocation_set). So a dropped page is exactly a page that
-    // was not selected. Old: nothing else to do. Young: the not-selected path
-    // (flip_age_pages) has already run for this cycle, so the dropped pages are
-    // aged in place now and stay young (ZRelocate::flip_age_dropped_pages).
+    // at that pause (flip_relocate_start). The table is filled before this final
+    // scan, so removing a forwarding makes the page not selected for this cycle.
+    // Old pages remain old. Young pages have already passed flip_age_pages; the
+    // dropped pages therefore age in place and stay young
+    // (ZRelocate::flip_age_dropped_pages). remove_pages also clears promotion
+    // guards because these pages never reach the promotion barrier.
     ZArray<ZPage*> dropped;
     _relocation_set.remove_pages(held, all, &_forwarding_table, &dropped);
     if (young && !dropped.is_empty()) {
