@@ -470,7 +470,7 @@ GC_TEST(LocalRegionArrayCopy, KeepsOuterRootsAcrossInnerEnd)
     bool updatedOuterSlot = false;
     mutator.VisitLocalRegionRoots([&](RootSlot& slot) {
         ++count;
-        if (&slot == &RootSlotAt(outerFields)) {
+        if (&slot == &RootSlotAt(static_cast<void*>(outerFields))) {
             updatedOuterSlot = true;
             GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<MAddress>(heap.obj0));
             StorePlain(slot, from_object(heap.obj1));
@@ -480,8 +480,8 @@ GC_TEST(LocalRegionArrayCopy, KeepsOuterRootsAcrossInnerEnd)
     GC_EXPECT_EQ(count, 1u);
     GC_EXPECT_TRUE(updatedOuterSlot);
     GC_EXPECT_FALSE(mutator.IsLocalRegionAddress(innerAddress));
-    GC_EXPECT_EQ(CJ_MCC_ReadRefField(outer, outerFields), heap.obj1);
-    GC_EXPECT_EQ(CJ_MCC_ReadRefField(outer, outerFields + 1), outer);
+    GC_EXPECT_TRUE(CJ_MCC_ReadRefField(outer, outerFields) == heap.obj1);
+    GC_EXPECT_TRUE(CJ_MCC_ReadRefField(outer, outerFields + 1) == outer);
     const MAddress outerAddress = reinterpret_cast<MAddress>(outer);
     MCC_EndLocalRegion(&outerFrame);
     GC_EXPECT_FALSE(mutator.IsLocalRegionAddress(outerAddress));
