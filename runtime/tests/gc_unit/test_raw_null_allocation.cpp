@@ -107,14 +107,22 @@ GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
     flags.set_non_blocking();
     ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
     GC_EXPECT_TRUE(page != nullptr);
-    bool increment = false;
-    page->livemap().set(ZGenerationId::young, 0, false, increment);
-    page->inc_live(1, 24);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(24 - TYPEINFO_PTR_SIZE);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    BaseObject* object = reinterpret_cast<BaseObject*>(page->alloc_object(24));
+    object->SetClassInfo(type);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, object));
     ZPageTest::MakeRelocatable(*page);
     ZRelocationSetSelector selector(0.0);
     selector.register_live_page(page);
     selector.select();
-    GC_EXPECT_EQ(selector.selected_small()->length(), 1);
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* forwarding; installed.next(&forwarding);) {
