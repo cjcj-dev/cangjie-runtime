@@ -2066,10 +2066,12 @@ static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPt
         ValuePayload(reinterpret_cast<MAddress>(fp), size, dst, reinterpret_cast<MAddress>(fp)));
 }
 
+static void CopyMaybeLocalGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size);
+
 extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
 {
     if (IsLocalAddress(obj) || IsLocalAddress(src)) {
-        CJ_MCC_MaybeLocalWriteGeneric(obj, fieldPtr, src, size);
+        CopyMaybeLocalGeneric(obj, fieldPtr, src, size);
         return;
     }
     CopyGenericField(obj, fieldPtr, src, size);
@@ -2267,7 +2269,7 @@ extern "C" void CJ_MCC_MaybeLocalWriteStruct(ObjectPtr owner, MAddress dst, size
     CopyMaybeLocalStruct(owner, dst, dstLen, nullptr, src, srcLen, gctib);
 }
 
-extern "C" void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size)
+static void CopyMaybeLocalGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size)
 {
     if (src != nullptr && size != 0) {
         CopyMaybeLocalStruct(owner, reinterpret_cast<MAddress>(field), size, src,
@@ -2275,11 +2277,17 @@ extern "C" void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, Obje
     }
 }
 
+// The compiler intrinsic and its LLVM lowering pass an i32 byte count.
+extern "C" void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, uint32_t size)
+{
+    CopyMaybeLocalGeneric(owner, field, src, size);
+}
+
 extern "C" void CJ_MCC_AssignLocalGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
     if (typeInfo != nullptr) {
-        CJ_MCC_MaybeLocalWriteGeneric(dst, reinterpret_cast<void*>(reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE),
-                                     src, typeInfo->GetInstanceSize());
+        CopyMaybeLocalGeneric(dst, reinterpret_cast<void*>(reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE),
+                              src, typeInfo->GetInstanceSize());
     }
 }
 

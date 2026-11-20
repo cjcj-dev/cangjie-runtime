@@ -198,7 +198,7 @@ extern "C" void CJ_MRT_RegisterExceptionCallback(void(*callback)());
 extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field);
 extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteStruct(ObjectPtr owner, MAddress dst, size_t dstLen, MAddress src,
                                                       size_t srcLen, GCTib gctib);
-extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size);
+extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, uint32_t size);
 extern "C" MRT_EXPORT void CJ_MCC_DemodeWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field);
 extern "C" MRT_EXPORT void CJ_MCC_AssignLocalGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo);
 extern "C" MRT_EXPORT size_t CJ_MCC_GetAllocatedLocalObjectSize();
