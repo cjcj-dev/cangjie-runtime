@@ -564,7 +564,7 @@ static void TestCompleteFrame(void)
     FrameStore fs; CjwRootFrame* f = Frame(&fs, 2);
     void* stack[3] = {0};
     struct { uint32_t n; CjwFrameRange r[1]; } ranges = {1, {{stack, sizeof(stack)}}};
-    f->ranges = &ranges;
+    f->ranges = (const CjwFrameRanges*)(const void*)&ranges;
     void* a = NewObj(&tiNode);
     void* child = NewObj(&tiLeaf);
     *Slot(a, 0) = child;
