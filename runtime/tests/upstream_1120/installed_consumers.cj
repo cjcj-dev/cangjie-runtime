@@ -43,7 +43,7 @@ func spawnForTrace(): Future<Array<StackTraceElement>> {
 func fromSpawn(): Int64 {
     let control = Exception("main marker").getStackTrace()
     for (frame in control) {
-        if (frame.methodName.contains("spawnForTrace")) {
+        if (frame.methodName == "spawnForTrace()") {
             return 44
         }
     }
@@ -52,7 +52,7 @@ func fromSpawn(): Int64 {
         return 45
     }
     println("CREATOR_LAST=${trace[trace.size - 1].methodName}")
-    if (!trace[trace.size - 1].methodName.contains("spawnForTrace")) {
+    if (trace[trace.size - 1].methodName != "spawnForTrace()") {
         return 46
     }
     println("CREATOR_ASSERTIONS_PASS")
