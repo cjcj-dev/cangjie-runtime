@@ -176,11 +176,11 @@ size_t ZRelocationSet::remove_pages(const std::vector<ZPage*>& pages, bool all, 
         ZPage* const page = forwarding->page();
         if (all || std::binary_search(pages.begin(), pages.end(), page)) {
             if (forwarding->is_promotion()) {
-                // Young page that install registered for relocate promotion
-                // (track_if_promoted). A late raw-data drop removes the
-                // forwarding before relocate-start, so this page never reaches
-                // the promotion barrier. Clear the allocation-exit guard along
-                // with the promotion-list entry; the page remains young.
+                // The promotion barrier already processed this young page
+                // through the list built by track_if_promoted. Removing its
+                // forwarding cancels relocation promotion without undoing
+                // that field processing. Clear the allocation-exit guard
+                // along with the list entry; the page remains young.
                 CHECK(_generation->is_young());
                 std::lock_guard<std::mutex> locker(_promotion_lock);
                 _relocate_promoted_pages.remove(page);

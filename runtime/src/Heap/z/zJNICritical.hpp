@@ -59,10 +59,9 @@ class ZRelocationSetSelector;
 // young, after select_relocation_set (install, flip_age_pages with its handshake
 // and promotion barrier, forwarding table). A late-dropped old page needs nothing
 // more; a late-dropped young page is aged in place and stays young. If its
-// forwarding was a promotion, remove_pages also clears the allocation-exit
-// guard; that guard is not a store barrier and no promotion barrier runs for a
-// page dropped before relocate-start.
-// (ZRelocate::flip_age_dropped_pages).
+// forwarding was a promotion, the promotion barrier has already processed its
+// reference fields. remove_pages cancels relocation promotion and clears the
+// allocation-exit guard, without undoing that field processing.
 class ZJNICritical {
 public:
     static void initialize();
