@@ -205,8 +205,12 @@ public:
 private:
     void StorePlain(zaddress value, std::memory_order order)
     {
-        zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
-        __atomic_store(&rootValue, &unsafeValue, order);
+        StoreBits(to_zaddress_unsafe(raw(value)), order);
+    }
+
+    void StoreBits(zaddress_unsafe value, std::memory_order order)
+    {
+        __atomic_store(&rootValue, &value, order);
     }
 
     bool CompareExchangePlain(zaddress_unsafe expected, zaddress desired,
@@ -218,6 +222,7 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
+    friend void StoreNonHeapAlias(RootSlot&, const BaseObject*);
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a
@@ -229,6 +234,13 @@ inline void StorePlain(RootSlot& slot, zaddress value,
                        std::memory_order order = std::memory_order_relaxed)
 {
     slot.StorePlain(value, order);
+}
+
+// A modal alias to an object on the stack or in a local region is not a ZGC oop.
+// The owner and lifetime checks take place at the runtime store entry.
+inline void StoreNonHeapAlias(RootSlot& slot, const BaseObject* value)
+{
+    slot.StoreBits(to_zaddress_unsafe(reinterpret_cast<Uptr>(value)), std::memory_order_relaxed);
 }
 
 // OpenJDK ProcessDerivedOop preserves the offset, processes the base, then

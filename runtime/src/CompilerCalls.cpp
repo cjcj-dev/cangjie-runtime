@@ -1897,9 +1897,10 @@ static bool IsLocalAddress(const void* address)
     return mutator != nullptr && mutator->IsLocalRegionAddress(reinterpret_cast<MAddress>(address));
 }
 
-static ObjectPtr LoadPlainLocalModeRef(MAddress address)
+static bool IsManagedStackAddress(const void* address)
 {
-    return static_cast<ObjectPtr>(reinterpret_cast<void*>(raw(RootSlotAt(address).LoadPlain())));
+    Mutator* mutator = ThreadLocal::GetMutator();
+    return address != nullptr && mutator != nullptr && mutator->IsStackAddr(reinterpret_cast<MAddress>(address));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
@@ -1912,10 +1913,13 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return NativeAccess<>::oop_load(&(NativeSlotAt(static_cast<void*>(field))));
     }
-    if (IsLocalAddress(field)) { return LoadPlainLocalModeRef(reinterpret_cast<MAddress>(field)); }
     const zaddress_unsafe bits = RootSlotAt(static_cast<void*>(field)).LoadPlain();
     ObjectPtr plain = static_cast<ObjectPtr>(reinterpret_cast<void*>(raw(bits)));
-    return IsLocalAddress(plain) ? plain : to_object(safe(bits));
+    if (!Heap::IsHeapAddress(plain) &&
+        (IsLocalAddress(field) || IsLocalAddress(plain) || IsManagedStackAddress(plain))) {
+        return plain;
+    }
+    return to_object(safe(bits));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -2130,14 +2134,16 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
                      srcSize, limit, typeName != nullptr ? typeName : "(null)");
     }
 
-    if (!typeInfo->HasRefField()) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + TYPEINFO_PTR_SIZE),
+    const MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
+    if (typeInfo->HasRefField() && IsLocalAddress(dst)) {
+        CopyMaybeLocalStruct(dst, dstAddr, limit, nullptr, srcField, srcSize, typeInfo->GetGCTib());
+    } else if (!typeInfo->HasRefField()) {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dstAddr),
                               limit,
                               reinterpret_cast<void*>(srcField),
                               srcSize) == EOK,
                      "MCC_WriteGenericPayload memcpy_s failed");
     } else {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
         HeapAccess<>::value_copy(ValuePayload(srcField, srcSize),
         ValuePayload(dstAddr, srcSize, dst, dstAddr));
     }
@@ -2187,7 +2193,11 @@ static void StoreMaybeLocalRef(ObjectPtr value, ObjectPtr owner, RefField<false>
                          "stack reference escapes to the local region");
         }
     }
-    StorePlain(slot, from_object(value));
+    if (IsLocalAddress(value) || IsManagedStackAddress(value)) {
+        StoreNonHeapAlias(slot, value);
+    } else {
+        StorePlain(slot, from_object(value));
+    }
 }
 
 extern "C" void CJ_MCC_MaybeLocalWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field)
@@ -2684,7 +2694,7 @@ extern "C" ObjRef MCC_NewLocalWeakRefObject(const TypeInfo* klass, MSize size)
 static ArrayRef NewLocalArray(const TypeInfo* klass, MIndex count, U32 width)
 {
     const MIndex size = CalculateArraySize(count, width);
-    if (size > std::numeric_limits<size_t>::max() - (sizeof(uint64_t) - 1)) {
+    if (size == MAX_ARRAY_SIZE || size > std::numeric_limits<size_t>::max() - (sizeof(uint64_t) - 1)) {
         ExceptionManager::LocalRegionOutOfMemory();
         ExceptionManager::CheckAndThrowPendingException("local array size");
         return nullptr;
