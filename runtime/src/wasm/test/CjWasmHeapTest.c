@@ -538,6 +538,43 @@ static void TestVerifyHeap(void)
 }
 
 // ---- gate and negative modes -------------------------------------------------
+// Complete frames (CjWasmHeap.h): a derived slot keeps the object containing it, also inside a
+// large object's later block; a stack-range word keeps its object; non-heap words and a stale word
+// that points into a freed cell hold no object and are ignored.
+static void TestCompleteFrame(void)
+{
+    int ok = 1;
+    (void)cjw_gc_collect_precise();
+    FrameStore fs; CjwRootFrame* f = Frame(&fs, 2);
+    void* stack[3] = {0};
+    struct { uint32_t n; CjwFrameRange r[1]; } ranges = {1, {{stack, 3}}};
+    f->funcDesc = &ranges;
+    f->nslots = 2u | CJW_ROOT_FRAME_COMPLETE;
+    void* a = NewObj(&tiNode);
+    void* child = NewObj(&tiLeaf);
+    *Slot(a, 0) = child;
+    void* big = NewArr(&tiU32Arr, 2000, 4);
+    void* b = NewObj(&tiLeaf);
+    void* garbage = NewObj(&tiLeaf);
+    f->slots[0] = (uint8_t*)a + 8;
+    f->slots[1] = (uint8_t*)big + 6000;
+    stack[0] = (void*)g_nonHeapThing;
+    stack[1] = b;
+    stack[2] = (void*)(uintptr_t)0x13;
+    cjw_root_frame_push_complete(f);
+    (void)cjw_gc_collect_precise();
+    CHECK(Alive(a) && Alive(child) && Alive(big) && Alive(b));
+    CHECK(!Alive(garbage));
+    stack[2] = (uint8_t*)garbage + 4;
+    (void)cjw_gc_collect_precise();
+    CHECK(Alive(a) && Alive(big) && Alive(b) && !Alive(garbage));
+    cjw_root_frame_pop_complete(f);
+    (void)cjw_gc_collect_precise();
+    CHECK(!Alive(a) && !Alive(child) && !Alive(big) && !Alive(b));
+    CHECK(__cj_root_top == NULL);
+    Report("complete_frame", ok);
+}
+
 static int ModeGateNoAutoCollect(void)
 {
     // No precise roots: allocation must never collect, the heap only grows.
@@ -561,11 +598,18 @@ int main(int argc, char** argv)
         return 0;
     }
     if (strcmp(mode, "collect_unprecise") == 0) { (void)cjw_alloc(16, 8); cjw_collect(); return 0; }
+    if (strcmp(mode, "gate_legacy") == 0) {   // this binary links the legacy frame member
+        cjw_roots_module_complete(NULL);
+        cjw_gc_evaluate_roots_gate();
+        int ok = !cjw_gc_roots_precise() && strcmp(cjw_gc_roots_gate(), "legacy-frames") == 0;
+        printf("%s gate_legacy roots=%s precise=%d\n", ok ? "PASS" : "FAIL", cjw_gc_roots_gate(), cjw_gc_roots_precise());
+        return ok ? 0 : 1;
+    }
     cjw_gc_declare_precise_roots();
     if (strcmp(mode, "all") == 0) {
         TestAllocBasic(); TestUnrootedReclaimed(); TestFrameRoot(); TestGctibFields(); TestRefArray();
         TestStructArray(); TestRuntimeStructArray(); TestPrimArray(); TestCycles(); TestStaticRoots(); TestStaticRootTable(); TestInternalRoots();
-        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap(); TestRuntimeTypeInfoTib();
+        TestDeepChain(); TestLargeReuse(); TestAutoThreshold(); TestMallocCoexist(); TestHooks(); TestM0Boundary(); TestVerifyHeap(); TestRuntimeTypeInfoTib(); TestCompleteFrame();
         // Every object the suite left behind (live or garbage) must satisfy the TypeInfo contract.
         CjwHeapVerifyStats v;
         cjw_gc_verify_heap(&v);

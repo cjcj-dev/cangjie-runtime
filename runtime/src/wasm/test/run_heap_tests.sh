@@ -44,7 +44,17 @@ array_bounds 139 exceeds its
 pop_order 139 popped while
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
+gate_legacy 0 -
 MODES
+# Root-completeness gate: heap without the legacy frame member, module records only.
+"$CC" $FLAGS -c "$HERE/CjWasmRootGateTest.c" -o gate_test.o && \
+  "$LD" -o root_gate_test.wasm "$SR/lib/wasm32-wasi/crt1-command.o" heap.o gate_test.o -L"$SR/lib/wasm32-wasi" -lc; c6=$?
+for mode in complete incomplete unrecorded_table no_record; do
+  r=NA; [ $c6 -eq 0 ] && { "$NODE" $NODE_FLAGS "$RUN" root_gate_test.wasm "$mode" > "gate_$mode.out" 2> "gate_$mode.err"; r=$?; }
+  v=FAIL; [ "$r" = 0 ] && grep -q "^PASS gate_$mode " "gate_$mode.out" && v=PASS
+  [ $v = PASS ] || FAILS=$((FAILS+1))
+  echo "$v mode=gate_$mode rc=$r want=0 build=$c6 out=$(tr '\n' '|' < "gate_$mode.out" 2>/dev/null)"
+done
 # Runtime-held roots: full runtime (CjWasmRuntime.c + heap) with a test-supplied Cangjie entry.
 RTC=${7:-$SRC/CjWasmRuntime.c}
 "$CC" $FLAGS -c "$RTC" -o rt.o && "$CC" $FLAGS -c "$HERE/CjWasmRuntimeRootTest.c" -o rt_root_test.o && \
