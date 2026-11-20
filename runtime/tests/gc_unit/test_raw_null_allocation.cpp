@@ -106,7 +106,8 @@ GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
-    GC_EXPECT_TRUE(page != nullptr);
+    ZPage* control = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+    GC_EXPECT_TRUE(page != nullptr && control != nullptr);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -119,9 +120,14 @@ GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, RemovesPromotionForwarding)
     BaseObject* object = reinterpret_cast<BaseObject*>(page->alloc_object(24));
     object->SetClassInfo(type);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, object));
+    BaseObject* controlObject = reinterpret_cast<BaseObject*>(control->alloc_object(24));
+    controlObject->SetClassInfo(type);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(control, controlObject));
     ZPageTest::MakeRelocatable(*page);
+    ZPageTest::MakeRelocatable(*control);
     ZRelocationSetSelector selector(0.0);
     selector.register_live_page(page);
+    selector.register_live_page(control);
     selector.select();
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
