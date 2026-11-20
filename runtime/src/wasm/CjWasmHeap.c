@@ -308,13 +308,13 @@ size_t cjw_heap_object_bytes(const void* p)
 
 // ---------------------------------------------------------------------------
 // Roots
-void cjw_root_frame_push(CjwRootFrame* frame)
+void cjw_root_frame_push_complete(CjwRootFrame* frame)
 {
     frame->prev = __cj_root_top;
     __cj_root_top = frame;
 }
 
-void cjw_root_frame_pop(CjwRootFrame* frame)
+void cjw_root_frame_pop_complete(CjwRootFrame* frame)
 {
     if (__cj_root_top != frame) {
         GcIntegrity("root frame %p popped while %p is the top of the shadow root stack", (void*)frame,
@@ -630,13 +630,50 @@ static void TraceObject(void* ref)
     }
 }
 
+// A complete-frame word: NULL, a non-heap address, or any address inside the
+// heap. Marks the live object containing it; free cells, free blocks and a small
+// block's unused tail hold no object and are ignored (stale stack words).
+static void MarkFrameWord(void* v, const void* where)
+{
+    uintptr_t a = (uintptr_t)v;
+    CjwChunk* c = FindChunk(a);
+    if (c == NULL) { return; }
+    uint32_t b = BlockOf(c, a);
+    while (b > 0 && c->blocks[b].kind == BK_LARGE_CONT) { --b; }
+    const CjwBlock* blk = &c->blocks[b];
+    uintptr_t start = BlockAddr(c, b);
+    if (blk->kind == BK_SMALL) {
+        uint32_t cell = kClassBytes[blk->cls];
+        uint32_t k = (uint32_t)((a - start) / cell);
+        if (k >= CJW_BLOCK_BYTES / cell) { return; }
+        start += (uintptr_t)k * cell;
+    } else if (blk->kind != BK_LARGE_HEAD) {
+        return;
+    }
+    if (!TestBit(c->allocBits, GranuleOf(c, start))) { return; }
+    MarkRef((void*)start, "complete shadow root", where);
+}
+
 static void MarkRoots(void)
 {
     size_t frames = 0;
     for (CjwRootFrame* f = __cj_root_top; f != NULL; f = f->prev) {
         if (FindChunk((uintptr_t)f) != NULL) { GcIntegrity("root frame %p lies inside the managed heap", (void*)f); }
         if (++frames > (1u << 24)) { GcIntegrity("shadow root stack longer than 2^24 frames (cycle?)"); }
-        for (uint32_t i = 0; i < f->nslots; ++i) { MarkRef(f->slots[i], "shadow root slot", &f->slots[i]); }
+        if ((f->nslots & CJW_ROOT_FRAME_COMPLETE) == 0) {
+            for (uint32_t i = 0; i < f->nslots; ++i) { MarkRef(f->slots[i], "shadow root slot", &f->slots[i]); }
+            continue;
+        }
+        uint32_t n = f->nslots & ~CJW_ROOT_FRAME_COMPLETE;
+        for (uint32_t i = 0; i < n; ++i) { MarkFrameWord(f->slots[i], &f->slots[i]); }
+        const CjwFrameRanges* r = (const CjwFrameRanges*)f->funcDesc;
+        if (r == NULL) { continue; }
+        if (FindChunk((uintptr_t)r) != NULL) { GcIntegrity("frame range table %p lies inside the managed heap", (const void*)r); }
+        for (uint32_t k = 0; k < r->nranges; ++k) {
+            void* const* w = (void* const*)r->ranges[k].start;
+            if (FindChunk((uintptr_t)w) != NULL) { GcIntegrity("frame range %p lies inside the managed heap", (const void*)w); }
+            for (uint32_t i = 0; i < r->ranges[k].words; ++i) { MarkFrameWord(w[i], &w[i]); }
+        }
     }
     for (size_t r = 0; r < g_nstatic; ++r) {
         for (size_t i = 0; i < g_static[r].count; ++i) {
@@ -706,6 +743,67 @@ static size_t Sweep(void)
     }
     return freed;
 }
+
+// ---------------------------------------------------------------------------
+// Root completeness of the program
+static uint32_t g_completeModules = 0, g_incompleteModules = 0;
+static int g_legacyFrames = 0;
+static void** const** g_claimed = NULL;
+static size_t g_nclaimed = 0, g_capClaimed = 0;
+static const char* g_rootsGate = "not-evaluated";
+
+void cjw_roots_module_complete(void** const* table)
+{
+    g_completeModules++;
+    if (table == NULL) { return; }
+    if (g_nclaimed == g_capClaimed) {
+        g_capClaimed = g_capClaimed ? g_capClaimed * 2 : 16;
+        g_claimed = (void** const**)XRealloc((void*)g_claimed, g_capClaimed * sizeof(*g_claimed));
+    }
+    g_claimed[g_nclaimed++] = table;
+}
+
+void cjw_roots_module_incomplete(void** const* table)
+{
+    (void)table;
+    g_incompleteModules++;
+}
+
+void cjw_roots_note_legacy_frames(void) { g_legacyFrames = 1; }
+
+static int Claimed(void** const* table)
+{
+    for (size_t i = 0; i < g_nclaimed; ++i) {
+        if (g_claimed[i] == table) { return 1; }
+    }
+    return 0;
+}
+
+void cjw_gc_evaluate_roots_gate(void)
+{
+    if (g_precise) {
+        g_rootsGate = "declared";
+        return;
+    }
+    const char* why = NULL;
+    if (g_legacyFrames) {
+        why = "legacy-frames";
+    } else if (g_incompleteModules != 0) {
+        why = "incomplete-module";
+    } else if (g_completeModules == 0) {
+        why = "no-root-record";
+    } else if (g_nstatic != 0) {
+        why = "untyped-static-range";
+    } else {
+        for (size_t t = 0; t < g_ntables && why == NULL; ++t) {
+            if (!Claimed(g_tables[t].entries)) { why = "unrecorded-static-table"; }
+        }
+    }
+    g_rootsGate = why != NULL ? why : "complete";
+    if (why == NULL) { g_precise = 1; }
+}
+
+const char* cjw_gc_roots_gate(void) { return g_rootsGate; }
 
 // ---------------------------------------------------------------------------
 // Collection
@@ -787,9 +885,9 @@ static void PrintStatsAtExit(void)
 {
     fprintf(stderr,
             "cangjie wasm32 runtime: gc stats: heap=%zu live=%zu allocated=%zu freed=%zu collections=%u chunks=%u "
-            "precise=%d\n",
+            "precise=%d roots=%s\n",
             g_stats.heapBytes, g_stats.liveBytes, g_stats.allocatedBytesTotal, g_stats.freedBytesTotal,
-            g_stats.collections, g_stats.chunks, g_precise);
+            g_stats.collections, g_stats.chunks, g_precise, g_rootsGate);
 }
 
 static void VerifyAtExit(void)

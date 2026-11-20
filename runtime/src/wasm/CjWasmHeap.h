@@ -32,9 +32,9 @@
 // (catch landing pads restore the value saved at entry). Before each call that
 // may allocate, every live managed base pointer is stored into its slot; after
 // the call it is reloaded (keeps a future moving collector correct).
-// Slots hold NULL or the *start* of a managed object; derived/interior
-// pointers must be rematerialised from their base and are rejected by the
-// collector (GC integrity failure).
+// Legacy frames: slots hold NULL or the *start* of a managed object;
+// derived/interior pointers are rejected (GC integrity failure). Complete
+// frames (below) may hold derived pointers.
 typedef struct CjwRootFrame {
     struct CjwRootFrame* prev;
     const void* funcDesc;   // opaque, diagnostics only (may be NULL)
@@ -46,9 +46,49 @@ _Static_assert(__builtin_offsetof(CjwRootFrame, nslots) == 8, "root frame: nslot
 _Static_assert(__builtin_offsetof(CjwRootFrame, slots) == 12, "root frame: slots at 12");
 
 extern CjwRootFrame* __cj_root_top;
+// Legacy (proof-based) frames: code that pushes them was not compiled under the
+// complete root contract. They live in their own archive member, whose
+// constructor keeps the collector off for the program (see the gate below).
 void cjw_root_frame_push(CjwRootFrame* frame);
 // Pops `frame`, which must be the current top (GC integrity failure otherwise).
 void cjw_root_frame_pop(CjwRootFrame* frame);
+
+// Complete frames (the complete root contract of the Cangjie LLVM). nslots has
+// CJW_ROOT_FRAME_COMPLETE set; a slot may hold any address that is live in the
+// compiled function, including a derived pointer: the collector is non-moving,
+// marks the object containing the address and never writes slots back.
+// funcDesc is NULL or a CjwFrameRanges naming the function's stack memory that
+// may hold references; every 4-byte word of a range is treated like a slot.
+#define CJW_ROOT_FRAME_COMPLETE 0x80000000u
+typedef struct {
+    void* start;
+    uint32_t words;
+} CjwFrameRange;
+typedef struct {
+    uint32_t nranges;
+    CjwFrameRange ranges[];
+} CjwFrameRanges;
+_Static_assert(__builtin_offsetof(CjwFrameRanges, ranges) == 4, "frame ranges at 4");
+_Static_assert(sizeof(CjwFrameRange) == 8, "frame range is 8 bytes");
+void cjw_root_frame_push_complete(CjwRootFrame* frame);
+void cjw_root_frame_pop_complete(CjwRootFrame* frame);
+
+// ---- root completeness of the program ---------------------------------------
+// Each module compiled under the complete contract reports itself from a
+// constructor, naming its static root table (or NULL): complete, or incomplete
+// when some function had a shape the contract cannot cover.
+void cjw_roots_module_complete(void** const* table);
+void cjw_roots_module_incomplete(void** const* table);
+// Called by the legacy frame member's constructor.
+void cjw_roots_note_legacy_frames(void);
+// Evaluated once, after all constructors and before the Cangjie entry: the roots
+// are declared precise only if at least one module reported complete, none
+// reported incomplete, no legacy frame code is linked, every registered static
+// root table belongs to a complete module and no untyped static range exists.
+// Otherwise the program runs without collection (allocation only grows the heap).
+void cjw_gc_evaluate_roots_gate(void);
+// "complete", "declared" (embedder), "not-evaluated" or the first failed condition.
+const char* cjw_gc_roots_gate(void);
 
 // ---- static and runtime-internal roots ------------------------------------
 // A static root range is `count` consecutive reference slots outside the
