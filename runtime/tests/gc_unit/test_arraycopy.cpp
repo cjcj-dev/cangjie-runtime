@@ -4,7 +4,6 @@
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/FieldInfo.h"
-#include "CompilerCalls.h"
 #include "Heap/Allocator/LocalObjectAllocator.h"
 #include "ObjectModel/MObject.inline.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -20,6 +19,11 @@ extern "C" void MCC_WriteStructField(ObjectPtr, MAddress, size_t, MAddress, size
 extern "C" void CJ_MCC_ArrayCopyRef(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 extern "C" void CJ_MCC_ArrayCopyStruct(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 extern "C" void CJ_MCC_ArrayCopyGeneric(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
+extern "C" void MCC_StartLocalRegion(FrameAddress*);
+extern "C" void MCC_EndLocalRegion(FrameAddress*);
+extern "C" ArrayRef MCC_NewLocalObjArray(const TypeInfo*, MIndex);
+extern "C" void CJ_MCC_MaybeLocalWriteRef(ObjectPtr, ObjectPtr, RefField<false>*);
+extern "C" ObjectPtr CJ_MCC_ReadRefField(ObjectPtr, RefField<false>*);
 
 namespace {
 void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same = false, bool generic = false, bool emptyDestination = false)
