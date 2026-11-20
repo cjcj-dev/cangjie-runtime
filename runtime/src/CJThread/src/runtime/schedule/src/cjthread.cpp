@@ -1355,12 +1355,6 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
     return CJThreadNewWithCreator(schedule, attrUser, func, argStart, argSize, createSource, rootColor, {});
 }
 
-MapleRuntime::CreatorFrameInfo MapleRuntime::CJThreadGetCreatorFrame()
-{
-    const struct CJThread* thread = CJThreadGet();
-    return thread == nullptr || thread->isCJThread0 ? CreatorFrameInfo{} : thread->creatorFrame;
-}
-
 /* Submit tasks from an external thread to the scheduling framework. */
 CJThreadHandle CJThreadNewToSchedule(ScheduleHandle schedule, const struct CJThreadAttr *attr,
                                      CJThreadFunc func, const void *argStart, unsigned int argSize,
@@ -2800,3 +2794,9 @@ void CJThreadSetSanitizerContext(void *cjthread, void *state)
 #ifdef __cplusplus
 }
 #endif
+
+MapleRuntime::CreatorFrameInfo MapleRuntime::CJThreadGetCreatorFrame()
+{
+    const struct CJThread* thread = CJThreadGet();
+    return thread == nullptr || thread->isCJThread0 ? CreatorFrameInfo{} : thread->creatorFrame;
+}
