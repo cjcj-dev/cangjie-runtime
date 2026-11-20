@@ -13,7 +13,7 @@
 #include "Base/MemUtils.h"
 #include "Common/NativeAllocator.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
