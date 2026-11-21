@@ -35,9 +35,9 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         identity = json.loads(result.stdout)
         self.assertEqual(identity['language']['std_core'],
-                         '47a91409292a5005f1dd3449bbc6b0840f89f3bbdb3ebba1235837cb768d3f60')
-        self.assertEqual(identity['language']['cjc'],
-                         'a4ae3418cb59c07b273056e6f2fd9a6908c4420da15f98bf63a8dfcf62ed15ad')
+                         '6484711bfc827990534249f65e2ee5f2c7979e4df284c4b92f88ad3814f50b98')
+        self.assertEqual(identity['language']['cjc_entity'],
+                         '3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c')
 
     def test_reject_old_qualification(self):
         result = self.invoke({'GC_UNIT_LANGUAGE_QUALIFICATION': str(OLD)})

@@ -1,42 +1,62 @@
 # Current pinned tuple qualification evidence
 
-Qualification was measured on kkk2 for cangjie-runtime#1504. No std rebuild or runtime product code change was made.
+Qualification was measured on kkk2 for the 853e native-producer SDK package. No runtime
+product code, std source or compiler change was made. The record replaces the previous
+`f2283db793…` stage1 tuple: with that SDK's std and the 853e target runtime the managed
+finalizer fixture reported `finalized=0` of 64 (gate run `run.ZgGVELBNlZ`, 2026-11-20),
+so that tuple no longer qualifies the current AOT ABI pairing.
 
-The retained same-source SDK was copied from `/root/sym_cjcj_863_implement_r6027183555/keep/sdk-stage1-pre-runner`. Its selected files were checked against `SDK.lock.json`; `same-source-std.sha256` identifies std-core `47a91409…`. The SDK compiler is the supplied stage1 ELF, not the previous wrapper.
+The package is the archive produced by `node build/cli.mjs sdk --archive-inputs …` (cjcj
+`6a26bcde09edfa65d4e5eba801c4cbb01a98897f`) from the 853e native producer install:
+`archive.tar.gz` SHA256 `fe17f688c60545f715bad0aac1401a13c8bf89286fba489a02ee52aa8159d86d`.
+It was unpacked once into a fresh directory and every measurement, consumer and gate run
+below used that unpacked tree, not the producer's install tree. Inputs recorded by the
+producer: compiler 6a26bcde, LLVM `74bb3a7186e171faf863f9c281ba9773e584bb64`, static std
+built by the B2 stage2 compiler from runtime/stdlib `54497690da71724010cd0d65b731ebc4f941fe52`
+(no `stdlib/libs` source difference to 853e), target runtime `853e939928ecdb17eef38409d137268dce15cc0d`.
 
-Compiler host runtime/boundscheck were copied from the pinned nightly-1.3.0-alpha.20260925001050 SDK. Host LLVM was downloaded from cjcj-dev/cjcj asset 616606322, whose archive SHA256 is `3a732a6fbab1cd09bb470374c2fb1b186668228477b92a12a98bb0227cb21806`, then checked against the Linux x86_64 host identity `30e8ba8c…`. These entity copies form the SDK `host/compiler` directory; its complete file-set identity is bound by the record.
+The SDK compiler entry is the cjcj native launcher. `bin/cjc` is an alias of the
+launcher `bin/cjcj-stage1`, whose `bin/cjcj-stage1.entry` names the entity
+`libexec/compiler/cjcj-stage1` and the compiler-execution directories under
+`.compiler-exec/`. The launcher stub is shared by cjc/llc/opt, so admission binds each
+`.entry` and its entity in addition to the launcher.
 
 | Measured language component | SHA256 |
 |---|---|
-| cjc | `a4ae3418cb59c07b273056e6f2fd9a6908c4420da15f98bf63a8dfcf62ed15ad` |
-| llc | `e426bdedd85c48eaba569cccbfc3c34de4bfdf0cdff765a4209ddaa3581adc57` |
-| opt | `8d8f8c5f4ab7e0da329b5ddf0b14b16f612a2a785a37892298453194c09e61f7` |
-| std | `31f21961358efb67854df315a4a2494eea35da1be28af7d16f79440f844f9c44` |
-| std_core | `47a91409292a5005f1dd3449bbc6b0840f89f3bbdb3ebba1235837cb768d3f60` |
-| runtime | `49c3e549002409742a6b02192e67d48696ce5515deafca83d17c0e59872bd546` |
+| cjc / llc / opt launcher | `420ac6fc43d8b8029c3f91fbaae50f6eb5af29ef90792b35c2f249e41249c0bf` |
+| cjc entity (`libexec/compiler/cjcj-stage1`) | `3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c` |
+| llc entity | `18407da25edbfedced94e74b0cb0cd232bda23e9ba170b85a21d988e8bad2966` |
+| opt entity | `a83a79f29ea1de27802f3bee9c97f2af25ff50c47c44d0509762b12c0119ecc8` |
+| std (archive set) | `d2270fa702b9bcfe7883173383a5f3da2b6f6812e4fa011fcc33769af98b9c3f` |
+| std_core | `6484711bfc827990534249f65e2ee5f2c7979e4df284c4b92f88ad3814f50b98` |
+| runtime | `4d6e503d7285ba39e5919d6419cb94e8d0d244b099005c6a33f760a62f9fed9b` |
+| compiler host runtime (`.compiler-exec/runtime/lib/linux_x86_64_cjnative`) | `c457d8add4f4f0fa6d8bffaf601840c6ece676b814efd6efb0faa625b1bb5b1c` |
 
-The remaining component, compiler-host directory and checker/reference hashes are the directly measured values in the qualification JSON. `evidence/measure.py` (preserved as the lane script `measure.py`) checks the selected SDK.lock identities before emitting `measured-inputs.json`; its own rc was 0.
+The compiler host is the package's own `.compiler-exec` set (three directories named by the
+launcher entry); its complete file-set identity is `compiler_host_set` in the record. The
+colour checker (`cjcj/ci/bootstrap/std_runtime_colour.py`, `f790d583…`) and the declared
+official reference runtime (nightly-1.3.0-alpha.20260925001050, `a656fbc7…`) are unchanged
+from the previous record. The checker on target runtime `4d6e503d…`, that reference and
+std-core `6484711b…` returned rc 0 / stdout `1`.
 
-Producer/consumer observations:
+Producer/consumer observations for this tuple:
 
-- The f228 product SO defines `ThreadLocalData::SetMutator` at `0x51bff0`. `runtime/src/Mutator/ThreadLocal.cpp:44` publishes `newMutator->tlab()` into the first TLS slot. The SO instructions at `0x51c07c`/`0x51c083` form the embedded TLAB address and store it directly into that slot.
-- `runtime/src/Mutator/ThreadLocal.h:32` defines the pointer slot, and `runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:77–79` asserts TLAB/top/end offsets 0/0/8. `runtime/src/arch/x86_64_linux/CalleeSavedStub.S:59–60` puts `MRT_GetThreadLocalData()` in r15.
-- The measured std-core archive defines `CJ_MCC_NewObjectFast` in `core.o` at `0x94bb0`. The linked finalizer ELF places that copy at `0x117040`: `_CGPatifHv` moves from `0x917c4` to `0x113c54`, the same `0x82490` displacement. Archive and ELF instructions read `[r15]` once, then TLAB top `[rdx]` and end `[rdx+8]` (`49 8b 17; 48 8b 02; 48 8b 4a 08`). The linked ELF also contains the fixture allocation stub at `0x81c20` with that same direct layout.
+- The measured std-core `core.o` (`8fd3e7c6…`) defines `CJ_MCC_NewObjectFast` at `0x98570`:
+  `49 8b 17; 48 8b 02; 48 8b 4a 08` (`mov (%r15),%rdx; mov (%rdx),%rax; mov 0x8(%rdx),%rcx`),
+  i.e. one load of the TLS slot followed by TLAB top/end, the same direct-TLAB consumer
+  layout as before. The runtime publishes `Mutator::tlab()` (`&allocBuffer`) from
+  `ThreadLocalData::SetMutator` (`runtime/src/Mutator/ThreadLocal.cpp:96`, resolved with
+  clice against the 853e Release compilation database).
+- The 853e native producer (`build_runtime.mjs` → `build.py build/install`, CPP suite FRESH)
+  and the 6a26 installed-language gate on this package ran the finalizer fixture
+  (`finalized=64 expected=64`) and the minor/major phase-entry guards with rc 0
+  (reports `REPORT-opus_reference_qualification_1121.md`, `REPORT-review_reference_native_853e_1121.md`).
+- From the unpacked archive the public cjc compiled and ran three ordinary consumers against
+  the packaged target runtime: synchronized C writes to live acquired arrays (120/120),
+  held/unheld array address observation over 36 and 48 rounds, and a two-thread minor-GC
+  mutator (63 and 148 minor collections); all rc 0 (`REPORT-ffi_language_minor_1122.md`).
 
-This corresponds to the TLAB top/end consumption in the reference `hotspot/cpu/x86/gc/shared/barrierSetAssembler_x86.cpp:295–305`. Cangjie publishes a pointer to its logical-thread TLAB in external TLS; HotSpot uses JavaThread fields. This observation qualifies the current AOT ABI pairing; it is not a general runtime behavior or performance claim.
-
-One sequential N=3 batch ran the unchanged `run_finalizer_trigger.sh` on CPU domain 0-15 through `wf_kkk2.sh sh`, with core soft/hard limits 0 and `LD_DEBUG=libs`. Each fixture used `-O0 --static-std`, a 256MB heap and the same retained target runtime/boundscheck. The first sample succeeded before the remaining two ran.
-
-| Sample | Compile rc | Runner rc | Finalized | Done | Run log SHA256 |
-|---|---|---|---|---|---|
-| 1 | 0 | 0 | 64 | 1 | `3fb66b24241688b7b118a7d90f208170142ea9571c24ab4e0051afb614487c07` |
-| 2 | 0 | 0 | 64 | 1 | `b1054c47837f6a7f9162a06f75e94027c5f2b23971235da2f57b59aacf08b6c1` |
-| 3 | 0 | 0 | 64 | 1 | `7528ad24b5abb92d1da61c8250de484cf6dc0a669a2d5a3433a3f68fb4bc1f52` |
-
-All three ELF hashes are `b22b678cbf7d051bda4db5cd746f599a4dbbf4fdc6972668fac4557e59a3edb3`. Target SO SHA256 is `49c3e549002409742a6b02192e67d48696ce5515deafca83d17c0e59872bd546`, with the actual stamp `CJRT-COMMIT:f2283db793be1fcbe986f9a4ed5c217609dcf3ca`; target boundscheck is `4463c3457486debd598d6433893e64d43b49dcea1ba4669744a5891076ef03b9`.
-
-Loader output in each `finalizer_trigger.build.log` records the compiler-host runtime and host LLVM; each `finalizer_trigger.run.log` records the retained f228 target runtime. `run_finalizer_trigger.sh:40–43` checks execution rc, the one completion line, and all 64 actual finalizer outputs before printing OK. Load averages were 0.45/0.31/0.68 before and 0.35/0.30/0.67 after.
-
-Raw logs, original rc files, linked ELFs, symbol/disassembly observations and `summary.json` are preserved under `kkk2:/root/sym_cangjie_runtime_1504_implement_r6028178076/evidence/qualification/` and `local:/root/cj_build/reports/EVIDENCE-sym_cangjie_runtime_1504_implement_r6028178076/qualification/`. The lane scripts and `measured-inputs.json` are also retained. The report is `/root/cj_build/reports/REPORT-sym_cangjie_runtime_1504_implement_r6028178076.md`.
-
-The fixed SDK runtime is a component of the input tuple. A runtime commit containing this record is admitted as a separately measured target through the unchanged colour checker; its commit stamp is not required to equal the SDK runtime hash. Thus the record has no self-referential target SO binding. See `LANGUAGE_TOOLCHAIN.md`.
+This qualifies the current AOT ABI pairing for the managed gate only; it is not a release
+or performance claim. `language.runtime` binds the fixed SDK runtime; a runtime commit
+containing this record is admitted as a separately measured target through the unchanged
+colour checker. See `LANGUAGE_TOOLCHAIN.md`.
