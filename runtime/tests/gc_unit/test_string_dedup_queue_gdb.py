@@ -62,7 +62,7 @@ class Snapshot(gdb.Breakpoint):
             return True
 
 
-Snapshot(str(source) + ':' + str(line), internal=True)
+Snapshot(source.name + ':' + str(line), internal=True)
 try:
     gdb.execute('run')
 except Exception as exc:
