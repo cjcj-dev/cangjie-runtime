@@ -2140,7 +2140,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     }
 
     @Frozen
-    private func max(l: Int64, r: Int64) {
+    private func max(this @local?, l: Int64, r: Int64) {
         return if (l >= r) {
             l
         } else {
@@ -2267,7 +2267,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
                     let bucket: Int64 = getIndex(entryHash, newCapOfBuckets)
                     let newNext: Int64 = newBuckets[bucket]
                     if (newNext != entries[i].next) {
-                        entries[i] = HashMapEntry<K, V>(entryHash, newNext, entries[i].key, entries[i].value)
+                        entries[i] = HashMapEntry<K, V>(entryHash, newNext, entries[i].key, entries[i].value) @local!
                     }
                     newBuckets[bucket] = i
                 }
@@ -2280,7 +2280,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
             let newCapOfEntries = max(oldEntriesSize + (oldEntriesSize >> 1), argCap)
             let newEntries = Array<HashMapEntry<K, V>>(
                 newCapOfEntries,
-                repeat: HashMapEntry<K, V>()
+                repeat: HashMapEntry<K, V>() @local!
             ) @local!
             entries.copyTo(newEntries, 0, 0, oldEntriesSize)
             entries = newEntries
