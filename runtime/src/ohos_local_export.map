@@ -18,5 +18,6 @@ CANGJIE {
           AddHandlerToSignalStack;RemoveHandlerFromSignalStack;sigaction;signal;sigprocmask;
           _Z30CJ_MRT_GetCJThreadNumberUnsafev;_Z25CJ_MRT_GetAllCJThreadInfoPvj;RegisterStackInfoCallbacks;
           g_cjStoreBarrierBufferCurrentOffset;g_cjStoreBarrierBufferBufferOffset;g_cjStoreBarrierEntrySize;g_cjStoreBarrierEntryPOffset;g_cjStoreBarrierEntryPrevOffset;
+          g_cjHeapRangeStart;g_cjHeapRangeEnd;g_cjHeapRangeCount;g_cjLoadShift;
   local: *; # Hide everything else.
 };
