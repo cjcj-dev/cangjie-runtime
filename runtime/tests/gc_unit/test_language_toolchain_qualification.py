@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Qualify admission against real SDK files, including one-byte changes.
 
-All modified files live in --out. No compiler or runtime is substituted.
-The acceptance/control group can also be run against a temporarily cut record.
+Mutations are confined to --out and never execute a modified SDK component.
+Use the acceptance group for read-only checks of a real installation.
 """
 import argparse
 import json
@@ -12,6 +12,62 @@ import shutil
 import subprocess
 import sys
 import unittest
+
+from language_toolchain import compiler_host_dirs, launcher_entry
+
+
+PUBLIC_LLVM = 'third_party/llvm/lib/libLLVM-15.so'
+
+
+def component_cases(sdk, proof, host_dirs):
+    """Find each physical file and the first check that binds it."""
+    language = {}
+    entries = set()
+    for name, relative in (
+        ('cjc', 'bin/cjc'),
+        ('llc', 'third_party/llvm/bin/llc'),
+        ('opt', 'third_party/llvm/bin/opt'),
+    ):
+        launcher = sdk / relative
+        language[name] = [launcher]
+        entry = launcher_entry(sdk, launcher)
+        if entry:
+            language[f'{name}_entry'] = [entry['entry']]
+            language[f'{name}_entity'] = [entry['entity']]
+            entries.add(entry['entry'].resolve(strict=True))
+
+    std = sdk / 'lib/linux_x86_64_cjnative'
+    language['std'] = sorted(std.glob('libcangjie-std-*.a'))
+    language['std_core'] = [std / 'libcangjie-std-core.a']
+    language['runtime'] = [sdk / 'runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so']
+
+    # Use the installed layout to decide which bindings are mandatory. A missing
+    # key must fail the test instead of silently dropping its mutation cases.
+    missing = [f'language.{key}' for key in sorted(language.keys() - proof['language'].keys())]
+    if entries and PUBLIC_LLVM not in proof['components']:
+        missing.append(f'components.{PUBLIC_LLVM}')
+    missing.extend(key for key in ('compiler_host', 'compiler_host_set') if key not in proof)
+    if missing:
+        raise AssertionError('Missing required qualification bindings: ' + ', '.join(missing))
+
+    cases = {}
+
+    def add(file, reason):
+        target = file.resolve(strict=True)
+        cases.setdefault(target, (file, reason, target in entries))
+
+    # Admission compares language keys in record order, then path bindings,
+    # then the host set. Aliases must expect the same first check as their file.
+    for key in proof['language']:
+        for file in language[key]:
+            add(file, f'LANGUAGE_TOOLCHAIN_INCOMPATIBLE component={key}')
+    for relative in proof['components']:
+        add(sdk / relative, f'LANGUAGE_TOOLCHAIN_INCOMPATIBLE component={relative}')
+    for directory in host_dirs:
+        for file in sorted(directory.iterdir()):
+            if file.is_file():
+                add(file, 'LANGUAGE_COMPILER_HOST_INCOMPATIBLE')
+    return list(cases.values())
 
 
 class QualificationTests(unittest.TestCase):
@@ -35,9 +91,11 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         identity = json.loads(result.stdout)
         self.assertEqual(identity['language']['std_core'],
-                         '47a91409292a5005f1dd3449bbc6b0840f89f3bbdb3ebba1235837cb768d3f60')
-        self.assertEqual(identity['language']['cjc'],
-                         'a4ae3418cb59c07b273056e6f2fd9a6908c4420da15f98bf63a8dfcf62ed15ad')
+                         '6484711bfc827990534249f65e2ee5f2c7979e4df284c4b92f88ad3814f50b98')
+        self.assertEqual(identity['language']['cjc_entity'],
+                         '3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c')
+        self.assertEqual(identity['qualified_components'].get(PUBLIC_LLVM),
+                         '8b344d0c1aa92bd40938e80faa783d1283ecbdb5b129a2c08605b51edf53e053')
 
     def test_reject_old_qualification(self):
         result = self.invoke({'GC_UNIT_LANGUAGE_QUALIFICATION': str(OLD)})
@@ -52,58 +110,64 @@ class QualificationTests(unittest.TestCase):
         print('OLD_TUPLE_REJECTION_ASSERT executed rc=2 component=cjc', flush=True)
 
     def test_reject_each_changed_component(self):
-        sdk = OUT / 'changed-sdk'
-        shutil.copytree(Path(os.environ['GC_UNIT_LANGUAGE_SDK']), sdk, symlinks=True)
+        source = Path(os.environ['GC_UNIT_LANGUAGE_SDK']).resolve(strict=True)
+        host = Path(os.environ['GC_UNIT_CJC_RUNTIME_LIB_DIR']).resolve(strict=True)
         proof = json.loads(Path(os.environ['GC_UNIT_LANGUAGE_QUALIFICATION']).read_text())
-        changes = {'GC_UNIT_LANGUAGE_SDK': str(sdk),
-                   'GC_UNIT_CJC_RUNTIME_LIB_DIR': str(sdk / 'host/compiler')}
-        paths = {'bin/cjc': 'component=cjc',
-                 'third_party/llvm/bin/llc': 'component=llc',
-                 'third_party/llvm/bin/opt': 'component=opt',
-                 'runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so': 'component=runtime'}
-        for archive in sorted((sdk / 'lib/linux_x86_64_cjnative').glob('libcangjie-std-*.a')):
-            paths[str(archive.relative_to(sdk))] = 'component=std'
-        # sdk_identity runs before the additional file bindings. Aliases are
-        # tested once at their actual executable, so the expected first reject
-        # names the language entry when a component is also one of those files.
-        for relative in proof['components']:
-            target = (sdk / relative).resolve()
-            existing = next((name for name in paths if (sdk / name).resolve() == target), None)
-            if existing is None:
-                paths[relative] = f'component={relative}'
-        cases = [(sdk / relative, reason, changes) for relative, reason in paths.items()]
-        cases += [(file, 'LANGUAGE_COMPILER_HOST_INCOMPATIBLE', changes)
-                  for file in sorted((sdk / 'host/compiler').iterdir()) if file.is_file()]
-        for variable in ('GC_UNIT_COLOUR_CHECKER', 'GC_UNIT_COLOUR_HOST_RUNTIME'):
-            copy = OUT / variable.lower()
-            shutil.copy2(os.environ[variable], copy)
-            cases.append((copy, 'LANGUAGE_COLOUR_REFERENCE_INCOMPATIBLE',
-                          dict(changes, **{variable: str(copy)})))
+        sdk = OUT / 'changed-sdk'
         try:
-            for file, reason, env in cases:
+            shutil.copytree(source, sdk, symlinks=True)
+            host_dirs, legacy = compiler_host_dirs(sdk)
+            # A legacy host can be supplied from an equivalent external directory.
+            # Launcher hosts are bound to the configured directory inside the SDK.
+            copied_host = host_dirs[0] if legacy else sdk / host.relative_to(source)
+            changes = {'GC_UNIT_LANGUAGE_SDK': str(sdk),
+                       'GC_UNIT_CJC_RUNTIME_LIB_DIR': str(copied_host)}
+            cases = [(file, reason, is_entry, changes)
+                     for file, reason, is_entry in component_cases(sdk, proof, host_dirs)]
+            for variable in ('GC_UNIT_COLOUR_CHECKER', 'GC_UNIT_COLOUR_HOST_RUNTIME'):
+                copy = OUT / variable.lower()
+                shutil.copy2(os.environ[variable], copy)
+                cases.append((copy, 'LANGUAGE_COLOUR_REFERENCE_INCOMPATIBLE', False,
+                              dict(changes, **{variable: str(copy)})))
+
+            for file, reason, is_entry, env in cases:
                 with self.subTest(component=str(file.relative_to(OUT))):
-                    # Follow SDK aliases only within this independent copy.
-                    target = file.resolve()
+                    target = file.resolve(strict=True)
                     self.assertTrue(target.is_relative_to(OUT.resolve()), str(target))
                     mode = target.stat().st_mode
                     target.chmod(mode | 0o200)
-                    with target.open('r+b') as stream:
-                        original = stream.read(1)
-                        self.assertTrue(original, str(file))
-                        stream.seek(0)
-                        stream.write(bytes([original[0] ^ 1]))
+                    original = None
                     try:
+                        with target.open('r+b') as stream:
+                            original = stream.read() if is_entry else stream.read(1)
+                            self.assertTrue(original, str(file))
+                            if is_entry:
+                                # Add one slash to a search directory. Keep a valid
+                                # recipe and identical resolution so the hash check
+                                # runs instead of failing in the entry parser.
+                                lines = original.split(b'\n')
+                                lines[5] += b'/'
+                                changed = b'\n'.join(lines)
+                            else:
+                                changed = bytes([original[0] ^ 1])
+                            stream.seek(0)
+                            stream.write(changed)
                         result = self.invoke(env)
                         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                        self.assertIn(reason, result.stderr)
+                        self.assertEqual(result.stderr.strip(),
+                                         f'LANGUAGE_ADMISSION_NOT_RUN reason={reason}')
                         print(f'ONE_BYTE_REJECTION_ASSERT component={file.relative_to(OUT)} '
                               f'rc=2 reason={reason}', flush=True)
                     finally:
-                        with target.open('r+b') as stream:
-                            stream.write(original)
+                        if original:
+                            with target.open('r+b') as stream:
+                                stream.write(original)
+                                if is_entry:
+                                    stream.truncate()
                         target.chmod(mode)
         finally:
-            shutil.rmtree(sdk)
+            if sdk.exists():
+                shutil.rmtree(sdk)
 
 
 if __name__ == '__main__':

@@ -1,25 +1,35 @@
 {
-  "source": "language_toolchain_qualification_evidence.md sha256=b535f296c6b6c724fc7c7db1844d1c2bd869f7a1e8831347b954e79da85978bf; fixed SDK runtime f2283db793; ThreadLocal.cpp:44 producer -> core.o/ELF direct-TLAB consumer; same-SO finalizer N=3 finalized=64",
+  "source": "language_toolchain_qualification_evidence.md sha256=71141ad99677c85d30aa759137adef70f2a118657c7dbec3b8344965e8fb55a1; 853e native-producer SDK archive fe17f688 (compiler 6a26bcde / LLVM 74bb3a71 / std 54497690 / target runtime 853e9399); launcher entry/entity bound; finalizer finalized=64; phase-entry minor/major guards 2/2",
   "language": {
-    "cjc": "a4ae3418cb59c07b273056e6f2fd9a6908c4420da15f98bf63a8dfcf62ed15ad",
-    "llc": "e426bdedd85c48eaba569cccbfc3c34de4bfdf0cdff765a4209ddaa3581adc57",
-    "opt": "8d8f8c5f4ab7e0da329b5ddf0b14b16f612a2a785a37892298453194c09e61f7",
-    "std": "31f21961358efb67854df315a4a2494eea35da1be28af7d16f79440f844f9c44",
-    "std_core": "47a91409292a5005f1dd3449bbc6b0840f89f3bbdb3ebba1235837cb768d3f60",
-    "runtime": "49c3e549002409742a6b02192e67d48696ce5515deafca83d17c0e59872bd546"
+    "cjc": "420ac6fc43d8b8029c3f91fbaae50f6eb5af29ef90792b35c2f249e41249c0bf",
+    "llc": "420ac6fc43d8b8029c3f91fbaae50f6eb5af29ef90792b35c2f249e41249c0bf",
+    "opt": "420ac6fc43d8b8029c3f91fbaae50f6eb5af29ef90792b35c2f249e41249c0bf",
+    "cjc_entry": "03e88062a7e83533ab18b74f205200a976eaf12935cddc606171c5b948ed0d55",
+    "cjc_entity": "3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c",
+    "llc_entry": "2f66d08c06c7ffeb771523bbf1ea48ba33465b898627b28e049f6c76aa00747e",
+    "llc_entity": "18407da25edbfedced94e74b0cb0cd232bda23e9ba170b85a21d988e8bad2966",
+    "opt_entry": "5e96ad25dfc652a2bda97e9fb84a825d1b522fa5d553fa8500a78299ded24baf",
+    "opt_entity": "a83a79f29ea1de27802f3bee9c97f2af25ff50c47c44d0509762b12c0119ecc8",
+    "std": "d2270fa702b9bcfe7883173383a5f3da2b6f6812e4fa011fcc33769af98b9c3f",
+    "std_core": "6484711bfc827990534249f65e2ee5f2c7979e4df284c4b92f88ad3814f50b98",
+    "runtime": "4d6e503d7285ba39e5919d6419cb94e8d0d244b099005c6a33f760a62f9fed9b"
   },
   "components": {
-    "bin/cjcj-stage1": "a4ae3418cb59c07b273056e6f2fd9a6908c4420da15f98bf63a8dfcf62ed15ad",
-    "third_party/llvm/lib/libLLVM-15.so": "4e2a5b4fb43e05cdb4afc20f8ff33624174a4ff8a47415aaade297eeda82798c",
-    "third_party/llvm/lib/libboundscheck.so": "3ad04fe38be88d5123078bd11d78cbc82377c114f6e6514b393ecd374e559bb7",
-    "runtime/lib/linux_x86_64_cjnative/libboundscheck.so": "4463c3457486debd598d6433893e64d43b49dcea1ba4669744a5891076ef03b9",
-    "MANIFEST.sha256": "3e97009594f005fb3367cd53b656f3366dccae44b6ca5fd006f23c6ed7fed3c0",
-    "std-producer.json": "20dd936a55d10f84540401c9e951f7140ad4c15c8b74ee2ec033f38184926a97",
-    "compiler-lineage.json": "f5ffe7c6869ce762ca0224d3f1c6efc384df1e3c19b02bb08b8477719838d158",
-    "SDK.lock.json": "08cf1f850c086ba13a3a99d813dd418dbd423e4a93b5e3785533b9e641adf261"
+    "libexec/compiler/cjcj-stage1": "3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c",
+    "bin/cjcj-stage1.entry": "03e88062a7e83533ab18b74f205200a976eaf12935cddc606171c5b948ed0d55",
+    ".native-tools/third_party/llvm/bin/llc": "18407da25edbfedced94e74b0cb0cd232bda23e9ba170b85a21d988e8bad2966",
+    ".native-tools/third_party/llvm/bin/opt": "a83a79f29ea1de27802f3bee9c97f2af25ff50c47c44d0509762b12c0119ecc8",
+    "third_party/llvm/bin/llc.entry": "2f66d08c06c7ffeb771523bbf1ea48ba33465b898627b28e049f6c76aa00747e",
+    "third_party/llvm/bin/opt.entry": "5e96ad25dfc652a2bda97e9fb84a825d1b522fa5d553fa8500a78299ded24baf",
+    "third_party/llvm/lib/libLLVM-15.so": "8b344d0c1aa92bd40938e80faa783d1283ecbdb5b129a2c08605b51edf53e053",
+    "runtime/lib/linux_x86_64_cjnative/libboundscheck.so": "e39f7d14b9eb47c43f392701be418263f48b122e9114828d5e014a8c6fe9d63e",
+    "compiler-inputs.json": "e4bd924f89a0968c8be334a4b46c8a67627df3be960b22f00e7581c10e395099",
+    "RUNTIME-INPUTS.json": "6fcdc3b12fe0779f400859fda5c6582f561c0d92fbe4970ac9039481a1a7f4d6",
+    "STAGE-INPUTS.json": "77b80ae16810ca43c59d5e12b244c12a87f9c9456e34b608020d2970c710a067",
+    "PROVENANCE.txt": "edaad737c6dff59d502e6a9d8cbc64eb2e5adfce21e335ad8a187a5c0e432bc5"
   },
-  "compiler_host": "a656fbc7d16e0fa2c61598fc68a74bb55948834e428c908fed17c945783f3988",
-  "compiler_host_set": "ac5153eda5f64b16c096132ff8fb88c85c9eefb014842ec610228241398db8bf",
+  "compiler_host": "c457d8add4f4f0fa6d8bffaf601840c6ece676b814efd6efb0faa625b1bb5b1c",
+  "compiler_host_set": "5f8db375b3af741175aa12fe78a32f77abbe6cbc681873a312314fc680c486c1",
   "colour_checker": "f790d583d71c0dbd600be8f9bffce4e6cd5db0795e013aecdc78b7786bf6a8a9",
   "colour_host": "a656fbc7d16e0fa2c61598fc68a74bb55948834e428c908fed17c945783f3988"
 }

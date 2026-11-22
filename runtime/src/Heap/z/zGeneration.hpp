@@ -132,6 +132,8 @@ public:
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
     void select_relocation_set(bool promote_all);
+    // Right before relocate start: final raw-data scan (ZJNICritical).
+    void drop_raw_data_held_pages();
 protected:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;

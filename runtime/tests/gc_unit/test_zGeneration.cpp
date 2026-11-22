@@ -98,50 +98,6 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     young->reset_statistics();
 }
 
-GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, InitializationPublishesConditionLock)
-{
-    RuntimeParam param{};
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    ZJNICritical::block();
-    const int64_t blocked = ZJNICritical::count_snapshot();
-    ZJNICritical::unblock();
-    const int64_t unblocked = ZJNICritical::count_snapshot();
-    std::printf("ZJNI_INITIALIZATION_RESULT blocked=%lld unblocked=%lld\n",
-                static_cast<long long>(blocked), static_cast<long long>(unblocked));
-    GC_EXPECT_EQ(blocked, static_cast<int64_t>(-1));
-    GC_EXPECT_EQ(unblocked, static_cast<int64_t>(0));
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
-GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockWaitsWhileEntered)
-{
-    RuntimeParam param{};
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    bool finishedWhileEntered = true;
-    CJThreadHandle task = RunCJTask([](void* context) -> void* {
-        ZJNICritical::enter();
-        std::atomic<bool> finished{ false };
-        std::thread waiter([&] {
-            ZJNICritical::block();
-            finished.store(true, std::memory_order_release);
-            ZJNICritical::unblock();
-        });
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
-        *static_cast<bool*>(context) = finished.load(std::memory_order_acquire);
-        std::printf("ZJNI_CRITICAL_BLOCK_WAIT finished=%d count=%lld\n",
-                    *static_cast<bool*>(context),
-                    static_cast<long long>(ZJNICritical::count_snapshot()));
-        ZJNICritical::exit();
-        waiter.join();
-        return nullptr;
-    }, &finishedWhileEntered);
-    void* result = nullptr;
-    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
-    ReleaseHandle(task);
-    GC_EXPECT_FALSE(finishedWhileEntered);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
 // ZGC zGeneration.cpp:499-505 and zRemembered.cpp:347-355: the
 // remembered set is ready when generation construction returns.
 GC_TEST(RememberedLifecycle720, ConstructedGenerationPublishesHighestGranule)

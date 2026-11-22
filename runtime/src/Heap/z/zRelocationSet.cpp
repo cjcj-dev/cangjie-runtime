@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -163,6 +164,38 @@ void ZRelocationSet::reset(RegionManager* page_allocator)
     destroy_and_clear(page_allocator, &_in_place_relocate_promoted_pages);
     destroy_and_clear(page_allocator, &_flip_promoted_pages);
     _relocate_promoted_pages.clear();
+}
+
+size_t ZRelocationSet::remove_pages(const std::vector<ZPage*>& pages, bool all, ZForwardingTable* table,
+                                    ZArray<ZPage*>* removed)
+{
+    size_t kept = 0;
+    size_t dropped = 0;
+    for (size_t i = 0; i < _nforwardings; ++i) {
+        ZForwarding* const forwarding = _forwardings[i];
+        ZPage* const page = forwarding->page();
+        if (all || std::binary_search(pages.begin(), pages.end(), page)) {
+            if (forwarding->is_promotion()) {
+                // The promotion barrier already processed this young page
+                // through the list built by track_if_promoted. Removing its
+                // forwarding cancels relocation promotion without undoing
+                // that field processing. Clear the allocation-exit guard
+                // along with the list entry; the page remains young.
+                CHECK(_generation->is_young());
+                std::lock_guard<std::mutex> locker(_promotion_lock);
+                _relocate_promoted_pages.remove(page);
+                page->clear_is_relocate_promoted();
+            }
+            table->remove(forwarding);
+            forwarding->~ZForwarding();
+            removed->push(page);
+            ++dropped;
+        } else {
+            _forwardings[kept++] = forwarding;
+        }
+    }
+    _nforwardings = kept;
+    return dropped;
 }
 
 void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)

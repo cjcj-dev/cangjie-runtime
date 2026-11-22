@@ -166,6 +166,7 @@ public:
     bool is_young() const { return IsYoungRegion(); }
     bool allows_raw_null() const;
     void set_is_relocate_promoted();
+    __attribute__((visibility("hidden"))) void clear_is_relocate_promoted();
     bool is_small() const { return _type == ZPageType::small; }
     bool is_medium() const { return _type == ZPageType::medium; }
     bool is_large() const { return _type == ZPageType::large; }

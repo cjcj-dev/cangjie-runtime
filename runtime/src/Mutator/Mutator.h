@@ -91,14 +91,6 @@ public:
     void SetGCDetached() { gcDetached.store(true, std::memory_order_release); }
     void ResetMutator();
 
-    // HotSpot javaThread.hpp:878-885: critical regions nest per logical thread.
-    bool InCritical() const { return jniActiveCritical > 0; }
-    void EnterCritical() { ++jniActiveCritical; }
-    void ExitCritical()
-    {
-        --jniActiveCritical;
-        MRT_ASSERT(jniActiveCritical >= 0, "JNI critical nesting problem");
-    }
 
     static Mutator* GetMutator() noexcept;
     HandshakeState& GetHandshakeState() { return handshakeState; }
@@ -578,7 +570,14 @@ private:
     // If set implies this mutator should process suspension requests
     std::atomic<uint32_t> suspensionFlag = { 0 };
     ThreadGCData gcData{true};
-    int32_t jniActiveCritical = 0;
+public:
+    // ZJNICritical: decoded heap arrays this mutator holds through
+    // MCC_AcquireRawData (nesting = several slots). Written only by the owning
+    // mutator; read by the collector when it selects a relocation set.
+    static constexpr int kRawDataSlots = 8;
+    std::atomic<uintptr_t> rawDataSlots[kRawDataSlots]{};
+    std::atomic<uint32_t> rawDataOverflow{ 0 };
+private:
     std::deque<ObjectRef> nativeFrameRoots;
 
 

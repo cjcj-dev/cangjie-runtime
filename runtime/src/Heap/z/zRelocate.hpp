@@ -142,6 +142,9 @@ public:
     bool is_queue_active() const { return relocateQueue.is_active(); }
     static PageAge compute_to_age(PageAge fromAge);
     static void flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
+    // Young pages whose forwarding a raw-data holder dropped before relocate start
+    // (ZGeneration::drop_raw_data_held_pages): aged in place, never promoted.
+    static void flip_age_dropped_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:

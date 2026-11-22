@@ -8,12 +8,15 @@
 #include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -86,6 +89,40 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
         GC_EXPECT_EQ(allows, !promote);
         GC_EXPECT_TRUE(installedPage);
     }
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RawNullLateDrop, AgesYoungPageAndResetsLivemap)
+{
+    CreateStandaloneHeap(2);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    auto& generation = Heap::GetHeap().young();
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
+    generation.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(generation);
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* survivor = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor13, flags);
+    ZPage* oldest = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor14, flags);
+    GC_EXPECT_TRUE(survivor != nullptr && oldest != nullptr);
+    bool increment = false;
+    survivor->livemap().set(ZGenerationId::young, 0, false, increment);
+    oldest->livemap().set(ZGenerationId::young, 0, false, increment);
+    ZArray<ZPage*> dropped;
+    dropped.push(survivor);
+    dropped.push(oldest);
+    generation.Workers()->set_active();
+    ZRelocate::flip_age_dropped_pages(*generation.Workers(), &dropped);
+    generation.Workers()->set_inactive();
+    std::fprintf(stderr, "RAW_NULL_LATE_DROP_AGE_TARGET survivor=%u oldest=%u young=%d/%d marked=%d/%d\n",
+                 static_cast<unsigned>(survivor->age()), static_cast<unsigned>(oldest->age()),
+                 survivor->is_young(), oldest->is_young(),
+                 survivor->livemap().is_marked(ZGenerationId::young),
+                 oldest->livemap().is_marked(ZGenerationId::young));
+    GC_EXPECT_EQ(survivor->age(), PageAge::survivor14);
+    GC_EXPECT_EQ(oldest->age(), PageAge::survivor14);
+    GC_EXPECT_TRUE(survivor->is_young() && oldest->is_young());
+    GC_EXPECT_FALSE(survivor->livemap().is_marked(ZGenerationId::young));
+    GC_EXPECT_FALSE(oldest->livemap().is_marked(ZGenerationId::young));
 }
 
 struct ExitCase { unsigned entry; bool reject; };

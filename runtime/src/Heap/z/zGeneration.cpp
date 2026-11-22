@@ -194,7 +194,6 @@ public:
     virtual ~VM_ZOperation() = default;
     virtual bool do_operation() = 0;
     virtual const char* name() const = 0;
-    virtual bool block_jni_critical() const { return false; }
     bool skip_thread_oop_barriers() const override { return true; }
     bool is_gc_operation() const override { return true; }
     // ZGC 5b2d6991 zGeneration.cpp: VM_ZOperation's caller holds Heap_lock
@@ -213,15 +212,34 @@ public:
     }
     bool pause()
     {
-        if (block_jni_critical()) {
-            ZJNICritical::block();
-        }
+        // ZGC zGeneration.cpp:474-485 blocks JNI critical regions around mark
+        // start and relocate start. No pause waits for raw-data holders here: a
+        // raw pointer is a decoded address that a colour change cannot invalidate,
+        // and ZJNICritical keeps the page of every held array out of the
+        // relocation set (ZGeneration::select_relocation_set).
         VMThread::execute(this);
-        if (block_jni_critical()) {
-            ZJNICritical::unblock();
-        }
         return success;
     }
+};
+
+// Closes a generation's raw-data selection once its relocate-start pause has
+// run, or when the cycle is abandoned before it (ZJNICritical).
+class ZRawDataSelectionScope {
+public:
+    explicit ZRawDataSelectionScope(ZGenerationId generation) : id(generation) {}
+    ~ZRawDataSelectionScope() { close(); }
+    ZRawDataSelectionScope(const ZRawDataSelectionScope&) = delete;
+    ZRawDataSelectionScope& operator=(const ZRawDataSelectionScope&) = delete;
+    void close()
+    {
+        if (!closed) {
+            closed = true;
+            ZJNICritical::close_selection(id);
+        }
+    }
+private:
+    const ZGenerationId id;
+    bool closed = false;
 };
 
 class VM_ZYoungOperation : public VM_ZOperation {
@@ -245,7 +263,6 @@ public:
         ZGeneration::young()->mark_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
 };
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
@@ -260,7 +277,6 @@ public:
         ZGeneration::old()->mark_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
 };
 
 class VM_ZMarkEndYoung : public VM_ZYoungOperation {
@@ -282,7 +298,6 @@ public:
         ZGeneration::young()->relocate_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
 };
 
 class VM_ZMarkEndOld : public VM_ZOperation {
@@ -306,7 +321,6 @@ public:
         ZGeneration::old()->relocate_start();
         return true;
     }
-    bool block_jni_critical() const override { return true; }
 };
 
 class VM_ZVerifyOld : public VMOperation {
@@ -377,9 +391,12 @@ void ZGenerationYoung::collect(ZYoungType type, void* timer)
     abortpoint();
     concurrent_reset_relocation_set();
     abortpoint();
+    ZRawDataSelectionScope rawDataSelection(ZGenerationId::young);
     concurrent_select_relocation_set();
     abortpoint();
+    drop_raw_data_held_pages();
     pause_relocate_start();
+    rawDataSelection.close();
     concurrent_relocate();
 }
 
@@ -862,14 +879,17 @@ void ZGenerationOld::collect(void* timer)
     concurrent_reset_relocation_set();
     abortpoint();
     pause_verify();
+    ZRawDataSelectionScope rawDataSelection(ZGenerationId::old);
     concurrent_select_relocation_set();
     abortpoint();
     {
         DriverLocker locker;
         concurrent_remap_young_roots();
         abortpoint();
+        drop_raw_data_held_pages();
         pause_relocate_start();
     }
+    rawDataSelection.close();
     concurrent_relocate();
 }
 
@@ -1133,6 +1153,32 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
                                      _relocation_set.relocate_promoted_pages());
 }
 
+void ZGeneration::drop_raw_data_held_pages()
+{
+    const bool young = _id == ZGenerationId::young;
+    std::vector<ZPage*> held;
+    bool all = false;
+    ZJNICritical::finish_selection(young ? ZGenerationId::young : ZGenerationId::old, held, all);
+    if (!all && held.empty()) {
+        return;
+    }
+    // This cycle's forwardings are not used before its relocate-start pause:
+    // nothing has been relocated yet and pointers become remap-bad for them only
+    // at that pause (flip_relocate_start). The table is filled before this final
+    // scan, so removing a forwarding makes the page not selected for this cycle.
+    // Old pages remain old. Young pages dropped here age in place and stay young
+    // (ZRelocate::flip_age_dropped_pages). flip_age_pages already ran the
+    // promotion barrier for the registered promotion pages. remove_pages
+    // cancels their later relocation promotion and clears the allocation-exit
+    // guard without undoing the reference-field processing.
+    ZArray<ZPage*> dropped;
+    _relocation_set.remove_pages(held, all, &_forwarding_table, &dropped);
+    if (young && !dropped.is_empty()) {
+        ZRelocate::flip_age_dropped_pages(*Workers(), &dropped);
+    }
+    ZJNICritical::note_late_dropped(static_cast<size_t>(dropped.length()));
+}
+
 void ZGeneration::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
@@ -1153,6 +1199,11 @@ void ZGeneration::select_relocation_set(bool promote_all)
         free_empty_pages(&selector, 0);
     }
     selector.select();
+    // Raw-data holders: publish the selected pages, then send the ones that hold
+    // an acquired array down the not-selected path (ZJNICritical). Everything else
+    // stays selected, so a holder that blocks in a foreign call costs only its
+    // own pages, and nothing waits for it.
+    (void)ZJNICritical::open_selection(id, &selector);
     if (_id == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
