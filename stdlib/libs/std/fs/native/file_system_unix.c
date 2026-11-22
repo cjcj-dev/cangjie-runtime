@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include "file_system.h"
 #include <string.h>
+#include "wasi_realpath.h"
 
 static int64_t BuildSubPath(char* dirPath, const int64_t pathLen, const char* subName);
 static FsError* GetErrnoResult(void);
