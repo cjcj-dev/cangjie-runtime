@@ -1315,15 +1315,3 @@ extend<V> Iterator<V> {
         }
     }
 }
-
-// WASI Preview 1 has no process spawning (no `uname` / `lscpu`) and no OS or CPU query, so the bench
-// report names the platform instead of trying to run a host tool.
-@When[os == "WASI"]
-func getOsVersion(): String {
-    "wasi-preview1"
-}
-
-@When[os == "WASI"]
-func getCpuName(): String {
-    "wasm32"
-}
