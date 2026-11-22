@@ -16,6 +16,9 @@ import unittest
 from language_toolchain import compiler_host_dirs, launcher_entry
 
 
+PUBLIC_LLVM = 'third_party/llvm/lib/libLLVM-15.so'
+
+
 def component_cases(sdk, proof, host_dirs):
     """Find each physical file and the first check that binds it."""
     language = {}
@@ -37,6 +40,16 @@ def component_cases(sdk, proof, host_dirs):
     language['std'] = sorted(std.glob('libcangjie-std-*.a'))
     language['std_core'] = [std / 'libcangjie-std-core.a']
     language['runtime'] = [sdk / 'runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so']
+
+    # Use the installed layout to decide which bindings are mandatory. A missing
+    # key must fail the test instead of silently dropping its mutation cases.
+    missing = [f'language.{key}' for key in sorted(language.keys() - proof['language'].keys())]
+    if entries and PUBLIC_LLVM not in proof['components']:
+        missing.append(f'components.{PUBLIC_LLVM}')
+    missing.extend(key for key in ('compiler_host', 'compiler_host_set') if key not in proof)
+    if missing:
+        raise AssertionError('Missing required qualification bindings: ' + ', '.join(missing))
+
     cases = {}
 
     def add(file, reason):
@@ -81,7 +94,7 @@ class QualificationTests(unittest.TestCase):
                          '6484711bfc827990534249f65e2ee5f2c7979e4df284c4b92f88ad3814f50b98')
         self.assertEqual(identity['language']['cjc_entity'],
                          '3be32b480581efb2c9e40708551c4cac1f13a08113104e1c5007f9e99b01138c')
-        self.assertEqual(identity['qualified_components'].get('third_party/llvm/lib/libLLVM-15.so'),
+        self.assertEqual(identity['qualified_components'].get(PUBLIC_LLVM),
                          '8b344d0c1aa92bd40938e80faa783d1283ecbdb5b129a2c08605b51edf53e053')
 
     def test_reject_old_qualification(self):

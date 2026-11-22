@@ -64,7 +64,8 @@ the previous real SDK. Run it again with `--group mutations` and a new output
 directory to check each bound SDK file, each static std archive, each compiler
 host file, and the checker/reference in private copies. The test follows the
 launchers' entry and entity paths and the compiler host directories used by
-admission. It flips one byte per file, or adds a slash to one entry search
+admission. It fails first if the record omits a required binding for the
+discovered layout. It flips one byte per file, or adds a slash to one entry search
 directory to keep the recipe valid. It checks the exact first rejection
 reason and restores the file. Use an ordinary temporary fixture when checks
 on the real installation are limited to read-only acceptance. The old
