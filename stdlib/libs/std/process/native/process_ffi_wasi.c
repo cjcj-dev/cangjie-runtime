@@ -27,6 +27,28 @@ extern char** environ;
 #define INVALID_PID (-1)
 #define INVALID_FD (-1)
 
+/* Same layouts as process_ffi_unix.c: std.process fills and reads them field by field. */
+typedef struct ProcessStartInfo {
+    char* command;
+    char** arguments;
+    size_t argSize;
+    char* workingDirectory;
+    char** environment;
+    size_t envSize;
+    intptr_t stdIn;
+    intptr_t stdOut;
+    intptr_t stdErr;
+} ProcessStartInfo;
+
+typedef struct ProcessRtnData {
+    int32_t pid;
+    intptr_t stdIn;
+    intptr_t stdOut;
+    intptr_t stdErr;
+    int32_t errCode;
+    char* errMessage;
+} ProcessRtnData;
+
 extern ProcessStartInfo* CJ_OS_CreateProcessStartInfo(void)
 {
     return (ProcessStartInfo*)malloc(sizeof(ProcessStartInfo));

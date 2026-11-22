@@ -9,7 +9,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#else
+#elif !defined(__wasi__)
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
@@ -35,6 +35,18 @@ uint64_t GetTerminalHeight(void)
         return 0;
     uint64_t height = (uint64_t)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
     return height;
+}
+#elif defined(__wasi__)
+// WASI Preview 1 has no terminal ioctl; report "unknown", as the Linux path does on failure.
+
+uint64_t GetTerminalWidth(void)
+{
+    return 0;
+}
+
+uint64_t GetTerminalHeight(void)
+{
+    return 0;
 }
 #else
 // Linux impl
