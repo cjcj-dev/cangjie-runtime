@@ -198,7 +198,7 @@ inline __attribute__((always_inline)) static int64_t StrStrN(const uint8_t* org,
 }
 #endif
 
-#ifdef __arm__
+#if defined(__arm__) || defined(__wasm__)
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -364,7 +364,7 @@ inline __attribute__((always_inline)) static int64_t StringSize(const uint8_t* s
 
 #endif
 
-#ifdef __arm__
+#if defined(__arm__) || defined(__wasm__)
 inline __attribute__((always_inline)) static int64_t StringSize(const uint8_t* str, int64_t len)
 {
     int64_t size = 0;

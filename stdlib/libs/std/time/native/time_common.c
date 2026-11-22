@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "../../fs/native/wasi_realpath.h"
 
 #ifdef __ohos__
 #include <sys/types.h>

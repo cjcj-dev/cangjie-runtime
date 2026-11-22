@@ -18,6 +18,11 @@
 #define TYPE_INFO_SECTION ".cjti"
 #define TYPE_TEMPLATE_SECTION ".cjtt"
 #define REFLECT_INFO_SECTION ".cjrflv"
+#elif defined(__wasi__)
+// wasm32-wasi: named data segments; nothing scans them (no CJ metadata tables on wasm32).
+#define TYPE_INFO_SECTION ".cjmetadata.typeinfo"
+#define TYPE_TEMPLATE_SECTION ".cjmetadata.typetemplate"
+#define REFLECT_INFO_SECTION ".cjmetadata.reflect.gv"
 #elif defined(__APPLE__)
 #define TYPE_INFO_SECTION "__CJ_METADATA,__cjtypeinfo"
 #define TYPE_TEMPLATE_SECTION "__CJ_METADATA,__cjtemplate"
@@ -507,7 +512,7 @@ DECLARE_TYPE_INFO(Float64_ti,
         .reflection = NULL,
     }))
 
-#ifdef __arm__
+#if defined(__arm__) || defined(__wasm32__)
 DECLARE_TYPE_INFO(CString_ti,
     ((TypeInfo){
         .name = "CString",

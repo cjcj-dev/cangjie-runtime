@@ -33,7 +33,11 @@ extern uint64_t CJ_Gettid(void)
 
 extern uint64_t CJ_Gettid(void)
 {
+#ifdef __wasi__
+    return 1; // WASI Preview 1: one instance runs one thread
+#else
     return (uint64_t)syscall(SYS_gettid);
+#endif
 }
 
 #endif
