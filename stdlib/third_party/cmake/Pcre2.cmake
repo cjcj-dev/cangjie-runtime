@@ -22,10 +22,18 @@ endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu14")
 
+set(pcre2_android_args)
+if(ANDROID)
+    list(APPEND pcre2_android_args
+        "-DCMAKE_ANDROID_NDK=${CMAKE_ANDROID_NDK}"
+        "-DCMAKE_ANDROID_API=${CMAKE_ANDROID_API}")
+endif()
+
 execute_process(
     COMMAND
         ${CMAKE_COMMAND}
         -G Ninja
+        ${pcre2_android_args}
         -DCANGJIE_TARGET_TOOLCHAIN=${CANGJIE_TARGET_TOOLCHAIN}
         -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
         -DCMAKE_SYSROOT=${CANGJIE_TARGET_SYSROOT}
