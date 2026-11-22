@@ -380,11 +380,9 @@ uint8_t CJ_MCC_IsSubType(const void* typeInfo, const void* superTypeInfo)
         if (t->kind == -1 || t->kind == -2 || t->kind >= K_MAX) {
             cjw_unsupported("subtype query from a non-concrete TypeInfo (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
         }
-        if (ImplementsInterface(t, sup)) { return 1; }
-        // Native also consults the outer extension defs (`extend T <: I` in other TypeInfos' packages, e.g.
-        // std.core's `extend Int64 <: ToString`) through the loader registry, which wasm32 does not build
-        // yet. "Not found in the type's own tables" is therefore not a proof of `false`: trap explicitly.
-        cjw_unsupported("interface subtype query that needs outer extension defs (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
+        // Own tables first, then every linked package's extension defs (the registry above), as native
+        // TypeInfo::IsSubType does through the loader: a miss in both is a proof of `false`.
+        return ImplementsInterface(t, sup) ? 1 : 0;
     }
     cjw_unsupported("function or tuple subtype query (CJ_MCC_IsSubType)", CJW_RC_TYPEQUERY);
 }
@@ -441,26 +439,70 @@ static CjwExtData** ExtDataList(const CjwTI* ti, uint32_t* classChain)
     return NULL;
 }
 
+// Does `ed` give `cur` (with type arguments args[0..argc)) the interface `itf`? The loop body of native
+// FindExtensionData / VisitExtensionData: where-condition on the type arguments, then the interface is
+// either a TypeInfo or computed from the type arguments.
+static int EdProvides(const CjwExtData* ed, uint32_t argc, CjwTI** args, const CjwTI* itf)
+{
+    if (ed->whereCondFn != NULL &&
+        (((uintptr_t(*)(int32_t, CjwTI**))ed->whereCondFn)((int32_t)argc, args) & 0x1u) == 0) {
+        return 0;
+    }
+    const CjwTI* edItf = ed->isInterfaceTypeInfo ? (const CjwTI*)ed->interface
+                                                 : ((CjwGenericFn)ed->interface)((int32_t)argc, args);
+    return edItf == itf || SameType(edItf, itf);
+}
+
+// Cross-package extension registry: native TypeInfo::TraverseOuterExtensionDefs walks every package's
+// extension defs through the loader. On wasm32 each compiled module hands its "InnerTypeExtensions" arrays
+// (@ExternalExtensionDefs / @NonExternalExtensionDefs) to CJ_MCC_WasmRegisterExtensionDefs from a
+// constructor (cj-wasm-roots), so the registry holds every linked package's defs before main runs.
+// Entries removed by GlobalDCE are null and skipped.
+#define CJW_EXTDEF_TABLES_MAX 4096u
+static struct { CjwExtData** defs; uint32_t count; } g_extDefTables[CJW_EXTDEF_TABLES_MAX];
+static uint32_t g_extDefTableNum;
+
+void CJ_MCC_WasmRegisterExtensionDefs(void* defs, uint32_t count)
+{
+    if (defs == NULL || count == 0) { return; }
+    if (g_extDefTableNum >= CJW_EXTDEF_TABLES_MAX) {
+        cjw_unsupported("more extension def tables than the wasm32 registry holds", CJW_RC_TYPEQUERY);
+    }
+    g_extDefTables[g_extDefTableNum].defs = (CjwExtData**)defs;
+    g_extDefTables[g_extDefTableNum].count = count;
+    ++g_extDefTableNum;
+}
+
+static CjwExtData* FindOuterExtData(const CjwTI* cur, uint32_t argc, CjwTI** args, const CjwTI* itf)
+{
+    for (uint32_t t = 0; t < g_extDefTableNum; ++t) {
+        CjwExtData** v = g_extDefTables[t].defs;
+        for (uint32_t i = 0; i < g_extDefTables[t].count; ++i) {
+            CjwExtData* ed = v[i];
+            if (ed == NULL || !EdTargetsType(ed, cur)) { continue; }
+            if (EdProvides(ed, argc, args, itf)) { return ed; }
+        }
+    }
+    return NULL;
+}
+
 static CjwExtData* FindExtData(const CjwTI* ti, const CjwTI* itf)
 {
     for (const CjwTI* cur = ti; cur != NULL; cur = IsClassLike(cur->kind) ? cur->super : NULL) {
         uint32_t classChain = 0;
         CjwExtData** v = ExtDataList(cur, &classChain);
-        if (v == NULL) { continue; }
         CjwTI** args = NULL;
         uint32_t argc = EdTypeArgs(cur, &args);
-        for (uint32_t i = 0;; ++i) {
-            CjwExtData* ed = v[i];
-            if (ed == NULL) { break; }
-            if (i >= classChain && !EdTargetsType(ed, cur)) { break; }
-            if (ed->whereCondFn != NULL &&
-                (((uintptr_t(*)(int32_t, CjwTI**))ed->whereCondFn)((int32_t)argc, args) & 0x1u) == 0) {
-                continue;
+        if (v != NULL) {
+            for (uint32_t i = 0;; ++i) {
+                CjwExtData* ed = v[i];
+                if (ed == NULL) { break; }
+                if (i >= classChain && !EdTargetsType(ed, cur)) { break; }
+                if (EdProvides(ed, argc, args, itf)) { return ed; }
             }
-            const CjwTI* edItf = ed->isInterfaceTypeInfo ? (const CjwTI*)ed->interface
-                                                         : ((CjwGenericFn)ed->interface)((int32_t)argc, args);
-            if (edItf == itf || SameType(edItf, itf)) { return ed; }
         }
+        CjwExtData* outer = FindOuterExtData(cur, argc, args, itf);
+        if (outer != NULL) { return outer; }
         if (cur->kind == K_RAWARRAY || cur->kind == K_CPOINTER) { break; }
     }
     return NULL;
