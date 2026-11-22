@@ -827,12 +827,31 @@ _Noreturn void CJ_MCC_PackageInitAbort(const void* pkg, const void* unit, uint32
 }
 
 // ---------------------------------------------------------------------------
-// Exceptions: wasm EH is not enabled in this stage; a throw ends the program.
+// Exceptions (wasm exception handling, M1). Every Cangjie exception is thrown with the one wasm tag
+// at index 0 (the C++ tag the LLVM wasm backend defines weakly in each throwing object). Cangjie
+// handlers are catch_all funclets (llvm WebAssemblyCJLowerLandingPads), so the payload is never read
+// back from the wasm exception: the in-flight object stays in g_cjwInFlight, which the collector marks
+// (cjw_inflight_exception) while cleanups and handlers run.
+static void* g_cjwInFlight = NULL;
+void* cjw_inflight_exception(void) { return g_cjwInFlight; }
+
 _Noreturn void CJ_MCC_ThrowException(void* exception)
 {
-    (void)exception;
-    cjw_unsupported("throwing an exception (wasm exception handling, M1)", CJW_RC_EXCEPTION);
+    g_cjwInFlight = exception;
+    __builtin_wasm_throw(0, exception);
+    __builtin_unreachable();
 }
+// `resume` of a cleanup landingpad: propagate the exception that is still in flight.
+_Noreturn void CJ_MCC_WasmRethrow(void)
+{
+    __builtin_wasm_throw(0, g_cjwInFlight);
+    __builtin_unreachable();
+}
+// landingpad body: wrapper -> exception object (CJ_MCC_PostThrowException).
+void* CJ_MCC_GetExceptionWrapper(void) { return &g_cjwInFlight; }
+void* CJ_MCC_PostThrowException(void* wrapper) { return *(void**)wrapper; }
+void* CJ_MCC_BeginCatch(void* wrapper) { return CJ_MCC_PostThrowException(wrapper); }
+void CJ_MCC_EndCatch(void) { g_cjwInFlight = NULL; }
 
 // ---------------------------------------------------------------------------
 // Process entry. wasi-libc crt1-command.o: _start -> __main_argc_argv(argc, argv).

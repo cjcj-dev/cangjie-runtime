@@ -12,5 +12,5 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(cangjie-runtime STATIC CjWasmRuntime.c CjWasmHeap.c)
 target_compile_options(cangjie-runtime PRIVATE --target=wasm32-wasi --sysroot=${WASI_SYSROOT}
-  -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions)
+  -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions -mexception-handling -mllvm -wasm-enable-eh)
 install(TARGETS cangjie-runtime ARCHIVE DESTINATION runtime/lib/wasi_wasm32_cjnative)

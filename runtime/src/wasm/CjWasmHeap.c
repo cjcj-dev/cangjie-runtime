@@ -633,9 +633,15 @@ static void MarkFrameWord(void* v, const void* where)
     MarkRef((void*)start, "shadow frame word", where);
 }
 
+void* cjw_inflight_exception(void); // CjWasmRuntime.c: the exception between throw and handler
+static void* g_inFlightWhere = NULL;
+
 static void MarkRoots(void)
 {
     size_t frames = 0;
+    // The in-flight exception is reachable only from the runtime while a cleanup or handler runs.
+    g_inFlightWhere = cjw_inflight_exception();
+    if (g_inFlightWhere != NULL) { MarkFrameWord(g_inFlightWhere, &g_inFlightWhere); }
     // MarkRoots order follows the ZGC root task split (zMark.cpp root tasks):
     // stack frames, then static tables, then runtime-internal roots.
     for (CjwRootFrame* f = __cj_root_top; f != NULL; f = f->prev) {
