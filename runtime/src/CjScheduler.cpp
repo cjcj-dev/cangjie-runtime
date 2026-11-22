@@ -1022,10 +1022,23 @@ MRT_EXPORT void CJ_MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* ent
     __attribute__((alias("MRT_CjRuntimeInitWithConfigV1")));
 MRT_EXPORT void CJ_MRT_CjRuntimeStart(void* execute)
     __attribute__((alias("MRT_CjRuntimeStart")));
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+// Spawning can reach a safepoint (MutatorManager::ConstructMutator leaves its
+// saferegion through ProcessSafepointIfRequested) while the managed caller keeps
+// stack pointers in callee-saved registers. Those entries are therefore
+// CalleeSavedRegistersStub C2R stubs (arch/*_linux/CalleeSavedStub.S), like every
+// other safepoint-capable CJ_MCC entry, so that the stack walk records the saved
+// registers instead of crossing an unrecorded C++ frame. HotSpot routes such
+// transitions through a frame anchor whose register save is known to the walker
+// (javaFrameAnchor.hpp, frame_x86.cpp sender_for_entry_frame).
+MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void *scheduler);
+MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi);
+#else
 MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void *scheduler)
     __attribute__((alias("MCC_NewCJThread")));
 MRT_EXPORT void* CJ_MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi)
     __attribute__((alias("MCC_NewCJThreadNoReturn")));
+#endif
 MRT_EXPORT void CJ_MRT_SetCommandLineArgs(int argc, const char* argv[])
     __attribute__((alias("MRT_SetCommandLineArgs")));
 MRT_EXPORT const char** CJ_MRT_GetCommandLineArgs() __attribute__((alias("MRT_GetCommandLineArgs")));

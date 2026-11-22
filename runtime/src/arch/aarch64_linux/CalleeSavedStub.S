@@ -233,6 +233,8 @@ unwindPCForC2RStubStart:
     CalleeSavedRegistersStub MRT_ThreadResumeAndWait CJ_MRT_ThreadResumeAndWait
     CalleeSavedRegistersStub MRT_ThreadReady CJ_MRT_ThreadReady
     CalleeSavedRegistersStub MCC_NewPinnedObject CJ_MCC_NewPinnedObject
+    CalleeSavedRegistersStub MCC_NewCJThread CJ_MCC_NewCJThread
+    CalleeSavedRegistersStub MCC_NewCJThreadNoReturn CJ_MCC_NewCJThreadNoReturn
     CalleeSavedRegistersStub MCC_ApplyCJInstanceMethod CJ_MCC_ApplyCJInstanceMethod
     CalleeSavedRegistersStub MCC_ApplyCJStaticMethod CJ_MCC_ApplyCJStaticMethod
     CalleeSavedRegistersStub MCC_ApplyCJGenericInstanceMethod CJ_MCC_ApplyCJGenericInstanceMethod

@@ -126,6 +126,7 @@ set(GC_UNIT_SOURCES
     test_cycle_ref_saferegion.cpp
     test_watermark_iteration.cpp
     test_binding_poll.cpp
+    test_spawn_entry_c2r_stub.cpp
     test_thread_smr_reclaim.cpp
     test_typeinfo_arena.cpp
     test_numa_mempolicy.cpp
