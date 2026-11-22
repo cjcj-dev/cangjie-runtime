@@ -852,3 +852,38 @@ int __main_argc_argv(int argc, char** argv)
     cjw_cangjie_main(argc, argv);
     return 0;
 }
+
+// compiler-rt's __truncdfhf2 (Float64 -> Float16, round to nearest even). LLVM lowers the Float16
+// conversions of std.core to this libcall on wasm32, and neither wasi-libc nor the SDK link line provides
+// compiler-rt builtins. The extension registry keeps the Float16 conformance tables live, which made the
+// reference reachable. Returns the binary16 bits, as the uint16_t compiler-rt ABI does.
+uint16_t __truncdfhf2(double a)
+{
+    uint64_t b;
+    memcpy(&b, &a, sizeof(b));
+    const uint16_t sign = (uint16_t)((b >> 48) & 0x8000u);
+    const int32_t exp = (int32_t)((b >> 52) & 0x7FF);
+    uint64_t mant = b & 0xFFFFFFFFFFFFFull;
+    if (exp == 0x7FF) { // infinity, or NaN kept quiet with its top payload bits
+        return mant != 0 ? (uint16_t)(sign | 0x7E00u | (uint16_t)((mant >> 42) & 0x1FFu)) : (uint16_t)(sign | 0x7C00u);
+    }
+    const int32_t e = exp - 1023 + 15;
+    if (e >= 0x1F) { return (uint16_t)(sign | 0x7C00u); }
+    uint64_t half;
+    uint64_t rem;
+    uint64_t mid;
+    if (e <= 0) { // binary16 subnormal (or zero): value = mant' * 2^(e - 43) in units of 2^-24
+        if (e < -10) { return sign; }
+        mant |= 1ull << 52;
+        const int shift = 43 - e;
+        half = mant >> shift;
+        rem = mant & ((1ull << shift) - 1);
+        mid = 1ull << (shift - 1);
+    } else {
+        half = ((uint64_t)e << 10) | (mant >> 42);
+        rem = mant & ((1ull << 42) - 1);
+        mid = 1ull << 41;
+    }
+    if (rem > mid || (rem == mid && (half & 1u))) { ++half; } // a carry into the exponent is still exact
+    return (uint16_t)(sign | (uint16_t)half);
+}
