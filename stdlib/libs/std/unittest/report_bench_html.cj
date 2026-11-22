@@ -1240,6 +1240,18 @@ func getOsVersion(): String {
     "iOS"
 }
 
+// WASI Preview 1 is none of the hosts above: it has no process spawning (no `uname` / `lscpu`)
+// and no OS or CPU query, so the bench report names the platform instead.
+@When[os != "Windows" && os != "Linux" && os != "macOS" && os != "iOS"]
+func getOsVersion(): String {
+    "wasi-preview1"
+}
+
+@When[os != "Windows" && os != "Linux" && os != "macOS" && os != "iOS"]
+func getCpuName(): String {
+    "wasm32"
+}
+
 @When[os == "Linux"]
 func getCpuName(): String {
     let (rc, stdout, _) = Process.runOutput("lscpu", [])
