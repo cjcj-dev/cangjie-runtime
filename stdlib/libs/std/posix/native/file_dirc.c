@@ -24,7 +24,8 @@
 #define lstat stat
 #include <windows.h>
 #include <psapi.h>
-#else
+#elif !defined(__wasi__)
+// WASI Preview 1 (wasi-libc) has no <pwd.h>, <sys/wait.h> or sockets; nothing in this file uses them.
 #include <arpa/inet.h>
 #include <pwd.h>
 #include <sys/wait.h>
