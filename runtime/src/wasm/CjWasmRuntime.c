@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <wasi/api.h>
 
 // ---------------------------------------------------------------------------
@@ -618,6 +619,11 @@ uint8_t CJ_MCC_IsTupleTypeOf(const void* obj, const void* typeInfo, const void* 
 int32_t CJ_MCC_MutexInit(void* mutex) { (void)mutex; return 0; }
 void CJ_MCC_MutexLock(void* mutex) { (void)mutex; }
 void CJ_MCC_MutexUnlock(void* mutex) { (void)mutex; }
+// Sync.cpp MCC_MutexTryLock: an uncontended lock always succeeds.
+bool CJ_MCC_MutexTryLock(void* mutex) { (void)mutex; return true; }
+// Sync.cpp MCC_MutexCheckStatus: "held by the current thread". Lock/unlock keep no owner state in a
+// single-threaded instance, so the only thread is always reported as the holder.
+bool CJ_MCC_MutexCheckStatus(const void* mutex) { (void)mutex; return true; }
 int32_t CJ_MCC_WaitQueueForMonitorInit(void* monitor) { (void)monitor; return 0; }
 // Cangjie threads (spawn) need wasm threads or a cooperative scheduler (M1+).
 void* CJ_MCC_NewCJThread(void* entry, void* closure, void* typeInfo)
@@ -644,6 +650,10 @@ void CJ_MCC_SetCurrentCJThreadObject(void* thread)
     if (!rooted) { cjw_add_root(&g_currentThreadObject); rooted = 1; }
     g_currentThreadObject = thread;
 }
+bool CJ_MCC_IsThreadObjectInited(void) { return g_currentThreadObject != NULL; }
+void* CJ_MCC_GetCurrentCJThreadObject(void) { return g_currentThreadObject; }
+// Opaque handle of the only Cangjie thread; CJ_MRT_GetCJThreadId maps every handle to 1.
+void* CJ_MRT_GetCurrentCJThread(void) { return (void*)&g_currentThreadObject; }
 int64_t CJ_MRT_GetCJThreadId(void* handle) { (void)handle; return 1; } // the only Cangjie thread
 void CJ_MRT_Sleep(int64_t ns)
 {
