@@ -540,6 +540,23 @@ void* CJ_MCC_GetMTable(const void* ti, const void* itf)
         fprintf(stderr, "cangjie wasm32 runtime: CJ_MCC_GetMTable(%s kind=%d typeArgs=%u ownExt=%d, %s kind=%d typeArgs=%u)\n",
             t->name ? t->name : "?", t->kind, t->typeArgNum, ExtDataList(t, &chain) != NULL,
             i->name ? i->name : "?", i->kind, i->typeArgNum);
+        uint32_t defs = 0, targeting = 0;
+        for (uint32_t tb = 0; tb < g_extDefTableNum; ++tb) {
+            for (uint32_t k = 0; k < g_extDefTables[tb].count; ++k) {
+                const CjwExtData* d = g_extDefTables[tb].defs[k];
+                if (d == NULL) { continue; }
+                ++defs;
+                if (EdTargetsType(d, t)) {
+                    ++targeting;
+                    const CjwTI* di = d->isInterfaceTypeInfo ? (const CjwTI*)d->interface : NULL;
+                    fprintf(stderr, "  registry def targeting %s: interface %s (computed=%d where=%d)\n",
+                        t->name ? t->name : "?", di != NULL && di->name ? di->name : "?",
+                        !d->isInterfaceTypeInfo, d->whereCondFn != NULL);
+                }
+            }
+        }
+        fprintf(stderr, "  extension registry: %u tables, %u defs, %u targeting the type\n", g_extDefTableNum, defs,
+            targeting);
         cjw_unsupported("interface method table lookup: no extension data (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY);
     }
     TryUpdateExtData(t, (const CjwTI*)itf, ed);
