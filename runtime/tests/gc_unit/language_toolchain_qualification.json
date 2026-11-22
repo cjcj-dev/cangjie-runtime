@@ -21,6 +21,7 @@
     ".native-tools/third_party/llvm/bin/opt": "a83a79f29ea1de27802f3bee9c97f2af25ff50c47c44d0509762b12c0119ecc8",
     "third_party/llvm/bin/llc.entry": "2f66d08c06c7ffeb771523bbf1ea48ba33465b898627b28e049f6c76aa00747e",
     "third_party/llvm/bin/opt.entry": "5e96ad25dfc652a2bda97e9fb84a825d1b522fa5d553fa8500a78299ded24baf",
+    "third_party/llvm/lib/libLLVM-15.so": "8b344d0c1aa92bd40938e80faa783d1283ecbdb5b129a2c08605b51edf53e053",
     "runtime/lib/linux_x86_64_cjnative/libboundscheck.so": "e39f7d14b9eb47c43f392701be418263f48b122e9114828d5e014a8c6fe9d63e",
     "compiler-inputs.json": "e4bd924f89a0968c8be334a4b46c8a67627df3be960b22f00e7581c10e395099",
     "RUNTIME-INPUTS.json": "6fcdc3b12fe0779f400859fda5c6582f561c0d92fbe4970ac9039481a1a7f4d6",
