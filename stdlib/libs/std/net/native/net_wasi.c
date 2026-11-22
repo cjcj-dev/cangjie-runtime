@@ -237,3 +237,68 @@ int32_t CJ_SockOptionSet(int64_t sock, int32_t level, int32_t optname, void* opt
 {
     (void)sock; (void)level; (void)optname; (void)optval; (void)oplen; errno = ENOTSUP; return -1;
 }
+
+int64_t CJ_MRT_SockConnectTimeout(int64_t sock, void* local_addr, void* peer_addr, uint64_t timeout)
+{
+    (void)sock; (void)local_addr; (void)peer_addr; (void)timeout; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_MRT_SockRecvfromTimeout(int64_t sock, uint8_t* buf, uint32_t length, int32_t flags, void* addr,
+    uint64_t timeout)
+{
+    (void)sock; (void)buf; (void)length; (void)flags; (void)addr; (void)timeout; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_MRT_SockSendtoNonBlock(int64_t sockfd, uint8_t* buf, uint32_t size, int32_t flags, void* sockaddr)
+{
+    (void)sockfd; (void)buf; (void)size; (void)flags; (void)sockaddr; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_MRT_SockRecvfromNonBlock(int64_t sockfd, uint8_t* buf, uint32_t size, int32_t flags, void* sockaddr)
+{
+    (void)sockfd; (void)buf; (void)size; (void)flags; (void)sockaddr; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_SockOptionGet(int64_t sock, int32_t level, int32_t optname, void* optval, int32_t* oplen)
+{
+    (void)sock; (void)level; (void)optname; (void)optval; (void)oplen; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_SOCKET_BufferRead(void* sockBuf, size_t bufOff, int32_t readSize, int64_t timeout, int32_t flags)
+{
+    (void)sockBuf; (void)bufOff; (void)readSize; (void)timeout; (void)flags; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_SOCKET_BufferRecvFrom(void* sockBuf, size_t bufOff, int32_t readSize, int64_t timeout, void* addr,
+    int32_t flags)
+{
+    (void)sockBuf; (void)bufOff; (void)readSize; (void)timeout; (void)addr; (void)flags; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_SOCKET_BufferWrite(void* sockBuf, size_t bufOff, int32_t writeSize, int64_t timeout, int32_t flags)
+{
+    (void)sockBuf; (void)bufOff; (void)writeSize; (void)timeout; (void)flags; errno = ENOTSUP; return -1;
+}
+
+int32_t CJ_SOCKET_BufferSendto(void* sockBuf, size_t bufOff, int32_t writeSize, int64_t timeout, const void* addr,
+    int32_t flags)
+{
+    (void)sockBuf; (void)bufOff; (void)writeSize; (void)timeout; (void)addr; (void)flags; errno = ENOTSUP; return -1;
+}
+
+/* std.net declares getaddrinfo/freeaddrinfo as foreign functions; WASI Preview 1 has no resolver and
+ * wasi-libc does not define them. Name resolution fails with EAI_FAIL (musl value) and no result list. */
+#define CJ_WASI_EAI_FAIL (-4)
+int getaddrinfo(const char* node, const char* service, const void* hints, void** res)
+{
+    (void)node; (void)service; (void)hints;
+    if (res != NULL) {
+        *res = NULL;
+    }
+    return CJ_WASI_EAI_FAIL;
+}
+
+void freeaddrinfo(void* res)
+{
+    (void)res;
+}

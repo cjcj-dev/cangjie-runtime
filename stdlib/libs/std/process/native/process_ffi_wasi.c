@@ -171,3 +171,11 @@ char** GetCurrentProcessEnvironment(int32_t pid)
     }
     return environment;
 }
+
+/* process_impl_linux.c asks getpid() whether a pid is the current process. wasi-libc only provides
+ * getpid in libwasi-emulated-getpid, which the wasm32-wasi link line does not name, so the module
+ * reports the same pid as above. */
+pid_t getpid(void)
+{
+    return WASI_PID;
+}
