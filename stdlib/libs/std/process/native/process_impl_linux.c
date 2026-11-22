@@ -547,8 +547,65 @@ extern void CJ_OS_CloseProcessHandle(size_t handle)
     return;
 }
 
+#ifdef __wasi__
+/* WASI Preview 1 has no /proc: the module is the only process (pid 1, see process_ffi_wasi.c). Its
+ * command line is the argv wasi-libc built from args_get, its environment is environ and its working
+ * directory is getcwd. Every string is a heap copy that CJ_OS_FreeProcessInfo releases. */
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+extern const char** CJ_MRT_GetCommandLineArgs(void);
+extern char** environ;
+
+static char** WasiCopyStrings(char* const* src, size_t skip)
+{
+    size_t n = 0;
+    while (src != NULL && src[n] != NULL) {
+        ++n;
+    }
+    size_t count = n > skip ? n - skip : 0;
+    char** dst = (char**)calloc(count + 1, sizeof(char*));
+    if (dst == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        dst[i] = strdup(src[i + skip]);
+        if (dst[i] == NULL) {
+            FreeTwoDimensionalArray(dst);
+            return NULL;
+        }
+    }
+    return dst;
+}
+
+static ProcessInfo* WasiCurrentProcessInfo(void)
+{
+    char* const* argv = (char* const*)CJ_MRT_GetCommandLineArgs();
+    ProcessInfo* info = (ProcessInfo*)calloc(1, sizeof(ProcessInfo));
+    if (info == NULL) {
+        return NULL;
+    }
+    char cwd[PATH_MAX];
+    info->command = strdup((argv != NULL && argv[0] != NULL) ? argv[0] : "");
+    info->workingDirectory = strdup(getcwd(cwd, sizeof(cwd)) != NULL ? cwd : "/");
+    info->arguments = WasiCopyStrings(argv, 1);
+    info->commandLine = WasiCopyStrings(argv, 0);
+    info->environment = WasiCopyStrings(environ, 0);
+    if (info->command == NULL || info->workingDirectory == NULL || info->arguments == NULL ||
+        info->commandLine == NULL || info->environment == NULL) {
+        CJ_OS_FreeProcessInfo(info);
+        return NULL;
+    }
+    return info;
+}
+#endif
+
 extern ProcessInfo* CJ_OS_GetProcessInfoByPid(int32_t pid)
 {
+#ifdef __wasi__
+    return pid == 1 ? WasiCurrentProcessInfo() : NULL;
+#endif
     int64_t linuxStartTime = CJ_OS_GetStartTimeFromBoot(pid);
     if (linuxStartTime == ERROR_GET_PROCESS_TIME_FAILED) {
         return NULL;
