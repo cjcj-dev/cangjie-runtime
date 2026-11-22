@@ -12,6 +12,12 @@ public interface Any {}
 
 public open class Object <: Any {
     public const init() {}
+
+    @When[local_mode_api == "on"]
+    public exclave const init(this @local!) { }
+
+    @When[local_mode_api == "on"]
+    public exclave const init(this @local?) { }
 }
 
 /**
@@ -25,13 +31,38 @@ public func refEq(a: Object, b: Object): Bool {
     return intrinsicRefEq(a, b)
 }
 
+/**
+ * Check whether two Objects are referencing to the same memory block.
+ * Accepts `@local?` receivers so that identity comparison is available for
+ * `@local!` instances (e.g. AST nodes inside a local region).
+ *
+ * @return true means they are the same Object.
+ */
+@When[local_mode_api == "on"]
+public func refEq(a: Object @local?, b: Object @local?): Bool {
+    return intrinsicRefEq(a, b)
+}
+
 // This function is only used by ArrayList type, and it is not intended to be documented in users' guide
 @Intrinsic
 public unsafe func zeroValue<T>(): T
 
+@When[local_mode_api == "on"]
+@Intrinsic
+public unsafe func zeroValue2<T>(): T @local!
+
+@When[local_mode_api == "on"]
+@Intrinsic
+func intrinsicRefEq(a: Object @local?, b: Object @local?): Bool
+
+@When[local_mode_api != "on"]
 @Intrinsic
 func intrinsicRefEq(a: Object, b: Object): Bool
 
-@When[backend == "cjnative"]
+@When[backend == "cjnative" && local_mode_api == "on"]
+@Intrinsic
+func intrinsicRefEqRawArray<T>(a: RawArray<T> @local?, b: RawArray<T> @local?): Bool
+
+@When[backend == "cjnative" && local_mode_api != "on"]
 @Intrinsic
 func intrinsicRefEqRawArray<T>(a: RawArray<T>, b: RawArray<T>): Bool

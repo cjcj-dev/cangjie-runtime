@@ -486,6 +486,9 @@ void ZStackWatermark::process_head(void* context)
     };
     owner.VisitExceptionRoots(roots);
     owner.VisitNativeFrameRoots(roots);
+    // zStackWatermark.cpp:169 (oops_do_no_frames): slots in native local
+    // regions have the head colour, with no stack frame to assign them to.
+    owner.VisitLocalRegionRoots([&](RootSlot& slot) { HealOnce(closure, healed, slot); });
     zaddress_unsafe* invisible = owner.GetGCData().invisible_root();
     if (invisible != nullptr) { ZUncoloredRoot::process_invisible(invisible, prev_head_color()); }
 }

@@ -6,6 +6,8 @@
 
 
 #include "Heap/z/zAccess.hpp"
+#include "Heap/Allocator/LocalObjectAllocator.h"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zRootsIterator.hpp"
 #include "CompilerCalls.h"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -50,16 +52,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#ifdef _WIN64
-#include "Mutator/MutatorManager.h"
-#include "Mutator/ThreadLocal.h"
-#endif
 #include "Sync/Sync.h"
 #include "UnwindStack/GcStackInfo.h"
+#include "ThreadCreatorInfo.h"
 #include "CpuProfiler/CpuProfiler.h"
 #ifdef __OHOS__
 #include "schedule.h"
@@ -371,6 +371,11 @@ extern "C" bool MCC_IsWrapperClassForAutoEnv(const TypeInfo* ti)
     }
 }
 
+static bool IsLocalAddress(const void* address);
+static void StoreMaybeLocalRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field);
+static void CopyMaybeLocalStruct(ObjectPtr owner, MAddress dst, size_t dstLen, ObjectPtr srcOwner,
+                                 MAddress src, size_t srcLen, GCTib gctib);
+
 extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, size_t dstSize, const ObjectPtr srcObj,
                                     MAddress srcField, size_t srcSize)
 {
@@ -378,6 +383,16 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
     const size_t length = std::min(srcSize, dstSize) / sizeof(zpointer);
     // RefArrayKlass::copy_array: establish the nonempty precondition before access barriers.
     if (length == 0) {
+        return;
+    }
+    if (IsLocalAddress(dstObj) || IsLocalAddress(srcObj)) {
+        const bool backward = dstField > srcField && dstField - srcField < length * sizeof(RootSlot);
+        for (size_t i = 0; i < length; ++i) {
+            const size_t offset = (backward ? length - 1 - i : i) * sizeof(RootSlot);
+            auto* from = reinterpret_cast<RefField<false>*>(srcField + offset);
+            auto* to = reinterpret_cast<RefField<false>*>(dstField + offset);
+            StoreMaybeLocalRef(CJ_MCC_ReadRefField(srcObj, from), dstObj, to);
+        }
         return;
     }
     HeapAccess<>::oop_arraycopy(srcObj, srcField, dstObj, dstField, length);
@@ -388,12 +403,23 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
 {
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
     CHECK(srcSize <= dstSize);
-    auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dstField) ? dstObj : srcObj);
+    auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dstField) || IsLocalAddress(dstObj) ? dstObj : srcObj);
     // Headerless native payloads have no array metadata; retain their byte-sized elements.
     const size_t stride = layout == nullptr ? 1 : layout->GetElementSize();
     CHECK(stride != 0 && srcSize % stride == 0);
     const size_t length = srcSize / stride;
     if (length == 0) {
+        return;
+    }
+    if (IsLocalAddress(dstObj) || IsLocalAddress(srcObj)) {
+        auto* array = static_cast<MArray*>(dstObj != nullptr ? dstObj : srcObj);
+        CHECK_DETAIL(array != nullptr, "modal array copy has no layout");
+        GCTib tib = array->GetTypeInfo()->GetComponentTypeInfo()->GetGCTib();
+        const bool backward = dstField > srcField && dstField - srcField < srcSize;
+        for (size_t i = 0; i < length; ++i) {
+            const size_t offset = (backward ? length - 1 - i : i) * stride;
+            CopyMaybeLocalStruct(dstObj, dstField + offset, stride, srcObj, srcField + offset, stride, tib);
+        }
         return;
     }
     HeapAccess<>::value_arraycopy(layout, srcField, dstField, length);
@@ -617,7 +643,17 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
             liteFrameInfos.push_back(static_cast<uint64_t>(SofStackFlag::TOP_FOLDED));
         }
     }
-    MIndex size = liteFrameInfos.size();
+    const CreatorFrameInfo creator = CJThreadGetCreatorFrame();
+    std::vector<uint64_t> withCreator;
+    if (creator.ip != 0) {
+        withCreator = liteFrameInfos;
+        const bool folded = withCreator.size() % frameInfoPairLen == 1;
+        withCreator.insert(withCreator.end() - (folded ? 1 : 0),
+                           {creator.ip, creator.funcStart, creator.funcDesc});
+    }
+    // Keep ExceptionWrapper's physical frames unchanged for crash and platform reporting.
+    const auto& result = creator.ip != 0 ? withCreator : liteFrameInfos;
+    MIndex size = result.size();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (UNLIKELY(ENABLE_LOG(EXCEPTION))) {
         MIndex arraySize = size;
@@ -626,10 +662,8 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         }
         DLOG(EXCEPTION, "fill in stack info");
         DLOG(EXCEPTION, "layer\tframePC\t\tframeFuncStart\tsize : %zu", (arraySize / frameInfoPairLen));
-        for (int i = 0; i < arraySize; ++i) {
-            uint64_t framePC = liteFrameInfos[i];
-            uint64_t frameFuncStart = liteFrameInfos[++i];
-            DLOG(EXCEPTION, "#%x\t0x%x\t0x%x", ((i - 1) / frameInfoPairLen), framePC, frameFuncStart);
+        for (MIndex i = 0; i < arraySize; i += frameInfoPairLen) {
+            DLOG(EXCEPTION, "#%x\t0x%x\t0x%x", (i / frameInfoPairLen), result[i], result[i + 1]);
         }
     }
 #endif
@@ -653,7 +687,7 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         return nullptr;
     }
     for (MIndex i = 0; i < size; ++i) {
-        array->SetPrimitiveElement(i, static_cast<int64_t>(liteFrameInfos[i]));
+        array->SetPrimitiveElement(i, static_cast<int64_t>(result[i]));
     }
     return array;
 }
@@ -1850,6 +1884,25 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
     return parameterInfo->GetAnnotations(arrayTi);
 }
 
+static bool IsLocalAddress(const void* address)
+{
+    if (address == nullptr || Heap::IsHeapAddress(address)) {
+        return false;
+    }
+
+    // A running region belongs to the mutator bound to this thread. An
+    // unattached native caller has no region to query, even before scheduler
+    // initialization or after the logical mutator has been detached.
+    const Mutator* mutator = ThreadLocal::GetMutator();
+    return mutator != nullptr && mutator->IsLocalRegionAddress(reinterpret_cast<MAddress>(address));
+}
+
+static bool IsManagedStackAddress(const void* address)
+{
+    Mutator* mutator = ThreadLocal::GetMutator();
+    return address != nullptr && mutator != nullptr && mutator->IsStackAddr(reinterpret_cast<MAddress>(address));
+}
+
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     // Existing compiled callers still use this entry until cjcj-llvm#18
@@ -1860,7 +1913,13 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return NativeAccess<>::oop_load(&(NativeSlotAt(static_cast<void*>(field))));
     }
-    return to_object(safe(RootSlotAt(static_cast<void*>(field)).LoadPlain()));
+    const zaddress_unsafe bits = RootSlotAt(static_cast<void*>(field)).LoadPlain();
+    ObjectPtr plain = static_cast<ObjectPtr>(reinterpret_cast<void*>(raw(bits)));
+    if (!Heap::IsHeapAddress(plain) &&
+        (IsLocalAddress(field) || IsLocalAddress(plain) || IsManagedStackAddress(plain))) {
+        return plain;
+    }
+    return to_object(safe(bits));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -2007,8 +2066,14 @@ static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPt
         ValuePayload(reinterpret_cast<MAddress>(fp), size, dst, reinterpret_cast<MAddress>(fp)));
 }
 
+static void CopyMaybeLocalGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size);
+
 extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
 {
+    if (IsLocalAddress(obj) || IsLocalAddress(src)) {
+        CopyMaybeLocalGeneric(obj, fieldPtr, src, size);
+        return;
+    }
     CopyGenericField(obj, fieldPtr, src, size);
 }
 
@@ -2029,7 +2094,7 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
                      "MCC_AssignGeneric memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
-        CopyGenericField(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
+        CJ_MCC_WriteGeneric(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
     }
 }
 
@@ -2071,14 +2136,16 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
                      srcSize, limit, typeName != nullptr ? typeName : "(null)");
     }
 
-    if (!typeInfo->HasRefField()) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + TYPEINFO_PTR_SIZE),
+    const MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
+    if (typeInfo->HasRefField() && IsLocalAddress(dst)) {
+        CopyMaybeLocalStruct(dst, dstAddr, limit, nullptr, srcField, srcSize, typeInfo->GetGCTib());
+    } else if (!typeInfo->HasRefField()) {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dstAddr),
                               limit,
                               reinterpret_cast<void*>(srcField),
                               srcSize) == EOK,
                      "MCC_WriteGenericPayload memcpy_s failed");
     } else {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
         HeapAccess<>::value_copy(ValuePayload(srcField, srcSize),
         ValuePayload(dstAddr, srcSize, dst, dstAddr));
     }
@@ -2106,8 +2173,131 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t
     }
 }
 
+static void StoreMaybeLocalRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field)
+{
+    const bool heapField = Heap::IsHeapAddress(field);
+    const bool globalField = IsGlobalStruct(owner, reinterpret_cast<MAddress>(field));
+    if (heapField || globalField) {
+        CHECK_DETAIL(!IsLocalAddress(value), "local reference escapes to a heap or global field");
+        WriteRefField<false>(value, owner, field);
+        return;
+    }
+
+    RootSlot& slot = RootSlotAt(static_cast<void*>(field));
+    if (IsLocalAddress(field)) {
+        Mutator& mutator = *Mutator::GetMutator();
+        CHECK_DETAIL(mutator.IsLocalRegionAddress(reinterpret_cast<MAddress>(owner)),
+                     "local store without an active local owner");
+        if (Heap::IsHeapAddress(value)) {
+            LocalObjectAllocator::Instance().AddLocalRoot(mutator, owner, &slot);
+        } else {
+            CHECK_DETAIL(!mutator.IsStackAddr(reinterpret_cast<MAddress>(value)),
+                         "stack reference escapes to the local region");
+        }
+    }
+    if (IsLocalAddress(value) || IsManagedStackAddress(value)) {
+        StoreNonHeapAlias(slot, value);
+    } else {
+        StorePlain(slot, from_object(value));
+    }
+}
+
+extern "C" void CJ_MCC_MaybeLocalWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field)
+{
+    StoreMaybeLocalRef(value, owner, field);
+}
+
+extern "C" void CJ_MCC_DemodeWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field)
+{
+    CHECK_DETAIL(!IsLocalAddress(value), "demode store received a local reference");
+    StoreMaybeLocalRef(value, owner, field);
+}
+
+static void CopyMaybeLocalStruct(ObjectPtr owner, MAddress dst, size_t dstLen, ObjectPtr srcOwner,
+                                 MAddress src, size_t srcLen, GCTib gctib)
+{
+    if (srcLen == 0 || dst == src) {
+        return;
+    }
+    CHECK_DETAIL(dst != 0 && src != 0 && srcLen <= dstLen, "invalid modal struct copy range");
+
+    // Iterate metadata in address order but copy from the end for an overlapping
+    // right shift. Each reference must take the source and destination barriers.
+    std::vector<MAddress> offsets;
+    gctib.ForEachBitmapWordInRange(dst, [&](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - dst);
+    }, dst, dst + srcLen);
+    std::sort(offsets.begin(), offsets.end());
+    auto copyRange = [&](size_t begin, size_t end) {
+        if (begin != end) {
+            CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + begin), dstLen - begin,
+                                   reinterpret_cast<void*>(src + begin), end - begin) == EOK,
+                         "modal struct copy failed");
+        }
+    };
+    auto copyRef = [&](size_t offset) {
+        auto* from = reinterpret_cast<RefField<false>*>(src + offset);
+        auto* to = reinterpret_cast<RefField<false>*>(dst + offset);
+        StoreMaybeLocalRef(CJ_MCC_ReadRefField(srcOwner, from), owner, to);
+    };
+
+    if (dst > src && dst - src < srcLen) {
+        size_t cursor = srcLen;
+        for (auto it = offsets.rbegin(); it != offsets.rend(); ++it) {
+            CHECK_DETAIL(*it <= cursor && cursor - *it >= sizeof(RootSlot), "invalid modal oop offset");
+            copyRange(*it + sizeof(RootSlot), cursor);
+            copyRef(*it);
+            cursor = *it;
+        }
+        copyRange(0, cursor);
+    } else {
+        size_t cursor = 0;
+        for (size_t offset : offsets) {
+            CHECK_DETAIL(offset >= cursor && offset <= srcLen && srcLen - offset >= sizeof(RootSlot),
+                         "invalid modal oop offset");
+            copyRange(cursor, offset);
+            copyRef(offset);
+            cursor = offset + sizeof(RootSlot);
+        }
+        copyRange(cursor, srcLen);
+    }
+}
+
+extern "C" void CJ_MCC_MaybeLocalWriteStruct(ObjectPtr owner, MAddress dst, size_t dstLen, MAddress src,
+                                              size_t srcLen, GCTib gctib)
+{
+    CopyMaybeLocalStruct(owner, dst, dstLen, nullptr, src, srcLen, gctib);
+}
+
+static void CopyMaybeLocalGeneric(ObjectPtr owner, void* field, ObjectPtr src, size_t size)
+{
+    if (src != nullptr && size != 0) {
+        CopyMaybeLocalStruct(owner, reinterpret_cast<MAddress>(field), size, src,
+                             reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size, src->GetGCTib());
+    }
+}
+
+// The compiler intrinsic and its LLVM lowering pass an i32 byte count.
+extern "C" void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, uint32_t size)
+{
+    CopyMaybeLocalGeneric(owner, field, src, size);
+}
+
+extern "C" void CJ_MCC_AssignLocalGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
+{
+    if (typeInfo != nullptr) {
+        CopyMaybeLocalGeneric(dst, reinterpret_cast<void*>(reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE),
+                              src, typeInfo->GetInstanceSize());
+    }
+}
+
 extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size)
 {
+    if (IsLocalAddress(dstPtr) || IsLocalAddress(fieldPtr)) {
+        CopyMaybeLocalStruct(dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size, obj,
+                             reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
+        return;
+    }
     if (size == 0) {
         return;
     }
@@ -2447,4 +2637,121 @@ extern "C" void CJ_MRT_RegisterExceptionCallback(void(*callback)())
     ExceptionManager::RegisterExceptionCallback(callback);
 }
 #endif
+extern "C" void MCC_StartLocalRegion(FrameAddress* ownerFA)
+{
+    CHECK_DETAIL(ownerFA != nullptr, "local region requires a managed caller frame");
+    LocalObjectAllocator::Instance().StartRegion(*Mutator::GetMutator(), ownerFA);
+}
+
+extern "C" void MCC_EndLocalRegion(FrameAddress* ownerFA)
+{
+    LocalObjectAllocator::Instance().EndRegion(*Mutator::GetMutator(), ownerFA);
+}
+
+extern "C" void MCC_AddLocalFinalizer(ObjectPtr obj)
+{
+    LocalObjectAllocator::Instance().AddFinalizer(*Mutator::GetMutator(), obj);
+}
+
+extern "C" void MCC_RemoveLocalFinalizer(ObjectPtr obj)
+{
+    LocalObjectAllocator::Instance().RemoveFinalizer(*Mutator::GetMutator(), obj);
+}
+
+extern "C" size_t CJ_MCC_GetAllocatedLocalObjectSize()
+{
+    ScopedEnterSaferegion enterSaferegion(false);
+    ScopedStopTheWorld stw("get allocated local object size");
+    return LocalObjectAllocator::Instance().GetAllocatedObjectBytes();
+}
+
+static MAddress AllocateLocal(size_t size)
+{
+    MAddress address = LocalObjectAllocator::Instance().Allocate(*Mutator::GetMutator(), size);
+    if (address == 0) {
+        ExceptionManager::LocalRegionOutOfMemory();
+        ExceptionManager::CheckAndThrowPendingException("local region allocation");
+    }
+    return address;
+}
+
+extern "C" ObjRef MCC_NewLocalObject(const TypeInfo* klass, MSize size)
+{
+    CHECK_DETAIL(size >= TYPEINFO_PTR_SIZE, "invalid local object size");
+    const MAddress address = AllocateLocal(size);
+    return address == 0 ? nullptr : static_cast<MObject*>(LocalObjectAllocator::InitializeObject(address, klass));
+}
+
+extern "C" ObjRef MCC_NewLocalFinalizer(const TypeInfo* klass, MSize size)
+{
+    // The compiler registers a local finalizer separately, after initialization.
+    return MCC_NewLocalObject(klass, size);
+}
+
+extern "C" ObjRef MCC_NewLocalGenericObject(const TypeInfo* klass, MSize size)
+{
+    return MCC_NewLocalObject(klass, size);
+}
+
+extern "C" ObjRef MCC_NewLocalWeakRefObject(const TypeInfo* klass, MSize size)
+{
+    // Local weak references are not supported upstream either.
+    return MCC_NewWeakRefObject(klass, size);
+}
+
+static ArrayRef NewLocalArray(const TypeInfo* klass, MIndex count, U32 width)
+{
+    const MIndex size = CalculateArraySize(count, width);
+    if (size == MAX_ARRAY_SIZE || size > std::numeric_limits<size_t>::max() - (sizeof(uint64_t) - 1)) {
+        ExceptionManager::LocalRegionOutOfMemory();
+        ExceptionManager::CheckAndThrowPendingException("local array size");
+        return nullptr;
+    }
+    MAddress address = AllocateLocal(static_cast<size_t>(size));
+    if (address == 0) {
+        return nullptr;
+    }
+    auto* array = reinterpret_cast<MArray*>(address);
+    array->SetLength(count);
+    return static_cast<MArray*>(LocalObjectAllocator::InitializeObject(address, klass));
+}
+
+extern "C" ArrayRef MCC_NewLocalObjArray(const TypeInfo* klass, MIndex count)
+{
+    return NewLocalArray(klass, count, sizeof(RootSlot));
+}
+
+extern "C" ArrayRef MCC_NewLocalArray(const TypeInfo* klass, MIndex count)
+{
+    if (klass->GetComponentTypeInfo()->IsObjectType() || klass->GetSuperTypeInfo()->IsRef()) {
+        return MCC_NewLocalObjArray(klass, count);
+    }
+    return NewLocalArray(klass, count, klass->GetSuperTypeInfo()->GetComponentSize());
+}
+
+extern "C" ArrayRef MCC_NewLocalGenericArray(const TypeInfo* klass, MIndex count)
+{
+    return klass->IsArrayType() ? MCC_NewLocalArray(klass, count) : nullptr;
+}
+
+extern "C" ArrayRef MCC_NewLocalArray8(const TypeInfo* klass, MIndex count)
+{
+    return NewLocalArray(klass, count, 1);
+}
+
+extern "C" ArrayRef MCC_NewLocalArray16(const TypeInfo* klass, MIndex count)
+{
+    return NewLocalArray(klass, count, 2);
+}
+
+extern "C" ArrayRef MCC_NewLocalArray32(const TypeInfo* klass, MIndex count)
+{
+    return NewLocalArray(klass, count, 4);
+}
+
+extern "C" ArrayRef MCC_NewLocalArray64(const TypeInfo* klass, MIndex count)
+{
+    return NewLocalArray(klass, count, 8);
+}
+
 } // namespace MapleRuntime

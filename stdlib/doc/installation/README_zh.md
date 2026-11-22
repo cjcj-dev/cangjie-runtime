@@ -169,3 +169,9 @@ $ rm -rf <path>/<to>/cangjie
 - 如果选择 `zip` 格式的安装包进行的安装，删除仓颉工具链的安装包目录，同时移除上述环境变量设置（若有），即可完成卸载。
 
 若需要更新仓颉工具链，需要先卸载当前版本，然后按上述指导重新安装最新版本的仓颉工具链。
+
+## local mode 构建开关
+
+`CANGJIE_ENABLE_LOCAL_MODE` 控制 `add_cangjie_library` 是否传入 `--experimental --enable-local-mode`。标准库主工程要求开启语法支持；单独复用 `AddCangjieSource.cmake` 时，语法和 API 开关默认均为 `OFF`。
+
+标准库主工程默认关闭实验性的 local-mode API。要在支持的平台上开启 API，在 `stdlib` 下使用 `python3 build.py build -t release --local_mode_api`，或在 CMake 配置时设置 `-DCANGJIE_ENABLE_LOCAL_MODE_API=ON`。

@@ -111,7 +111,7 @@ public:
     // used for exception backtrace.
     bool IsNeedFiltExceptionCreationLayer() const { return mangleNameHelper->IsNeedFilt(); }
 
-private:
+    // Caller holds a metadata read scope when retaining the result for capture.
     static uint64_t* ResolveFuncDesc(const FrameInfo& frameInfo)
     {
 #ifdef __APPLE__
@@ -122,6 +122,7 @@ private:
 #endif
     }
 
+private:
     // Keep the image mapped for the complete helper lifetime, not only while
     // ResolveFuncDesc decodes the pointer.
     ElfUnloadQuiescence::ReadScope metadataReader;

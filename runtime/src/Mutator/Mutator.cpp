@@ -21,6 +21,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/Allocator/LocalObjectAllocator.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
 #include "StackManager.h"
@@ -233,6 +234,7 @@ Mutator::Mutator() : cjthread(nullptr)
 
 Mutator::~Mutator()
 {
+    if (localObjectAllocatorData != nullptr) { LocalObjectAllocator::Instance().OnMutatorExit(*this); }
     ReleaseAllocBuffer();
     tid = 0;
     stackBoundAddr = nullptr;
@@ -248,6 +250,7 @@ Mutator::~Mutator()
 
 void Mutator::ResetMutator()
 {
+    if (localObjectAllocatorData != nullptr) { LocalObjectAllocator::Instance().OnMutatorExit(*this); }
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
     ReleaseAllocBuffer();
@@ -339,7 +342,20 @@ void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
     if (GetStackWatermark().GetEpoch() != epoch) { return; }
     VisitExceptionRoots(visitor);
     VisitNativeFrameRoots(visitor);
+    VisitLocalRegionRoots(visitor);
     if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor); }
+}
+
+void Mutator::VisitLocalRegionRoots(const RootVisitor& visitor)
+{
+    if (localObjectAllocatorData != nullptr) {
+        LocalObjectAllocator::Instance().VisitLocalObjectRefFields(*this, visitor);
+    }
+}
+
+bool Mutator::IsLocalRegionAddress(MAddress address) const
+{
+    return localObjectAllocatorData != nullptr && LocalObjectAllocator::Instance().Contains(*this, address);
 }
 
 void Mutator::VisitStackRoots(const RootVisitor& func)
@@ -737,6 +753,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // takes MutatorLock and then the watermark lock, so this lock cannot be
         // held across MutatorLock.
         flush.Shift(stackOffset);
+        if (localObjectAllocatorData != nullptr) {
+            LocalObjectAllocator::Instance().RebaseFrames(*this, stackOffset);
+        }
         UpdatePollValues(ThreadLocal::GetThreadLocalData());
         flush.End();
 
@@ -871,6 +890,9 @@ void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
         ObjectRef& slot = *pending.back();
         pending.pop_back();
         const uintptr_t address = raw(slot.LoadPlain(std::memory_order_acquire));
+        // Local storage itself is outside ZGC. Its registered fields are
+        // visited from the thread head, independently of stack aliases.
+        if (IsLocalRegionAddress(address)) { continue; }
         if (!IsStackAddr(address)) {
             // Preserve invalid non-stack addresses for the verifier to reject.
             visitor(slot);

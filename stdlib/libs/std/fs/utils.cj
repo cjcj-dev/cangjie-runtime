@@ -48,9 +48,14 @@ let TMP_FILE = "/tmpFileXXXXXX\0".toArray()
 /**
  * Before calling this function, call func checkPath to verify @param path.
  */
-@When[os != "Windows"]
+@When[local_mode_api == "on" && os != "Windows"]
+func isAbsolutePath(path: String @local?): Bool {
+    path.size > 0 && isSlash(path[0])
+}
+
+@When[local_mode_api != "on" && os != "Windows"]
 func isAbsolutePath(path: String): Bool {
-    return isSlash(path[0])
+    path.size > 0 && isSlash(path[0])
 }
 
 @When[os != "Windows"]
@@ -62,6 +67,19 @@ func toAbsolutePath(path: Path): Path {
         return path
     }
     return canonicalize(Path(CURRENT_PATH_STRING)).join(raw)
+}
+
+@When[local_mode_api == "on" && os != "Windows"]
+func toAbsolutePath(path: Path @local!): Path @local! {
+    exclave {
+        PathValidator.throwIfEmptyOrContainsNullByte("path", path, true)
+
+        let raw = path._rawPath
+        if (isAbsolutePath(raw)) {
+            return path
+        }
+        canonicalize(Path(".") @local!).join(raw)
+    }
 }
 
 @When[os != "Windows"]
@@ -98,6 +116,13 @@ func processPathHeader(_: String, canonicalPath: Array<Byte>): String {
     return String.fromUtf8(canonicalPath)
 }
 
+@When[local_mode_api == "on" && os != "Windows"]
+func processPathHeader(_: String @local?, canonicalPath: Array<Byte> @local!): String @local! {
+    exclave {
+        String.fromUtf8(canonicalPath)
+    }
+}
+
 @When[os == "Windows"]
 let InvalidHandle: FileHandle = 0
 
@@ -125,11 +150,19 @@ const DOS_PATH_PREFIX = "\\\\?\\"
 @When[os == "Windows"]
 const UNC_PACH_PREFIX = "\\\\.\\"
 
-@When[os == "Windows"]
+@When[os == "Windows" && local_mode_api == "on"]
+func isAbsolutePath(path: String @local?): Bool {
+    // The size of path is 3 when path == "[a-z | A-Z]:\\xxxx"
+    // "/xxx" or "\\xxx" is absolute path
+    ((path.size >= 3) && path[0].isAsciiLetter() && (path[1] == b':') && isSlash(path[2])) ||
+        (path.size >= 1 && isSlash(path[0]))
+}
+
+@When[os == "Windows" && local_mode_api != "on"]
 func isAbsolutePath(path: String): Bool {
     // The size of path is 3 when path == "[a-z | A-Z]:\\xxxx"
     // "/xxx" or "\\xxx" is absolute path
-    return ((path.size >= 3) && path[0].isAsciiLetter() && (path[1] == b':') && isSlash(path[2])) ||
+    ((path.size >= 3) && path[0].isAsciiLetter() && (path[1] == b':') && isSlash(path[2])) ||
         (path.size >= 1 && isSlash(path[0]))
 }
 
@@ -145,6 +178,22 @@ func toAbsolutePath(path: Path): Path {
         return canonicalize(Path(CURRENT_PATH_STRING)).join(raw[2..])
     }
     return canonicalize(Path(CURRENT_PATH_STRING)).join(raw)
+}
+
+@When[local_mode_api == "on" && os == "Windows"]
+func toAbsolutePath(path: Path @local!): Path @local! {
+    exclave {
+        PathValidator.throwIfEmptyOrContainsNullByte("path", path, true)
+
+        let raw = path._rawPath
+        if (isAbsolutePath(raw) || raw.size == 2 && raw[1] == b':') {
+            return path
+        }
+        if (raw.size > 1 && raw[1] == b':') {
+            return canonicalize(Path(".") @local!).join(raw[2..])
+        }
+        canonicalize(Path(".") @local!).join(raw)
+    }
 }
 
 @When[os == "Windows"]
@@ -204,10 +253,37 @@ func getParent(path: String): Path {
     return Path(path[..end + 1])
 }
 
+@When[local_mode_api == "on"]
+func getParent(path: String @local!): Path @local! {
+    exclave {
+        let rootLen = getRootLen(path)
+        var end = path.size - 1
+        while (end >= rootLen) {
+            if (!isSlash(path[end])) {
+                break
+            }
+            end--
+        }
+        while (end >= rootLen) {
+            if (isSlash(path[end])) {
+                break
+            }
+            end--
+        }
+        while (end >= rootLen) {
+            if (!isSlash(path[end])) {
+                break
+            }
+            end--
+        }
+        var sb = StringBuilder() @local!
+        sb.append(path[..end + 1])
+        Path(sb.toString()) @local!
+    }
+}
+
 func getFileName(path: String): String {
     let rootLen = getRootLen(path)
-    // skip trailing slashes
-    // end point to the first non slash rune from end, or rootLen - 1
     var end = path.size - 1
     while (end >= rootLen) {
         if (!isSlash(path[end])) {
@@ -215,7 +291,6 @@ func getFileName(path: String): String {
         }
         end--
     }
-    // find last slash
     var start = end
     while (start >= rootLen) {
         if (isSlash(path[start])) {
@@ -223,10 +298,42 @@ func getFileName(path: String): String {
         }
         start--
     }
-    return path[rootLen..end + 1]
+    path[rootLen..end + 1]
 }
 
-@When[os != "Windows"]
+@When[local_mode_api == "on"]
+exclave func getFileName(path: String @local?): String @local! {
+    let rootLen = getRootLen(path)
+    var end = path.size - 1
+    while (end >= rootLen) {
+        if (!isSlash(path[end])) {
+            break
+        }
+        end--
+    }
+    var start = end
+    while (start >= rootLen) {
+        if (isSlash(path[start])) {
+            var sb = StringBuilder() @local!
+            sb.append(path[start + 1..end + 1])
+            return sb.toString()
+        }
+        start--
+    }
+    var sb = StringBuilder() @local!
+    sb.append(path[rootLen..end + 1])
+    sb.toString()
+}
+
+@When[local_mode_api == "on" && os != "Windows"]
+func getRootLen(path: String @local?): Int64 {
+    if (path.size > 0 && isSlash(path[0])) {
+        return 1
+    }
+    0
+}
+
+@When[local_mode_api != "on" && os != "Windows"]
 func getRootLen(path: String): Int64 {
     if (path.size > 0 && isSlash(path[0])) {
         return 1
@@ -234,7 +341,37 @@ func getRootLen(path: String): Int64 {
     0
 }
 
-@When[os == "Windows"]
+@When[os == "Windows" && local_mode_api == "on"]
+func getRootLen(path: String @local?): Int64 {
+    let raw = unsafe { path.rawData() }
+    // "c:" || "c:\\"
+    if (raw.size > 1 && raw[1] == b':') {
+        if (raw.size > 2 && isSlash(raw[2])) {
+            return 3
+        }
+        return 2
+    }
+    // "\\\\?\\UNC\\" || "\\\\.\\UNC\\"
+    if (raw.size > 7 && (raw[..8].equalsIgnoreCaseAndSlash("\\\\?\\UNC\\") ||
+        raw[..8].equalsIgnoreCaseAndSlash("\\\\.\\UNC\\"))) {
+        return countSeparator(raw, idx: 8, cnt: 2)
+    }
+    // "\\\\?\\" || "\\\\.\\"
+    if (raw.size > 3 && (raw[..4].equalsIgnoreCaseAndSlash("\\\\?\\") || raw[..4].equalsIgnoreCaseAndSlash("\\\\.\\"))) {
+        return countSeparator(raw, idx: 4, cnt: 1)
+    }
+    if (isSlash(raw[0])) {
+        // "\\\\" UNC path
+        if (raw.size > 1 && isSlash(raw[1])) {
+            return countSeparator(raw, idx: 2, cnt: 2)
+        }
+        // "\\"
+        return 1
+    }
+    return 0
+}
+
+@When[os == "Windows" && local_mode_api != "on"]
 func getRootLen(path: String): Int64 {
     let raw = unsafe { path.rawData() }
     // "c:" || "c:\\"
@@ -264,7 +401,19 @@ func getRootLen(path: String): Int64 {
     return 0
 }
 
-@When[os == "Windows"]
+@When[os == "Windows" && local_mode_api == "on"]
+func countSeparator(path: Array<Byte> @local?, idx!: Int64, cnt!: Int64): Int64 {
+    var n = cnt
+    for (i in idx..path.size where isSlash(path[i])) {
+        n--
+        if (n == 0) {
+            return i + 1
+        }
+    }
+    return path.size
+}
+
+@When[os == "Windows" && local_mode_api != "on"]
 func countSeparator(path: Array<Byte>, idx!: Int64, cnt!: Int64): Int64 {
     var n = cnt
     for (i in idx..path.size where isSlash(path[i])) {
@@ -308,6 +457,20 @@ func processPathHeader(rawPath: String, canonicalPath: Array<Byte>): String {
     }
 }
 
+@When[local_mode_api == "on" && os == "Windows"]
+func processPathHeader(rawPath: String @local?, canonicalPath: Array<Byte> @local!): String @local! {
+    exclave {
+        if (rawPath.startsWith(DOS_PATH_PREFIX)) {
+            return String.fromUtf8(canonicalPath)
+        } else if (rawPath.startsWith(UNC_PACH_PREFIX)) {
+            canonicalPath[2] = b'.'
+            return String.fromUtf8(canonicalPath)
+        } else {
+            return String.fromUtf8(canonicalPath[4..])
+        }
+    }
+}
+
 // Some WIN API do not accept normal path longer than 260 bytes (including the ending '\0').
 // So when path is too long, we add "\\\\?\\" to DOS path, "\\\\?\\UNC" to UNC path.
 // Meanwhile, we replace '/' with '\\', since some WIN API do not accept long path with both '\\' and '/'.
@@ -339,6 +502,34 @@ func fixLongPath(path: String): String {
     return path
 }
 
+@When[local_mode_api == "on" && os == "Windows"]
+exclave func fixLongPath(path: String @local!): String @local! {
+    if (path.size < 259) {
+        return path
+    }
+    let raw = unsafe { path.rawData() }
+    // "c:" || "c:\\"
+    if (raw.size > 1 && raw[1] == b':') {
+        return concatPath("\\\\?\\", path)
+    }
+    // "\\\\?\\UNC\\" || "\\\\.\\UNC\\"
+    if (raw.size > 7 && (raw[..8].equalsIgnoreCaseAndSlash("\\\\?\\UNC\\") ||
+        raw[..8].equalsIgnoreCaseAndSlash("\\\\.\\UNC\\"))) {
+        return path
+    }
+    // "\\\\?\\" || "\\\\.\\"
+    if (raw.size > 3 && (raw[..4].equalsIgnoreCaseAndSlash("\\\\?\\") || raw[..4].equalsIgnoreCaseAndSlash("\\\\.\\"))) {
+        return path
+    }
+    if (isSlash(raw[0])) {
+        // "\\\\" UNC path
+        if (raw.size > 1 && isSlash(raw[1])) {
+            return concatPath("\\\\?\\UNC", path[1..])
+        }
+    }
+    path
+}
+
 @When[os == "Windows"]
 func concatPath(prefix: String, old: String): String {
     let new = Array<Byte>(prefix.size + old.size, repeat: 0)
@@ -358,9 +549,33 @@ func concatPath(prefix: String, old: String): String {
     return unsafe { String.fromUtf8Unchecked(new) }
 }
 
+@When[local_mode_api == "on" && os == "Windows"]
+exclave func concatPath(prefix: String, old: String @local?): String @local! {
+    let new: Array<Byte> @local! = Array<Byte>(prefix.size + old.size, repeat: 0)
+    for (i in 0..prefix.size) {
+        new[i] = prefix[i]
+    }
+    var (oldIdx, newIdx) = (0, prefix.size)
+    while (oldIdx < old.size) {
+        if (old[oldIdx] == b'/') {
+            new[newIdx] = b'\\'
+        } else {
+            new[newIdx] = old[oldIdx]
+        }
+        oldIdx++
+        newIdx++
+    }
+    unsafe { String.fromUtf8Unchecked(new) }
+}
+
 @When[os != "Windows"]
 func fixLongPath(path: String): String {
     return path
+}
+
+@When[local_mode_api == "on" && os != "Windows"]
+func fixLongPath(path: String @local?): String @local? {
+    path
 }
 
 func callNativeFunc(path: String, nativeFunc: CFunc<(CString) -> CPointer<FsError>>, errMsgPrefix: String): Unit {
@@ -402,7 +617,27 @@ func callNativeFunc(
 }
 
 extend Array<Byte> {
-    @When[os == "Windows"]
+    @When[os == "Windows" && local_mode_api == "on"]
+    func equalsIgnoreCaseAndSlash(this @local?, that: String): Bool {
+        // size is the same, and not 0
+        var (b1, b2): (Byte, Byte)
+        for (i in 0..this.size) {
+            b1 = this[i]
+            b2 = that[i]
+            if (isSlash(b1)) {
+                if (!isSlash(b2)) {
+                    return false
+                }
+                continue
+            }
+            if (!byteEqualsIgnoreAsciiCase(b1, b2)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    @When[os == "Windows" && local_mode_api != "on"]
     func equalsIgnoreCaseAndSlash(that: String): Bool {
         // size is the same, and not 0
         var (b1, b2): (Byte, Byte)
@@ -422,6 +657,22 @@ extend Array<Byte> {
         return true
     }
 
+    @When[local_mode_api == "on"]
+    func byteEqualsIgnoreAsciiCase(this @local?, b1: Byte, b2: Byte): Bool {
+        if (b1 == b2) {
+            return true
+        }
+        // b1 in 'A' ~ 'Z', and the lower case of b1 equals to b2
+        if (b1 >= b'A' && b1 <= b'Z' && (b1 + 32) == b2) {
+            return true
+        }
+        if (b2 >= b'A' && b2 <= b'Z' && (b2 + 32) == b1) {
+            return true
+        }
+        return false
+    }
+
+    @When[local_mode_api != "on"]
     func byteEqualsIgnoreAsciiCase(b1: Byte, b2: Byte): Bool {
         if (b1 == b2) {
             return true

@@ -8,6 +8,21 @@ cmake_minimum_required(VERSION 3.16.5)
 project(cangjie)
 # add path for custom CMake modules and add cmake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+# This branch's standard library contains local-mode declarations. Opt in here;
+# consumers that only reuse AddCangjieSource retain the module's OFF default.
+option(CANGJIE_ENABLE_LOCAL_MODE "Build the standard library with experimental local mode" ON)
+message(STATUS "Cangjie standard library local mode: ${CANGJIE_ENABLE_LOCAL_MODE}")
+# The full standard-library build exposes experimental local-mode APIs only on request.
+option(CANGJIE_ENABLE_LOCAL_MODE_API "Compile the experimental local-mode APIs of the standard library" OFF)
+message(STATUS "Cangjie standard library local API: ${CANGJIE_ENABLE_LOCAL_MODE_API}")
+# The standard library sources reference local-mode syntax throughout, so the full project
+# cannot be built with the parser support disabled. Reject it here instead of letting the
+# failure surface as a flood of syntax errors. Reusing the AddCangjieSource module on its
+# own is unaffected: only this project-level configuration is restricted.
+if(NOT CANGJIE_ENABLE_LOCAL_MODE)
+    message(FATAL_ERROR
+        "The Cangjie standard library requires CANGJIE_ENABLE_LOCAL_MODE=ON; its sources use local-mode syntax.")
+endif()
 include(AddCangjieSource)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -29,6 +44,9 @@ endif()
 
 string(TOLOWER "${CMAKE_BUILD_TYPE}" runtime_build_mode)
 set(target_system_name ${CMAKE_SYSTEM_NAME})
+if(OHOS AND CANGJIE_ENABLE_LOCAL_MODE_API)
+    message(FATAL_ERROR "Experimental standard-library local-mode APIs are not supported on OHOS")
+endif()
 if(OHOS)
     set(target_system_name "linux_ohos")
 endif()

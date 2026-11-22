@@ -165,3 +165,9 @@ After configuration, the Cangjie compilation toolchain will be directly availabl
 - If installed using the `zip` format package, delete the Cangjie toolchain installation directory and remove the aforementioned environment variable settings (if any) to complete the uninstallation.
 
 To update the Cangjie toolchain, first uninstall the current version, then follow the above instructions to reinstall the latest version of the Cangjie toolchain.
+
+## Local-mode build option
+
+`CANGJIE_ENABLE_LOCAL_MODE` controls whether `add_cangjie_library` passes `--experimental --enable-local-mode`. The standard-library project requires this syntax support. When reusing only `AddCangjieSource.cmake`, the syntax and API switches both default to `OFF`.
+
+Experimental local-mode APIs are disabled by default. To include them on a supported platform, use `python3 build.py build -t release --local_mode_api` in `stdlib`, or set `-DCANGJIE_ENABLE_LOCAL_MODE_API=ON` when configuring with CMake.

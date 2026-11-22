@@ -24,6 +24,7 @@
 #include "gas/offset_macro.h"
 #include "Mutator/Mutator.h"
 #include "base.h"
+#include "ThreadCreatorInfo.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -179,6 +180,7 @@ struct CJThread {
 #ifdef __OHOS__
     std::vector<unsigned long long> threadStackTopList;
 #endif
+    MapleRuntime::CreatorFrameInfo creatorFrame; // Keep assembly and generated-code offsets stable.
 };
 
 // These fields are consumed by generated code and the context-switch assembly.
