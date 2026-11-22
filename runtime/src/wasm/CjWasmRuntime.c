@@ -492,7 +492,14 @@ void* CJ_MCC_GetMTable(const void* ti, const void* itf)
     const CjwTI* t = (const CjwTI*)ti;
     if (t->kind == K_TEMP_ENUM && t->super != NULL) { t = t->super; }
     CjwExtData* ed = FindExtData(t, (const CjwTI*)itf);
-    if (ed == NULL) { cjw_unsupported("interface method table lookup: no extension data (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY); }
+    if (ed == NULL) {
+        const CjwTI* i = (const CjwTI*)itf;
+        uint32_t chain = 0;
+        fprintf(stderr, "cangjie wasm32 runtime: CJ_MCC_GetMTable(%s kind=%d typeArgs=%u ownExt=%d, %s kind=%d typeArgs=%u)\n",
+            t->name ? t->name : "?", t->kind, t->typeArgNum, ExtDataList(t, &chain) != NULL,
+            i->name ? i->name : "?", i->kind, i->typeArgNum);
+        cjw_unsupported("interface method table lookup: no extension data (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY);
+    }
     TryUpdateExtData(t, (const CjwTI*)itf, ed);
     return ed->funcTable;
 }

@@ -1,6 +1,7 @@
 # Standalone build of the wasm32-wasi Cangjie runtime archive.
 #   cmake -G Ninja -S runtime/src/wasm -B <build> \
 #     -DCMAKE_C_COMPILER=<cjcj-llvm>/bin/clang -DCMAKE_AR=<cjcj-llvm>/bin/llvm-ar \
+#     -DCMAKE_RANLIB=<cjcj-llvm>/bin/llvm-ranlib \
 #     -DWASI_SYSROOT=<pinned wasi-sysroot> -DCMAKE_INSTALL_PREFIX=<sdk>
 cmake_minimum_required(VERSION 3.16)
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
