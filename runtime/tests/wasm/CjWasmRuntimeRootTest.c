@@ -1,8 +1,8 @@
 // Runtime-held root test: links CjWasmRuntime.c + CjWasmHeap.c (the full archive contents) and supplies the
 // Cangjie entry symbol `main` itself. Checks that the managed Thread object CjWasmRuntime.c keeps in a C static
 // (CJ_MCC_SetCurrentCJThreadObject) is an internal GC root. Exit status = number of failed checks.
-#include "../CjWasmHeap.h"
-#include "../CjWasmObjectModel.h"
+#include "CjWasmHeap.h"
+#include "CjWasmObjectModel.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

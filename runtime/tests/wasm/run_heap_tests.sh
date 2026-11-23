@@ -8,10 +8,11 @@ NODE=${NODE:-node}
 # V8 crashes in a GC triggered from the WASI fd_write fast-API callback once the linear memory is large
 # (InnerPointerToCodeCache::GetCacheEntry, node v20.19.0 and v22.23.3); disable fast API calls.
 NODE_FLAGS=${NODE_FLAGS:---no-turbo-fast-api-calls}
-HERE=$(cd "$(dirname "$0")" && pwd); SRC=$(dirname "$HERE")
+HERE=$(cd "$(dirname "$0")" && pwd); SRC=$(cd "$HERE/../../src/wasm" && pwd)
 HEAPC=${6:-$SRC/CjWasmHeap.c}
 mkdir -p "$OUT"; cd "$OUT" || exit 99
-FLAGS="--target=wasm32-wasi --sysroot=$SR -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions -I$SRC"
+# Same compile options as the product library (runtime/src/wasm/CMakeLists.txt), including wasm EH.
+FLAGS="--target=wasm32-wasi --sysroot=$SR -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions -mexception-handling -mllvm -wasm-enable-eh -I$SRC"
 FAILS=0
 "$CC" $FLAGS -c "$HEAPC" -o heap.o; c1=$?
 "$CC" $FLAGS -c "$HERE/CjWasmHeapTest.c" -o heap_test.o; c2=$?

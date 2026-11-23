@@ -3,11 +3,14 @@
 //   heap_test.wasm            runs every positive test, exit status = failures
 //   heap_test.wasm <mode>     runs one negative/gate mode (see run_heap_tests.sh)
 // TypeInfos and GC tibs are built here with the wasm32 layout of CjWasmObjectModel.h.
-#include "../CjWasmHeap.h"
-#include "../CjWasmObjectModel.h"
+#include "CjWasmHeap.h"
+#include "CjWasmObjectModel.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// The heap unit is linked without CjWasmRuntime.c here; no Cangjie exception is ever in flight.
+void* cjw_inflight_exception(void) { return NULL; }
 
 _Noreturn void cjw_unsupported(const char* feature, int code)
 {
