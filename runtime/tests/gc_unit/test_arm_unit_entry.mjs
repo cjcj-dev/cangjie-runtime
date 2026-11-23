@@ -25,10 +25,10 @@ function check(name, value, detail = '') {
   console.log(`ASSERT ${name} ${value ? 'PASS' : 'FAIL'} ${detail}`);
 }
 function text(path) {return existsSync(path) ? readFileSync(path, 'utf8') : '';}
-const yaml = run('yaml', 'python3', ['-c', 'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', join(root, '.github/workflows/arm-unit-ref.yml')], root);
+const yaml = run('yaml', 'python3', ['-c', 'import json,sys,yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', join(root, '.github/workflows/runtime-ci.yml')], root);
 if (yaml.status !== 0) throw new Error('workflow parsing failed');
 const workflow = JSON.parse(yaml.stdout);
-const body = workflow.jobs.unit.steps.find(s => s.name === 'Build and execute real standalone entry').run;
+const body = workflow.jobs['arm-unit-ref-unit'].steps.find(s => s.name === 'Build and execute real standalone entry').run;
 const work = join(evidence, 'workflow');
 mkdirSync(work, {recursive: true});
 for (const path of ['bin', 'elf-source/runtime/tests/gc_unit', 'product-source/runtime', 'runtime/tests/gc_unit']) mkdirSync(join(work, path), {recursive:true});
@@ -109,8 +109,8 @@ for(const [script, valid] of [['arm_root_qualification.py',rootFilter],['teardow
  const bad=run(script+'.invalid','python3',[join(root,'runtime/tests',script),...args,'Publication.One:Main.One'],root);
  check('specialized.'+script,good.status===0 && bad.status===1,`valid=${good.status} unrelated=${bad.status}`);
 }
-check('workflow.native_arm',workflow.jobs.unit['runs-on']==='ubuntu-24.04-arm');
-check('workflow.sccache',workflow.jobs.unit.steps.some(s=>s.uses==='mozilla-actions/sccache-action@v0.0.10'));
+check('workflow.native_arm',workflow.jobs['arm-unit-ref-unit']['runs-on']==='ubuntu-24.04-arm');
+check('workflow.sccache',workflow.jobs['arm-unit-ref-unit'].steps.some(s=>s.uses==='mozilla-actions/sccache-action@v0.0.10'));
 writeFileSync(join(evidence,'assertions.json'),JSON.stringify(checks,null,2));
 console.log(`ENTRY_ASSERTIONS total=${checks.length} passed=${checks.filter(c=>c.pass).length} failed=${checks.filter(c=>!c.pass).length}`);
 process.exitCode=checks.every(c=>c.pass)?0:1;

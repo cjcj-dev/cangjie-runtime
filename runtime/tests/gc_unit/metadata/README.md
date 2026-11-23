@@ -4,7 +4,7 @@ This target links `test_empty_stackmap.cpp` to the product shared runtime. It
 uses the existing test registry without the full GC heap fixture. No product
 translation unit is compiled into the test executable.
 
-`.github/workflows/metadata-platform.yml` uses public standard runners:
+`.github/workflows/runtime-ci.yml (suite metadata-platform)` uses public standard runners:
 `ubuntu-24.04-arm`, `windows-2025`, and `macos-15`. It runs on
 `workflow_dispatch` against the selected ref. Each C++ job configures
 sccache and records its compiler, image, CPU count, commands, exit codes, wall

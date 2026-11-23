@@ -1,0 +1,2416 @@
+# Single runtime CI entry. Each job keeps its original steps; former workflow files are selectable
+# through the dispatch input "suite"; push/pull_request keep their original branch and path triggers.
+name: runtime-ci
+'on':
+  push:
+    branches:
+    - main
+    - sym/arm-unit-*
+  pull_request:
+    paths:
+    - .github/scripts/ohos-public-sdk.sh
+    - .github/scripts/ohos-routing-controls.py
+    - .github/workflows/runtime-ci.yml
+    - runtime/CMakeLists.txt
+    - runtime/build.py
+    - runtime/build/cmake/toolchain/ohos_*
+    - runtime/config.cmake
+    - runtime/src/CJThread/CMakeLists.txt
+    - runtime/tests/test_ohos_public_sdk.py
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which suite to run (former workflow file name), or all
+        type: choice
+        required: true
+        options:
+        - all
+        - apple
+        - arm-unit-ref
+        - cjthread-windows-bat-rc
+        - cjthread-windows-native
+        - ios-backing
+        - metadata-platform
+        - ohos-public-sdk
+        - return-poll-native
+        - return-safepoint
+        - runtime-link-publication
+        - runtime-windows
+        - safepoint-windows
+        - windows-export-contract
+        - windows-target-export-contract
+      backing_regression:
+        description: 'apple: Run backing launcher baseline/candidate/cut/restored evidence / ios-backing: Run only simulator backing launcher regression evidence'
+        type: boolean
+        default: false
+      p04_bsd_tu_only:
+        description: 'apple: Run only the P04 bsd TU compile job'
+        required: false
+        default: false
+        type: boolean
+      job:
+        description: 'apple: which job to run'
+        type: choice
+        options:
+        - all
+        - package-init
+        - bsd-backing-fail
+        - bsd-backing-product
+        - ios-stdlib-configure
+        - readscope-lifetime
+        - readscope-ios
+        - readscope-ios-intel
+        default: all
+      teardown_qualification_1426:
+        description: 'arm-unit-ref: Run only bounded native ARM and x64 teardown qualification'
+        required: false
+        default: false
+        type: boolean
+      teardown_hosts_2204_2604:
+        description: 'arm-unit-ref: Run only native Ubuntu 22.04 and 26.04 teardown qualification for this candidate'
+        required: false
+        default: false
+        type: boolean
+      root_qualification_1411:
+        description: 'arm-unit-ref: Run only the bounded four-root ARM qualification'
+        required: false
+        default: false
+        type: boolean
+      elf_ref:
+        description: 'arm-unit-ref: Ref containing the test sources'
+        required: true
+        type: string
+      product_ref:
+        description: 'arm-unit-ref: Ref containing the runtime sources'
+        required: true
+        type: string
+      filter:
+        description: 'arm-unit-ref: Colon-separated exact Suite.Test names'
+        required: true
+        type: string
+      readscope_android:
+        description: 'metadata-platform: Normal Android production and finite x64 emulator image lifecycle only.'
+        type: boolean
+        default: false
+      readscope_linux_arm64:
+        description: 'metadata-platform: Normal native ARM64 production and finite image lifecycle only.'
+        type: boolean
+        default: false
+      readscope_android_exit_compare:
+        description: 'metadata-platform: Fixed 8e251/d51c normal x64 production; three C API/no-image exit children only.'
+        type: boolean
+        default: false
+      readscope_android_scene:
+        description: 'metadata-platform: Prepared single d51c full-image Grok scene; final packaged entry review and execution approval pending.'
+        type: boolean
+        default: false
+      runtime_ref:
+        description: 'return-poll-native: Paired runtime commit; its resolved SHA is retained in the evidence.'
+        type: string
+        required: true
+        default: sym/1207-implement-r5855120562
+      targets:
+        description: 'return-poll-native: Native runner/target matrix (JSON); select only the arm needing new evidence.'
+        type: string
+        required: false
+        default: '[{"runner":"macos-15","target":"aarch64-macos"},{"runner":"macos-15-intel","target":"x86_64-macos"},{"runner":"windows-latest","target":"x86_64-windows"}]'
+      readscope_lifetime:
+        description: 'runtime-windows: Build the fixed runtime and exercise native image lifetime entry/rollback.'
+        type: boolean
+        default: false
+      readscope_target_inputs:
+        description: 'runtime-windows: Normal installed runtime/startup/import prerequisites only; no lifecycle repetitions.'
+        type: boolean
+        default: false
+      readscope_std_consumer:
+        description: 'runtime-windows: Consume frozen normal std/public CJ DLL arms only; no runtime production.'
+        type: boolean
+        default: false
+      std_asset_url:
+        description: 'runtime-windows: Exact temporary prerelease asset URL for the frozen DLL arms.'
+        type: string
+        default: ''
+      std_asset_sha256:
+        description: 'runtime-windows: Preapproved SHA256 of that asset.'
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  apple-apple-runtime:
+    name: ${{ matrix.runner }} / ${{ matrix.variant }}
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && ((github.event_name == 'push' || inputs.job == 'all') && inputs.p04_bsd_tu_only != true) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    env:
+      CANGJIE_BUILD_JOBS: 3
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-15
+          variant: native-macos-arm64
+          kind: native
+          target: native
+          sdk: macosx
+          macho_arch: arm64
+        - runner: macos-15
+          variant: ios-device-aarch64
+          kind: ios-device
+          target: ios-aarch64
+          sdk: iphoneos
+          macho_arch: arm64
+        - runner: macos-15
+          variant: ios-simulator-aarch64
+          kind: ios-simulator
+          target: ios-simulator-aarch64
+          sdk: iphonesimulator
+          macho_arch: arm64
+        - runner: macos-15-intel
+          variant: native-macos-x86_64
+          kind: native
+          target: native
+          sdk: macosx
+          macho_arch: x86_64
+        - runner: macos-15-intel
+          variant: ios-device-aarch64
+          kind: ios-device
+          target: ios-aarch64
+          sdk: iphoneos
+          macho_arch: arm64
+        - runner: macos-15-intel
+          variant: ios-simulator-x86_64
+          kind: ios-simulator
+          target: ios-simulator-x86_64
+          sdk: iphonesimulator
+          macho_arch: x86_64
+        - runner: macos-26
+          variant: native-macos-arm64
+          kind: native
+          target: native
+          sdk: macosx
+          macho_arch: arm64
+        - runner: macos-26
+          variant: ios-device-aarch64
+          kind: ios-device
+          target: ios-aarch64
+          sdk: iphoneos
+          macho_arch: arm64
+        - runner: macos-26
+          variant: ios-simulator-aarch64
+          kind: ios-simulator
+          target: ios-simulator-aarch64
+          sdk: iphonesimulator
+          macho_arch: arm64
+        - runner: macos-26-intel
+          variant: native-macos-x86_64
+          kind: native
+          target: native
+          sdk: macosx
+          macho_arch: x86_64
+        - runner: macos-26-intel
+          variant: ios-device-aarch64
+          kind: ios-device
+          target: ios-aarch64
+          sdk: iphoneos
+          macho_arch: arm64
+        - runner: macos-26-intel
+          variant: ios-simulator-x86_64
+          kind: ios-simulator
+          target: ios-simulator-x86_64
+          sdk: iphonesimulator
+          macho_arch: x86_64
+    steps:
+    - name: Check out source
+      uses: actions/checkout@v4
+    - name: Resolve per-runner install roots
+      run: |
+        printf 'INSTALL_ROOT=%s/cangjie-install\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        printf 'PACKAGE_ROOT=%s/cangjie-package\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+    - name: Print runner, Xcode, compiler, and SDK versions
+      run: |
+        sw_vers
+        uname -a
+        printf 'machine=%s\n' "$(uname -m)"
+        printf 'processor_count=%s\n' "$(sysctl -n hw.ncpu)"
+        xcodebuild -version
+        clang --version
+        cmake --version
+        for sdk in macosx iphoneos iphonesimulator; do
+          printf '%s SDK version: ' "$sdk"
+          xcrun --sdk "$sdk" --show-sdk-version
+          printf '%s SDK path: ' "$sdk"
+          xcrun --sdk "$sdk" --show-sdk-path
+        done
+    - name: Assert native runner architecture
+      if: matrix.kind == 'native'
+      env:
+        EXPECTED_ARCH: ${{ matrix.macho_arch }}
+      run: |
+        ulimit -c 0
+        actual_arch="$(uname -m)"
+        if [[ "$actual_arch" != "$EXPECTED_ARCH" ]]; then
+          echo "expected runner architecture $EXPECTED_ARCH, got $actual_arch" >&2
+          exit 1
+        fi
+    - name: Build runtime through build.py
+      env:
+        BUILD_TARGET: ${{ matrix.target }}
+        BUILD_SDK: ${{ matrix.sdk }}
+        BUILD_KIND: ${{ matrix.kind }}
+      run: |
+        cd runtime
+        if [[ "$BUILD_KIND" == "native" ]]; then
+          python3 build.py build \
+            --target "$BUILD_TARGET" \
+            --build-type release \
+            --prefix "$RUNNER_TEMP/cangjie-preinstall"
+        else
+          sdk_root="$(xcrun --sdk "$BUILD_SDK" --show-sdk-path)"
+          clang_path="$(xcrun --sdk "$BUILD_SDK" --find clang)"
+          toolchain_root="$(dirname "$(dirname "$clang_path")")"
+          printf 'build.py target=%s\n' "$BUILD_TARGET"
+          printf 'build.py target toolchain=%s\n' "$toolchain_root"
+          printf 'build.py target sysroot=%s\n' "$sdk_root"
+          python3 build.py build \
+            --target "$BUILD_TARGET" \
+            --build-type release \
+            --target-toolchain "$toolchain_root" \
+            --target-sysroot "$sdk_root" \
+            --prefix "$RUNNER_TEMP/cangjie-preinstall"
+        fi
+    - name: Install runtime through build.py
+      run: |
+        cd runtime
+        python3 build.py install --prefix "$INSTALL_ROOT"
+        # CMake installs libboundscheck.dylib next to libcangjie-runtime.dylib on macOS
+        # (runtime/CMakeLists.txt install(TARGETS boundscheck ...)); the dlopen smoke
+        # resolves it by leaf name, so assert it landed rather than copying it here.
+        if [[ "${{ matrix.kind }}" == "native" ]]; then
+          find "$INSTALL_ROOT" -type f -name 'libboundscheck.dylib' | grep . || {
+            echo "ERROR: libboundscheck.dylib missing from install tree" >&2; exit 1; }
+        fi
+        find "$INSTALL_ROOT" -type f -print | sort
+    - name: Assert installed runtime Mach-O architecture
+      env:
+        EXPECTED_ARCH: ${{ matrix.macho_arch }}
+      run: |
+        runtime_dylib="$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)"
+        if [[ -z "$runtime_dylib" ]]; then
+          echo "libcangjie-runtime.dylib was not installed" >&2
+          exit 1
+        fi
+        file_output="$(file "$runtime_dylib")"
+        echo "$file_output"
+        if [[ "$file_output" != *"$EXPECTED_ARCH"* ]]; then
+          echo "expected Mach-O architecture $EXPECTED_ARCH" >&2
+          exit 1
+        fi
+    - name: Run native tests and dlopen smoke
+      if: matrix.kind == 'native'
+      run: |
+        if [[ -f runtime/CMakebuild/CTestTestfile.cmake ]] && \
+           grep -Rqs 'add_test' runtime/CMakebuild; then
+          ctest --test-dir runtime/CMakebuild --output-on-failure
+        else
+          echo "No CTest/CJThread test registration exists; running the required dlopen smoke."
+        fi
+
+        runtime_dylib="$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)"
+        cat >"$RUNNER_TEMP/runtime_dlopen_smoke.c" <<'EOF'
+        #include <dlfcn.h>
+        #include <stdio.h>
+
+        int main(int argc, char **argv)
+        {
+            static const char *symbols[] = {
+                /* libcangjie-runtime exports DemangleHandle; plain CJ_MRT_Demangle
+                   lives only in the static cangjie-demangle lib (cjfilt), on Linux too. */
+                "CJ_MRT_DemangleHandle",
+                "CJ_MRT_CjRuntimeInit",
+                "CJ_MRT_SetCommandLineArgs",
+            };
+            if (argc != 2) {
+                fprintf(stderr, "usage: %s DYLIB\n", argv[0]);
+                return 2;
+            }
+            void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+            if (handle == NULL) {
+                fprintf(stderr, "dlopen failed: %s\n", dlerror());
+                return 1;
+            }
+            for (unsigned long i = 0; i < sizeof(symbols) / sizeof(symbols[0]); ++i) {
+                dlerror();
+                void *symbol = dlsym(handle, symbols[i]);
+                const char *error = dlerror();
+                if (error != NULL || symbol == NULL) {
+                    fprintf(stderr, "dlsym(%s) failed: %s\n", symbols[i],
+                            error == NULL ? "null address" : error);
+                    return 1;
+                }
+                printf("resolved %s at %p\n", symbols[i], symbol);
+            }
+            if (dlclose(handle) != 0) {
+                fprintf(stderr, "dlclose failed: %s\n", dlerror());
+                return 1;
+            }
+            return 0;
+        }
+        EOF
+        clang -Wall -Wextra -Werror "$RUNNER_TEMP/runtime_dlopen_smoke.c" \
+          -o "$RUNNER_TEMP/runtime_dlopen_smoke"
+        # libcangjie-runtime.dylib depends on @rpath/libboundscheck.dylib; make the co-located
+        # sibling resolvable by leaf name for the smoke process.
+        DYLD_LIBRARY_PATH="$(dirname "$runtime_dylib")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+          "$RUNNER_TEMP/runtime_dlopen_smoke" "$runtime_dylib"
+    - name: Record simulator execution scope
+      if: matrix.kind == 'ios-simulator'
+      run: |
+        xcrun simctl list runtimes
+        echo "Simulator execution is build-only: a dylib cannot be launched by simctl on its own; an app bundle and executable lifecycle harness are required."
+        echo "The installed simulator dylib was still required to pass the Mach-O architecture assertion."
+    - name: Pack install tree for diagnosis
+      if: always()
+      env:
+        ARTIFACT_BASENAME: ${{ matrix.runner }}-${{ matrix.variant }}
+      run: |
+        mkdir -p "$PACKAGE_ROOT"
+        if [[ -d "$INSTALL_ROOT" ]]; then
+          tar -C "$INSTALL_ROOT" -czf "$PACKAGE_ROOT/$ARTIFACT_BASENAME.tar.gz" .
+        else
+          printf 'The build failed before an install tree was created. See the job log.\n' \
+            >"$PACKAGE_ROOT/NO_INSTALL_TREE.txt"
+          tar -C "$PACKAGE_ROOT" -czf "$PACKAGE_ROOT/$ARTIFACT_BASENAME.tar.gz" NO_INSTALL_TREE.txt
+        fi
+    - name: Upload install artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: install-${{ matrix.runner }}-${{ matrix.variant }}
+        path: ${{ runner.temp }}/cangjie-package/${{ matrix.runner }}-${{ matrix.variant }}.tar.gz
+        if-no-files-found: error
+        retention-days: 7
+  apple-bsd-backing-product:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'workflow_dispatch' && inputs.job == 'bsd-backing-product') }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+        - macos-15
+        - macos-15-intel
+        build_type:
+        - release
+        - debug
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build native product
+      run: |
+        ulimit -c 0
+        export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+        export GC_UNIT_GATE_SKIP=1
+        uptime
+        cd runtime
+        python3 build.py build --target native --build-type "${{ matrix.build_type }}"
+    - name: Install symbol reader
+      run: brew list llvm >/dev/null 2>&1 || brew install llvm
+    - name: Exercise native product and independent cuts
+      run: |
+        ulimit -c 0
+        export PATH="$(brew --prefix llvm)/bin:$PATH"
+        python3 runtime/tests/bsd/check_backing_product.py "$RUNNER_TEMP/backing-product"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: backing-product-${{ matrix.runner }}-${{ matrix.build_type }}
+        path: ${{ runner.temp }}/backing-product
+        retention-days: 7
+    name: apple / bsd-backing-product
+  apple-bsd-backing-fail:
+    name: bsd-backing-fail / ${{ matrix.runner }}
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && ((github.event_name == 'push' || inputs.job == 'all' || inputs.job == 'bsd-backing-fail') && inputs.p04_bsd_tu_only != true) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-15
+          arch: arm64
+        - runner: macos-15-intel
+          arch: x86_64
+    steps:
+    - name: Check out source
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Run BSD backing failure paths
+      run: |
+        actual_arch="$(uname -m)"
+        printf 'machine=%s expected=%s\n' "$actual_arch" "${{ matrix.arch }}"
+        if [[ "$actual_arch" != "${{ matrix.arch }}" ]]; then
+          echo "runner arch mismatch" >&2
+          exit 1
+        fi
+        if [[ "${{ inputs.backing_regression }}" == "true" ]]; then
+          BSD_BACKING_REGRESSION_DIR="$RUNNER_TEMP/backing-launcher" \
+            python3 runtime/tests/bsd/check_backing_launcher.py
+        else
+          /bin/bash runtime/tests/bsd/run_backing_fail.sh
+        fi
+    - uses: actions/upload-artifact@v4
+      if: ${{ always() && inputs.backing_regression }}
+      with:
+        name: backing-launcher-${{ matrix.runner }}
+        path: ${{ runner.temp }}/backing-launcher
+        retention-days: 7
+  apple-p04-bsd-tu:
+    name: p04-bsd-tu / ${{ matrix.runner }}
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'push' || inputs.job == 'all' || inputs.p04_bsd_tu_only == true) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-15
+          arch: arm64
+        - runner: macos-15-intel
+          arch: x86_64
+    steps:
+    - name: Check out source
+      uses: actions/checkout@v4
+    - name: Compile P04 bsd translation units
+      run: |
+        actual_arch="$(uname -m)"
+        printf 'machine=%s expected=%s\n' "$actual_arch" "${{ matrix.arch }}"
+        if [[ "$actual_arch" != "${{ matrix.arch }}" ]]; then
+          echo "runner arch mismatch" >&2
+          exit 1
+        fi
+        sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+        cxx="$(xcrun --sdk macosx --find clang++)"
+        printf 'sdk=%s\n' "$sdk_path"
+        printf 'cxx=%s\n' "$cxx"
+        "$cxx" --version
+        bc="runtime/third_party/third_party_bounds_checking_function"
+        if [[ ! -f "$bc/include/securec.h" ]]; then
+          git clone --depth 1 --branch OpenHarmony-v6.0-Release \
+            https://gitcode.com/openharmony/third_party_bounds_checking_function \
+            "$bc"
+        fi
+        test -f "$bc/include/securec.h"
+        flags=(
+          -std=c++14
+          -fno-exceptions
+          -fno-strict-aliasing
+          -fPIC
+          -isysroot "$sdk_path"
+          -I runtime/src
+          -I "$bc/include"
+          -D_LARGEFILE_SOURCE
+          -D_FILE_OFFSET_BITS=64
+          -DCANGJIE
+          -DMRT_MACOS
+          -D_XOPEN_SOURCE=600
+          -D_DARWIN_C_SOURCE
+        )
+        probe_rc=0
+        printf 'int p04_bsd_compiler_probe(){return 0;}\n' >"$RUNNER_TEMP/p04_empty.cpp"
+        "$cxx" "${flags[@]}" -c "$RUNNER_TEMP/p04_empty.cpp" -o "$RUNNER_TEMP/p04_empty.o" || probe_rc=$?
+        printf 'P04_BSD_TU file=empty.cpp sample=0 arch=%s rc=%s\n' "$actual_arch" "$probe_rc"
+        tus=(
+          runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp
+          runtime/src/Heap/z/zLargePages_bsd.cpp
+          runtime/src/Heap/z/zNUMA_bsd.cpp
+        )
+        fail=0
+        if [[ "$probe_rc" -ne 0 ]]; then
+          fail=1
+        fi
+        for sample in 1 2 3; do
+          for tu in "${tus[@]}"; do
+            base="$(basename "$tu" .cpp)"
+            obj="$RUNNER_TEMP/${base}.s${sample}.o"
+            rc=0
+            "$cxx" "${flags[@]}" -c "$tu" -o "$obj" || rc=$?
+            printf 'P04_BSD_TU file=%s sample=%s arch=%s rc=%s\n' "$(basename "$tu")" "$sample" "$actual_arch" "$rc"
+            if [[ "$rc" -ne 0 ]]; then
+              fail=1
+            fi
+          done
+        done
+        exit "$fail"
+  apple-ios-stdlib-configure:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && ((github.event_name == 'push' || inputs.job == 'ios-stdlib-configure' || inputs.job == 'all') && inputs.p04_bsd_tu_only != true) }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple:
+        - arm64
+        - simulator_arm64
+        - simulator_x86_64
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: mozilla-actions/sccache-action@v0.0.9
+    - uses: actions/download-artifact@v4
+      with:
+        github-token: ${{ github.token }}
+        repository: cjcj-dev/cjcj
+        run-id: 36019663568
+        artifact-ids: 10816590496
+        merge-multiple: true
+        path: ${{ runner.temp }}/stdlib-configure-inputs
+    - name: Verify configure input identity
+      run: |
+        cd "$RUNNER_TEMP/stdlib-configure-inputs"
+        cat PROVENANCE
+        shasum -a 256 -c SHA256SUMS
+        echo 'a0257ed258ea93c1138295c1f1c017358379c10489fbfbb2cc3e1377bb9f675b  libcangjie-ast-support.a' | shasum -a 256 -c -
+        chmod +x third_party/flatbuffers/bin/flatc
+        echo "CANGJIE_HOME=$RUNNER_TEMP/stdlib-configure-inputs" >> "$GITHUB_ENV"
+    - name: Prepare configure dependencies
+      run: |
+        ulimit -c 0
+        xcodebuild -version
+        uptime
+        brew install ninja llvm
+        echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+        git clone --depth 1 --branch OpenHarmony-v6.0-Release https://github.com/openharmony/third_party_bounds_checking_function.git stdlib/third_party/boundscheck-v1.1.16
+        git clone --depth 1 https://github.com/openharmony/third_party_pcre2.git stdlib/third_party/pcre2
+    - name: Configure baseline, candidate, cut, restored and caller SDK arms
+      env:
+        CMAKE_BUILD_PARALLEL_LEVEL: 3
+        CMAKE_C_COMPILER_LAUNCHER: sccache
+        CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      run: |
+        ulimit -c 0
+        python3 stdlib/tests/ios_sdk_configure.py --tuple '${{ matrix.tuple }}' \
+          --baseline a891df782f6132909c81afb9ecb4c05a73278d03 \
+          --output "$RUNNER_TEMP/ios-sdk-evidence"
+    - name: Record final load
+      if: always()
+      run: uptime
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ios-sdk-${{ matrix.tuple }}
+        path: |
+          ${{ runner.temp }}/ios-sdk-evidence/**/configure.log
+          ${{ runner.temp }}/ios-sdk-evidence/**/result*.json
+          ${{ runner.temp }}/ios-sdk-evidence/**/compile_commands.json
+          ${{ runner.temp }}/ios-sdk-evidence/**/CMakeCache.txt
+    name: apple / ios-stdlib-configure
+  apple-package-init:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'workflow_dispatch' && inputs.job == 'package-init') }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+        - macos-15
+        - macos-15-intel
+    steps:
+    - uses: actions/checkout@v4
+    - name: Native product build
+      run: |
+        ulimit -c 0
+        export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+        export GC_UNIT_GATE_SKIP=1
+        uptime
+        cd runtime
+        python3 build.py build --target native --build-type release
+    - name: Install symbol reader
+      run: brew list llvm >/dev/null 2>&1 || brew install llvm
+    - name: PackageInit native calls and product fault arms
+      run: |
+        ulimit -c 0
+        export PATH="$(brew --prefix llvm)/bin:$PATH"
+        python3 runtime/tests/package_init_darwin/run.py "$RUNNER_TEMP/package-init"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: package-init-${{ matrix.runner }}
+        path: ${{ runner.temp }}/package-init
+    name: apple / package-init
+  apple-package-init-ios:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'workflow_dispatch' && inputs.job == 'package-init') }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - target: ios-aarch64
+          sdk: iphoneos
+        - target: ios-simulator-x86_64
+          sdk: iphonesimulator
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cross-build product for iOS
+      env:
+        TARGET: ${{ matrix.target }}
+        SDK: ${{ matrix.sdk }}
+      run: |
+        ulimit -c 0
+        export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+        export GC_UNIT_GATE_SKIP=1
+        mkdir -p "$RUNNER_TEMP/package-init-ios"
+        cd runtime
+        toolchain=$(dirname "$(dirname "$(xcrun --sdk "$SDK" --find clang)")")
+        python3 build.py build --target "$TARGET" --build-type release \
+          --target-toolchain "$toolchain" --target-sysroot "$(xcrun --sdk "$SDK" --show-sdk-path)"
+    - name: Install symbol reader
+      run: brew list llvm >/dev/null 2>&1 || brew install llvm
+    - name: Check defined entry symbols
+      run: |
+        product=$(find runtime/CMakebuild -name libcangjie-runtime.dylib -type f -print -quit)
+        nm="$(brew --prefix llvm)/bin/llvm-nm"
+        "$nm" --defined-only "$product" > "$RUNNER_TEMP/package-init-ios/defined.txt"
+        shasum -a 256 "$product" > "$RUNNER_TEMP/package-init-ios/sha256.txt"
+        for entry in Begin Complete Fail Abort; do
+          grep -E " [Tt] _CJ_MCC_PackageInit${entry}$" "$RUNNER_TEMP/package-init-ios/defined.txt"
+          grep -E " [Tt] _MCC_PackageInit${entry}$" "$RUNNER_TEMP/package-init-ios/defined.txt"
+        done
+        grep -E ' [Tt] _CJ_MCC_NewObject$' "$RUNNER_TEMP/package-init-ios/defined.txt"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: package-init-${{ matrix.target }}
+        path: ${{ runner.temp }}/package-init-ios
+    name: apple / package-init-ios
+  apple-readscope-lifetime:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'workflow_dispatch' && inputs.job == 'readscope-lifetime') }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+        - macos-15
+        - macos-15-intel
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Fixed native bounds dependency
+      run: |
+        git init runtime/third_party/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+        git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+    - name: Normal native production and lifecycle fixture
+      run: |
+        ulimit -c 0
+        node runtime/tests/readscope_native_retention/apple.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-apple-${{ matrix.runner }}
+        path: |
+          ${{ runner.temp }}/readscope-apple/*.json
+          ${{ runner.temp }}/readscope-apple/*.stdout
+          ${{ runner.temp }}/readscope-apple/*.stderr
+          ${{ runner.temp }}/readscope-apple/*.dylib
+          ${{ runner.temp }}/readscope-apple/readscope-consumer
+          ${{ runner.temp }}/readscope-apple/install/runtime/lib/**/*.dylib
+        if-no-files-found: error
+    name: apple / readscope-lifetime
+  apple-readscope-ios:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'apple')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name == 'workflow_dispatch' && (inputs.job == 'readscope-ios' || inputs.job == 'readscope-ios-intel')) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      READSCOPE_IOS_TARGET: ${{ matrix.target }}
+      READSCOPE_SIM_SDK_VERSION: ${{ inputs.job == 'readscope-ios-intel' && '18.5' || '' }}
+      READSCOPE_SIM_RUNTIME: ${{ inputs.job == 'readscope-ios-intel' && 'com.apple.CoreSimulator.SimRuntime.iOS-18-5' || '' }}
+      READSCOPE_SIM_BUILD: ${{ inputs.job == 'readscope-ios-intel' && '22F77' || '' }}
+      READSCOPE_SIM_DEVICE: ${{ inputs.job == 'readscope-ios-intel' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.job == 'readscope-ios-intel' && '[{"runner":"macos-15-intel","target":"ios-simulator-x86_64"}]' || '[{"runner":"macos-15","target":"ios-aarch64"},{"runner":"macos-15","target":"ios-simulator-aarch64"},{"runner":"macos-15-intel","target":"ios-simulator-x86_64"}]') }}
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Fixed bounds dependency
+      run: |
+        git init runtime/third_party/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+        git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+    - name: Normal target production and finite simulator lifecycle
+      run: ulimit -c 0 && node runtime/tests/readscope_native_retention/ios.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-${{ matrix.target }}
+        path: |
+          ${{ runner.temp }}/readscope-ios/*.json
+          ${{ runner.temp }}/readscope-ios/*.stdout
+          ${{ runner.temp }}/readscope-ios/*.stderr
+          ${{ runner.temp }}/readscope-ios/install/**
+        if-no-files-found: error
+    name: apple / readscope-ios
+  arm-unit-ref-unit:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'arm-unit-ref')) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sym/arm-unit-'))) && (!inputs.root_qualification_1411 && !inputs.teardown_qualification_1426 && !inputs.teardown_hosts_2204_2604) }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache
+      GC_UNIT_GATE_SKIP: '1'
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Resolve refs
+      id: refs
+      env:
+        ELF_REF: ${{ inputs.elf_ref }}
+        PRODUCT_REF: ${{ inputs.product_ref }}
+        TEST_FILTER: ${{ inputs.filter }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        if [ "$EVENT" = push ]; then
+          ELF_REF=$(jq -er '.elf_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+          PRODUCT_REF=$(jq -er '.product_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+          TEST_FILTER=$(jq -er '.filter | strings | select(length > 0)' .github/arm-unit-params.json)
+        fi
+        for value in "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER"; do
+          test -n "$value"
+          test "$(printf '%s' "$value" | wc -l)" = 0
+        done
+        printf 'elf_ref=%s\nproduct_ref=%s\nfilter=%s\n' "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER" >> "$GITHUB_OUTPUT"
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ steps.refs.outputs.elf_ref }}
+        path: elf-source
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ steps.refs.outputs.product_ref }}
+        path: product-source
+    - name: Install native tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build libssl-dev libffi-dev gdb
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: actions/cache@v4
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: arm-unit-${{ runner.os }}-${{ github.sha }}
+        restore-keys: arm-unit-${{ runner.os }}-
+    - name: Build and execute real standalone entry
+      env:
+        TEST_FILTER: ${{ steps.refs.outputs.filter }}
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        mkdir -p evidence compiler-bin
+        uptime > evidence/uptime-before.log
+        git -C elf-source rev-parse HEAD > evidence/elf-ref.log
+        git -C product-source rev-parse HEAD > evidence/product-ref.log
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+        chmod +x compiler-bin/clang++
+        export CXX="$PWD/compiler-bin/clang++"
+        build_ref() {
+          local arm=$1 start=$SECONDS
+          cmake -S "$arm-source/runtime" -B "$arm-build" -DCMAKE_BUILD_TYPE=Release \
+            -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 \
+            -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_ASM_COMPILER_LAUNCHER=sccache -DMRT_TESTABLE_INTERNALS=OFF -DMRT_GC_UNIT_TESTS=OFF \
+            > "evidence/$arm-configure.log" 2>&1 && \
+            cmake --build "$arm-build" --target cangjie-runtime -j"$(nproc)" > "evidence/$arm-build.log" 2>&1
+          local result=$?
+          printf 'rc=%s wall=%s jobs=%s\n' "$result" "$((SECONDS-start))" "$(nproc)" > "evidence/$arm-build-result.log"
+          return "$result"
+        }
+        build_ref elf & elf_pid=$!
+        build_ref product & product_pid=$!
+        wait "$elf_pid"
+        wait "$product_pid"
+        elf_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' elf-build/CMakeCache.txt)
+        product_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' product-build/CMakeCache.txt)
+        elf_lib=$(dirname "$(find "$elf_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+        product_lib=$(dirname "$(find "$product_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+        sha256sum "$elf_lib/libcangjie-runtime.so" "$product_lib/libcangjie-runtime.so" "$product_lib/libboundscheck.so" > evidence/products.sha256
+        nm --defined-only "$product_lib/libcangjie-runtime.so" | c++filt > evidence/product-symbols.log
+        set +e
+        GC_UNIT_BUILD_ONLY=1 GCV2_RUNTIME_LIB_DIR="$elf_lib" GCV2_RUNTIME_OUTPUT_ROOT="$elf_root" GC_UNIT_OUT="$PWD/evidence/standalone" \
+          bash elf-source/runtime/tests/gc_unit/run_standalone.sh > evidence/standalone.log 2>&1
+        standalone_rc=$?
+        printf '%s\n' "$standalone_rc" > evidence/standalone.rc
+        if [ "$standalone_rc" -ne 0 ]; then exit "$standalone_rc"; fi
+        if ! grep -qxF "GC_UNIT_BUILD_ONLY_DONE tests_executed=0" evidence/standalone.log; then exit 2; fi
+        sha256sum evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit > evidence/elf.sha256
+        nm --defined-only evidence/standalone/cj_gc_unit | c++filt > evidence/elf-defined.log
+        nm -u evidence/standalone/cj_gc_unit | c++filt > evidence/elf-imports.log
+        GC_UNIT_TEST_FILTER="$TEST_FILTER" GC_UNIT_JOBS=1 \
+          bash runtime/tests/gc_unit/run_parallel_tests.sh \
+            evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit \
+            evidence/standalone "$product_lib" > evidence/target.log 2>&1
+        target_rc=$?
+        printf '%s\n' "$target_rc" > evidence/target.rc
+        cat evidence/target.log
+        uptime > evidence/uptime-after.log
+        exit "$target_rc"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: arm-unit-${{ github.run_id }}
+        path: |
+          evidence/**/*.log
+          evidence/**/*.rc
+          evidence/**/*.sha256
+          evidence/standalone/test-lists/*
+          evidence/standalone/test-manifest*.tsv
+          evidence/standalone/test-status/*
+          evidence/standalone/test-tallies/*
+          evidence/standalone/parallel_tally.txt
+        retention-days: 7
+    name: arm-unit-ref / unit
+  arm-unit-ref-root-qualification-1411:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'arm-unit-ref')) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sym/arm-unit-'))) && (github.event_name == 'workflow_dispatch' && inputs.root_qualification_1411 && !inputs.teardown_qualification_1426) }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-root-1411
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
+    - name: Validate fixed candidate and four-item manifest before production
+      env:
+        CANDIDATE: ${{ github.sha }}
+        ELF_REF: ${{ inputs.elf_ref }}
+        PRODUCT_REF: ${{ inputs.product_ref }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        test "$ELF_REF" = "$CANDIDATE"
+        test "$PRODUCT_REF" = "$CANDIDATE"
+        python3 runtime/tests/arm_root_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+    - name: Install native tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build libssl-dev libffi-dev
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Capture toolchain cache identity and compiler wrappers
+      id: toolchain
+      run: |
+        mkdir -p evidence compiler-bin
+        /usr/bin/clang --version > evidence/clang-version.log
+        cmake --version > evidence/cmake-version.log
+        sccache --version > evidence/sccache-version.log
+        printf 'identity=%s\n' "$(cat evidence/*-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+        chmod +x compiler-bin/*
+        echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+        echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+    - uses: actions/cache@v4
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: root1411-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+        restore-keys: root1411-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+    - name: Build product once and qualify four filters with budget control
+      env:
+        CANDIDATE: ${{ github.sha }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        set +e
+        python3 runtime/tests/arm_root_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence > evidence/qualification.log 2>&1
+        result=$?
+        printf '%s\n' "$result" > evidence/qualification.rc
+        cat evidence/qualification.log
+        exit "$result"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: root-qualification-1411-${{ github.run_id }}
+        path: |
+          evidence/*.log
+          evidence/*.rc
+          evidence/*.json
+          evidence/*.sha256
+          evidence/*.diff
+          evidence/QUALIFICATION_DONE
+          evidence/CMakeCache.txt
+          evidence/publication/
+          evidence/standalone/cj_gc_unit
+          evidence/standalone/cj_gc_unit.green
+          evidence/standalone/cj_gc_forwarding_publication_unit
+          evidence/standalone/*.json
+          evidence/standalone/*.sha256
+        retention-days: 7
+    name: arm-unit-ref / root-qualification-1411
+  arm-unit-ref-teardown-qualification-1426:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'arm-unit-ref')) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sym/arm-unit-'))) && (github.event_name == 'workflow_dispatch' && inputs.teardown_qualification_1426 && !inputs.root_qualification_1411) }}
+    runs-on: ${{ matrix.host }}
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-1426-${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+        - ubuntu-24.04-arm
+        - ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+    - name: Validate fixed candidate and teardown-only entry
+      env:
+        CANDIDATE: ${{ github.sha }}
+        ELF_REF: ${{ inputs.elf_ref }}
+        PRODUCT_REF: ${{ inputs.product_ref }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        test "$ELF_REF" = "$CANDIDATE"
+        test "$PRODUCT_REF" = "$CANDIDATE"
+        python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+    - name: Install native tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build binutils libssl-dev libffi-dev gdb
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Capture cache identity and compiler wrappers
+      id: toolchain
+      run: |
+        mkdir -p evidence compiler-bin
+        /usr/bin/clang --version > evidence/clang-version.log
+        cmake --version > evidence/cmake-version.log
+        sccache --version > evidence/sccache-version.log
+        gdb --version > evidence/gdb-version.log
+        python3 --version > evidence/python-version.log
+        ldd --version > evidence/glibc-version.log
+        uname -a > evidence/kernel.log
+        printf 'identity=%s\n' "$(cat evidence/clang-version.log evidence/cmake-version.log evidence/sccache-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+        chmod +x compiler-bin/*
+        echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+        echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+    - uses: actions/cache@v4
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+        restore-keys: teardown1426-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+    - uses: actions/download-artifact@v4
+      with:
+        name: teardown-qualification-1426-${{ matrix.host }}-37322917803
+        run-id: 37322917803
+        github-token: ${{ github.token }}
+        path: retained
+    - name: Build once and execute finite teardown batch
+      env:
+        CANDIDATE: ${{ github.sha }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        set +e
+        python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence --reuse retained > evidence/qualification.log 2>&1
+        result=$?
+        printf '%s\n' "$result" > evidence/qualification.rc
+        cat evidence/qualification.log
+        sccache --show-stats > evidence/sccache-final.log 2>&1
+        exit "$result"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: teardown-qualification-1426-${{ matrix.host }}-${{ github.run_id }}
+        path: evidence/
+        retention-days: 7
+    name: arm-unit-ref / teardown-qualification-1426
+  arm-unit-ref-teardown-hosts-2204-2604:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'arm-unit-ref')) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sym/arm-unit-'))) && (github.event_name == 'workflow_dispatch' && inputs.teardown_hosts_2204_2604 && !inputs.root_qualification_1411 && !inputs.teardown_qualification_1426) }}
+    runs-on: ${{ matrix.host }}
+    permissions:
+      contents: read
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-teardown-2204-2604-${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+        - ubuntu-22.04
+        - ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+    - name: Validate fixed candidate and teardown-only entry
+      env:
+        CANDIDATE: ${{ github.sha }}
+        ELF_REF: ${{ inputs.elf_ref }}
+        PRODUCT_REF: ${{ inputs.product_ref }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        test "$ELF_REF" = "$CANDIDATE"
+        test "$PRODUCT_REF" = "$CANDIDATE"
+        python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --validate-only
+    - name: Install native tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build binutils libssl-dev libffi-dev gdb
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Capture cache identity and compiler wrappers
+      id: toolchain
+      run: |
+        mkdir -p evidence compiler-bin
+        /usr/bin/clang --version > evidence/clang-version.log
+        cmake --version > evidence/cmake-version.log
+        sccache --version > evidence/sccache-version.log
+        gdb --version > evidence/gdb-version.log
+        python3 --version > evidence/python-version.log
+        ldd --version > evidence/glibc-version.log
+        uname -a > evidence/kernel.log
+        printf 'identity=%s\n' "$(cat evidence/clang-version.log evidence/cmake-version.log evidence/sccache-version.log | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+        printf '#!/bin/sh\nexec sccache /usr/bin/clang "$@"\n' > compiler-bin/clang
+        chmod +x compiler-bin/*
+        echo "CXX=$PWD/compiler-bin/clang++" >> "$GITHUB_ENV"
+        echo "CC=$PWD/compiler-bin/clang" >> "$GITHUB_ENV"
+    - uses: actions/cache@v4
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: teardown22042604-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-${{ github.sha }}
+        restore-keys: teardown22042604-${{ runner.os }}-${{ runner.arch }}-Release-default-${{ steps.toolchain.outputs.identity }}-
+    - name: Build once and execute finite teardown batch
+      env:
+        CANDIDATE: ${{ github.sha }}
+        TEST_FILTER: ${{ inputs.filter }}
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        set +e
+        python3 runtime/tests/teardown_qualification.py --candidate "$CANDIDATE" --filter "$TEST_FILTER" --evidence evidence > evidence/qualification.log 2>&1
+        result=$?
+        printf '%s\n' "$result" > evidence/qualification.rc
+        cat evidence/qualification.log
+        sccache --show-stats > evidence/sccache-final.log 2>&1
+        exit "$result"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: teardown-hosts-2204-2604-${{ matrix.host }}-${{ github.run_id }}
+        path: evidence/
+        retention-days: 7
+    name: arm-unit-ref / teardown-hosts-2204-2604
+  cjthread-windows-bat-rc-bat-rc:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'cjthread-windows-bat-rc'))) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: run product bat four arms
+      shell: pwsh
+      run: pwsh -File runtime/tests/cjthread_windows_bat_rc.ps1
+    - name: upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bat-rc-logs
+        path: bat-rc-logs
+    name: cjthread-windows-bat-rc / bat-rc
+  cjthread-windows-native-native:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'cjthread-windows-native'))) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arm:
+        - baseline
+        - green
+        - cut-path
+        - cut-output
+        - restored
+        - incomplete
+        - clone-failure
+        - cut-dependency-overlay
+        - cut-clone-result
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+    - name: Exercise the native parent configure
+      shell: msys2 {0}
+      run: python3 runtime/tests/cjthread_windows_native.py ${{ matrix.arm }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cjthread-native-${{ matrix.arm }}
+        path: ${{ runner.temp }}/cjthread-native/evidence
+    name: cjthread-windows-native / native
+  ios-backing-full-runtime:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'ios-backing'))) && (!inputs.backing_regression) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple:
+        - device
+        - simulator
+        arm:
+        - candidate
+        - api-regression
+        - restored
+        include:
+        - tuple: device
+          runner: macos-15
+          target: ios-aarch64
+          sdk: iphoneos
+          arch: arm64
+          sdk_version: '18.5'
+        - tuple: simulator
+          runner: macos-15-intel
+          target: ios-simulator-x86_64
+          sdk: iphonesimulator
+          arch: x86_64
+          sdk_version: '18.5'
+        - tuple: native-arm64
+          arm: candidate
+          runner: macos-15
+          target: native
+          sdk: macosx
+          arch: arm64
+          sdk_version: '15.5'
+        - tuple: native-x86_64
+          arm: candidate
+          runner: macos-15-intel
+          target: native
+          sdk: macosx
+          arch: x86_64
+          sdk_version: '15.5'
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: mozilla-actions/sccache-action@v0.0.9
+    - name: Build full runtime against SDK 18.5
+      env:
+        TARGET: ${{ matrix.target }}
+        SDK: ${{ matrix.sdk }}
+        SDK_VERSION: ${{ matrix.sdk_version }}
+        ARCH: ${{ matrix.arch }}
+        ARM: ${{ matrix.arm }}
+      run: |
+        ulimit -c 0
+        out="$RUNNER_TEMP/ios-backing"
+        mkdir -p "$out"
+        uptime > "$out/uptime-before.txt"
+        xcodebuild -version | tee "$out/xcode.txt"
+        sdk_version="$(xcrun --sdk "$SDK" --show-sdk-version)"
+        printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
+        test "$sdk_version" = "$SDK_VERSION"
+        sdk_root="$(xcrun --sdk "$SDK" --show-sdk-path)"
+        clang_path="$(xcrun --sdk "$SDK" --find clang)"
+        export CANGJIE_BUILD_JOBS="$(sysctl -n hw.ncpu)"
+        printf 'jobs=%s target=%s sdk=%s\n' "$CANGJIE_BUILD_JOBS" "$TARGET" "$sdk_root" > "$out/recipe.txt"
+        git rev-parse HEAD > "$out/head.txt"
+        # Restore the original product API at the same bearing point. This
+        # arm tests the compile contract only, not runtime mapping behavior.
+        if [ "$ARM" = api-regression ]; then
+          git show 10965c352184f366d9e46fc75341905724bf40d5:runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp > runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp
+          git diff > "$out/cut.diff"
+        fi
+        maps="-ffile-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fdebug-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fmacro-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime"
+        export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
+        start=$SECONDS
+        rc=0
+        args=(--target "$TARGET" --build-type release --prefix "$out/preinstall")
+        if [ "$TARGET" != native ]; then
+          args+=(--target-toolchain "$(dirname "$(dirname "$clang_path")")" --target-sysroot "$sdk_root")
+        fi
+        (cd runtime && python3 build.py build "${args[@]}") > "$out/build.log" 2>&1 || rc=$?
+        printf '%s\n' "$rc" > "$out/build.rc"
+        printf 'wall=%s\n' "$((SECONDS-start))" > "$out/wall.txt"
+        uptime > "$out/uptime-after.txt"
+        find runtime -type f -name '*.dylib' -exec shasum -a 256 {} + > "$out/dylibs.sha256"
+        if [ "$ARM" = api-regression ]; then
+          # Contract (issue #1182 original diagnostic): the restored product
+          # must fail this build with the SDK header rejection
+          # "mach_vm.h unsupported.". A nonzero rc without that exact
+          # diagnostic is a non-target failure and fails this job.
+          if [ "$rc" = 0 ]; then
+            printf 'SDK_API_REGRESSION_ASSERT FAIL: restored build unexpectedly succeeded\n' | tee "$out/assertion.txt"
+            exit 1
+          fi
+          if ! grep -n 'mach_vm.h unsupported' "$out/build.log" | tee "$out/target-diagnostic.txt"; then
+            printf 'SDK_API_REGRESSION_ASSERT FAIL: rc=%s without target diagnostic (non-target failure)\n' "$rc" | tee "$out/assertion.txt"
+            grep -n -m 25 -E 'error:|Error [0-9]' "$out/build.log" || true
+            exit 1
+          fi
+          grep -n "undeclared identifier 'mach_vm_remap'" "$out/build.log" > "$out/secondary-diagnostic.txt" || true
+          printf 'SDK_API_REGRESSION_ASSERT PASS: rc=%s target diagnostic present\n' "$rc" | tee "$out/assertion.txt"
+          exit 0
+        fi
+        if [ "$rc" != 0 ]; then
+          grep -n -m 25 -E 'error:|Undefined symbols|undefined symbol|Error [0-9]' "$out/build.log" || true
+          exit "$rc"
+        fi
+        dylib="$(find runtime -type f -name libcangjie-runtime.dylib -print -quit)"
+        test -n "$dylib"
+        file "$dylib" | tee "$out/product-file.txt"
+        lipo "$dylib" -verify_arch "$ARCH"
+        nm -u "$dylib" > "$out/imports.txt"
+        grep -E '(^|[[:space:]])_vm_remap$' "$out/imports.txt"
+        mkdir -p "$out/product"
+        cp "$dylib" "$out/product/"
+        find runtime -type f -name libboundscheck.dylib -exec cp {} "$out/product/" \;
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ios-backing-${{ matrix.tuple }}-${{ matrix.arm }}
+        path: ${{ runner.temp }}/ios-backing
+        retention-days: 7
+    name: ios-backing / full-runtime
+  ios-backing-sim-remap-test:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'ios-backing'))) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - tuple: simulator-arm64
+          runner: macos-15
+          arch: arm64
+        - tuple: simulator-x86_64
+          runner: macos-15-intel
+          arch: x86_64
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Probe simulator and run vm_remap path test from product source
+      env:
+        ARCH: ${{ matrix.arch }}
+      run: |
+        ulimit -c 0
+        out="$RUNNER_TEMP/sim-remap"
+        mkdir -p "$out"
+        uptime > "$out/uptime-before.txt"
+        xcodebuild -version | tee "$out/xcode.txt"
+        sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+        printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
+        test "$sdk_version" = '18.5'
+        git rev-parse HEAD > "$out/head.txt"
+        probe="$out/sim-probe.txt"
+        : > "$probe"
+        rec() {
+          printf '$ %s\n' "$*" >> "$probe"
+          "$@" >> "$probe" 2>&1
+          rc=$?
+          printf 'rc=%s\n\n' "$rc" >> "$probe"
+          return $rc
+        }
+        udid=""
+        infeasible=""
+        rec xcrun simctl list runtimes
+        udid="$(xcrun simctl list devices available -j | python3 -c '
+        import json, sys
+        data = json.load(sys.stdin)
+        for runtime, devs in sorted(data.get("devices", {}).items(), reverse=True):
+            if "iOS" not in runtime:
+                continue
+            for dev in devs:
+                if dev.get("isAvailable") and "iPhone" in dev.get("name", ""):
+                    print(dev["udid"])
+                    sys.exit(0)
+        ')"
+        if [ -z "$udid" ]; then
+          infeasible="no available iPhone simulator device (see sim-probe.txt)"
+        else
+          if ! rec xcrun simctl boot "$udid"; then
+            # boot returns an error when the device is already booted
+            state="$(xcrun simctl list devices -j | python3 -c '
+        import json, sys
+        data = json.load(sys.stdin)
+        for devs in data.get("devices", {}).values():
+            for dev in devs:
+                if dev.get("udid") == "'"$udid"'":
+                    print(dev.get("state", ""))
+        ')"
+            if [ "$state" != "Booted" ]; then
+              infeasible="simctl boot $udid failed (see sim-probe.txt)"
+            fi
+          fi
+        fi
+        if [ -z "$infeasible" ] && ! rec xcrun simctl spawn "$udid" /bin/echo spawn-sanity-ok; then
+          infeasible="simctl spawn sanity check failed (see sim-probe.txt)"
+        fi
+        cat "$probe"
+        if [ -n "$infeasible" ]; then
+          printf 'SIM_RUNTIME=infeasible reason=%s\n' "$infeasible" | tee "$out/sim-runtime.txt"
+          exit 0
+        fi
+        printf 'SIM_RUNTIME=feasible udid=%s arch=%s\n' "$udid" "$ARCH" | tee "$out/sim-runtime.txt"
+        # Build the vm_remap path unit test from the product source
+        # (zPhysicalMemoryBacking_bsd.cpp) for the iOS simulator SDK and
+        # execute it inside the booted simulator. map_ok drives the product
+        # map -> mremap_mach -> vm_remap path and consumes its result.
+        rc=0
+        launcher=(/bin/bash runtime/tests/bsd/run_backing_fail.sh)
+        if [[ "${{ inputs.backing_regression }}" == "true" ]]; then
+          launcher=(python3 runtime/tests/bsd/check_backing_launcher.py)
+        fi
+        BSD_BACKING_REGRESSION_DIR="$out/launcher" \
+        BSD_BACKING_SDK=iphonesimulator \
+        BSD_BACKING_ARCH="$ARCH" \
+        BSD_BACKING_SIM_UDID="$udid" \
+        BSD_BACKING_CASES="ctor_ok map_ok" \
+          "${launcher[@]}" > "$out/sim-test.log" 2>&1 || rc=$?
+        cat "$out/sim-test.log"
+        printf 'SIM_RUNTIME_TEST rc=%s cases=[ctor_ok map_ok]\n' "$rc" | tee -a "$out/sim-runtime.txt"
+        uptime > "$out/uptime-after.txt"
+        exit "$rc"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: sim-remap-${{ matrix.tuple }}
+        path: ${{ runner.temp }}/sim-remap
+        retention-days: 7
+    name: ios-backing / sim-remap-test
+  metadata-platform-prepare:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+        - linux-arm64
+        - windows-x64
+        config:
+        - default
+        - testable
+        include:
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+        - platform: windows-x64
+          runner: windows-2025
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      if: runner.os == 'Windows'
+      with:
+        msystem: CLANG64
+        update: false
+        path-type: inherit
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/gc_unit/metadata/build.py prepare --config ${{ matrix.config }}
+    - if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/gc_unit/metadata/build.py prepare --config ${{ matrix.config }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: prepare-${{ matrix.platform }}-${{ matrix.config }}
+        path: |
+          ${{ runner.temp }}/metadata/*.log
+          ${{ runner.temp }}/metadata/*.json
+    - uses: actions/upload-artifact@v4
+      if: success() && matrix.config == 'testable'
+      with:
+        name: bundle-${{ matrix.platform }}
+        path: ${{ runner.temp }}/metadata/bundle/
+    name: metadata-platform / prepare
+  metadata-platform-arms:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare && always() && !cancelled()) }}
+    needs: metadata-platform-prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+          arm: baseline
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+          arm: candidate
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+          arm: caller-sp
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+          arm: restored
+        - platform: linux-arm64
+          runner: ubuntu-24.04-arm
+          arm: device
+        - platform: windows-x64
+          runner: windows-2025
+          arm: baseline
+        - platform: windows-x64
+          runner: windows-2025
+          arm: candidate
+        - platform: windows-x64
+          runner: windows-2025
+          arm: current-desc
+        - platform: windows-x64
+          runner: windows-2025
+          arm: current-map
+        - platform: windows-x64
+          runner: windows-2025
+          arm: caller-desc
+        - platform: windows-x64
+          runner: windows-2025
+          arm: caller-map
+        - platform: windows-x64
+          runner: windows-2025
+          arm: restored
+        - platform: windows-x64
+          runner: windows-2025
+          arm: device
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      if: runner.os == 'Windows'
+      with:
+        msystem: CLANG64
+        update: false
+        path-type: inherit
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: actions/download-artifact@v4
+      with:
+        name: bundle-${{ matrix.platform }}
+        path: ${{ runner.temp }}/metadata/bundle
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/gc_unit/metadata/build.py arm --arm ${{ matrix.arm }}
+    - if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/gc_unit/metadata/build.py arm --arm ${{ matrix.arm }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: arm-${{ matrix.platform }}-${{ matrix.arm }}
+        path: |
+          ${{ runner.temp }}/metadata/*.log
+          ${{ runner.temp }}/metadata/*.json
+          ${{ runner.temp }}/metadata/*.diff
+    name: metadata-platform / arms
+  metadata-platform-pac-capability:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && !inputs.readscope_android && !inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare) }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - pac-off
+        - pac-on
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - shell: bash
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/gc_unit/metadata/build.py capability --config ${{ matrix.config }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: capability-${{ matrix.config }}
+        path: |
+          ${{ runner.temp }}/metadata/*.log
+          ${{ runner.temp }}/metadata/*.json
+    name: metadata-platform / pac-capability
+  metadata-platform-readscope-android:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && inputs.readscope_android && !inputs.readscope_android_exit_compare) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch the fixed bounds source with Git
+      run: |
+        git init runtime/third_party/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+        git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Enable the runner KVM device
+      run: test -c /dev/kvm && sudo chmod 666 /dev/kvm
+    - name: Normal production and real emulator lifecycle
+      run: ulimit -c 0 && node runtime/tests/readscope_native_retention/android.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-android
+        path: |
+          ${{ runner.temp }}/readscope-android/*.json
+          ${{ runner.temp }}/readscope-android/*.stdout
+          ${{ runner.temp }}/readscope-android/*.stderr
+          ${{ runner.temp }}/readscope-android/x86_64/install/**
+          ${{ runner.temp }}/readscope-android/aarch64/install/**
+        if-no-files-found: error
+    name: metadata-platform / readscope-android
+  metadata-platform-readscope-linux-arm64:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && inputs.readscope_linux_arm64 && !inputs.readscope_android_exit_compare) }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Native tools and fixed bounds source
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang llvm cmake ninja-build
+        git init runtime/third_party/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+        git -C runtime/third_party/third_party_bounds_checking_function fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+        git -C runtime/third_party/third_party_bounds_checking_function checkout --detach FETCH_HEAD
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Normal native production and finite lifecycle
+      run: ulimit -S -c 0 && ulimit -H -c 0 && node runtime/tests/readscope_native_retention/linux-arm64.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-linux-arm64
+        path: |
+          ${{ runner.temp }}/readscope-linux-arm64/*.json
+          ${{ runner.temp }}/readscope-linux-arm64/*.stdout
+          ${{ runner.temp }}/readscope-linux-arm64/*.stderr
+          ${{ runner.temp }}/readscope-linux-arm64/install/**
+        if-no-files-found: error
+    name: metadata-platform / readscope-linux-arm64
+  metadata-platform-readscope-android-exit-compare:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (!inputs.readscope_android_scene && inputs.readscope_android_exit_compare && !inputs.readscope_android && !inputs.readscope_linux_arm64) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      READSCOPE_ANDROID_EXIT_COMPARE: fixed-three-children-v1
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Install the native emulator shared-library dependency
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libpulse0
+    - name: Enable the runner KVM device
+      run: test -c /dev/kvm && sudo chmod 666 /dev/kvm
+    - name: Normal fixed-arm production and three common C API exit children
+      run: ulimit -S -c 0 && ulimit -H -c 0 && node runtime/tests/readscope_native_retention/android-exit-compare.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-android-exit-compare
+        path: |
+          ${{ runner.temp }}/readscope-android-exit/*.json
+          ${{ runner.temp }}/readscope-android-exit/*.stdout
+          ${{ runner.temp }}/readscope-android-exit/*.stderr
+          ${{ runner.temp }}/readscope-android-exit/*.pid-logcat
+          ${{ runner.temp }}/readscope-android-exit/tombstones/**
+          ${{ runner.temp }}/readscope-android-exit/base/install/**
+          ${{ runner.temp }}/readscope-android-exit/candidate/install/**
+          ${{ runner.temp }}/readscope-android-exit/base/consumer
+          ${{ runner.temp }}/readscope-android-exit/candidate/consumer
+          ${{ runner.temp }}/readscope-android-exit/base/build/CMakeCache.txt
+          ${{ runner.temp }}/readscope-android-exit/candidate/build/CMakeCache.txt
+          ${{ runner.temp }}/readscope-android-exit/base/build/build.ninja
+          ${{ runner.temp }}/readscope-android-exit/candidate/build/build.ninja
+        if-no-files-found: error
+    name: metadata-platform / readscope-android-exit-compare
+  metadata-platform-readscope-android-scene:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'metadata-platform'))) && (inputs.readscope_android_scene) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+      SCENE_ANDROID: ${{ inputs.readscope_android_scene }}
+      SCENE_OLD_ANDROID: ${{ inputs.readscope_android }}
+      SCENE_OLD_ARM64: ${{ inputs.readscope_linux_arm64 }}
+      SCENE_OLD_COMPARE: ${{ inputs.readscope_android_exit_compare }}
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check immutable Grok bundle and fail before preparation if not ready
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/readscope-android-scene-check"
+        node runtime/tests/readscope_native_retention/android-scene.mjs --check-bundle > "$RUNNER_TEMP/readscope-android-scene-check/input.json"
+        node runtime/tests/readscope_native_retention/android-scene.mjs --require-ready
+    - uses: actions/download-artifact@v4
+      with:
+        repository: cjcj-dev/cangjie-runtime
+        run-id: 43760946735
+        artifact-ids: '14180621274'
+        merge-multiple: true
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/readscope-android-scene-artifact
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Normal single-job host dependencies and KVM
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y libpulse0 cmake ninja-build
+        test -e /dev/kvm
+        sudo chmod 666 /dev/kvm
+    - name: Fixed-source relink using original normal installed runtime
+      shell: bash
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        node runtime/tests/readscope_native_retention/android-scene.mjs --prepare
+    - name: Single original preinit process through Grok-owned driver only
+      shell: bash
+      run: |
+        ulimit -S -c 0
+        ulimit -H -c 0
+        node runtime/tests/readscope_native_retention/android-scene.mjs --execute
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-android-scene
+        path: |
+          ${{ runner.temp }}/readscope-android-scene-check/
+          ${{ runner.temp }}/readscope-android-scene/*.json
+          ${{ runner.temp }}/readscope-android-scene/*.stdout
+          ${{ runner.temp }}/readscope-android-scene/*.stderr
+          ${{ runner.temp }}/readscope-android-scene/execution/
+          ${{ runner.temp }}/readscope-android-scene/grok/
+          ${{ runner.temp }}/readscope-android-scene/cleanup/
+          ${{ runner.temp }}/readscope-android-scene/fixture.so
+          ${{ runner.temp }}/readscope-android-scene/consumer
+          runtime/tests/readscope_native_retention/android-scene/host-check.json
+          runtime/tests/readscope_native_retention/android-scene/execute-result.json
+          runtime/tests/readscope_native_retention/android-scene/run/
+    name: metadata-platform / readscope-android-scene
+  ohos-public-sdk-build:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'ohos-public-sdk')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    concurrency:
+      group: ohos-public-sdk-${{ github.head_ref || github.ref_name }}
+      cancel-in-progress: true
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+        - x86_64
+        - aarch64
+        entry:
+        - cmake
+        - build.py
+        - controls
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - name: Dependencies
+      run: sudo apt-get update -qq && sudo apt-get install -y ccache libtinfo5 ninja-build
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/ohos-sdk
+        key: ohos-public-native-linux-5.0.0-v1
+    - name: Download official OpenHarmony SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        sdk="$RUNNER_TEMP/ohos-sdk"
+        if ! test -f "$sdk/archive.sha256"; then
+          mkdir -p "$sdk"
+          cd "$sdk"
+          url=https://repo.huaweicloud.com/openharmony/os/5.0.0-Release/ohos-sdk-windows_linux-public.tar.gz
+          curl --fail --location --retry 3 "$url" -o sdk.tar.gz
+          curl --fail --location --retry 3 "$url.sha256" -o expected.sha256
+          expected=$(awk '{print $1}' expected.sha256)
+          printf '%s  sdk.tar.gz\n' "$expected" | sha256sum -c -
+          sha256sum sdk.tar.gz > archive.sha256
+          tar -xzf sdk.tar.gz --wildcards --no-anchored 'native-linux-*.zip'
+          native_zip=$(find . -name 'native-linux-*.zip' -print -quit)
+          unzip -q "$native_zip" -d unpacked
+          rm sdk.tar.gz "$native_zip"
+        fi
+        native=$(find "$sdk/unpacked" -type d -name native -print -quit)
+        test -x "$native/llvm/bin/clang"
+        echo "PUBLIC_NATIVE=$native" >> "$GITHUB_ENV"
+        cat "$sdk/archive.sha256" "$native/oh-uni-package.json"
+    - name: Build through real entry and verify products
+      run: bash .github/scripts/ohos-public-sdk.sh '${{ matrix.arch }}' '${{ matrix.entry }}'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ohos-${{ matrix.arch }}-${{ matrix.entry }}
+        path: ohos-evidence
+    name: ohos-public-sdk / build
+  return-poll-native-native:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'return-poll-native'))) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      RETURN_PAIR_OUT: ${{ github.workspace }}/return-pair
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-return-pair
+      SCCACHE_CACHE_SIZE: 2G
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.targets || '[{"runner":"macos-15","target":"aarch64-macos"},{"runner":"macos-15-intel","target":"x86_64-macos"},{"runner":"windows-latest","target":"x86_64-windows"}]') }}
+    timeout-minutes: 90
+    steps:
+    - name: Preserve compiler input bytes on Windows
+      shell: bash
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v4
+    - name: Preserve Windows batch-file checkout convention
+      if: runner.os == 'Windows'
+      shell: bash
+      run: git config --global core.autocrlf true
+    - uses: actions/checkout@v4
+      with:
+        repository: cjcj-dev/cangjie-runtime
+        ref: ${{ inputs.runtime_ref || github.sha }}
+        path: runtime-source
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - uses: actions/cache/restore@v4
+      id: cache
+      with:
+        path: ${{ github.workspace }}/sccache-return-pair
+        key: return-pair-${{ matrix.target }}-${{ inputs.runtime_ref || github.sha }}-${{ github.run_id }}
+        restore-keys: |
+          return-pair-${{ matrix.target }}-${{ inputs.runtime_ref || github.sha }}-
+          return-pair-${{ matrix.target }}-
+    - uses: msys2/setup-msys2@v2
+      if: runner.os == 'Windows'
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make file git procps-ng
+    - name: Apple native pair
+      if: runner.os == 'macOS'
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/return_poll_native/native.py runtime-source
+    - name: Windows native pair
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        ulimit -c 0
+        export PATH="$(dirname "$(cygpath -u "$SCCACHE_PATH")"):$PATH"
+        python3 runtime/tests/return_poll_native/native.py runtime-source
+    - uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: ${{ github.workspace }}/sccache-return-pair
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: return-pair-${{ matrix.target }}
+        path: |
+          ${{ github.workspace }}/return-pair/*.json
+          ${{ github.workspace }}/return-pair/*.log
+          ${{ github.workspace }}/return-pair/*.o
+          ${{ github.workspace }}/return-pair/*-pair*
+          ${{ github.workspace }}/return-pair/*/*.json
+          ${{ github.workspace }}/return-pair/*/*.log
+          ${{ github.workspace }}/return-pair/*/*.diff
+          ${{ github.workspace }}/return-pair/*/*.def
+          ${{ github.workspace }}/return-pair/*/product/*
+        if-no-files-found: error
+    name: return-poll-native / native
+  return-safepoint-apple:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'return-safepoint'))) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - runner: macos-15
+          target: native
+          name: aarch64-macos
+        - runner: macos-15-intel
+          target: native
+          name: x86_64-macos
+        - runner: macos-15
+          target: ios-aarch64
+          name: aarch64-ios
+        - runner: macos-15-intel
+          target: ios-simulator-x86_64
+          name: x86_64-ios
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and exercise product return stub
+      env:
+        RETURN_STUB_OUT: ${{ runner.temp }}/return-stub
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/return_safepoint/native_matrix.py '${{ matrix.target }}'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: return-stub-${{ matrix.name }}
+        path: |
+          ${{ runner.temp }}/return-stub/*.json
+          ${{ runner.temp }}/return-stub/*.log
+          ${{ runner.temp }}/return-stub/*.sha256
+          ${{ runner.temp }}/return-stub/*/*.json
+          ${{ runner.temp }}/return-stub/*/*.log
+          ${{ runner.temp }}/return-stub/*/*.rc
+          ${{ runner.temp }}/return-stub/*/*.diff
+          ${{ runner.temp }}/return-stub/*/product/*
+    name: return-safepoint / apple
+  return-safepoint-windows:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'return-safepoint'))) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make file
+    - name: Build and exercise product return stub
+      shell: msys2 {0}
+      env:
+        RETURN_STUB_OUT: ${{ runner.temp }}/return-stub
+      run: python3 runtime/tests/return_safepoint/native_matrix.py windows-x86_64
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: return-stub-x86_64-windows
+        path: |
+          ${{ runner.temp }}/return-stub/*.json
+          ${{ runner.temp }}/return-stub/*.log
+          ${{ runner.temp }}/return-stub/*.sha256
+          ${{ runner.temp }}/return-stub/*/*.json
+          ${{ runner.temp }}/return-stub/*/*.log
+          ${{ runner.temp }}/return-stub/*/*.rc
+          ${{ runner.temp }}/return-stub/*/*.diff
+          ${{ runner.temp }}/return-stub/*/runtime/CMakebuild/*.def
+          ${{ runner.temp }}/return-stub/*/product/*
+    name: return-safepoint / windows
+  runtime-link-publication-windows:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-link-publication'))) }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        arm:
+        - candidate
+        - cut-producer
+        - cut-consumer
+        - restored
+        - cut-retention
+        - cut-lookup
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: runtime-source
+    - uses: actions/checkout@v4
+      with:
+        repository: cjcj-dev/cjcj
+        ref: 34ade075158dce9bb380297cd0c8e1d785a035d8
+        path: compiler-entry
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        release: false
+        update: true
+        path-type: inherit
+        install: git make python gzip unzip file binutils mingw-w64-x86_64-clang mingw-w64-x86_64-cmake mingw-w64-x86_64-compiler-rt mingw-w64-x86_64-gcc mingw-w64-x86_64-libc++ mingw-w64-x86_64-libunwind mingw-w64-x86_64-ninja mingw-w64-x86_64-python mingw-w64-x86_64-lld
+    - name: Preserve native cache directories
+      shell: pwsh
+      run: |
+        $cacheHome = $env:USERPROFILE.Replace('\', '/')
+        $cacheConfigHome = $env:LOCALAPPDATA.Replace('\', '/')
+        "export USERPROFILE='$cacheHome' LOCALAPPDATA='$cacheConfigHome'" | Set-Content -NoNewline -Encoding utf8 C:/msys64/etc/profile.d/runtime-publication.sh
+    - name: Exercise cjcj 589 production entry and publication controls
+      shell: pwsh
+      run: |
+        $arm = '${{ matrix.arm }}'
+        if ($arm -in @('cut-retention', 'cut-lookup')) {
+          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_publication_metadata.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --cut $arm.Substring(4)
+        } else {
+          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_link_publication.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --arm $arm
+        }
+        exit $LASTEXITCODE
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: link-publication-${{ matrix.arm }}
+        path: evidence/
+        retention-days: 7
+    name: runtime-link-publication / windows
+  runtime-link-publication-arm-copy:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-link-publication'))) }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+        - default
+        - testable
+        - gcunit
+        arm:
+        - candidate
+        - cut
+        - restored
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install native build tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache gdb libssl-dev libffi-dev
+    - name: Exercise product Copy publication and real unit link
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/test_copy_link_publication.py --profile '${{ matrix.profile }}' --arm '${{ matrix.arm }}' --evidence evidence
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: arm-copy-${{ matrix.profile }}-${{ matrix.arm }}
+        path: |
+          evidence/*.log
+          evidence/*.json
+          evidence/*.sha256
+          evidence/*.diff
+          evidence/standalone/**/*.log
+          evidence/standalone/**/*.sha256
+        retention-days: 7
+    name: runtime-link-publication / arm-copy
+  runtime-link-publication-arm-copy-baseline:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-link-publication'))) }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+        - default
+        - testable
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        ref: 81618ec3150dcda33a61ba4a171ddf755f5eb1cf
+        path: baseline-source
+    - name: Install native build tools
+      run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache gdb libssl-dev libffi-dev
+    - name: Reproduce frozen standalone link failure
+      run: |
+        ulimit -c 0
+        python3 runtime/tests/test_copy_link_publication.py --source baseline-source/runtime --profile '${{ matrix.profile }}' --arm baseline --evidence evidence
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: arm-copy-${{ matrix.profile }}-baseline
+        path: |
+          evidence/*.log
+          evidence/*.json
+          evidence/*.sha256
+          evidence/standalone/**/*.log
+          evidence/standalone/**/*.sha256
+        retention-days: 7
+    name: runtime-link-publication / arm-copy-baseline
+  runtime-windows-windows:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-windows'))) && (!inputs.readscope_std_consumer && !inputs.readscope_lifetime && !inputs.readscope_target_inputs) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arm:
+        - candidate
+        - cut-region
+        - cut-filler
+        - cut-limit
+        - cut-compiler
+        - restored
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make file
+    - name: Build native product
+      shell: msys2 {0}
+      run: python3 runtime/tests/windows_native/build_native.py ${{ matrix.arm }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: runtime-windows-${{ matrix.arm }}
+        path: |
+          ${{ runner.temp }}/runtime-windows/*.log
+          ${{ runner.temp }}/runtime-windows/*.json
+          ${{ runner.temp }}/runtime-windows/*.diff
+          ${{ runner.temp }}/runtime-windows/*.def
+          ${{ runner.temp }}/runtime-windows/*.cmake
+          ${{ runner.temp }}/runtime-windows/product/*
+    name: runtime-windows / windows
+  runtime-windows-readscope-lifetime:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-windows'))) && (!inputs.readscope_std_consumer && inputs.readscope_lifetime != inputs.readscope_target_inputs) }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch the fixed bounds source with Git
+      shell: pwsh
+      run: |
+        $bounds = 'runtime/third_party/third_party_bounds_checking_function'
+        git init $bounds
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        git -C $bounds remote add origin https://gitcode.com/openharmony/third_party_bounds_checking_function
+        git -C $bounds fetch --depth=1 origin 2ae82839ecaaa7d031e66ccbd2076d671acfd615
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        git -C $bounds checkout --detach FETCH_HEAD
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - uses: msys2/setup-msys2@v2
+      id: readscope-msys
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make mingw-w64-x86_64-binutils
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Normal runtime production and native lifecycle consumer
+      env:
+        READSCOPE_CLANG64: ${{ steps.readscope-msys.outputs.msys2-location }}/clang64/bin
+        READSCOPE_TARGET_INPUTS_ONLY: ${{ inputs.readscope_target_inputs }}
+      shell: pwsh
+      run: node runtime/tests/readscope_native_retention/native.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-windows-native
+        path: |
+          ${{ runner.temp }}/readscope-native/*.json
+          ${{ runner.temp }}/readscope-native/*.stdout
+          ${{ runner.temp }}/readscope-native/*.stderr
+          ${{ runner.temp }}/readscope-native/*.dll
+          ${{ runner.temp }}/readscope-native/*.exe
+          ${{ runner.temp }}/readscope-native/install/runtime/lib/**/*.dll
+          ${{ runner.temp }}/readscope-native/install/lib/windows_x86_64_cjnative/**
+          ${{ runner.temp }}/readscope-native/install/include/**
+          ${{ runner.temp }}/readscope-native/target-inputs/**
+          ${{ runner.temp }}/readscope-native/install/include/**
+        if-no-files-found: error
+    name: runtime-windows / readscope-lifetime
+  runtime-windows-readscope-std-consumer:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime-windows'))) && (inputs.readscope_std_consumer) }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      id: std-msys
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - name: Verify frozen inputs and consume normal DLLs
+      shell: pwsh
+      env:
+        READSCOPE_CLANG64: ${{ steps.std-msys.outputs.msys2-location }}/clang64/bin
+        READSCOPE_STD_ASSET_URL: ${{ inputs.std_asset_url }}
+        READSCOPE_STD_ASSET_SHA256: ${{ inputs.std_asset_sha256 }}
+        READSCOPE_OTHER_LIFETIME: ${{ inputs.readscope_lifetime }}
+        READSCOPE_OTHER_PRODUCER: ${{ inputs.readscope_target_inputs }}
+      run: node stdlib/tests/windows_shared_entry_runner.mjs
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: readscope-std-consumer
+        path: ${{ runner.temp }}/readscope-std-consumer/
+        if-no-files-found: error
+    name: runtime-windows / readscope-std-consumer
+  safepoint-windows-build:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'safepoint-windows'))) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arm:
+        - candidate
+        - cut-home
+        - cut-restore
+        - restored
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+    - name: Build native product
+      shell: msys2 {0}
+      run: python3 runtime/tests/safepoint_windows/build_native.py '${{ matrix.arm }}'
+    - name: Link the shared sentinel
+      if: matrix.arm == 'candidate'
+      shell: msys2 {0}
+      run: python3 runtime/tests/safepoint_windows/verify.py --link
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: safepoint-windows-${{ matrix.arm }}
+        path: |
+          ${{ runner.temp }}/safepoint-windows/**/*.log
+          ${{ runner.temp }}/safepoint-windows/**/*.json
+          ${{ runner.temp }}/safepoint-windows/**/*.diff
+          ${{ runner.temp }}/safepoint-windows/*/*.def
+          ${{ runner.temp }}/safepoint-windows/sentinel.exe
+          ${{ runner.temp }}/safepoint-windows/*/product/*
+    name: safepoint-windows / build
+  safepoint-windows-verify:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'safepoint-windows'))) }}
+    needs: safepoint-windows-build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-gdb
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: safepoint-windows-*
+        merge-multiple: true
+        path: ${{ runner.temp }}/safepoint-windows
+    - name: Exercise the same sentinel against all products
+      shell: msys2 {0}
+      run: python3 runtime/tests/safepoint_windows/verify.py
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: safepoint-windows-behavior
+        path: |
+          ${{ runner.temp }}/safepoint-windows/behavior.json
+          ${{ runner.temp }}/safepoint-windows/identity.json
+          ${{ runner.temp }}/safepoint-windows/*/sentinel.log
+          ${{ runner.temp }}/safepoint-windows/*/home.log
+          ${{ runner.temp }}/safepoint-windows/*/home.json
+    name: safepoint-windows / verify
+  windows-export-contract-windows:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'windows-export-contract'))) }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: false
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make file
+    - name: Complete native product build
+      shell: msys2 {0}
+      run: python3 runtime/tests/windows_native/build_native.py candidate
+    - name: Check actual exports and every contract deletion
+      shell: msys2 {0}
+      run: |
+        python3 runtime/tests/windows_exports/test_contract.py --raw "$RUNNER_TEMP/runtime-windows/windows_x86_64_exports.raw.def" > "$RUNNER_TEMP/runtime-windows/contract.log" 2>&1
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: windows-export-contract
+        path: |
+          ${{ runner.temp }}/runtime-windows/*.log
+          ${{ runner.temp }}/runtime-windows/*.json
+          ${{ runner.temp }}/runtime-windows/*.def
+          ${{ runner.temp }}/runtime-windows/product/*
+    name: windows-export-contract / windows
+  windows-target-export-contract-windows:
+    if: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'windows-target-export-contract'))) }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: runtime-source
+    - uses: actions/checkout@v4
+      with:
+        repository: cjcj-dev/cjcj
+        ref: 34ade075158dce9bb380297cd0c8e1d785a035d8
+        path: compiler-entry
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        release: false
+        update: true
+        path-type: inherit
+        install: git make python gzip unzip file binutils mingw-w64-x86_64-clang mingw-w64-x86_64-cmake mingw-w64-x86_64-compiler-rt mingw-w64-x86_64-gcc mingw-w64-x86_64-libc++ mingw-w64-x86_64-libunwind mingw-w64-x86_64-ninja mingw-w64-x86_64-python mingw-w64-x86_64-lld
+    - name: Preserve native cache directories
+      shell: pwsh
+      run: |
+        $cacheHome = $env:USERPROFILE.Replace('\', '/')
+        $cacheConfigHome = $env:LOCALAPPDATA.Replace('\', '/')
+        "export USERPROFILE='$cacheHome' LOCALAPPDATA='$cacheConfigHome'" | Set-Content -NoNewline -Encoding utf8 C:/msys64/etc/profile.d/runtime-publication.sh
+    - name: Exercise the pinned cjcj 589 production entry
+      shell: pwsh
+      run: |
+        & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/windows_exports/test_native_entry.py --source runtime-source --production-entry compiler-entry --evidence evidence
+        exit $LASTEXITCODE
+    - name: Check actual DLL contract through the shipped CLI
+      shell: pwsh
+      run: |
+        & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/windows_exports/test_contract.py --raw evidence/windows_x86_64_exports.raw.def *> evidence/export-contract.log
+        exit $LASTEXITCODE
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: target-exports
+        path: evidence/
+        retention-days: 7
+    name: windows-target-export-contract / windows
