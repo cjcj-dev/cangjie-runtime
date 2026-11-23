@@ -11,11 +11,14 @@
 #include <wasi/api.h>
 
 // ---------------------------------------------------------------------------
+// Shared, allocation-free stderr diagnostics (CjWasmHeap.c).
+__attribute__((format(printf, 1, 2), visibility("hidden")))
+void cjw_diag(const char* fmt, ...);
+
 // Unsupported features
 _Noreturn void cjw_unsupported(const char* feature, int code)
 {
-    fprintf(stderr, "cangjie wasm32 runtime: %s is not supported on the wasm32-wasi target yet\n", feature);
-    fflush(stderr);
+    cjw_diag("cangjie wasm32 runtime: %s is not supported on the wasm32-wasi target yet\n", feature);
     // Diagnostics: trap instead of exiting so the host prints the wasm call stack.
     const char* trap = getenv("CJ_WASM_TRAP_ON_UNSUPPORTED");
     if (trap != NULL && trap[0] == '1') { __builtin_trap(); }
@@ -44,7 +47,7 @@ static void* NewArrayOf(const void* arrayInfo, int64_t nElems, size_t elemBytes)
 {
     if (nElems < 0) { cjw_unsupported("negative array length", CJW_RC_UNSUPPORTED); }
     if (elemBytes != 0 && (uint64_t)nElems > (SIZE_MAX - CJW_ARRAY_HEADER_SIZE) / elemBytes) {
-        fprintf(stderr, "cangjie wasm32 runtime: array of %lld elements does not fit wasm32 memory\n", (long long)nElems);
+        cjw_diag("cangjie wasm32 runtime: array of %lld elements does not fit wasm32 memory\n", (long long)nElems);
         exit(CJW_RC_UNSUPPORTED);
     }
     uint8_t* obj = (uint8_t*)cjw_alloc(CJW_ARRAY_HEADER_SIZE + (size_t)nElems * elemBytes, 8);
@@ -239,7 +242,7 @@ static uint32_t TypeSize(const CjwTI* ti)
         return AlignUp(total, a);
     }
     if (k >= K_MAX) {
-        fprintf(stderr, "cangjie wasm32 runtime: TypeInfo %s has kind %d\n", ti->name ? ti->name : "?", (int)k);
+        cjw_diag("cangjie wasm32 runtime: TypeInfo %s has kind %d\n", ti->name ? ti->name : "?", (int)k);
         cjw_unsupported("size of a VArray/unknown TypeInfo kind", CJW_RC_TYPEQUERY);
     }
     return ti->size; // primitives, CString, CPointer, CFunc
@@ -538,7 +541,7 @@ void* CJ_MCC_GetMTable(const void* ti, const void* itf)
     if (ed == NULL) {
         const CjwTI* i = (const CjwTI*)itf;
         uint32_t chain = 0;
-        fprintf(stderr, "cangjie wasm32 runtime: CJ_MCC_GetMTable(%s kind=%d typeArgs=%u ownExt=%d, %s kind=%d typeArgs=%u)\n",
+        cjw_diag("cangjie wasm32 runtime: CJ_MCC_GetMTable(%s kind=%d typeArgs=%u ownExt=%d, %s kind=%d typeArgs=%u)\n",
             t->name ? t->name : "?", t->kind, t->typeArgNum, ExtDataList(t, &chain) != NULL,
             i->name ? i->name : "?", i->kind, i->typeArgNum);
         uint32_t defs = 0, targeting = 0;
@@ -550,13 +553,13 @@ void* CJ_MCC_GetMTable(const void* ti, const void* itf)
                 if (EdTargetsType(d, t)) {
                     ++targeting;
                     const CjwTI* di = d->isInterfaceTypeInfo ? (const CjwTI*)d->interface : NULL;
-                    fprintf(stderr, "  registry def targeting %s: interface %s (computed=%d where=%d)\n",
+                    cjw_diag("  registry def targeting %s: interface %s (computed=%d where=%d)\n",
                         t->name ? t->name : "?", di != NULL && di->name ? di->name : "?",
                         !d->isInterfaceTypeInfo, d->whereCondFn != NULL);
                 }
             }
         }
-        fprintf(stderr, "  extension registry: %u tables, %u defs, %u targeting the type\n", g_extDefTableNum, defs,
+        cjw_diag("  extension registry: %u tables, %u defs, %u targeting the type\n", g_extDefTableNum, defs,
             targeting);
         cjw_unsupported("interface method table lookup: no extension data (CJ_MCC_GetMTable)", CJW_RC_TYPEQUERY);
     }
@@ -822,7 +825,7 @@ void CJ_MCC_PackageInitFail(void* ownerToken, uint32_t code) { (void)code; ((Cjw
 _Noreturn void CJ_MCC_PackageInitAbort(const void* pkg, const void* unit, uint32_t phase, uint32_t result)
 {
     (void)pkg; (void)unit;
-    fprintf(stderr, "cangjie wasm32 runtime: package initialization aborted (phase %u, result %u)\n", phase, result);
+    cjw_diag("cangjie wasm32 runtime: package initialization aborted (phase %u, result %u)\n", phase, result);
     exit(CJW_RC_PKGINIT);
 }
 

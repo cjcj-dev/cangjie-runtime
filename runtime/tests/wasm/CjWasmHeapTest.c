@@ -608,6 +608,11 @@ int main(int argc, char** argv)
 {
     InitTypes();
     const char* mode = argc > 1 ? argv[1] : "all";
+    if (strcmp(mode, "null_slot") == 0) {
+        static void** slots[1] = {NULL};
+        cjw_static_root_table_register(slots, 1);
+        return 0;
+    }
     if (strcmp(mode, "gate") == 0) { return ModeGateNoAutoCollect(); }
     if (strcmp(mode, "verify_interior") == 0) {   // verifier before collection is enabled, metadata points mid-object
         void* n = NewObj(&tiNode); void* b = NewObj(&tiLeaf);
@@ -650,9 +655,9 @@ int main(int argc, char** argv)
         f->slots[0] = NewObj(&tiNoTib);
     } else if (strcmp(mode, "tib_beyond") == 0) {
         f->slots[0] = NewObj(&tiBeyond);
-    } else if (strcmp(mode, "array_bounds") == 0) {
+    } else if (strcmp(mode, "array_bounds") == 0 || strcmp(mode, "negative_length") == 0) {
         void* arr = NewArr(&tiRefArr, 2, 4);
-        *(int64_t*)((uint8_t*)arr + CJW_ARRAY_LENGTH_OFFSET) = 100000;
+        *(int64_t*)((uint8_t*)arr + CJW_ARRAY_LENGTH_OFFSET) = strcmp(mode, "negative_length") == 0 ? INT64_MIN : 100000;
         f->slots[0] = arr;
     } else if (strcmp(mode, "frame_order") == 0) {
         // I-FRAME: a caller frame must lie above its callee on the wasm stack.
