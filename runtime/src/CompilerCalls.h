@@ -194,6 +194,41 @@ extern "C" void* CJ_MRT_ARKTS_CreateEngine();
 extern "C" void CJ_MRT_RegisterExceptionCallback(void(*callback)());
 #endif
 
+// Local-region ABI. Region storage uses plain slots and never enters ZGC pages.
+extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field);
+extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteStruct(ObjectPtr owner, MAddress dst, size_t dstLen, MAddress src,
+                                                      size_t srcLen, GCTib gctib);
+extern "C" MRT_EXPORT void CJ_MCC_MaybeLocalWriteGeneric(ObjectPtr owner, void* field, ObjectPtr src, uint32_t size);
+extern "C" MRT_EXPORT void CJ_MCC_DemodeWriteRef(ObjectPtr value, ObjectPtr owner, RefField<false>* field);
+extern "C" MRT_EXPORT void CJ_MCC_AssignLocalGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo);
+extern "C" MRT_EXPORT size_t CJ_MCC_GetAllocatedLocalObjectSize();
+
+// local region
+// start region when enter a cj func
+extern "C" MRT_EXPORT void MCC_StartLocalRegion(FrameAddress* ownerFA);
+// end region when finish a cj func or exclave
+extern "C" MRT_EXPORT void MCC_EndLocalRegion(FrameAddress* ownerFA);
+// Compiler contract: Add registers exactly once in the object's owning currentFrame.
+// Pair Remove with Add in that same currentFrame, before the frame is closed.
+// Runtime Remove also locates the owning active frame if an inner region is active.
+extern "C" MRT_EXPORT void MCC_AddLocalFinalizer(ObjectPtr obj);
+extern "C" MRT_EXPORT void MCC_RemoveLocalFinalizer(ObjectPtr obj);
+// alloc local region object
+extern "C" ObjRef MCC_NewLocalObject(const TypeInfo* classInfo, MSize size);
+extern "C" ObjRef MCC_NewLocalFinalizer(const TypeInfo* classInfo, MSize size);
+
+extern "C" ArrayRef MCC_NewLocalArray(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewLocalObjArray(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewLocalArray8(const TypeInfo* classInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewLocalArray16(const TypeInfo* classInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewLocalArray32(const TypeInfo* classInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewLocalArray64(const TypeInfo* classInfo, MIndex nElems);
+
+extern "C" ObjRef MCC_NewLocalGenericObject(const TypeInfo* klass, MSize size);
+extern "C" ArrayRef MCC_NewLocalGenericArray(const TypeInfo* arrayInfo, MIndex nElems);
+
+extern "C" ObjRef MCC_NewLocalWeakRefObject(const TypeInfo* klass, MSize size);
+
 #ifdef __APPLE__
 #include "MacAlias.h"
 #else

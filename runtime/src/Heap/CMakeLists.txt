@@ -44,6 +44,7 @@ list(APPEND SRC_LIST
     "z/zPhysicalMemoryManager.cpp"
     "z/zLargePages.cpp"
     "z/zErrno.cpp"
+    "Allocator/LocalObjectAllocator.cpp"
     "Allocator/RegionSpace.cpp"
     "z/zThreadLocalAllocBuffer.cpp"
     "z/zTLABUsage.cpp"

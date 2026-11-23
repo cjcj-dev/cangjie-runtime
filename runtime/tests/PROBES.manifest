@@ -182,3 +182,4 @@ reflection_stable_callback.cpp manual native helper for reflection_stable_bounda
 
 c2n_nofp manual paired GNU Linux x86-64 backend/runtime private install; public CJ calls, native XMM clobber, GC progress, callback exception/root controls; performance not measured
 tuple_runtime_read_product.cj manual installed compiler/runtime generic tuple class/interface/nested predicates with exact result assertions and GC survival
+upstream_1120 manual private installed SDK; concurrent collections callback exception recovery, deadline and iterator assertions

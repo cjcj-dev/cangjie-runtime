@@ -123,6 +123,7 @@ set(GC_UNIT_SOURCES
     test_payload_clamp.cpp
     test_write_generic.cpp
     test_arraycopy.cpp
+    test_arraycopy_local_null_gctib.cpp
     test_cycle_ref_saferegion.cpp
     test_watermark_iteration.cpp
     test_binding_poll.cpp

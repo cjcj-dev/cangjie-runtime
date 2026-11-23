@@ -386,12 +386,17 @@ public:
     bool TransitionToCpuProfile(bool bySelf);
 
     void VisitProcessedRoots(const RootVisitor& visitor);
+    void VisitLocalRegionRoots(const RootVisitor& visitor);
+    bool IsLocalRegionAddress(MAddress address) const;
+    void* GetLocalObjectAllocatorData() const { return localObjectAllocatorData; }
+    void SetLocalObjectAllocatorData(void* data) { localObjectAllocatorData = data; }
     void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
+        VisitLocalRegionRoots(visitor);
         VisitStackRoots(visitor);
     }
 
@@ -542,6 +547,7 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
+    void* localObjectAllocatorData = nullptr;
     // thread id
     uint32_t tid = 0;
     // cjthread ptr

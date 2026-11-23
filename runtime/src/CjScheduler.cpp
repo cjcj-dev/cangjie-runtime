@@ -32,6 +32,7 @@
 #include "ExceptionManager.h"
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.inline.h"
+#include "ThreadCreatorInfo.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -427,8 +428,9 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
-    CJThreadHandle handle = CJThreadNew(scheduler, nullptr, WrapperTask, &data, sizeof(LWTData),
-            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
+    const auto creator = MapleRuntime::CaptureCreator();
+    CJThreadHandle handle = CJThreadNewWithCreator(scheduler, nullptr, WrapperTask, &data, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask, creator);
     if (handle == nullptr) {
 #if defined(CANGJIE_TSAN_SUPPORT)
         MapleRuntime::Sanitizer::TsanFuncExit();
@@ -703,10 +705,9 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
-    CJThreadHandle handle =
-        CJThreadNewToSchedule(scheduler, nullptr, WrapperOfExecuteClosure, &data, sizeof(LWTData),
-            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
-    return handle;
+    const auto creator = MapleRuntime::CaptureCreator();
+    return CJThreadNewWithCreator(scheduler, nullptr, WrapperOfExecuteClosure, &data, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask, creator);
 }
 
 /**
