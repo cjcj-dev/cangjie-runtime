@@ -106,6 +106,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_engine.cpp
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
+    test_finalizer_stw_publication.cpp
     test_barrier_owner_1391.cpp
     test_shutdown_1459.cpp
     test_partial_array.cpp

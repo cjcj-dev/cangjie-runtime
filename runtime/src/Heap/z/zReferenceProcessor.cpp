@@ -471,6 +471,22 @@ void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
 void FinalizerProcessor::Run() { RunWorker(false); }
 void FinalizerProcessor::RunReferenceHandler() { RunWorker(true); }
 
+void FinalizerProcessor::PublishWorkerMutator(Mutator& mutator)
+{
+    MutatorManager::Instance().MutatorManagementRLock();
+    fpMutator = &mutator;
+    tid = mutator.GetTid();
+    MutatorManager::Instance().MutatorManagementRUnlock();
+}
+
+void FinalizerProcessor::RetractWorkerMutator(Mutator& mutator)
+{
+    (void)mutator;
+    MutatorManager::Instance().MutatorManagementRLock();
+    fpMutator = nullptr;
+    MutatorManager::Instance().MutatorManagementRUnlock();
+}
+
 void FinalizerProcessor::RunWorker(bool handler)
 {
     NotifyStarted();
@@ -484,10 +500,7 @@ void FinalizerProcessor::RunWorker(bool handler)
     (void)NewFinalizerCJThread();
     Mutator* mutator = Mutator::GetMutator();
     if (!handler) {
-        MutatorManager::Instance().MutatorManagementRLock();
-        fpMutator = mutator;
-        tid = mutator->GetTid();
-        MutatorManager::Instance().MutatorManagementRUnlock();
+        PublishWorkerMutator(*mutator);
     }
     {
         ScopedObjectAccess access;
@@ -495,9 +508,7 @@ void FinalizerProcessor::RunWorker(bool handler)
         CHECK_DETAIL(!ExceptionManager::HasPendingException(), "Reference service exited with an exception");
     }
     if (!handler) {
-        MutatorManager::Instance().MutatorManagementRLock();
-        fpMutator = nullptr;
-        MutatorManager::Instance().MutatorManagementRUnlock();
+        RetractWorkerMutator(*mutator);
     }
     EndFinalizerCJThread();
 }
