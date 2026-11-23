@@ -40,6 +40,7 @@ tib_beyond 139 beyond its
 array_bounds 139 exceeds its
 negative_length 139 negative length -9223372036854775808
 frame_order 139 is not below its caller frame
+null_slot 139 entry 0 (0) is NULL
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object
 MODES

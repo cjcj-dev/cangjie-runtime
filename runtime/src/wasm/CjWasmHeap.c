@@ -108,6 +108,7 @@ static void DiagMessage(const char* fmt, va_list args)
         ++fmt;
         if (*fmt == 's') {
             const char* s = va_arg(args, const char*);
+            if (s == NULL) { s = "(null)"; }
             DiagWrite(s, strlen(s));
         } else if (*fmt == 'u') {
             DiagNumber(va_arg(args, unsigned), 10, 0, 0);
@@ -122,7 +123,7 @@ static void DiagMessage(const char* fmt, va_list args)
             DiagNumber(n < 0 ? 0 - (uint64_t)n : (uint64_t)n, 10, 0, 0);
         } else if (*fmt == 'p') {
             uintptr_t p = (uintptr_t)va_arg(args, void*);
-            DiagNumber(p, 16, 2 * sizeof(void*), p != 0);
+            DiagNumber(p, 16, 0, p != 0);
         } else if (strncmp(fmt, "#lx", 3) == 0) {
             unsigned long n = va_arg(args, unsigned long);
             DiagNumber(n, 16, 0, n != 0);

@@ -608,6 +608,11 @@ int main(int argc, char** argv)
 {
     InitTypes();
     const char* mode = argc > 1 ? argv[1] : "all";
+    if (strcmp(mode, "null_slot") == 0) {
+        static void** slots[1] = {NULL};
+        cjw_static_root_table_register(slots, 1);
+        return 0;
+    }
     if (strcmp(mode, "gate") == 0) { return ModeGateNoAutoCollect(); }
     if (strcmp(mode, "verify_interior") == 0) {   // verifier before collection is enabled, metadata points mid-object
         void* n = NewObj(&tiNode); void* b = NewObj(&tiLeaf);
