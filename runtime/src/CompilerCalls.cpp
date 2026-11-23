@@ -2224,9 +2224,14 @@ static void CopyMaybeLocalStruct(ObjectPtr owner, MAddress dst, size_t dstLen, O
     // Iterate metadata in address order but copy from the end for an overlapping
     // right shift. Each reference must take the source and destination barriers.
     std::vector<MAddress> offsets;
-    gctib.ForEachBitmapWordInRange(dst, [&](RefField<>& field) {
-        offsets.push_back(reinterpret_cast<MAddress>(&field) - dst);
-    }, dst, dst + srcLen);
+    // A component without reference fields carries a null GCTib (TypeInfo::HasRefField() is false),
+    // which ForEachBitmapWordInRange would dereference as a StdGCTib*: such an element is plain bytes
+    // and takes no reference barriers, as in TypeArrayKlass::copy_array (hotspot/share/oops/typeArrayKlass.cpp:177).
+    if (gctib.tag != 0) {
+        gctib.ForEachBitmapWordInRange(dst, [&](RefField<>& field) {
+            offsets.push_back(reinterpret_cast<MAddress>(&field) - dst);
+        }, dst, dst + srcLen);
+    }
     std::sort(offsets.begin(), offsets.end());
     auto copyRange = [&](size_t begin, size_t end) {
         if (begin != end) {
