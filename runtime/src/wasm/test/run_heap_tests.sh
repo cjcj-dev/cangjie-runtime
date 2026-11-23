@@ -11,7 +11,7 @@ NODE_FLAGS=${NODE_FLAGS:---no-turbo-fast-api-calls}
 HERE=$(cd "$(dirname "$0")" && pwd); SRC=$(dirname "$HERE")
 HEAPC=${6:-$SRC/CjWasmHeap.c}
 mkdir -p "$OUT"; cd "$OUT" || exit 99
-FLAGS="--target=wasm32-wasi --sysroot=$SR -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions -I$SRC"
+FLAGS="--target=wasm32-wasi --sysroot=$SR -O2 -std=c11 -Wall -Wextra -Werror -fno-exceptions -mexception-handling -mllvm -wasm-enable-eh -I$SRC"
 FAILS=0
 "$CC" $FLAGS -c "$HEAPC" -o heap.o; c1=$?
 "$CC" $FLAGS -c "$HERE/CjWasmHeapTest.c" -o heap_test.o; c2=$?
@@ -38,6 +38,7 @@ rt_varray 135 no derivable runtime field layout
 wild_ti 139 outside linear memory
 tib_beyond 139 beyond its
 array_bounds 139 exceeds its
+negative_length 139 negative length -9223372036854775808
 frame_order 139 is not below its caller frame
 table_in_heap 139 is NULL or inside the managed heap
 verify_interior 139 not at the start of a live object

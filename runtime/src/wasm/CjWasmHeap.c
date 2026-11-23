@@ -3,7 +3,8 @@
 #include "CjWasmObjectModel.h"
 #include "CjWasmRuntime.h"
 #include <stdarg.h>
-#include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -71,15 +72,94 @@ static size_t g_markSp = 0, g_markCap = 0;
 
 // ---------------------------------------------------------------------------
 // Failure reporting
+// Diagnostics also run on allocation failure: write directly to fd 2 without allocating.
+static void DiagWrite(const char* s, size_t len)
+{
+    while (len != 0) {
+        ssize_t n = write(STDERR_FILENO, s, len);
+        if (n < 0 && errno == EINTR) { continue; }
+        if (n <= 0) { return; }
+        s += n;
+        len -= (size_t)n;
+    }
+}
+
+static void DiagNumber(uint64_t value, unsigned base, unsigned width, int prefix)
+{
+    char buf[24]; // 20 decimal digits (or 16 hex digits) and an optional prefix
+    char* end = buf + sizeof(buf);
+    char* p = end;
+    do {
+        *--p = "0123456789abcdef"[value % base];
+        value /= base;
+    } while (value != 0 || (unsigned)(end - p) < width);
+    if (prefix) { *--p = 'x'; *--p = '0'; }
+    DiagWrite(p, (size_t)(end - p));
+}
+
+// Only the conversions used in the two Wasm runtime translation units.
+static void DiagMessage(const char* fmt, va_list args)
+{
+    while (*fmt) {
+        const char* start = fmt;
+        while (*fmt && *fmt != '%') { ++fmt; }
+        DiagWrite(start, (size_t)(fmt - start));
+        if (!*fmt) { break; }
+        ++fmt;
+        if (*fmt == 's') {
+            const char* s = va_arg(args, const char*);
+            DiagWrite(s, strlen(s));
+        } else if (*fmt == 'u') {
+            DiagNumber(va_arg(args, unsigned), 10, 0, 0);
+        } else if (strncmp(fmt, "zu", 2) == 0) {
+            DiagNumber(va_arg(args, size_t), 10, 0, 0);
+            ++fmt;
+        } else if (*fmt == 'd' || strncmp(fmt, "lld", 3) == 0) {
+            int64_t n;
+            if (*fmt == 'd') { n = va_arg(args, int); }
+            else { n = va_arg(args, long long); fmt += 2; }
+            if (n < 0) { DiagWrite("-", 1); }
+            DiagNumber(n < 0 ? 0 - (uint64_t)n : (uint64_t)n, 10, 0, 0);
+        } else if (*fmt == 'p') {
+            uintptr_t p = (uintptr_t)va_arg(args, void*);
+            DiagNumber(p, 16, 2 * sizeof(void*), p != 0);
+        } else if (strncmp(fmt, "#lx", 3) == 0) {
+            unsigned long n = va_arg(args, unsigned long);
+            DiagNumber(n, 16, 0, n != 0);
+            fmt += 2;
+        } else if (strncmp(fmt, "#x", 2) == 0 || strncmp(fmt, "02x", 3) == 0) {
+            unsigned n = va_arg(args, unsigned);
+            int padded = *fmt == '0';
+            DiagNumber(n, 16, padded ? 2 : 0, !padded && n != 0);
+            fmt += padded ? 2 : 1;
+        } else {
+            // Leave an unrecognized conversion visible in the diagnostic.
+            DiagWrite("%", 1);
+            DiagWrite(fmt, strlen(fmt));
+            break;
+        }
+        ++fmt;
+    }
+}
+
+__attribute__((format(printf, 1, 2), visibility("hidden")))
+void cjw_diag(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    DiagMessage(fmt, ap);
+    va_end(ap);
+}
+
+__attribute__((format(printf, 1, 2)))
 static _Noreturn void GcIntegrity(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    fputs("cangjie wasm32 runtime: GC integrity failure: ", stderr);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
+    cjw_diag("cangjie wasm32 runtime: GC integrity failure: ");
+    DiagMessage(fmt, ap);
+    DiagWrite("\n", 1);
     va_end(ap);
-    fflush(stderr);
     const char* trap = getenv("CJ_WASM_TRAP_ON_UNSUPPORTED");
     if (trap != NULL && trap[0] == '1') { __builtin_trap(); }
     exit(CJW_RC_GC_INTEGRITY);
@@ -87,9 +167,8 @@ static _Noreturn void GcIntegrity(const char* fmt, ...)
 
 static _Noreturn void OutOfMemory(size_t size)
 {
-    fprintf(stderr, "cangjie wasm32 runtime: out of memory allocating %zu bytes (arena %zu bytes)\n", size,
+    cjw_diag("cangjie wasm32 runtime: out of memory allocating %zu bytes (arena %zu bytes)\n", size,
             g_stats.heapBytes);
-    fflush(stderr);
     exit(CJW_RC_UNSUPPORTED);
 }
 
@@ -391,7 +470,7 @@ static void Untraceable(const char* what, const uint8_t* ti)
         g_vstats.untraceable++;
         if (g_verifyVerbose) {
             const char* name = ti != NULL ? *(const char* const*)ti : NULL;
-            fprintf(stderr, "cangjie wasm32 runtime: gc verify: untraceable %s: %s\n", name ? name : "?", what);
+            cjw_diag("cangjie wasm32 runtime: gc verify: untraceable %s: %s\n", name ? name : "?", what);
         }
         return;
     }
@@ -456,7 +535,7 @@ static const CjwGCTib* EnsureGCTib(const uint8_t* ti, int depth)
     g_stats.derivedGCTibs++;
     if (g_verifyVerbose) {
         const char* name = *(const char* const*)ti;
-        fprintf(stderr, "cangjie wasm32 runtime: gc verify: derived tib for %s: size=%u bits[0]=%#x\n", name ? name : "?",
+        cjw_diag("cangjie wasm32 runtime: gc verify: derived tib for %s: size=%u bits[0]=%#x\n", name ? name : "?",
                 size, nBytes ? tib->bits[0] : 0u);
     }
     return tib;
@@ -487,10 +566,10 @@ static void DumpTib(const uint8_t* ti, const CjwGCTib* gctib)
     for (uint32_t i = 0; i < g_ndumped; ++i) { if (g_dumped[i] == ti) { return; } }
     if (g_ndumped < 256u) { g_dumped[g_ndumped++] = ti; }
     const char* name = *(const char* const*)ti;
-    fprintf(stderr, "cangjie wasm32 runtime: gc verify: tib %s kind=%d size=%u nBytes=%u bits=", name ? name : "?",
+    cjw_diag("cangjie wasm32 runtime: gc verify: tib %s kind=%d size=%u nBytes=%u bits=", name ? name : "?",
             cjw_ti_kind(ti), cjw_ti_size(ti), gctib->nBytes);
-    for (uint32_t i = 0; i < gctib->nBytes && i < 16u; ++i) { fprintf(stderr, "%02x", gctib->bits[i]); }
-    fputc('\n', stderr);
+    for (uint32_t i = 0; i < gctib->nBytes && i < 16u; ++i) { cjw_diag("%02x", gctib->bits[i]); }
+    DiagWrite("\n", 1);
 }
 
 // Visits the reference slots that `gctib` marks in [base, base+limit).
@@ -813,8 +892,7 @@ void cjw_gc_verify_heap(CjwHeapVerifyStats* out)
 static int g_statsAtExit = 0;
 static void PrintStatsAtExit(void)
 {
-    fprintf(stderr,
-            "cangjie wasm32 runtime: gc stats: heap=%zu live=%zu allocated=%zu freed=%zu collections=%u chunks=%u "
+    cjw_diag("cangjie wasm32 runtime: gc stats: heap=%zu live=%zu allocated=%zu freed=%zu collections=%u chunks=%u "
             "collecting=%d\n",
             g_stats.heapBytes, g_stats.liveBytes, g_stats.allocatedBytesTotal, g_stats.freedBytesTotal,
             g_stats.collections, g_stats.chunks, g_collecting);
@@ -824,8 +902,7 @@ static void VerifyAtExit(void)
 {
     CjwHeapVerifyStats v;
     cjw_gc_verify_heap(&v);
-    fprintf(stderr,
-            "cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
+    cjw_diag("cangjie wasm32 runtime: gc verify: objects=%zu heap_refs=%zu nonheap_refs=%zu untraceable=%zu "
             "derived_tibs=%u unmarked_heap_words=%zu internal_roots=%zu static_tables=%zu\n",
             v.objects, v.heapRefs, v.nonHeapRefs, v.untraceable, g_stats.derivedGCTibs, v.unmarkedHeapWords,
             g_ninternal, g_ntables);

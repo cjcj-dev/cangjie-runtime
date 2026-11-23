@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// The heap-only fixture has no exception runtime or in-flight exception.
+void* cjw_inflight_exception(void) { return NULL; }
+
 _Noreturn void cjw_unsupported(const char* feature, int code)
 {
     fprintf(stderr, "cangjie wasm32 runtime: %s is not supported on the wasm32-wasi target yet\n", feature);
@@ -647,9 +650,9 @@ int main(int argc, char** argv)
         f->slots[0] = NewObj(&tiNoTib);
     } else if (strcmp(mode, "tib_beyond") == 0) {
         f->slots[0] = NewObj(&tiBeyond);
-    } else if (strcmp(mode, "array_bounds") == 0) {
+    } else if (strcmp(mode, "array_bounds") == 0 || strcmp(mode, "negative_length") == 0) {
         void* arr = NewArr(&tiRefArr, 2, 4);
-        *(int64_t*)((uint8_t*)arr + CJW_ARRAY_LENGTH_OFFSET) = 100000;
+        *(int64_t*)((uint8_t*)arr + CJW_ARRAY_LENGTH_OFFSET) = strcmp(mode, "negative_length") == 0 ? INT64_MIN : 100000;
         f->slots[0] = arr;
     } else if (strcmp(mode, "frame_order") == 0) {
         // I-FRAME: a caller frame must lie above its callee on the wasm stack.
