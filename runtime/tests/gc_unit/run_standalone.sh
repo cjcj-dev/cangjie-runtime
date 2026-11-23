@@ -403,6 +403,7 @@ MAIN_SOURCES=(
   "$SRC/test_loadfc.cpp"
   "$SRC/test_upstream_demangle.cpp"
   "$SRC/test_arraycopy.cpp"
+  "$SRC/test_arraycopy_local_null_gctib.cpp"
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
   "$SRC/test_mark_stack_entry.cpp"
