@@ -433,6 +433,7 @@ MAIN_SOURCES=(
   "$SRC/test_cycle_ref_saferegion.cpp"
   "$SRC/test_watermark_iteration.cpp"
   "$SRC/test_binding_poll.cpp"
+  "$SRC/test_spawn_entry_c2r_stub.cpp"
   "$SRC/test_thread_smr_reclaim.cpp"
   "$SRC/test_typeinfo_arena.cpp"
   "$SRC/test_numa_mempolicy.cpp"
