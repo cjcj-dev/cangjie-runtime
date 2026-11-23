@@ -3,6 +3,7 @@
 
 #include <new>
 
+#include "Base/Log.h"
 #include "Base/Panic.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Common/Mutex.h"
@@ -20,6 +21,7 @@
 #include <chrono>
 #include "Base/Macros.h"
 #include "Heap/z/zUncommitter.hpp"
+#include "Mutator/ThreadLocal.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/shared/collectedHeap.hpp"
@@ -501,8 +503,21 @@ void FinalizerProcessor::RunWorker(bool handler)
         }
         if (!IsRunning()) { return; }
     }
-    (void)NewFinalizerCJThread();
-    Mutator* mutator = Mutator::GetMutator();
+    (void)RunBoundWorker(handler, NewFinalizerCJThread());
+}
+
+// jvm.cpp:2992-3004 / javaThread.cpp:2017-2021: a service thread whose native
+// creation failed never runs its body. NewFinalizerCJThread returns null before
+// any identity is bound (CjScheduler.cpp), so neither worker may publish,
+// enter managed code, or tear down a mutator it does not have.
+bool FinalizerProcessor::RunBoundWorker(bool handler, void* carrier)
+{
+    Mutator* mutator = carrier == nullptr ? nullptr : ThreadLocal::GetMutator();
+    if (mutator == nullptr) {
+        LOG(RTLOG_ERROR, "%s worker has no bound mutator (carrier %p); the service is not started",
+            handler ? "reference handler" : "finalizer", carrier);
+        return false;
+    }
     if (!handler) {
         PublishWorkerMutator(*mutator);
     }
@@ -515,6 +530,7 @@ void FinalizerProcessor::RunWorker(bool handler)
         RetractWorkerMutator(*mutator);
     }
     EndFinalizerCJThread();
+    return true;
 }
 
 BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)

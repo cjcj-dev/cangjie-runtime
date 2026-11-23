@@ -100,6 +100,10 @@ public:
     // MutatorManager::VisitAllMutatorsExceptFinalizer reads.
     void PublishWorkerMutator(Mutator& mutator);
     void RetractWorkerMutator(Mutator& mutator);
+    // Serves one worker on the carrier NewFinalizerCJThread returned. Returns
+    // false, without publishing or entering managed code, when the carrier or
+    // its bound mutator is missing.
+    bool RunBoundWorker(bool handler, void* carrier);
     ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
     void ProcessReferences() { referenceProcessor.process_references(); }
     void EnqueueReferences() { referenceProcessor.enqueue_references(); }
