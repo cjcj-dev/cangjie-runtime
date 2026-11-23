@@ -171,7 +171,17 @@ Mutator* MutatorManager::CreateMutator()
     // Binding must not reinitialize a watermark already seen by a root task.
     Mutator* mutator = ConcurrencyModel::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "scheduler must construct the logical mutator");
-    MutatorManagementRLock();
+    // First schedule: the processor bound this registered identity to the
+    // carrier and PreparedToRun published it active (processor.cpp) before the
+    // entry (StartMainTask, or CJThreadEntryInitMutator -> MRT_CreateMutator)
+    // reaches here, so a pause may own the write side and wait for it.
+    // mutex.cpp:87-113: such a thread waits for the lock in the blocked state.
+    // A carrier that has not bound it has not published it active either.
+    if (ThreadLocal::GetMutator() == mutator) {
+        AcquireMutatorManagementRLockForMutator(*mutator);
+    } else {
+        MutatorManagementRLock();
+    }
     mutator->InitTid();
     BindMutator(*mutator);
     MutatorManagementRUnlock();
