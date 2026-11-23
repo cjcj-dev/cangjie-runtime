@@ -96,6 +96,14 @@ public:
     bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
     Mutator* GetMutator() const { return fpMutator; }
+    // Publish/retract the finalizer worker identity that
+    // MutatorManager::VisitAllMutatorsExceptFinalizer reads.
+    void PublishWorkerMutator(Mutator& mutator);
+    void RetractWorkerMutator(Mutator& mutator);
+    // Serves one worker on the carrier NewFinalizerCJThread returned. Returns
+    // false, without publishing or entering managed code, when the carrier or
+    // its bound mutator is missing.
+    bool RunBoundWorker(bool handler, void* carrier);
     ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
     void ProcessReferences() { referenceProcessor.process_references(); }
     void EnqueueReferences() { referenceProcessor.enqueue_references(); }

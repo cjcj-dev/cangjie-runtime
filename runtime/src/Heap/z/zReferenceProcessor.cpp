@@ -3,6 +3,7 @@
 
 #include <new>
 
+#include "Base/Log.h"
 #include "Base/Panic.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Common/Mutex.h"
@@ -20,6 +21,7 @@
 #include <chrono>
 #include "Base/Macros.h"
 #include "Heap/z/zUncommitter.hpp"
+#include "Mutator/ThreadLocal.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/shared/collectedHeap.hpp"
@@ -471,6 +473,26 @@ void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
 void FinalizerProcessor::Run() { RunWorker(false); }
 void FinalizerProcessor::RunReferenceHandler() { RunWorker(true); }
 
+// The worker is registered and active here: MRT_PreRunManagedCode left the
+// saferegion in NewFinalizerCJThread. A pause may already own the management
+// write lock and wait for this mutator, so acquire it safepoint-cooperatively.
+void FinalizerProcessor::PublishWorkerMutator(Mutator& mutator)
+{
+    MutatorManager::Instance().AcquireMutatorManagementRLockForMutator(mutator);
+    fpMutator = &mutator;
+    tid = mutator.GetTid();
+    MutatorManager::Instance().MutatorManagementRUnlock();
+}
+
+// Still active after the managed service returns (ScopedObjectAccess restores
+// the state it found), so the same acquisition applies.
+void FinalizerProcessor::RetractWorkerMutator(Mutator& mutator)
+{
+    MutatorManager::Instance().AcquireMutatorManagementRLockForMutator(mutator);
+    fpMutator = nullptr;
+    MutatorManager::Instance().MutatorManagementRUnlock();
+}
+
 void FinalizerProcessor::RunWorker(bool handler)
 {
     NotifyStarted();
@@ -481,13 +503,23 @@ void FinalizerProcessor::RunWorker(bool handler)
         }
         if (!IsRunning()) { return; }
     }
-    (void)NewFinalizerCJThread();
-    Mutator* mutator = Mutator::GetMutator();
+    (void)RunBoundWorker(handler, NewFinalizerCJThread());
+}
+
+// jvm.cpp:2992-3004 / javaThread.cpp:2017-2021: a service thread whose native
+// creation failed never runs its body. NewFinalizerCJThread returns null before
+// any identity is bound (CjScheduler.cpp), so neither worker may publish,
+// enter managed code, or tear down a mutator it does not have.
+bool FinalizerProcessor::RunBoundWorker(bool handler, void* carrier)
+{
+    Mutator* mutator = carrier == nullptr ? nullptr : ThreadLocal::GetMutator();
+    if (mutator == nullptr) {
+        LOG(RTLOG_ERROR, "%s worker has no bound mutator (carrier %p); the service is not started",
+            handler ? "reference handler" : "finalizer", carrier);
+        return false;
+    }
     if (!handler) {
-        MutatorManager::Instance().MutatorManagementRLock();
-        fpMutator = mutator;
-        tid = mutator->GetTid();
-        MutatorManager::Instance().MutatorManagementRUnlock();
+        PublishWorkerMutator(*mutator);
     }
     {
         ScopedObjectAccess access;
@@ -495,11 +527,10 @@ void FinalizerProcessor::RunWorker(bool handler)
         CHECK_DETAIL(!ExceptionManager::HasPendingException(), "Reference service exited with an exception");
     }
     if (!handler) {
-        MutatorManager::Instance().MutatorManagementRLock();
-        fpMutator = nullptr;
-        MutatorManager::Instance().MutatorManagementRUnlock();
+        RetractWorkerMutator(*mutator);
     }
     EndFinalizerCJThread();
+    return true;
 }
 
 BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)

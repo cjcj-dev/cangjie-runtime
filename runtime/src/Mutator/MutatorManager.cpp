@@ -171,7 +171,17 @@ Mutator* MutatorManager::CreateMutator()
     // Binding must not reinitialize a watermark already seen by a root task.
     Mutator* mutator = ConcurrencyModel::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "scheduler must construct the logical mutator");
-    MutatorManagementRLock();
+    // First schedule: the processor bound this registered identity to the
+    // carrier and PreparedToRun published it active (processor.cpp) before the
+    // entry (StartMainTask, or CJThreadEntryInitMutator -> MRT_CreateMutator)
+    // reaches here, so a pause may own the write side and wait for it.
+    // mutex.cpp:87-113: such a thread waits for the lock in the blocked state.
+    // A carrier that has not bound it has not published it active either.
+    if (ThreadLocal::GetMutator() == mutator) {
+        AcquireMutatorManagementRLockForMutator(*mutator);
+    } else {
+        MutatorManagementRLock();
+    }
     mutator->InitTid();
     BindMutator(*mutator);
     MutatorManagementRUnlock();
@@ -322,6 +332,21 @@ private:
     bool released = false;
 };
 
+// Read-side counterpart of InFlightMutatorManagementLockRelease.
+class InFlightMutatorManagementReadLockRelease {
+public:
+    explicit InFlightMutatorManagementReadLockRelease(MutatorManager& manager) : manager(manager) {}
+    void operator()()
+    {
+        manager.MutatorManagementRUnlock();
+        released = true;
+    }
+    bool NotReleased() const { return !released; }
+private:
+    MutatorManager& manager;
+    bool released = false;
+};
+
 } // namespace
 
 void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
@@ -333,6 +358,26 @@ void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
         {
             MutatorBlockInVMPreprocess<InFlightMutatorManagementLockRelease> blocked(mutator, release);
             MutatorManagementWLock();
+        }
+        if (release.NotReleased()) {
+            return;
+        }
+    }
+}
+
+// mutex.cpp:87-113 (Mutex::lock_contended): an active thread that finds the
+// lock contended blocks in ThreadBlockInVMPreprocess and retries after a
+// request released the in-flight lock. StopTheWorld owns the write side from
+// before DemandSuspensionForSync until StartTheWorld (safepoint.cpp:346/465
+// hold Threads_lock the same way), so an active mutator spinning for the read
+// side would be waited on by the pause it is waiting for.
+void MutatorManager::AcquireMutatorManagementRLockForMutator(Mutator& mutator)
+{
+    while (!TryAcquireMutatorManagementRLock()) {
+        InFlightMutatorManagementReadLockRelease release(*this);
+        {
+            MutatorBlockInVMPreprocess<InFlightMutatorManagementReadLockRelease> blocked(mutator, release);
+            MutatorManagementRLock();
         }
         if (release.NotReleased()) {
             return;
