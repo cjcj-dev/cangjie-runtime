@@ -133,6 +133,10 @@ public:
 
     void AcquireMutatorManagementWLock();
     void AcquireMutatorManagementWLockForExit(Mutator& mutator);
+    // mutex.cpp:87-113 for the read side: a registered mutator that is not
+    // safepoint-safe waits for the management lock inside its saferegion,
+    // since StopTheWorld holds the write side for the whole pause.
+    void AcquireMutatorManagementRLockForMutator(Mutator& mutator);
     // threads.cpp:1089-1114: single removal transaction (detach publication,
     // list removal, GC-detached transition) in the pause-exclusive section.
     void RemoveMutator(Mutator& mutator);

@@ -471,18 +471,22 @@ void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
 void FinalizerProcessor::Run() { RunWorker(false); }
 void FinalizerProcessor::RunReferenceHandler() { RunWorker(true); }
 
+// The worker is registered and active here: MRT_PreRunManagedCode left the
+// saferegion in NewFinalizerCJThread. A pause may already own the management
+// write lock and wait for this mutator, so acquire it safepoint-cooperatively.
 void FinalizerProcessor::PublishWorkerMutator(Mutator& mutator)
 {
-    MutatorManager::Instance().MutatorManagementRLock();
+    MutatorManager::Instance().AcquireMutatorManagementRLockForMutator(mutator);
     fpMutator = &mutator;
     tid = mutator.GetTid();
     MutatorManager::Instance().MutatorManagementRUnlock();
 }
 
+// Still active after the managed service returns (ScopedObjectAccess restores
+// the state it found), so the same acquisition applies.
 void FinalizerProcessor::RetractWorkerMutator(Mutator& mutator)
 {
-    (void)mutator;
-    MutatorManager::Instance().MutatorManagementRLock();
+    MutatorManager::Instance().AcquireMutatorManagementRLockForMutator(mutator);
     fpMutator = nullptr;
     MutatorManager::Instance().MutatorManagementRUnlock();
 }
