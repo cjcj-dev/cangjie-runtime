@@ -2,14 +2,16 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-// Finalizer worker identity publication versus a stop-the-world pause.
+// Registered, active mutators that take the mutator management read lock
+// versus a stop-the-world pause that owns the write side.
 //
 // Stage B hello-spin: VMThread waited in WaitUntilAllMutatorStopped on the
 // finalizer worker (LWP 925706), which spun in MutatorManagementRLock()
 // inside FinalizerProcessor::RunWorker while the pause owned the write side.
+// MutatorManager::CreateMutator has the same caller state on first schedule:
+// the processor binds the identity and PreparedToRun publishes it active
+// before StartMainTask / MRT_CreateMutator reach the read lock.
 //
-// Product path: FinalizerProcessor::RunWorker -> NewFinalizerCJThread ->
-//   MRT_PreRunManagedCode (leaves the saferegion) -> PublishWorkerMutator.
 // Pause path: ScopedStopTheWorld -> MutatorManager::StopTheWorld ->
 //   AcquireMutatorManagementWLock -> DemandSuspensionForSync ->
 //   WaitUntilAllMutatorStopped.
@@ -18,11 +20,13 @@
 // (safepoint.cpp:346, released at safepoint.cpp:465), and an active Java
 // thread that finds a safepoint-checking lock contended waits in
 // ThreadBlockInVMPreprocess (mutex.cpp:87-113), so the safepoint never waits
-// on a thread that is waiting for the safepoint's own lock.
+// on a thread that is waiting for the safepoint's own lock. A service thread
+// whose native creation failed never runs its body (jvm.cpp:2992-3004).
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <thread>
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
@@ -39,6 +43,8 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
+constexpr int kWaitMs = 10000;
+
 template<class Pred> bool WaitFor(Pred pred, int ms)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
@@ -49,45 +55,86 @@ template<class Pred> bool WaitFor(Pred pred, int ms)
     return true;
 }
 
-// Active: the worker is in the state MRT_PreRunManagedCode leaves it in.
-// Saferegion: control arm, the same publication from a safepoint-safe state.
-enum class Publisher { Active, Saferegion };
+// The product read-lock acquisition the worker performs while the pause owns
+// the write side.
+enum class Action { Publish, Retract, CreateMutator };
+// Active: the state the product caller is in (MRT_PreRunManagedCode or
+// PreparedToRun left the saferegion). Saferegion: control arm, the same call
+// from a safepoint-safe state.
+enum class Caller { Active, Saferegion };
 
-const char* Name(Publisher publisher) { return publisher == Publisher::Active ? "active" : "saferegion"; }
+const char* Name(Action action)
+{
+    switch (action) {
+        case Action::Publish: return "publish";
+        case Action::Retract: return "retract";
+        default: return "create_mutator";
+    }
+}
+const char* Name(Caller caller) { return caller == Caller::Active ? "active" : "saferegion"; }
 
-void RunPublication(Publisher publisher)
+// A timed-out wait means the worker may still be inside the product call and
+// the threads cannot be joined; report and leave the test process without
+// reading anything the worker writes.
+[[noreturn]] void FailUnjoinable(Action action, Caller caller, const char* stage)
+{
+    std::fprintf(stderr, "FINALIZER_PUBLICATION_RESULT action=%s caller=%s timed_out=%s\n",
+                 Name(action), Name(caller), stage);
+    std::fflush(stderr);
+    std::_Exit(1);
+}
+
+void RunUnderPause(Action action, Caller caller)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture heap;
     auto& manager = MutatorManager::Instance();
     FinalizerProcessor& processor = Heap::GetHeap().GetFinalizerProcessor();
     const bool idleBefore = processor.GetMutator() == nullptr;
+    // The product's out-of-line PreparedToRun, as test_binding_poll resolves it.
+    using Resume = void (*)(Mutator*, ThreadLocalData*);
+    auto resumeFirst = reinterpret_cast<Resume>(dlsym(RTLD_DEFAULT,
+        "_ZN12MapleRuntime7Mutator13PreparedToRunEPNS_15ThreadLocalDataE"));
+    GC_EXPECT_TRUE(action != Action::CreateMutator || resumeFirst != nullptr);
+    if (action == Action::CreateMutator && resumeFirst == nullptr) { return; }
     std::atomic<Mutator*> owner{nullptr};
-    std::atomic<bool> publishNow{false};
-    std::atomic<bool> published{false};
+    std::atomic<bool> actNow{false};
+    std::atomic<bool> acted{false};
     std::atomic<bool> exitNow{false};
+    Mutator* created = nullptr; // written by the worker before `acted` (release)
     std::thread worker([&] {
         Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-        // Registered and active, as after NewFinalizerCJThread returns.
-        (void)current->LeaveSaferegion();
-        StackWatermarkSet::on_safepoint(*current);
-        owner.store(current, std::memory_order_release);
-        while (!publishNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-        if (publisher == Publisher::Active) {
+        if (action == Action::Retract) {
+            // Published before the pause, from the initial saferegion.
             processor.PublishWorkerMutator(*current);
-        } else {
-            (void)current->EnterSaferegion(false);
-            processor.PublishWorkerMutator(*current);
-            (void)current->LeaveSaferegion();
         }
-        published.store(true, std::memory_order_release);
+        if (action == Action::CreateMutator) {
+            // processor.cpp: the carrier binds the identity, then PreparedToRun
+            // leaves the saferegion before the entry calls CreateMutator.
+            resumeFirst(current, ThreadLocal::GetThreadLocalData());
+        } else {
+            // Registered and active, as after NewFinalizerCJThread returns.
+            (void)current->LeaveSaferegion();
+            StackWatermarkSet::on_safepoint(*current);
+        }
+        owner.store(current, std::memory_order_release);
+        while (!actNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        const bool safe = caller == Caller::Saferegion && current->EnterSaferegion(false);
+        switch (action) {
+            case Action::Publish: processor.PublishWorkerMutator(*current); break;
+            case Action::Retract: processor.RetractWorkerMutator(*current); break;
+            default: created = manager.CreateMutator(); break;
+        }
+        if (safe) { (void)current->LeaveSaferegion(); }
+        acted.store(true, std::memory_order_release);
         while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-        processor.RetractWorkerMutator(*current);
+        if (action == Action::Publish) { processor.RetractWorkerMutator(*current); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     });
-    const bool created = WaitFor([&] { return owner.load() != nullptr; }, 10000);
-    if (!created) { std::abort(); }
-    Mutator* target = owner.load();
+    if (!WaitFor([&] { return owner.load(std::memory_order_acquire) != nullptr; }, kWaitMs)) {
+        FailUnjoinable(action, caller, "worker_setup");
+    }
+    Mutator* target = owner.load(std::memory_order_acquire);
 
     std::atomic<bool> paused{false};
     std::atomic<bool> resume{false};
@@ -98,49 +145,78 @@ void RunPublication(Publisher publisher)
         while (!resume.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     });
     // The suspension request is set only after StopTheWorld owns the
-    // management write lock, so the publication below always meets the
-    // pause in WaitUntilAllMutatorStopped with the lock held.
+    // management write lock, so the call below always meets the pause in
+    // WaitUntilAllMutatorStopped with the lock held.
     const bool requested = WaitFor([&] {
         return manager.SyncTriggered() && target->HasAnySuspensionRequest();
-    }, 10000);
-    if (!requested) { std::abort(); }
-    const bool stoppedBeforePublish = paused.load(std::memory_order_acquire);
-    publishNow.store(true, std::memory_order_release);
-    const bool pauseCompleted = WaitFor([&] { return paused.load(std::memory_order_acquire); }, 10000);
+    }, kWaitMs);
+    if (!requested) { FailUnjoinable(action, caller, "request"); }
+    const bool stoppedBeforeAct = paused.load(std::memory_order_acquire);
+    actNow.store(true, std::memory_order_release);
+    const bool pauseCompleted = WaitFor([&] { return paused.load(std::memory_order_acquire); }, kWaitMs);
     std::fprintf(stderr,
-                 "FINALIZER_PUBLICATION_PAUSE publisher=%s requested=%d stopped_before_publish=%d "
+                 "FINALIZER_PUBLICATION_PAUSE action=%s caller=%s requested=1 stopped_before_act=%d "
                  "pause_completed=%d\n",
-                 Name(publisher), requested, stoppedBeforePublish, pauseCompleted);
-    if (!pauseCompleted) {
-        // The pause can only finish once the waiting publisher is safe; the
-        // threads cannot be joined, so leave this test process now.
-        std::fprintf(stderr, "FINALIZER_PUBLICATION_RESULT publisher=%s pause_completed=0\n", Name(publisher));
-        std::fflush(stderr);
-        std::_Exit(1);
-    }
-    // While the world is stopped the publisher is safe and has not published:
-    // the pause owns the lock the publication needs.
+                 Name(action), Name(caller), stoppedBeforeAct, pauseCompleted);
+    // The pause can only finish once the waiting caller is safe.
+    if (!pauseCompleted) { FailUnjoinable(action, caller, "pause"); }
+    // While the world is stopped the caller is safe and has not acquired the
+    // read lock: the pause owns the write side the call needs.
     const bool safeInPause = target->InSaferegion();
-    const bool publishedInPause = published.load(std::memory_order_acquire);
+    const bool actedInPause = acted.load(std::memory_order_acquire);
     resume.store(true, std::memory_order_release);
     requester.join();
-    const bool publishedAfter = WaitFor([&] { return published.load(std::memory_order_acquire); }, 10000);
-    const bool identity = processor.GetMutator() == target && processor.GetTid() == target->GetTid();
+    const bool actedAfter = WaitFor([&] { return acted.load(std::memory_order_acquire); }, kWaitMs);
+    if (!actedAfter) { FailUnjoinable(action, caller, "act"); }
+    // `acted` (acquire) orders every worker write of the call before these reads.
+    bool identity = false;
+    switch (action) {
+        case Action::Publish:
+            identity = processor.GetMutator() == target && processor.GetTid() == target->GetTid();
+            break;
+        case Action::Retract: identity = processor.GetMutator() == nullptr; break;
+        default: identity = created == target; break;
+    }
     exitNow.store(true, std::memory_order_release);
     worker.join();
-    const bool retracted = processor.GetMutator() == nullptr;
+    const bool idleAfter = processor.GetMutator() == nullptr;
     std::fprintf(stderr,
-                 "FINALIZER_PUBLICATION_RESULT publisher=%s pause_completed=1 safe_in_pause=%d "
-                 "published_in_pause=%d published_after=%d identity=%d retracted=%d\n",
-                 Name(publisher), safeInPause, publishedInPause, publishedAfter, identity, retracted);
+                 "FINALIZER_PUBLICATION_RESULT action=%s caller=%s pause_completed=1 safe_in_pause=%d "
+                 "acted_in_pause=%d acted_after=1 identity=%d idle_after=%d\n",
+                 Name(action), Name(caller), safeInPause, actedInPause, identity, idleAfter);
     GC_EXPECT_TRUE(idleBefore);
-    GC_EXPECT_FALSE(stoppedBeforePublish);
+    GC_EXPECT_FALSE(stoppedBeforeAct);
     GC_EXPECT_TRUE(safeInPause);
-    GC_EXPECT_FALSE(publishedInPause);
-    GC_EXPECT_TRUE(publishedAfter);
+    GC_EXPECT_FALSE(actedInPause);
     GC_EXPECT_TRUE(identity);
-    GC_EXPECT_TRUE(retracted);
+    GC_EXPECT_TRUE(idleAfter);
     GC_EXPECT_FALSE(manager.SyncTriggered());
+}
+
+// RunBoundWorker on a thread NewFinalizerCJThread did not bind: either no
+// carrier (creation failed) or a carrier without a bound mutator.
+void RunUnbound(bool handler, bool withCarrier)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    FinalizerProcessor& processor = Heap::GetHeap().GetFinalizerProcessor();
+    const bool idleBefore = processor.GetMutator() == nullptr;
+    int carrier = 0;
+    std::atomic<int> served{-1};
+    std::atomic<bool> unbound{false};
+    std::thread worker([&] {
+        unbound.store(ThreadLocal::GetMutator() == nullptr, std::memory_order_relaxed);
+        served.store(processor.RunBoundWorker(handler, withCarrier ? &carrier : nullptr) ? 1 : 0,
+                     std::memory_order_release);
+    });
+    worker.join();
+    const bool idleAfter = processor.GetMutator() == nullptr;
+    std::fprintf(stderr, "FINALIZER_WORKER_BINDING_RESULT worker=%s carrier=%d unbound=%d served=%d idle_after=%d\n",
+                 handler ? "reference_handler" : "finalizer", withCarrier, unbound.load(), served.load(), idleAfter);
+    GC_EXPECT_TRUE(idleBefore);
+    GC_EXPECT_TRUE(unbound.load());
+    GC_EXPECT_EQ(served.load(std::memory_order_acquire), 0);
+    GC_EXPECT_TRUE(idleAfter);
 }
 } // namespace
 
@@ -148,11 +224,48 @@ void RunPublication(Publisher publisher)
 // a pause owns the management write lock; the pause must still complete.
 GC_OTHER_VM_TEST(FinalizerStwPublication, ActivePublisherDoesNotBlockPause)
 {
-    RunPublication(Publisher::Active);
+    RunUnderPause(Action::Publish, Caller::Active);
 }
 
 // Control arm: the same interleaving with a safepoint-safe publisher.
 GC_OTHER_VM_TEST(FinalizerStwPublication, SafePublisherDoesNotBlockPause)
 {
-    RunPublication(Publisher::Saferegion);
+    RunUnderPause(Action::Publish, Caller::Saferegion);
+}
+
+// The worker retracts after its managed service returned, still active, while
+// a pause owns the management write lock.
+GC_OTHER_VM_TEST(FinalizerStwPublication, ActiveRetractionDoesNotBlockPause)
+{
+    RunUnderPause(Action::Retract, Caller::Active);
+}
+
+// First schedule: MutatorManager::CreateMutator from the state PreparedToRun
+// leaves a newly scheduled logical thread in.
+GC_OTHER_VM_TEST(CreateMutatorStw, FirstScheduleDoesNotBlockPause)
+{
+    RunUnderPause(Action::CreateMutator, Caller::Active);
+}
+
+// Control arm: CreateMutator from a safepoint-safe caller.
+GC_OTHER_VM_TEST(CreateMutatorStw, SafeCallerDoesNotBlockPause)
+{
+    RunUnderPause(Action::CreateMutator, Caller::Saferegion);
+}
+
+// NewFinalizerCJThread failed: neither worker publishes or enters managed code.
+GC_OTHER_VM_TEST(FinalizerWorkerBinding, FinalizerWithoutCarrierIsNotServed)
+{
+    RunUnbound(false, false);
+}
+
+GC_OTHER_VM_TEST(FinalizerWorkerBinding, ReferenceHandlerWithoutCarrierIsNotServed)
+{
+    RunUnbound(true, false);
+}
+
+// A carrier without a bound mutator gets the same treatment.
+GC_OTHER_VM_TEST(FinalizerWorkerBinding, FinalizerWithoutBoundMutatorIsNotServed)
+{
+    RunUnbound(false, true);
 }
