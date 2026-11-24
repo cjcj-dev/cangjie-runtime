@@ -25,6 +25,14 @@ if "%PROJECT_PATH%" neq "%PROJECT_PATH: =%" (
     exit /b 1
 )
 
+@REM Forward the parent install prefix (argument 7) and target arch (argument 8)
+@REM to CMake, as build_cjthread.sh does; an argument a direct caller omits is
+@REM not passed. Set them here: variables in the -p block expand at block parse.
+set "CJTHREAD_INSTALL_PREFIX_ARG="
+if not "%~7" == "" set "CJTHREAD_INSTALL_PREFIX_ARG=-DCMAKE_INSTALL_PREFIX="%~7""
+set "CJTHREAD_TARGET_ARCH_ARG="
+if not "%~8" == "" set "CJTHREAD_TARGET_ARCH_ARG=-DTARGET_ARCH="%~8""
+
 if "%~1" == "-s" (
     cd /d "%TESTCODE_PATH%\cjthread_sdv\src"
     if errorlevel 1 goto :cjthread_fail
@@ -59,15 +67,21 @@ if "%~1" == "-s" (
     if errorlevel 1 goto :cjthread_fail
 
     if "%~2" == "windows_x86_64" (
-        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu "%CJTHREAD_PATH%" -G "MinGW Makefiles"
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 %CJTHREAD_INSTALL_PREFIX_ARG% %CJTHREAD_TARGET_ARCH_ARG% -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     ) else (
-        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 "%CJTHREAD_PATH%" -G "MinGW Makefiles"
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 %CJTHREAD_INSTALL_PREFIX_ARG% %CJTHREAD_TARGET_ARCH_ARG% "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     )
 
     mingw32-make -j%CANGJIE_BUILD_JOBS%
     if errorlevel 1 goto :cjthread_fail
+    @REM Install into the forwarded prefix, which writes cjthread-build/install_manifest.txt.
+    @REM Without a prefix CMake would default to a system directory; skip it then.
+    if defined CJTHREAD_INSTALL_PREFIX_ARG (
+        mingw32-make install -j%CANGJIE_BUILD_JOBS%
+        if errorlevel 1 goto :cjthread_fail
+    )
 )
 
 cd /d "%CURRENT_PATH%"

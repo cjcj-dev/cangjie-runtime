@@ -219,7 +219,7 @@ if (WINDOWS_FLAG MATCHES 1)
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for windows on windows")
         # build\build_cjthread_windows.bat -p windows_x86_64 Debug STATIC
-        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" ${TARGET_ARCH}
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" "${TARGET_ARCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     elseif (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux")
         message("build cjthread for windows on linux")
@@ -231,7 +231,7 @@ if (WINDOWS_FLAG MATCHES 1)
 elseif (OHOS_FLAG MATCHES 1) # for ohos-aarch64
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" "${TARGET_ARCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
@@ -241,7 +241,7 @@ elseif (OHOS_FLAG MATCHES 1) # for ohos-aarch64
 elseif (OHOS_FLAG MATCHES 2) # for ohos-x86_64
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" "${TARGET_ARCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
@@ -251,7 +251,7 @@ elseif (OHOS_FLAG MATCHES 2) # for ohos-x86_64
 elseif (OHOS_FLAG MATCHES 3) # for ohos-arm
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" "${TARGET_ARCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
