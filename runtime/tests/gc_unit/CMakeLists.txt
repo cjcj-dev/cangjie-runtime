@@ -66,7 +66,7 @@ set(GC_UNIT_SOURCES
     test_relocation_request_queue.cpp
     test_barrier_remap_no_relocate.cpp
     test_store_barrier_buffer.cpp
-    test_old_to_young_1102.cpp
+    test_store_barrier_phase_flush.cpp
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
     test_zPage.cpp

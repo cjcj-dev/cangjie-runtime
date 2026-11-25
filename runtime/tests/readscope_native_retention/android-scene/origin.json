@@ -1,25 +1,17 @@
 {
   "schema": 6,
-  "sourceOwner": "diag_c274_fcache_grok_1113",
-  "sourceReport": "REPORT-grok_android_owner_guard_1116.md",
-  "sourceRequest": null,
-  "sourceRequestTerminal": "Grok report DONE; source completion adopted by current controller task; no new request UUID inferred",
   "files": {
     "scene.mjs": {
-      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/scene.mjs",
-      "sha256": "a5f8f7e55d5d0b2decd6ca7ba99976652e4e63f11f35303cc7db7b9a399f7848"
+      "sha256": "a276ba7ec97053e46d43bca6e68f2f9f1d68521b90412b4c459cb8b328538734"
     },
     "capture.py": {
-      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/capture.py",
       "sha256": "5562524a1d1ec05d8a487d4092ad45747f1dcf1e9ce2ecfcfd605aec6b187d1a"
     },
     "lldb-commands.txt": {
-      "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/lldb-commands.txt",
       "sha256": "29f7a82b02b365ccf6103f5993850becc2c75fb9b4361d7c991d9b71c085e67f"
     }
   },
   "jobInterface": {
-    "source": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/job-interface.json",
     "sha256": "b80618743acf4a5d8ec2f21e6162bbd1fc29069f9fa154909ebb556a68718a9d"
   },
   "predecessor": "572eba19640b59e67ac0e4fdfdc7e4002c9e78f8",
@@ -45,7 +37,7 @@
     "fatalStopIsBusinessExit": false,
     "controlledDetachBusinessExit": "UNKNOWN",
     "targetCleanup": "Same live pid/start/exe; rc0 and whole-line REAPED only after /proc disappearance wait. Missing/reused/late identity UNKNOWN; target cleanup does not create a natural business exit. Native behavior NOT_RUN.",
-    "exitProvenance": "Actual detach, debugger kill/quit, timeout and cleanup must not establish a natural business exit. Source review of the fixed operation chain remains separate from the parser intent/completion controls. No additional reachable violation established by Sol; exact scope question handed to original Grok owner.",
+    "exitProvenance": "Actual detach, debugger kill/quit, timeout and cleanup must not establish a natural business exit. Source review of the fixed operation chain remains separate from the parser intent/completion controls.",
     "hostDescendants": {
       "scope": "Foreground process group while leader identity matches; after leader disappears, recorded members only, with matching start and original group.",
       "uncovered": [
@@ -57,13 +49,6 @@
     }
   },
   "rejectedPackage": "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
-  "sourceProvenance": {
-    "record": "/root/cj_build/agent_scratch/diag_c274_fcache_grok_1113/android-exit-1116/request-44e1719b.json",
-    "nativeSession": "ses_e2d918ab4ffegXNGJG7ij4SN9H",
-    "reportEvent": "call-06524593-8034-4cda-8452-5de7392a4360-128",
-    "originalRequest": "44e1719b-fe7d-4001-b368-aeb82878899e",
-    "successorTerminalSource": "Controller tool verification confirms 0dec7f97-602c-4c7e-93ea-89cf5ca064fd COMPLETED. Historical request-44e1719b journal unchanged; no new session/report event invented."
-  },
   "rejectedPackages": [
     "37167a2fd7f846ebe0804e7b780eecedf50c66a2",
     "5715cb62abe40ada616ceef105837ead8c61f8f3",
@@ -72,8 +57,8 @@
   "evidenceReuse": {
     "oldCalibration47": "belongs to 617eaa2d; not evidence of executing the new fixed package",
     "currentSourceEvidence": [
-      "REPORT-grok_android_owner_guard_1116.md and owner-guard.json: seven sealed shell fixtures, nativeRuns0",
-      "Sol real production drive-to-shell PID reuse red/reject and same-owner signaling/wait/error controls, separately recorded",
+      "Seven sealed shell fixtures; no native execution",
+      "PID reuse rejection, same-owner signaling, wait and error controls",
       "Unchanged serial/version/host controls and limited descendant scope retained"
     ],
     "nativeRuns": 0
@@ -83,10 +68,7 @@
     "meaning": "Local origin ready retains reviewed gate meaning only. Independent job-interface ready=false; 572eba SOURCE_REJECT unchanged. No push/dispatch/native permission for this successor.",
     "parent": "572eba19640b59e67ac0e4fdfdc7e4002c9e78f8",
     "technicalReview": {
-      "report": "/root/cj_build/reports/REPORT-rev_android_live_package_ed488_sol_1116.md",
-      "verdict": "SOURCE_PASS_SCOPED",
-      "adoptedBy": "Current controller instruction",
-      "reviewRequestTerminal": "Not asserted here; controller harvest is separate"
+      "verdict": "SOURCE_PASS_SCOPED"
     },
     "scope": {
       "mode": "preinit/full-image ordinary return",
@@ -122,10 +104,6 @@
         "readscope_android_exit_compare": false
       }
     },
-    "owners": {
-      "debuggerLogicAndNativeInterpretation": "diag_c274_fcache_grok_1113",
-      "formalPackageAndResourceCleanup": "rev_ten_perf_std_rebuild_sol_1113_retry"
-    },
     "limitations": [
       "background error detail is not fully returned by all reap branches; retain available raw output and record missing detail UNKNOWN",
       "actual tools, live module identity, events, terminal status and cleanup remain unverified",
@@ -137,7 +115,7 @@
   },
   "sourceCxxLimitation": {
     "revision": "d8003a456d14a3deb8054cdaa529ffbf02d9b262",
-    "fixedSource": "Official fixed source text read by previous independent review; provenance in REPORT-rev_android_572eba_sol_1116.md",
+    "fixedSource": "Source text only at the recorded revision",
     "matchingClice": "Missing matching compile_commands, generated headers, toolchain include closure and fixed workspace; no unrelated index substituted"
   },
   "serverCleanupLimitation": {

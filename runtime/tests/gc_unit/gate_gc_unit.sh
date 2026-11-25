@@ -518,7 +518,6 @@ fi
 # The suite links -lcangjie-runtime, so it measures the .so, not the source tree -- but it compiles
 # the product *headers* into its own binary.  A .so older than the sources therefore gives every test
 # a new inline half and an old compiled half, which is not a control arm, it is a third program.
-# (Observed 2026-08-18: exactly this skew flipped the Remset results and read as a fresh regression.)
 newer_src=$(find "$ROOT/runtime/src" \( -name '*.cpp' -o -name '*.h' \) -newer "$SO" -print -quit 2>/dev/null)
 if [[ -n "$newer_src" ]]; then
   echo "GC_UNIT_GATE_FAIL: $SO is older than runtime sources -- rebuild before trusting this suite:" >&2

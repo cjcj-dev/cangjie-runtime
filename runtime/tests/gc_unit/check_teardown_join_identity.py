@@ -3,6 +3,7 @@
 Tid-word glibc waits with the kernel tid. joinstate glibc waits with 1 or 2.
 Both are accepted only at that worker's CLONE_CHILD_CLEARTID address.
 """
+import argparse
 import difflib
 import os
 from pathlib import Path
@@ -473,9 +474,14 @@ def run_suite(label, evidence):
 
 
 def main():
-    if '--suite' in sys.argv:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--suite', action='store_true', help='run only the identity checks')
+    mode.add_argument('--evidence-dir', type=Path, help='write mutation and live probe evidence here')
+    args = parser.parse_args()
+    if args.suite:
         return suite()
-    evidence = Path('/root/cj_build/agent_scratch/impl_teardown_join_grok_1108')
+    evidence = args.evidence_dir.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     original = SOURCE.read_bytes()
     if original.decode().count(GUARD) != 1:

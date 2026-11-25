@@ -25,7 +25,7 @@ using namespace MapleRuntime::GcUnit;
 // start is too late for the bitmap that mark already published. The phase
 // flush must scan that old slot and remember it, so the next young mark still
 // resolves the young referent after the remembered-set flip.
-GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
+GC_TEST(StoreBarrierPhaseFlush, YoungMarkPhaseFlushRemembersOldToYoungSlot)
 {
     GcHeapFixture fx;
     fx.region0()->reset(PageAge::old);
@@ -61,7 +61,7 @@ GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
     BaseObject* target = to_object(resolved);
     ZPage* page = Heap::page(reinterpret_cast<MAddress>(target));
     std::fprintf(stderr,
-                 "OLD_TO_YOUNG_1102_RESOLVED published=%d scanned=%d target=%p young=%p page=%p\n",
+                 "OLD_TO_YOUNG_PHASE_FLUSH_RESOLVED published=%d scanned=%d target=%p young=%p page=%p\n",
                  published, scanned, static_cast<void*>(target), static_cast<void*>(fx.obj1),
                  static_cast<void*>(page));
     std::fflush(stderr);

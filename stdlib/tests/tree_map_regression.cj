@@ -1,4 +1,4 @@
-/* Direct installed-stdlib regression for R17 search/deletion/rebalancing. */
+/* Direct installed-stdlib regression for TreeMap search/deletion/rebalancing. */
 import std.collection.*
 import std.runtime.*
 

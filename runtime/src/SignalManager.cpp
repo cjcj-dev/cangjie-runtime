@@ -275,7 +275,7 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 {
     // AS-safe path: key fields via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
-    // signal-context critical path (REPORT-gchang11 §5 D).
+    // signal-context critical path.
     // Emit once per OS signal delivery (HandlerImpl entry) so a user-registered
     // crash handler on an _exit path cannot suppress the pc line.
     uintptr_t sigPc = 0;

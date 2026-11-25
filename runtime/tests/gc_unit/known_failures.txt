@@ -7,7 +7,7 @@
 # diagnostic subsystems, a whole unit suite behind a default-OFF flag, and a fail-closed gate script
 # that nothing ever called.
 #
-# Empty as of 2026-08-18: 80 of 80 pass.  The two that stood here were resolved rather than waived --
+# The two that stood here were resolved rather than waived --
 # both were the test being wrong about what OpenJDK does, not the runtime:
 #   Remset.OldToOldNotRecorded            zBarrier.inline.hpp:729-733 conditions on the slot, so
 #                                         old->old IS recorded; zRemembered.cpp:578-589 prunes it at

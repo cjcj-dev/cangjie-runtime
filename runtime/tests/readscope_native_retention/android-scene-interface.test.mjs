@@ -27,11 +27,11 @@ function ioFunctions(next){
 }
 
 test('crash detach supplies Boolean and intent is separate from actual completion',()=>{
- const funcs=vm.runInNewContext(part('function launchArgv(','function launchContract(')+
+ const funcs=vm.runInNewContext(part('function platformConnect(','function launchContract(')+
   part('function sbProcess(','async function drive(')+'\n({launchArgv,sbProcess})',{
   join:path.join,HERE:'/unused-fixture',REMOTE:'/data/local/tmp/readscope-lifetime',process:{env:{HOST_SYMBOLS:'/unused-consumer'}},
  });
- const argv=funcs.launchArgv('/unused-lldb');
+ const argv=funcs.launchArgv('/unused-lldb','emulator-5554');
  assert(argv.includes('process detach --keep-stopped true'),'TARGET: Boolean detach argument required');
  const prefix="Process 2400 launched: '/data/local/tmp/readscope-lifetime/consumer' (x86_64)\nDETACH_INTENT\n";
  const intent=funcs.sbProcess(prefix);

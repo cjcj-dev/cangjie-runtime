@@ -66,7 +66,6 @@ func runKillFailureControl(): Int64 { return 0 }
 @When[os != "Linux"]
 func runReapNegativeControl(): Int64 { return 0 }
 
-// TASK17:16 runs only these two additions; 906bb error arms are reused.
 @When[os == "Linux"]
 func runRetryOneControl(): Int64 {
     unsafe { CJ_TEST_WrapReset(3) }

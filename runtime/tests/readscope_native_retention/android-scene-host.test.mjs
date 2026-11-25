@@ -1,5 +1,5 @@
 #!/usr/bin/env zx
-// Actual prepare and Grok probe functions, sealed text/file inputs, no tools.
+// Actual prepare and scene probe functions, sealed text/file inputs, no tools.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -71,16 +71,16 @@ test('host-check child failure prevents later prepare resources and AVD',()=>{
 });
 test('rc0 cannot replace structured host capability result',()=>{
  const r=attempt({outcome:'PLATFORM_ABSENT'});
- assert.match(r.error?.message||'',/Grok host-check must establish tool capability/);
+ assert.match(r.error?.message||'',/scene host-check must establish tool capability/);
  assert.equal(r.calls.at(-1).name,'host-check');
 });
 test('missing host-check record does not grant capability',()=>{
  const r=attempt({missingRecord:true});assert.equal(r.error?.message,'ENOENT host-check.json');
  assert.equal(r.calls.at(-1).name,'host-check');
 });
-test('fixed Grok capability probe uses lldb.sh for both queries and real launch route',async()=>{
- const grok=fs.readFileSync(path.join(bundle,'scene.mjs'),'utf8');
- const part=(start,end)=>grok.slice(grok.indexOf(start),grok.indexOf(end,grok.indexOf(start)));
+test('fixed scene capability probe uses lldb.sh for both queries and real launch route',async()=>{
+ const driver=fs.readFileSync(path.join(bundle,'scene.mjs'),'utf8');
+ const part=(start,end)=>driver.slice(driver.indexOf(start),driver.indexOf(end,driver.indexOf(start)));
  const script=part('const NDK =','const REMOTE =')+
   part('const PYTHON_SONAME =','function fail(')+
   part('function missingSonames(','function launchArgv(')+
@@ -94,7 +94,7 @@ test('fixed Grok capability probe uses lldb.sh for both queries and real launch 
  assert.equal(result.outcome,null);assert.equal(calls.length,3);
  const launcher=`/sdk/ndk/${fixed.ndk}/toolchains/llvm/prebuilt/linux-x86_64/bin/lldb.sh`;
  assert.equal(calls[1].args[0],launcher);assert.equal(calls[2].args[0],launcher);
- assert(grok.includes("launchArgv(join(sdk, TOOLS.hostWrapper), serial)"));
+ assert(driver.includes("launchArgv(join(sdk, TOOLS.hostWrapper), serial)"));
  assert(!calls.some(c=>c.args.some(x=>/adb|emulator|lldb-server/.test(x))));
 });
 
@@ -102,9 +102,9 @@ test('fixed Grok capability probe uses lldb.sh for both queries and real launch 
 // execute-result.json host-version/server-version. No debugger or device runs.
 const officialVersionText='lldb version 18.0.4 (/mnt/disks/build-disk/src/android/llvm-r522817/out/llvm-project/lldb revision d8003a456d14a3deb8054cdaa529ffbf02d9b262)\n  clang revision d8003a456d14a3deb8054cdaa529ffbf02d9b262\n  llvm revision d8003a456d14a3deb8054cdaa529ffbf02d9b262\n';
 function recordedVersionDrive(){
- const grok=fs.readFileSync(process.env.SCENE_VERSION_SOURCE||path.join(bundle,'scene.mjs'),'utf8');
- const end=grok.indexOf('\nfunction readProc(');assert(end>0);
- const definitions=grok.slice(0,end).replace(/^#![^\n]*\n/,'').replace(/^import [^\n]+;\n/gm,'')
+ const driver=fs.readFileSync(process.env.SCENE_VERSION_SOURCE||path.join(bundle,'scene.mjs'),'utf8');
+ const end=driver.indexOf('\nfunction readProc(');assert(end>0);
+ const definitions=driver.slice(0,end).replace(/^#![^\n]*\n/,'').replace(/^import [^\n]+;\n/gm,'')
   .replace("const HERE = dirname(new URL(import.meta.url).pathname);",'const HERE = '+JSON.stringify(bundle)+';');
  return vm.runInNewContext(definitions+'\n({drive,scripted})',{
   join:path.join,createHash,readFileSync:fs.readFileSync,Date,

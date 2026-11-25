@@ -117,9 +117,8 @@ public:
     // was the world stopped".  rec=cycle is wall time for the whole collection and rec=phase is
     // work, and a phase timer reads the same whether its body ran inside the pause or beside a
     // running mutator -- so a change that moves work out of the pause and a change that makes the
-    // work slower are indistinguishable in both.  Measured 2026-08-18: turning young concurrent
-    // mark+follow on moved `mark_closure` into the concurrent window and every available ruler
-    // showed it as a regression, because none of them measured a pause.
+    // work slower are indistinguishable in both.  For example, young concurrent mark+follow moves
+    // `mark_closure` outside the pause, but its phase timer still counts that work.
     //
     // wait_ns is the rendezvous (from the request until the last mutator has parked) and held_ns is
     // the body.  They are reported apart because they respond to different things: wait_ns tracks

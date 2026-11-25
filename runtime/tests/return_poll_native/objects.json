@@ -7,13 +7,13 @@
       "arm": "candidate",
       "llc_sha256": "1e8979e3ba28ef2fb8570ab2c0ccd3389bbfff1c662ffbabf69534d9d77b73f0",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/keep/release/llc",
+        "keep/release/llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-pc-windows-msvc",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/native-inputs/x86_64-windows-candidate.o"
+        "native-inputs/x86_64-windows-candidate.o"
       ],
       "rc": 0,
       "sha256": "de8accfe9573d8206a066f7e18f4cd6c4b1511b8489af24cc24fc918e129fb8d",
@@ -25,13 +25,13 @@
       "arm": "cut-producer",
       "llc_sha256": "9b1935b133acd8f5e0b4e0ebef350b1bfe719f1839beb5814e06bb800962889a",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/keep/cut-producer/llc",
+        "keep/cut-producer/llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-pc-windows-msvc",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5854003479/native-inputs/x86_64-windows-cut-producer.o"
+        "native-inputs/x86_64-windows-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "ae50603b26f649ca64aa63d5e8648d00f844504ff4f3308b24341c6f547a212b",
@@ -43,13 +43,13 @@
       "arm": "candidate",
       "llc_sha256": "a645e7b291530ed7d51e78d48ef99bf3bad117c41593ec4de38d03c4fb8553ee",
       "command": [
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/keep/llvm-pair-candidate/llc",
+        "keep/llvm-pair-candidate/llc",
         "--cangjie-pipeline",
         "-mtriple=aarch64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/aarch64-macos-candidate.o"
+        "aarch64-macos-candidate.o"
       ],
       "rc": 0,
       "sha256": "a32b501232473d74c26ddeb76ab8b2c99cae37c15f854741ed122fe0b62f037b",
@@ -61,13 +61,13 @@
       "arm": "cut-producer",
       "llc_sha256": "34560f30a4ab47c69c0fcd1c070cdc23af28bb2651db109b0b8f30ed40b97b41",
       "command": [
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/keep/llvm-pair-cut-producer/llc",
+        "keep/llvm-pair-cut-producer/llc",
         "--cangjie-pipeline",
         "-mtriple=aarch64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/aarch64-macos-cut-producer.o"
+        "aarch64-macos-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "3731b4f510521fc3db84dc410efa3e0f24db5be8eb7b49c73f16cbede30ea29b",
@@ -79,13 +79,13 @@
       "arm": "candidate",
       "llc_sha256": "a645e7b291530ed7d51e78d48ef99bf3bad117c41593ec4de38d03c4fb8553ee",
       "command": [
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/keep/llvm-pair-candidate/llc",
+        "keep/llvm-pair-candidate/llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/x86_64-macos-candidate.o"
+        "x86_64-macos-candidate.o"
       ],
       "rc": 0,
       "sha256": "fe797745173062a3e478a25b94796d4f449865478cbd40f2b0b6e7733d29245a",
@@ -97,13 +97,13 @@
       "arm": "cut-producer",
       "llc_sha256": "34560f30a4ab47c69c0fcd1c070cdc23af28bb2651db109b0b8f30ed40b97b41",
       "command": [
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/keep/llvm-pair-cut-producer/llc",
+        "keep/llvm-pair-cut-producer/llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cangjie_runtime_1207_implement_r5855120562/x86_64-macos-cut-producer.o"
+        "x86_64-macos-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "bb874ab860f0f68568308127377a814484a5a2652663dcca6b0677a0a1eb0444",

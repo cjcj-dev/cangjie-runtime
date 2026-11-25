@@ -1,4 +1,4 @@
-/* Direct installed-stdlib regression for the complete R16 correction chain. */
+/* Exercise ConcurrentHashMap callbacks and colliding keys. */
 import std.collection.concurrent.*
 import std.runtime.*
 

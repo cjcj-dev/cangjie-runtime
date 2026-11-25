@@ -26,9 +26,8 @@ it refuses incomplete/failed campaigns rather than comparing empty populations.
 Its `numericCriteriaMet` result is only the numeric comparison, not independent
 producer/ABI/loader/workload qualification or a release approval.
 
-The separately authorized future measurement entry is
-`node measure_r6.mjs run CONFIG.json`. **TASK02:00 does not authorize running it.**
-The outer existing wf/claim/scope must supply the admitted quiet 16-core window,
+To start a measurement, use `node measure_r6.mjs run CONFIG.json`.
+The caller must supply a reserved, quiet 16-core window,
 memory/storage/log allowance, core soft/hard 0 and Swap0. Preserve the 64–79
 protected range and check SMT siblings; the runner does not claim or stop other
 owners. `run` checks its scope includes the requested cores, records affinity,
@@ -94,8 +93,7 @@ retained forty measured scalar summaries test only the noise calculation; this
 does not prove raw-log compatibility or qualify an old/new subject producer.
 No new receipt/schema/qualification flag is produced. Existing workload
 qualification holds, minor C3, independent review and real measurement remain
-separate obligations. See the lane's `minor-perf-1031/C3-SOURCE-CONTRACT.md` for
-the precise current allocation-observation gap; no runtime counter was added.
+separate obligations. This measurement does not add a runtime allocation counter.
 
 ## Public run entry integration fixture
 
@@ -125,19 +123,3 @@ exit status. A real out-of-scope 128–143 request must fail before any fixture
 starts, without changing or faking the current cgroup. The 300-second target
 timeout is not deliberately reached in this <=120-second integration test;
 the outer service deadline is a bound, not a measured timeout recovery claim.
-
-The 2026-10-31 TASK02:46 finite run completed in
-`wf-e8090b01-c7d0-4798-b677-696814b0333c`: success CLI rc0 with 40 fixture
-processes; exit7 and SIGTERM CLI rc1 with two processes each (GNU time rc7
-and rc143 respectively); affinity rejection CLI rc1 with zero processes.
-All four assertions passed. The service ended rc0 with an empty cgroup and
-released its 16-core claim. This supplements, rather than repeats, the earlier
-86 parser/plan checks. C3 remains UNMET; no real workload was executed.
-
-Task-local preparation retained the initial overbroad CPU-activity rejection
-and the subsequent rejection of awesun's separate service process. Under the
-explicit TASK02:46 decision, exact existing awesun UI/service and read-only
-space-monitor identities were classified separately from competing work.
-Their affinity and processes were not modified. This allowance is restricted
-to these short functional fixtures; it grants no quiet-window exemption for
-performance measurement and changes no runner affinity or N check.

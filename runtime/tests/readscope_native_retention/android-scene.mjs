@@ -1,5 +1,5 @@
 #!/usr/bin/env zx
-// Official-runner preparation only; debugger implementation belongs to Grok.
+// Official-runner preparation only; scene.mjs drives the debugger.
 // No import of scene.mjs/capture.py: checking this file cannot start a debugger.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -64,7 +64,7 @@ export function runtimeIdentity(so, notes) {
 
 function checkBundle() {
   for (const [name, entry] of Object.entries(origin.files)) {
-    assert.equal(sha(path.join(bundle, name)), entry.sha256, `Grok file changed: ${name}`);
+    assert.equal(sha(path.join(bundle, name)), entry.sha256, `scene file changed: ${name}`);
   }
   assert.equal(sha(path.join(bundle, 'job-interface.json')), origin.jobInterface.sha256);
   const plannedBindings = interfaceBindings('$RUNNER_TEMP/readscope-android-scene', '$ANDROID_HOME');
@@ -83,18 +83,17 @@ function checkBundle() {
       shellWait: 'UNKNOWN', lldbRcIsBusinessRc: false, syntheticExitShell: false,
       deviceRuntimeIdentity: 'UNKNOWN; actual module identity must be verified before qualification',
       controlledDetachBusinessExit: 'UNKNOWN',
-      targetCleanup: 'Read Grok same-instance cleanup result separately; missing identity or unconfirmed disappearance remains UNKNOWN' },
+      targetCleanup: 'See the scene record for same-instance cleanup; missing identity or unconfirmed disappearance remains UNKNOWN' },
     nativeRuns: 0 };
 }
 
 function requireReady() {
   const checked = checkBundle();
   assert.equal(checked.pendingBindings.length, 0,
-    `GROK_INTERFACE_INCOMPLETE: ${checked.pendingBindings.map(row => row.id).join(',')}`);
-  // Byte-identical Grok package is bound, but final entry/independent review
-  // and separate controller authorization are required before native execution.
+    `SCENE_INTERFACE_INCOMPLETE: ${checked.pendingBindings.map(row => row.id).join(',')}`);
+  // Bundle integrity alone does not authorize native execution.
   assert.equal(origin.readyForNativeExecution, true,
-    `GROK_ENTRY_NOT_READY: ${origin.blockers.map(x => x.id).join(',')}`);
+    `SCENE_ENTRY_NOT_READY: ${origin.blockers.map(x => x.id).join(',')}`);
 }
 
 function context() {
@@ -304,7 +303,7 @@ function prepare() {
   }
   assert(fs.statSync(debuggerTools.wrapper).isFile());
   // Match the fixed r27d lldb.sh environment, without substituting system Python.
-  // Grok host-check verifies the official launcher bytes and uses it for both
+  // The host check verifies the official launcher bytes and uses it for both
   // capability probes; execute uses that same launcher for the actual launch.
   const pythonHome = path.join(tools, '../python3');
   const pythonLib = path.join(pythonHome, 'lib');
@@ -316,7 +315,7 @@ function prepare() {
     fs.readFileSync(path.join(out, 'host-lldb-dependencies.stderr'), 'utf8'));
   run('host-check', [process.execPath, path.join(bundle, 'scene.mjs'), 'host-check']);
   const hostCheck = JSON.parse(fs.readFileSync(path.join(bundle, 'host-check.json'), 'utf8'));
-  assert.equal(hostCheck.outcome, 'HOST_READY', 'Grok host-check must establish tool capability');
+  assert.equal(hostCheck.outcome, 'HOST_READY', 'scene host-check must establish tool capability');
   assert.equal(hostCheck.meta?.remoteAndroid, true);
   assert.equal(hostCheck.meta?.launcher, debuggerTools.wrapper);
   json(path.join(out, 'debugger-tools.json'), { paths: debuggerTools,
@@ -350,9 +349,9 @@ function prepare() {
     consumer: { path: path.join(out, 'consumer'), sha256: sha(path.join(out, 'consumer')), originalElf: 'NOT_SAVED' },
     sourceBlobs: { fixture: fixed.fixtureBlob, consumer: fixed.consumerBlob },
     relinkOnly: true, runtimeRebuilt: false, mode: 'preinit', originalFlags: true,
-    dynamicIdentity: 'NOT_RUN; must be captured by Grok in actual target', nativeRuns: 0,
+    dynamicIdentity: 'NOT_RUN; must be captured by the scene driver in actual target', nativeRuns: 0,
   });
-  // Route record only, never an extra launch. Grok owns the actual call below.
+  // Route record only, never an extra launch. The scene driver owns the actual call below.
   rows.push({ name: 'preinit', executed: false, args: [path.join(sdk, 'platform-tools/adb'),
     '-s', 'emulator-5554', 'shell', 'env', 'LD_LIBRARY_PATH=/data/local/tmp/readscope-lifetime',
     '/data/local/tmp/readscope-lifetime/consumer', '/data/local/tmp/readscope-lifetime/fixture.so', 'preinit'] });
@@ -372,9 +371,9 @@ async function execute() {
   assert.equal(inputs.runtime.buildId, runtimeInput.buildId);
   assert.notEqual(bindings.RUNTIME_SO, bindings.HOST_SYMBOLS);
   // The fixed original SO has no GNU Build ID. Absence is recorded, not a
-  // rejection: Grok must correlate the actual same-PID module/maps with the
+  // rejection: the scene driver must correlate the actual same-PID module/maps with the
   // deployed file's identity. A derived LLDB UUID is not a GNU Build ID.
-  // No self-test/calibrate here: Grok self-test assumes official tools absent.
+  // No self-test/calibrate here: scene self-test assumes official tools absent.
   const adb = path.join(sdk, 'platform-tools/adb');
   fs.mkdirSync(env.ANDROID_AVD_HOME, { recursive: true });
   run('create-avd', [path.join(sdk, 'cmdline-tools/latest/bin/avdmanager'), 'create', 'avd',
@@ -436,12 +435,12 @@ async function execute() {
       runtime: runtimeInput,
       remoteRuntime: '/data/local/tmp/readscope-lifetime/libcangjie-runtime.so',
       recorderOutput: path.join(bundle, 'run'),
-      actualLoadedIdentity: 'NOT_RUN; Grok must verify in this native execution' });
-    const scene = asyncRunner(path.join(out, 'grok'), launch.env);
+      actualLoadedIdentity: 'NOT_RUN; the scene driver must verify in this native execution' });
+    const scene = asyncRunner(path.join(out, 'scene-output'), launch.env);
     const result = await scene('scene', launch.argv, launch.limits);
     const hardDeadline = launch.hardDeadline;
     json(path.join(out, 'scene-wrapper-result.json'), { ...result, sceneStarted, hardDeadline,
-      innerDeadline: Number(launch.bindings.SCENE_DEADLINE_MS), nativeBusinessExit: 'UNKNOWN; read Grok records separately' });
+      innerDeadline: Number(launch.bindings.SCENE_DEADLINE_MS), nativeBusinessExit: 'UNKNOWN; read scene records separately' });
     assert(result.reaped && !result.timedOut && !result.error, 'scene wrapper did not close normally');
     assert.equal(result.rc, 0, 'scene Node rc; not a native business rc');
     assert.equal(result.signal, null);
@@ -493,7 +492,7 @@ try {
   else if (mode === '--prepare') prepare();
   else if (mode === '--execute') {
     const { out } = context();
-    fs.mkdirSync(path.join(out, 'execution')); fs.mkdirSync(path.join(out, 'grok'));
+    fs.mkdirSync(path.join(out, 'execution')); fs.mkdirSync(path.join(out, 'scene-output'));
     await execute();
   } else throw Error('usage: android-scene.mjs --check-bundle|--require-ready|--prepare|--execute');
 } catch (error) {

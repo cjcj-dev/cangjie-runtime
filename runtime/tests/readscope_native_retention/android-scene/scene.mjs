@@ -1327,6 +1327,15 @@ async function calibrate() {
   return cases;
 }
 
+// interface-check needs an LLVM checkout; host-closure-check replays ldd output,
+// the bare launch result and the host check. version-check and connect-check each
+// take the execute-result.json from the run that exercised that failure.
+function replayInput(name) {
+  const value = process.env[name];
+  if (!value) fail(`${name} is required for ${process.argv[2]}`);
+  return value;
+}
+
 const argv = process.argv.slice(2);
 
 if (argv[0] === 'reap-check') {
@@ -1403,7 +1412,7 @@ if (argv[0] === 'calibrate') {
   });
 } else if (argv[0] === 'interface-check') {
   const { EventEmitter } = await import('node:events');
-  const options = readFileSync('/root/cj_build/llvm_src/cjcj-llvm/lldb/source/Commands/Options.td', 'utf8');
+  const options = readFileSync(join(replayInput('SCENE_LLVM_SOURCE'), 'lldb/source/Commands/Options.td'), 'utf8');
   const definition = options.match(/def process_detach_keep_stopped\s*:[\s\S]*?;/)?.[0];
   if (!definition || !definition.includes('Arg<"Boolean">')) fail('keep-stopped is not a Boolean option');
   const stopAtEntry = options.match(/def process_launch_stop_at_entry\s*:[\s\S]*?;/)?.[0];
@@ -1437,7 +1446,7 @@ if (argv[0] === 'calibrate') {
   const scriptDef = options.match(/def script_language\s*:[\s\S]*?;/)?.[0];
   if (!scriptDef || !scriptDef.includes('EnumArg<"ScriptLang">')) fail('script language option changed');
   if (crash.some(item => item.startsWith('--') || item.includes('--language') || item.includes('--verbose'))) fail('control segment invented an optional flag');
-  const quitSrc = readFileSync('/root/cj_build/llvm_src/cjcj-llvm/lldb/source/Commands/CommandObjectQuit.cpp', 'utf8');
+  const quitSrc = readFileSync(join(replayInput('SCENE_LLVM_SOURCE'), 'lldb/source/Commands/CommandObjectQuit.cpp'), 'utf8');
   if (!quitSrc.includes('"quit [exit-code]"') || !quitSrc.includes('eArgTypeUnsignedInteger')) fail('quit is not an optional unsigned exit code');
   if (crash[4] !== 'quit') fail('quit was given a flag');
   const sceneText = readFileSync(join(HERE, 'scene.mjs'), 'utf8');
@@ -1541,8 +1550,8 @@ if (argv[0] === 'calibrate') {
   process.exit(outcome === 'HOST_READY' ? 0 : 1);
 } else if (argv[0] === 'host-closure-check') {
   if (sha256(OFFICIAL_LAUNCHER) !== LAUNCHER_SHA) fail('embedded launcher does not match the r27d zip');
-  const lddPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-bounds-preparation/external-after-exact-authorization/artifacts/14196974102/_temp/readscope-android-scene/host-lldb-dependencies.stdout';
-  const executedPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-bounds-preparation/external-after-exact-authorization/artifacts/14196974102/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const lddPath = replayInput('SCENE_LDD_LOG');
+  const executedPath = replayInput('SCENE_LAUNCH_RECORD');
   const lddText = readFileSync(lddPath, 'utf8');
   const closed = closureDecision(lddText, true);
   const open = closureDecision(lddText, false);
@@ -1569,7 +1578,7 @@ if (argv[0] === 'calibrate') {
   const absentVersion = scripted({ platform: 'remote-android', steps: { 'host-version': { rc: 127, stdout: '', stderr: `${PYTHON_SONAME}\n` } } });
   const absent = await probeHost(absentVersion, '/sdk', (step, args) => absentVersion.run(step, args));
   if (absent.outcome !== 'VERSION_ABSENT' || absentVersion.runs.includes('platform-list')) fail('version failure continued into platform discovery');
-  const officialHost = JSON.parse(readFileSync('/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-e4f9-official-once/artifacts/14201471674/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/host-check.json', 'utf8'));
+  const officialHost = JSON.parse(readFileSync(replayInput('SCENE_HOST_RECORD'), 'utf8'));
   const officialList = officialHost.log.find(row => row.step === 'platform-list');
   if (!officialList || officialList.rc !== 0 || !hasRemoteAndroid(officialList.stdout)) fail('official platform list was rejected');
   const officialProbe = scripted({ platform: officialList.stdout, serial: 'emulator-5554\tdevice', steps: {} });
@@ -1829,7 +1838,7 @@ if (argv[0] === 'calibrate') {
   console.log('OWNERSHIP_PASS');
   process.exit(0);
 } else if (argv[0] === 'version-check') {
-  const officialPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-platform-colon/external-after-new-exact-authorization/artifacts/14202228278/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const officialPath = replayInput('SCENE_EXECUTE_RECORD');
   const official = JSON.parse(readFileSync(officialPath, 'utf8'));
   const hostRow = official.log.find(row => row.step === 'host-version');
   const serverRow = official.log.find(row => row.step === 'server-version');
@@ -1891,7 +1900,7 @@ if (argv[0] === 'calibrate') {
   console.log('VERSION_PASS');
   process.exit(0);
 } else if (argv[0] === 'connect-check') {
-  const officialPath = '/root/cj_build/agent_scratch/rev_ten_perf_std_rebuild_sol_1113_retry/readscope-retained/android-scene-server-version/external-after-new-exact-authorization/artifacts/14224690883/cangjie-runtime/cangjie-runtime/runtime/tests/readscope_native_retention/android-scene/execute-result.json';
+  const officialPath = replayInput('SCENE_EXECUTE_RECORD');
   const official = JSON.parse(readFileSync(officialPath, 'utf8'));
   const row = name => official.log.find(item => item.step === name);
   const launch = row('launch');

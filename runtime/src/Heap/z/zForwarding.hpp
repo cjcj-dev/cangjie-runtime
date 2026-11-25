@@ -90,8 +90,8 @@ public:
 
     ForwardingEntry next(ForwardingCursor* cursor) const;
 
-    // zForwarding.inline.hpp:230-245 plus a bound: our nentries estimate can undersize
-    // (REPORT-fwdentries). A miss is a state every caller already handles.
+    // zForwarding.inline.hpp:230-245 plus a bound: the nentries estimate can be too small.
+    // Every caller already handles a miss.
     ForwardingEntry find_index(uintptr_t fromIndex, ForwardingCursor* cursor) const;
 
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.

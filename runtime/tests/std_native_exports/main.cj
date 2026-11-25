@@ -5,7 +5,7 @@ import std.env.*
 import std.process.*
 
 main(): Int64 {
-    let key = "CJ_R19_NATIVE_EXPORTS_1105"
+    let key = "CJ_STD_NATIVE_EXPORTS_TEST"
     let previous = getVariable(key)
     try {
         setVariable(key, "r19")
