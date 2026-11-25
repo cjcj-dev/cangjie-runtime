@@ -165,6 +165,80 @@ def bind_clear_word(clear_by_tid, child, clear):
     return clear
 
 
+def wait_event(tid):
+    who, status = os.waitpid(tid, WALL)
+    emit('WAIT_EVENT', tid=who, status=status, event=status >> 16)
+    return who, status
+
+
+class Tracees:
+    def __init__(self, pid):
+        self.pid = pid
+        self.owned = {pid}
+        self.early_clone_stops = set()
+        self.reaped = set()
+
+    def wait(self, tid=-1, *, collecting_clones=False):
+        while True:
+            who, status = wait_event(tid)
+            if who in self.owned:
+                if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+                    self.reaped.add(who)
+                    if who == self.pid:
+                        self.require_paired()
+                return who, status
+            # TRACECLONE's initial child stop can precede the parent's event.
+            # Consume the stop, but do not dispatch or restart an unbound child.
+            if (collecting_clones and os.WIFSTOPPED(status)
+                    and os.WSTOPSIG(status) == signal.SIGSTOP and status >> 16 == 0
+                    and who not in self.early_clone_stops
+                    and os.path.isdir(f'/proc/{self.pid}/task/{who}')):
+                self.early_clone_stops.add(who)
+                continue
+            raise RuntimeError(f'unowned wait tid={who}')
+
+    def confirm_clone(self, child, clear_by_tid, clear):
+        if child in self.owned:
+            raise RuntimeError('duplicate clone identity')
+        bound = bind_clear_word(clear_by_tid, child, clear)
+        self.owned.add(child)
+        if child in self.early_clone_stops:
+            self.early_clone_stops.remove(child)
+            trace(CONT, child)
+        return bound
+
+    def require_paired(self):
+        if self.early_clone_stops:
+            raise RuntimeError(f'unpaired early clone stops: {sorted(self.early_clone_stops)}')
+
+    def kill_and_reap(self):
+        # SIGKILL targets the fork's thread group, including unpaired children.
+        if self.pid not in self.reaped:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        remaining = (self.owned | self.early_clone_stops) - self.reaped
+        while remaining:
+            # Finish parked children even if an unrelated wait is also pending.
+            target = next(iter(remaining & self.early_clone_stops), -1)
+            try:
+                tid, status = wait_event(target)
+            except ChildProcessError:
+                if target == -1:
+                    break
+                # Its terminal status may itself have been the rejected wait.
+                remaining.remove(target)
+                continue
+            if tid not in remaining:
+                raise RuntimeError(f'unowned wait tid={tid}')
+            if os.WIFSTOPPED(status):
+                trace(CONT, tid, data=signal.SIGKILL)
+            elif os.WIFEXITED(status) or os.WIFSIGNALED(status):
+                remaining.remove(tid)
+                self.reaped.add(tid)
+
+
 def match_held_worker_join(params, clear_by_tid, comm_of, word_at):
     """Return the held worker tid, None if this futex is not that join, or raise.
 
@@ -319,22 +393,14 @@ def main():
                     pool_ready.set()
     reader = threading.Thread(target=forward_output, daemon=True)
     reader.start()
-    owned = {pid}
+    tracees = Tracees(pid)
     held, joined, join_tid = None, False, None
-    workers, exits, reaped = set(), set(), set()
+    workers, exits = set(), set()
     worker_names = {}
     pending_clear, clear_by_tid = {}, {}
     stage = 'exec-stop'
-    def wait(tid=-1):
-        who, status = os.waitpid(tid, WALL)
-        emit('WAIT_EVENT', tid=who, status=status, event=status >> 16)
-        if who not in owned:
-            raise RuntimeError(f'unowned wait tid={who}')
-        if os.WIFEXITED(status) or os.WIFSIGNALED(status):
-            reaped.add(who)
-        return who, status
     try:
-        _, status = wait(pid)
+        _, status = tracees.wait(pid)
         if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 77:
             return 77
         if not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTRAP:
@@ -358,7 +424,7 @@ def main():
         stage = 'hold-and-join'
         trace(SYSCALL, pid)
         while True:
-            tid, status = wait()
+            tid, status = tracees.wait(collecting_clones=True)
             if os.WIFEXITED(status) or os.WIFSIGNALED(status):
                 if tid == pid:
                     raise RuntimeError('product exited before construction')
@@ -369,9 +435,6 @@ def main():
             if event == 3:
                 child = ctypes.c_ulong()
                 trace(GETEVENTMSG, tid, data=ctypes.addressof(child))
-                if child.value in owned:
-                    raise RuntimeError('duplicate clone identity')
-                owned.add(child.value)
                 if tid in pending_clear:
                     clear = pending_clear.pop(tid)
                 else:
@@ -380,7 +443,7 @@ def main():
                         raise RuntimeError(f'clone clear word not captured parent={tid} child={child.value}')
                     clear = decode_clear_uaddr(
                         abi.arm, stopped[0], stopped[1], lambda addr, size: peek_bytes(tid, addr, size))
-                bound = bind_clear_word(clear_by_tid, child.value, clear)
+                bound = tracees.confirm_clone(child.value, clear_by_tid, clear)
                 emit('CLONE', parent=tid, child=child.value, clear_uaddr=bound)
                 trace(SYSCALL if tid == pid else CONT, tid)
             elif event == 6:
@@ -439,8 +502,9 @@ def main():
                     continue
                 if len(workers) != created or Counter(worker_names.values()) != Counter(f'RuntimeWorker#{i}'[:15] for i in range(created)):
                     raise RuntimeError('incomplete actual runtime worker set')
-                if join_tid != held or held not in workers or not workers <= owned:
+                if join_tid != held or held not in workers or not workers <= tracees.owned:
                     raise RuntimeError('worker/join identity mismatch')
+                tracees.require_paired()
                 emit('WORKER_SET', workers=sorted(workers), exit_events=sorted(exits), held=held, tgid=pid, created=created, active=active, names=worker_names)
                 break
         name, state = task_record(pid, held)
@@ -459,13 +523,13 @@ def main():
         if ready.si_pid != held or ready.si_code != os.CLD_EXITED or ready.si_status != 0:
             raise RuntimeError(f'unexpected held exit event: {ready}')
         name, state = task_record(pid, held)
-        if name != 'RuntimeWorker#0' or state != 'Z' or held in reaped:
+        if name != 'RuntimeWorker#0' or state != 'Z' or held in tracees.reaped:
             raise RuntimeError('held exit readiness is not unreaped Z')
         emit('HELD_EXIT_READY', tid=held, si_pid=ready.si_pid, si_code=ready.si_code,
              si_status=ready.si_status, state=state, reaped=False)
         stage = 'completion-breakpoint'
         trace(CONT, pid)
-        waited, status = wait(pid)
+        waited, status = tracees.wait(pid)
         if not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTRAP or status >> 16:
             raise RuntimeError(f'completion breakpoint not reached status={status:x}')
         values = abi.regset(pid)
@@ -482,7 +546,7 @@ def main():
             raise RuntimeError('deterministic stale task not constructed')
         if not args.live:
             sample_passed = teardown_before_sentinel([runtime_workers(pid)])
-        _, held_status = wait(held)
+        _, held_status = tracees.wait(held)
         if not os.WIFEXITED(held_status) or os.WEXITSTATUS(held_status) != 0:
             raise RuntimeError('held worker reap failed')
         task = Path(f'/proc/{pid}/task/{held}')
@@ -501,7 +565,7 @@ def main():
         trace(CONT, pid)
         stage = 'normal-exit'
         while True:
-            tid, status = wait()
+            tid, status = tracees.wait()
             if os.WIFEXITED(status):
                 if tid != pid:
                     continue
@@ -517,23 +581,12 @@ def main():
             trace(CONT, tid)
         return 0 if sample_passed else 1
     except TraceError as error:
+        tracees.require_paired()
         print(f'TEARDOWN_CONSTRUCTION_NOT_RUN stage={stage} errno={error.errno} {error}', flush=True)
         return 77
     finally:
-        # Only this fork and clone-event registered tracees belong to us.
-        if pid not in reaped:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        while owned - reaped:
-            try:
-                tid, status = wait()
-                if os.WIFSTOPPED(status):
-                    trace(CONT, tid, data=signal.SIGKILL)
-            except ChildProcessError:
-                break
-        emit('CONSTRUCTION_CLEANUP', owned=sorted(owned), reaped=sorted(reaped), stage=stage)
+        tracees.kill_and_reap()
+        emit('CONSTRUCTION_CLEANUP', owned=sorted(tracees.owned), reaped=sorted(tracees.reaped), stage=stage)
 
 
 if __name__ == '__main__':
