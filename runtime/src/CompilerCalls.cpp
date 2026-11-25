@@ -11,6 +11,7 @@
 #include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zBarrierSet.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/VMOperation.h"
 
 #include "Base/CString.h"
 #include "Heap/z/zStat.hpp"
@@ -866,18 +867,23 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
     return static_cast<MArray*>(recordsHandle());
 }
 
+// HotSpot vmOperations.hpp:212: results outlive the stack-owned operation.
+class VM_ThreadDump final : public VMOperation {
+public:
+    explicit VM_ThreadDump(std::vector<std::unique_ptr<RecordStackInfo>>& output) : records(output) {}
+    const char* name() const override { return "dump all thread"; }
+    void doit() override { CollectThreadSnapshots(records); }
+private:
+    std::vector<std::unique_ptr<RecordStackInfo>>& records;
+};
+
 extern "C" ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo* arraySnapshot, const TypeInfo* arrayStackTrace,
                                                  const TypeInfo* charArray)
 {
     std::vector<std::unique_ptr<RecordStackInfo>> records;
     {
-        ScopedEnterSaferegion enterSaferegion(false);
-        if (MutatorManager::Instance().WorldStopped()) {
-            CollectThreadSnapshots(records);
-        } else {
-            ScopedStopTheWorld stw("dump all thread");
-            CollectThreadSnapshots(records);
-        }
+        VM_ThreadDump operation(records);
+        VMThread::execute(&operation);
     }
     return GetAllThreadSnapshot(arraySnapshot, arrayStackTrace, charArray, records);
 }

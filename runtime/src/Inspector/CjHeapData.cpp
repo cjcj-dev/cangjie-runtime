@@ -10,6 +10,7 @@
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zPage.hpp"
 #include "CjHeapData.h"
+#include "Mutator/VMOperation.h"
 #include <cerrno>
 #include <cstdint>
 #include <Common/BaseObject.h>
@@ -134,6 +135,25 @@ void CjHeapData::InitSerializedIdWrapper()
     serializedIdWrapper.Init(domainStart, domainEnd);
 }
 
+// HotSpot heapDumper.cpp:2461,2882-2883: the caller retains the writer.
+class VM_HeapDumper final : public VMOperation {
+public:
+    VM_HeapDumper(CjHeapData& data, const char* reason) : heapData(data), dumpReason(reason) {}
+    const char* name() const override { return dumpReason; }
+    void doit() override
+    {
+        size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
+        // Statistical ratio of heap size to object count.
+        const size_t estimateSize = 40;
+        heapData.dumpObjects.reserve(allocatedSize / estimateSize);
+        heapData.ProcessHeap();
+        heapData.WriteHeap();
+    }
+private:
+    CjHeapData& heapData;
+    const char* dumpReason;
+};
+
 void CjHeapData::DumpHeap(bool needStopTheWorld)
 {
     // step1 - open file
@@ -177,21 +197,13 @@ void CjHeapData::DumpHeap(bool needStopTheWorld)
     }
     InitSerializedIdWrapper();
     // step2 - write file
+    VM_HeapDumper operation(*this, "dump heap to file");
     if (needStopTheWorld) {
-        ScopedStopTheWorld scopedStopTheWorld("dump heap to file");
-        size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
-        // 40: Statistical ratio of heap size to object count, used to estimate container capacity
-        const size_t estimateSize = 40;
-        dumpObjects.reserve(allocatedSize / estimateSize);
-        ProcessHeap();
-        WriteHeap();
+        VMThread::execute(&operation);
     } else {
-        size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
-        // 40: Statistical ratio of heap size to object count, used to estimate container capacity
-        const size_t estimateSize = 40;
-        dumpObjects.reserve(allocatedSize / estimateSize);
-        ProcessHeap();
-        WriteHeap();
+        // OHOS fork retains only the calling thread, so no VM thread can
+        // consume a submission here. Preserve the child-only direct dump.
+        operation.doit();
     }
 
     // step3 - close file
@@ -226,21 +238,12 @@ bool CjHeapData::DumpHeap(int fd, bool needStopTheWorld)
     }
 
     InitSerializedIdWrapper();
+    VM_HeapDumper operation(*this, "dump heap to fd");
     if (needStopTheWorld) {
-        ScopedStopTheWorld scopedStopTheWorld("dump heap to fd");
-        size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
-        // 40: Statistical ratio of heap size to object count, used to estimate container capacity
-        const size_t estimateSize = 40;
-        dumpObjects.reserve(allocatedSize / estimateSize);
-        ProcessHeap();
-        WriteHeap();
+        VMThread::execute(&operation);
     } else {
-        size_t allocatedSize = Heap::GetHeap().GetAllocatedSize();
-        // 40: Statistical ratio of heap size to object count, used to estimate container capacity
-        const size_t estimateSize = 40;
-        dumpObjects.reserve(allocatedSize / estimateSize);
-        ProcessHeap();
-        WriteHeap();
+        // fork() preserves only the caller; the child has no VM worker.
+        operation.doit();
     }
 
     // fclose will close fd
@@ -422,12 +425,10 @@ void CjHeapData::ProcessRootConcurrencyModel()
 void CjHeapData::ProcessRootFinalizer()
 {
     NativeSlotVisitor visitor = [this](NativeSlot& objRef) {
-        zaddress_unsafe value = ZPointer::uncolor_unsafe(objRef.GetFieldValue());
-        if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
+        BaseObject* obj = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&objRef);
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return;
         }
-        // FinalizerProcessor holds listLock while exposing each retained root.
-        BaseObject* obj = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&(objRef));
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };

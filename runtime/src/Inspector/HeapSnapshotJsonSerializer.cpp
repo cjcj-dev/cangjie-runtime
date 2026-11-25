@@ -16,12 +16,29 @@
 #include "FileStream.h"
 #include "CjHeapData.h"
 #include "HeapSnapshotJsonSerializer.h"
+#include "Mutator/VMOperation.h"
 
 namespace MapleRuntime {
 
+class CjHeapDataForIDE::VM_HeapSnapshot final : public VMOperation {
+public:
+    explicit VM_HeapSnapshot(CjHeapDataForIDE& data) : heapData(data) {}
+    const char* name() const override { return "serialize heap data"; }
+    void doit() override { result = heapData.SerializeAtSafepoint(); }
+    bool result = false;
+private:
+    CjHeapDataForIDE& heapData;
+};
+
 bool CjHeapDataForIDE::Serialize()
 {
-    ScopedStopTheWorld scopedStopTheWorld("serialize heap data");
+    VM_HeapSnapshot operation(*this);
+    VMThread::execute(&operation);
+    return operation.result;
+}
+
+bool CjHeapDataForIDE::SerializeAtSafepoint()
+{
     ProcessHeap();
     HeapProfilerStream* stream = &MapleRuntime::HeapProfilerStream::GetInstance();
     stream->SetContext(DUMPHEAPSNAPSHOT);
