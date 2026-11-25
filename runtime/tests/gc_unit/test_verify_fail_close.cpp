@@ -24,9 +24,12 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <memory>
 #include <string>
+#include <thread>
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -793,6 +796,76 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, HeapWalkEntersBarrierAndVisitsCarrier)
     CheckCarrierWalk(true);
 }
 
+namespace {
+// The same opaque scheduler entries used by the unstarted carrier tests in test_tlab_usage.cpp.
+extern "C" CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                   const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+extern "C" void CJ_CJThreadFree(CJThread*, bool);
+
+class CarrierRuntime {
+public:
+    CarrierRuntime()
+    {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 512 * 1024;
+        GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    }
+    ~CarrierRuntime()
+    {
+        if (!finished) { (void)FiniCJRuntime(); }
+    }
+    void Finish()
+    {
+        finished = true;
+        GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    }
+private:
+    bool finished = false;
+};
+
+std::atomic<unsigned> carrierExecutions{0};
+
+void* CountCarrierExecution(void*, unsigned int)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    ++carrierExecutions;
+    return nullptr;
+}
+
+ScheduleHandle CarrierScheduler()
+{
+    return reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+}
+
+// Record addresses rather than keeping references to slots past carrier retirement.
+std::unordered_multiset<uintptr_t> CarrierRootSlots()
+{
+    std::unordered_multiset<uintptr_t> slots;
+    VisitCJThreadRoots([&](CJThreadRoot& root) {
+        root.oops_do([&](RootSlot& slot) { slots.insert(reinterpret_cast<uintptr_t>(&slot)); });
+    });
+    return slots;
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ScheduledCallbackChangesSharedObservation)
+{
+    CarrierRuntime runtime;
+    CJThreadAttr attr;
+    CJThreadAttrInit(&attr);
+    CJThreadAttrCjFromCSet(&attr, true);
+    LWTData data{};
+    GC_EXPECT_TRUE(CJThreadNew(CarrierScheduler(), &attr, CountCarrierExecution, &data, sizeof(data)) != nullptr);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (carrierExecutions.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    GC_EXPECT_EQ(carrierExecutions.load(), 1U);
+    runtime.Finish();
+    GC_EXPECT_EQ(carrierExecutions.load(), 1U);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
 {
     if (!ZVerifyRoots) {
@@ -800,30 +873,65 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         RunInOtherVm("ZVerifyCarrier.ArmedBadRootIsSkipped");
         return;
     }
-    RuntimeParam param{};
-    param.coParam.processorNum = 1;
-    param.heapParam.heapSize = 32 * 1024;
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    auto* thread = MCC_NewCJThread(nullptr, nullptr,
-        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    CarrierRuntime runtime;
+    GC_EXPECT_TRUE(MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD) != nullptr);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    LWTData initial{};
+    {
+        ScopedObjectAccess access;
+        initial.obj = MObject::NewPinnedObject(type, sizeof(uintptr_t));
+    }
+    GC_EXPECT_TRUE(initial.obj != nullptr);
+    const auto before = CarrierRootSlots();
+    CJThreadAttr attr;
+    CJThreadAttrInit(&attr);
+    CJThreadAttrStackSizeSet(&attr, 128U * 1024U); // Avoid reusing a default-sized carrier.
+    CJThreadAttrCjFromCSet(&attr, true);
+    // Build registers the carrier for root walks; CJThreadNew would also enqueue it.
+    auto release = [](CJThread* thread) { CJ_CJThreadFree(thread, false); };
+    std::unique_ptr<CJThread, decltype(release)> thread(
+        CJThreadBuild(CarrierScheduler(), &attr, CountCarrierExecution, &initial, sizeof(initial),
+                      CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask), release);
     GC_EXPECT_TRUE(thread != nullptr);
+    LWTData* data = nullptr;
+    CJThreadVisitRoots(thread.get(), [](void* arg, void* context) {
+        *static_cast<LWTData**>(context) = static_cast<LWTData*>(arg);
+    }, &data);
+    GC_EXPECT_TRUE(data != nullptr && data->obj == initial.obj);
+    const auto slot = reinterpret_cast<uintptr_t>(&RootSlotAt(&data->obj));
+    GC_EXPECT_EQ(before.count(slot), 0U);
+    GC_EXPECT_EQ(CarrierRootSlots().count(slot), 1U);
+
+    auto& heap = Heap::GetHeap();
     {
         DriverLocker lock;
-        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
-        Heap::GetHeap().young().pause_mark_start();
+        YoungTypeSetter typeSetter(heap.young(), ZYoungType::minor);
+        heap.young().pause_mark_start();
     }
-    auto* previous = CJThreadGetHandle();
-    ThreadLocal::SetCJThread(thread);
-    auto* data = static_cast<LWTData*>(CJThreadGetArg());
-    ThreadLocal::SetCJThread(previous);
-    auto* savedObject = data->obj;
-    data->obj = reinterpret_cast<BaseObject*>(0x1000);
-    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
-    Heap::GetHeap().old().pause_verify();
-    std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
-    GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
-    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
-    data->obj = savedObject;
+    heap.StopGCWork();
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread.get(), ZPointerStoreGoodMask));
+    {
+        struct RestoreSlot {
+            BaseObject*& slot;
+            BaseObject* saved;
+            ~RestoreSlot() { slot = saved; }
+        } restore{data->obj, data->obj};
+        auto* bad = reinterpret_cast<BaseObject*>(0x1000);
+        data->obj = bad;
+        heap.old().pause_verify();
+        std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
+        GC_EXPECT_TRUE(data->obj == bad);
+        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread.get(), ZPointerStoreGoodMask));
+    }
+    GC_EXPECT_TRUE(data->obj == initial.obj);
+    thread.reset();
+    GC_EXPECT_EQ(CarrierRootSlots().count(slot), 0U);
+    runtime.Finish();
+    GC_EXPECT_EQ(carrierExecutions.load(), 0U);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
