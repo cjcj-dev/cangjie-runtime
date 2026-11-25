@@ -53,6 +53,8 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" void MCC_WriteStructField(ObjectPtr, MAddress, size_t, MAddress, size_t, GCTib);
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
 extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems);
 }
@@ -132,6 +134,33 @@ struct PlainStructArrayTypeInfos : ByteArrayTypeInfos {
 PlainStructArrayTypeInfos& GetPlainStructArrayTypeInfos()
 {
     static PlainStructArrayTypeInfos infos;
+    return infos;
+}
+
+// Same flattened shape as an entry array, with one independently traceable
+// strong reference between two primitive words. No String/AST metadata model.
+struct BufferedStructEntry {
+    uintptr_t key;
+    BaseObject* value;
+    uintptr_t stamp;
+};
+static_assert(offsetof(BufferedStructEntry, value) == sizeof(uintptr_t));
+static_assert(sizeof(BufferedStructEntry) == 3 * sizeof(uintptr_t));
+
+struct BufferedStructEntryArrayInfos : ByteArrayTypeInfos {
+    BufferedStructEntryArrayInfos()
+    {
+        component->SetType(TypeKind::TYPE_KIND_STRUCT);
+        component->SetInstanceSize(sizeof(BufferedStructEntry));
+        component->SetFlagHasRefField();
+        GCTib tib{};
+        tib.tag = SIGN_BIT | 2;
+        component->SetGCTib(tib);
+    }
+};
+BufferedStructEntryArrayInfos& GetBufferedStructEntryArrayInfos()
+{
+    static BufferedStructEntryArrayInfos infos;
     return infos;
 }
 
@@ -775,6 +804,112 @@ void* RunNativeTaskRootCase(void*)
     return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
 }
 
+// The allocating setter returns before the collection. Its uncolored source
+// is consumed by the product struct-copy ABI, including the real pre-store.
+// Native C++ frames are outside the managed root set; only holder/control are
+// explicitly registered below. A dead sibling tests that native addresses do
+// not accidentally keep these large pages alive.
+__attribute__((noinline)) uintptr_t PublishBufferedStructEntry(MArray* holder, size_t targetLength)
+{
+    BufferedStructEntry entry{37, MCC_NewArray8(GetByteArrayTypeInfos().array, targetLength), 91};
+    const uintptr_t address = reinterpret_cast<uintptr_t>(entry.value);
+    MCC_WriteStructField(holder, reinterpret_cast<MAddress>(holder->ConvertToCArray()), sizeof(entry),
+                         reinterpret_cast<MAddress>(&entry), sizeof(entry),
+                         GetBufferedStructEntryArrayInfos().component->GetGCTib());
+    return address;
+}
+
+void* RunBufferedStructArrayFlipCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    Mutator* const mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    constexpr MIndex length = 1024 * 1024;
+    constexpr size_t targetLength = 8 * 1024 * 1024;
+    MArray* holder = MCC_NewArray(GetBufferedStructEntryArrayInfos().array, length);
+    const U64 holderRoot = heap.cross_vm().export_roots().RegisterExportRoot(holder);
+    heap.RequestGC(GC_REASON_USER);
+    // Hold the normal driver lock across setup, the one product collect, and
+    // all observations, so an automatic cycle cannot erase the flip evidence.
+    DriverLocker driverLock;
+    holder = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(holderRoot));
+    auto* const p = reinterpret_cast<volatile zpointer*>(holder->ConvertToCArray() +
+                                                        offsetof(BufferedStructEntry, value));
+    auto& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
+    const zpointer previous = field.GetFieldValue();
+    const bool oldHolder = !Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
+    size_t refFields = 0;
+    bool logicalSlot = false;
+    holder->ForEachRefFieldInRange([&](RefField<>& slot) {
+        ++refFields;
+        logicalSlot = logicalSlot || reinterpret_cast<volatile zpointer*>(&slot) == p;
+    }, reinterpret_cast<MAddress>(holder->ConvertToCArray()),
+       reinterpret_cast<MAddress>(holder->ConvertToCArray()) + sizeof(BufferedStructEntry));
+
+    U64 controlRoot;
+    uintptr_t deadAddress;
+    uintptr_t targetAddress;
+    {
+        // Exclude unrelated automatic driver cycles during this finite setup.
+        // Allocation is bounded to three dedicated large pages, below capacity.
+        MArray* control = MCC_NewArray8(GetByteArrayTypeInfos().array, targetLength);
+        controlRoot = heap.cross_vm().export_roots().RegisterExportRoot(control);
+        deadAddress = reinterpret_cast<uintptr_t>(MCC_NewArray8(GetByteArrayTypeInfos().array, targetLength));
+        targetAddress = PublishBufferedStructEntry(holder, targetLength);
+    }
+    StoreBarrierBuffer& buffer = *mutator->GetGCData().storeBarrierBuffer;
+    const size_t pending = buffer.Pending();
+    const bool paired = pending == 1 && buffer.buffer[buffer.Current()].p == p &&
+                        raw(buffer.buffer[buffer.Current()].prev) == raw(previous);
+    ZPage* const targetBefore = Heap::page(targetAddress);
+    const bool youngTarget = targetBefore != nullptr && targetBefore->IsYoungRegion() && targetBefore->is_large();
+    const bool previousUnrecorded = !heap.young().is_remembered(p);
+    const uintptr_t beforeColor = buffer.lastProcessedColor;
+    const uint64_t beforeSequence = heap.young().seqnum();
+    const bool published = raw(ZPointer::uncolor(field.GetFieldValue())) == targetAddress &&
+                           ZPointer::is_store_good(field.GetFieldValue());
+    const bool layout = holder->GetElementSize() == sizeof(BufferedStructEntry) &&
+                        holder->GetLength() == length && logicalSlot && refFields == 1;
+    const bool ready = layout && oldHolder && youngTarget && paired && previousUnrecorded && published &&
+        is_null_any(previous) && !mutator->IsManagedContext() &&
+        mutator->GetGCData().invisible_root() == nullptr &&
+        (beforeColor & ZPointerMarkedYoungMask) == ZPointerMarkedYoung;
+    if (!ready) {
+        heap.cross_vm().export_roots().RemoveExportRoot(controlRoot);
+        heap.cross_vm().export_roots().RemoveExportRoot(holderRoot);
+        mutator->SetManagedContext(true);
+        return reinterpret_cast<void*>(20); // Fixture premise, never a product red.
+    }
+
+    // ZGC zGeneration.cpp:538-576: the real collect entry owns the flip,
+    // root processing, mark completion, selector, and age transition.
+    {
+        ScopedEnterSaferegion safe(false);
+        heap.young().collect(ZYoungType::minor);
+    }
+    ZPage* const targetAfter = Heap::page(targetAddress);
+    const bool survived = targetAfter != nullptr;
+    const bool implicit = survived && targetAfter->IsAllocating();
+    const bool marked = survived && targetAfter->is_marked();
+    const bool stronglyLive = survived && targetAfter->is_object_strongly_live(to_zaddress(targetAddress));
+    const bool remembered = heap.young().is_remembered(p);
+    const bool flipped = heap.young().seqnum() == beforeSequence + 1 &&
+                        (beforeColor & ZPointerMarkedYoungMask) != ZPointerMarkedYoung;
+    const bool consumed = buffer.IsEmpty();
+    BaseObject* const control = heap.cross_vm().export_roots().GetExportRoot(controlRoot);
+    const bool controlLive = control != nullptr && Heap::page(reinterpret_cast<uintptr_t>(control)) != nullptr &&
+                            static_cast<MArray*>(control)->GetLength() == targetLength;
+    const bool deadReleased = Heap::page(deadAddress) == nullptr;
+    const auto* const primitive = reinterpret_cast<const BufferedStructEntry*>(holder->ConvertToCArray());
+    const bool primitiveIntact = primitive->key == 37 && primitive->stamp == 91;
+    const bool targetInvariant = survived && (marked || implicit) && stronglyLive && remembered && flipped && consumed;
+    const bool controlInvariant = controlLive && deadReleased && primitiveIntact;
+    heap.cross_vm().export_roots().RemoveExportRoot(controlRoot);
+    heap.cross_vm().export_roots().RemoveExportRoot(holderRoot);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>(!flipped ? 20 : !controlInvariant ? 2 : targetInvariant ? 0 : 1);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
                    bool runtimeThread = false)
 {
@@ -956,4 +1091,10 @@ GC_RUNTIME_OTHER_VM_TEST(RelocatePromotion, NullFieldsStayColoredThroughCollecti
 GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, FirstYoungStoreIntoPromotedNullIsRemembered)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 3, 1, true), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(StoreBarrierBufferFlip, StructArraySoleEdgeSurvivesYoungCollection)
+{
+    const int result = RunRuntimeCase(RunBufferedStructArrayFlipCase, 0);
+    GC_EXPECT_EQ(result, 0);
 }
