@@ -137,7 +137,8 @@ for (const c of cases.filter(c=>!values.select || values.select.split(',').inclu
  const dir=join(work,c.name), root=join(dir,'source'), bin=join(dir,'bin'), trace=join(dir,'argv.jsonl');
  assert.ok(!existsSync(dir),'each execution needs a fresh work directory: '+dir);
  mkdirSync(bin,{recursive:true});
- for(const relative of ['runtime/build.py','stdlib/build.py','runtime/build/build_cjthread.sh','runtime/build/build_cjthread_windows.bat','stdlib/third_party/cmake/Pcre2.cmake']) {
+ for(const relative of ['runtime/build.py','stdlib/build.py','runtime/build/build_cjthread.sh','runtime/build/build_cjthread_windows.bat',
+  'stdlib/third_party/cmake/Pcre2.cmake','stdlib/third_party/cmake/Pcre2KeepDebug.cmake']) {
   const from=join(source,relative), to=join(root,relative);
   if(existsSync(from)){mkdirSync(dirname(to),{recursive:true});copyFileSync(from,to);}
  }

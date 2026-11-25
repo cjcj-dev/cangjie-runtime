@@ -6,6 +6,9 @@
 
 cmake_minimum_required(VERSION 3.16.5)
 project(cangjie)
+
+set(CANGJIE_MAX_COMPILER_PROCESSES "" CACHE STRING
+    "Maximum concurrent Cangjie compiler processes (Ninja only; empty means unlimited)")
 # add path for custom CMake modules and add cmake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(AddCangjieSource)

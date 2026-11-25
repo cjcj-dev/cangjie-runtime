@@ -66,6 +66,12 @@ def nonnegative_jobs(value):
         raise argparse.ArgumentTypeError("jobs must be a nonnegative integer (0 means default)")
 
 
+def positive_integer(value):
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return int(value)
+
+
 def effective_cpu_count():
     """CPU availability, including affinity and visible ancestor cgroup quotas."""
     count_fn = getattr(os, "process_cpu_count", os.cpu_count)
@@ -245,6 +251,8 @@ def generate_cmake_defs(args):
 
     if args.sanitizer_support:
         result.append("-DCANGJIE_SANITIZER_SUPPORT=" + args.sanitizer_support)
+    if args.max_compiler_processes is not None:
+        result.append("-DCANGJIE_MAX_COMPILER_PROCESSES=" + str(args.max_compiler_processes))
     return result
 
 def build(args):
@@ -313,8 +321,8 @@ def build(args):
     else:
         cmake_build_dir = os.path.join(BUILD_DIR, "build-libs-{}".format(args.target)) if args.target else CMAKE_BUILD_DIR
 
-    if not os.path.exists(cmake_build_dir):
-        os.makedirs(cmake_build_dir)
+    if not os.path.exists(cmake_build_dir) or args.max_compiler_processes is not None:
+        os.makedirs(cmake_build_dir, exist_ok=True)
         output = subprocess.Popen(cmake_command, cwd=cmake_build_dir, stdout=PIPE, env=env)
         log_output(output)
 
@@ -486,6 +494,10 @@ def main():
     parser_build.add_argument(
         "--jobs","-j" , dest="jobs", type=nonnegative_jobs, default=0,
         help="run N jobs in parallel (0 uses parent budget or effective CPUs)"
+    )
+    parser_build.add_argument(
+        "--max-compiler-processes", type=positive_integer,
+        help="limit concurrent static and BC compiler processes together (Ninja only)",
     )
     parser_build.add_argument(
         "--hwasan", action="store_true", help="build with hardware asan"
