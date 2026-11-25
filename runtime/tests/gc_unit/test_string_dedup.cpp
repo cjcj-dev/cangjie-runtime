@@ -586,26 +586,43 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
 }
 
 namespace {
+std::filesystem::path LocateDedupSource(const std::filesystem::path& recorded,
+                                        const std::filesystem::path& executableDirectory)
+{
+    std::error_code error;
+    if (recorded.is_relative()) {
+        for (auto directory = executableDirectory; !directory.empty();) {
+            const auto candidate = directory / recorded;
+            if (std::filesystem::is_regular_file(candidate, error)) return candidate;
+            const auto parent = directory.parent_path();
+            if (parent == directory) break;
+            directory = parent;
+        }
+        return {};
+    }
+    if (std::filesystem::is_regular_file(recorded, error)) return recorded;
+    return {};
+}
+std::filesystem::path ResolveDedupSource(const char* executable)
+{
+    auto source = LocateDedupSource(__FILE__, std::filesystem::path(executable).parent_path());
+    if (source.empty()) return {};
+    source = std::filesystem::absolute(source);
+    std::error_code error;
+    if (!source.is_absolute() || !std::filesystem::is_regular_file(source, error)) return {};
+    return source;
+}
 bool RunMaintenanceSchedule(const char* fixture)
 {
     if (std::getenv("DEDUP_MAINTENANCE_FILE") != nullptr) return false;
     char executable[4096]{};
     const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     GC_EXPECT_TRUE(length > 0);
-    std::filesystem::path source = __FILE__;
-    if (source.is_relative()) {
-        auto directory = std::filesystem::path(executable).parent_path();
-        while (!directory.empty()) {
-            if (std::filesystem::is_regular_file(directory / source)) {
-                source = directory / source;
-                break;
-            }
-            const auto parent = directory.parent_path();
-            if (parent == directory) break;
-            directory = parent;
-        }
-    }
-    source = std::filesystem::absolute(source);
+    executable[length] = '\0';
+    const auto source = ResolveDedupSource(executable);
+    std::printf("DEDUP_ASSET_SOURCE %s\n", source.string().c_str());
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(!source.empty() && std::filesystem::is_regular_file(source));
     const auto scheduler = source.parent_path() / "test_string_dedup_maintenance_gdb.py";
     GC_EXPECT_TRUE(std::filesystem::is_regular_file(scheduler));
     const std::string prefix = std::string(executable) + ".maintenance-" + std::to_string(getpid());
@@ -734,24 +751,11 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
         GC_EXPECT_TRUE(length > 0);
         executable[length] = '\0';
         const std::string snapshot = std::string(executable) + ".queue-observation-" + std::to_string(getpid());
-        std::filesystem::path source = __FILE__;
-        if (source.is_relative()) {
-            // ccache can record a source path relative to the lane root. A
-            // cut runs from its own build directory, so resolve from the ELF.
-            auto directory = std::filesystem::path(executable).parent_path();
-            while (!directory.empty()) {
-                if (std::filesystem::is_regular_file(directory / source)) {
-                    source = directory / source;
-                    break;
-                }
-                const auto parent = directory.parent_path();
-                if (parent == directory) break;
-                directory = parent;
-            }
-        }
-        source = std::filesystem::absolute(source);
+        const auto source = ResolveDedupSource(executable);
+        std::printf("DEDUP_ASSET_SOURCE %s\n", source.string().c_str());
+        std::fflush(stdout);
+        GC_EXPECT_TRUE(!source.empty() && std::filesystem::is_regular_file(source));
         const auto observer = source.parent_path() / "test_string_dedup_queue_gdb.py";
-        GC_EXPECT_TRUE(std::filesystem::is_regular_file(source));
         GC_EXPECT_TRUE(std::filesystem::is_regular_file(observer));
         const pid_t child = fork();
         GC_EXPECT_TRUE(child >= 0);
