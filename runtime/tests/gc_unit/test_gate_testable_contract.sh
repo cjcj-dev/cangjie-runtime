@@ -500,17 +500,26 @@ mv "$fixture/so_reentry_probe.cpp" "$fixture/runtime/tests/gc_unit/so_reentry_pr
 # runner outputs; each arm has its own output directory to force fresh execution.
 cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/saved-runner.sh"
 contract_failures=0
-for arm in normal empty_success empty_failure process_failure; do
+for arm in normal empty_success empty_failure process_failure timeout; do
   tests=1; suite_rc=0; expected_rc=0; expected_reason=LANGUAGE_DEFERRED
   case "$arm" in
     empty_success) tests=0; expected_rc=3; expected_reason=CPP_SUITE_EMPTY ;;
     empty_failure) tests=0; suite_rc=1; expected_rc=1; expected_reason=CPP_SUITE_EXIT_FAILURE ;;
+    timeout) suite_rc=124; expected_rc=6; expected_reason=CPP_SUITE_TIMEOUT ;;
     process_failure) suite_rc=7; expected_rc=1; expected_reason=CPP_SUITE_EXIT_FAILURE ;;
   esac
   cat >"$fixture/runtime/tests/gc_unit/run_standalone.sh" <<RUNNER
 #!/usr/bin/env bash
 # test_x.cpp
 printf '[========] $tests tests: $tests passed, 0 failed\n' >"\$GC_UNIT_TALLY_FILE"
+if [[ "$arm" == process_failure || "$arm" == timeout ]]; then
+  echo "other VM child exit diagnostic" >"\$GC_UNIT_OUT/other_vm_exit.log"
+  echo "GC_UNIT_OTHER_VM_EXIT_RC=7"
+  echo 1 >"\$GC_UNIT_OUT/teardown-live.rc"
+  echo "expected live control" >"\$GC_UNIT_OUT/teardown-live.log"
+  echo 0 >"\$GC_UNIT_OUT/teardown-aggregate.rc"
+  echo "GC_UNIT_OTHER_VM_TEARDOWN_RC=0"
+fi
 exit $suite_rc
 RUNNER
   set +e
@@ -526,6 +535,70 @@ RUNNER
     echo "COMPLETION_FAIL arm=$arm"
     contract_failures=$((contract_failures + 1))
   fi
+  if [[ "$arm" == process_failure || "$arm" == timeout ]]; then
+    if ! /usr/bin/grep -Fxq 'other VM child exit diagnostic' "$fixture/completion-$arm.log"; then
+      echo "DIAGNOSTIC_ASSERT_FAIL arm=$arm missing other_vm_exit.log detail" >&2
+      contract_failures=$((contract_failures + 1))
+    fi
+    if /usr/bin/grep -Fxq 'expected live control' "$fixture/completion-$arm.log"; then
+      echo "DIAGNOSTIC_ASSERT_FAIL arm=$arm reported accepted live control" >&2
+      contract_failures=$((contract_failures + 1))
+    fi
+  fi
 done
+
+# Reproduce the output order of standalone: teardown rejects the exited
+# phase, then the real parallel runner prints 32 passing cases and exits 0.
+cat >"$fixture/bin/Main" <<'CASES'
+#!/usr/bin/env bash
+if [[ "$1" == --gtest_list_tests ]]; then
+  echo "${0##*/}."
+  printf '  Case%s\n' {1..16}
+  exit 0
+fi
+name=${1#--gtest_filter=}
+printf '[  RUN   ] %s\n[  PASS  ] %s\n' "$name" "$name"
+echo '[========] 1 tests: 1 passed, 0 failed' >"$GC_UNIT_TALLY_FILE"
+CASES
+chmod +x "$fixture/bin/Main"
+ln -s Main "$fixture/bin/Publication"
+cp "$ROOT/runtime/tests/gc_unit/run_parallel_tests.sh" "$fixture/runtime/tests/gc_unit/"
+cat >"$fixture/runtime/tests/gc_unit/run_standalone.sh" <<'RUNNER'
+#!/usr/bin/env bash
+# test_x.cpp
+set -eu
+src=$(dirname "$0")
+echo 'GC_UNIT_OTHER_VM_EXIT_RC=0'
+echo 'healthy other VM output' >"$GC_UNIT_OUT/other_vm_exit.log"
+echo 'exited probe detail: unexpected clear word' >"$GC_UNIT_OUT/teardown-exited.log"
+echo 1 >"$GC_UNIT_OUT/teardown-exited.rc"
+echo 'TEARDOWN_RECORDS_REJECT exited: rc=1, expected=0'
+echo 'TEARDOWN_CONSTRUCT_EXITED_RC=1'
+echo 'ASSERT_TEARDOWN_BEFORE_SENTINEL samples=1 PASS'
+echo 'GC_UNIT_OTHER_VM_TEARDOWN_RC=1'
+echo 1 >"$GC_UNIT_OUT/teardown-aggregate.rc"
+GC_UNIT_TEST_FILTER= GC_UNIT_MAIN_ENV= GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_JOBS=2 bash "$src/run_parallel_tests.sh" "$(command -v Main)" "$(command -v Publication)" \
+  "$GC_UNIT_OUT" "$GCV2_RUNTIME_LIB_DIR"
+exit 1
+RUNNER
+diag_rc=0
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GC_UNIT_OUT="$fixture/diag-out" \
+  GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/diag.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/diag.stdout" 2>"$fixture/diag.stderr" || diag_rc=$?
+[[ $diag_rc == 1 ]]
+/usr/bin/grep -Fxq '[  PASSED  ] 32 tests.' "$fixture/diag.stdout"
+/usr/bin/grep -Fq 'GC_UNIT_RUN_DONE rc=0 main_rc=0 publication_rc=0' "$fixture/diag.stdout"
+/usr/bin/grep -Fxq 'REASON=CPP_SUITE_EXIT_FAILURE' "$fixture/diag.status"
+for line in 'GC_UNIT_OTHER_VM_EXIT_RC=0' 'GC_UNIT_OTHER_VM_TEARDOWN_RC=1' \
+    'TEARDOWN_RECORDS_REJECT exited: rc=1, expected=0' 'TEARDOWN_CONSTRUCT_EXITED_RC=1' \
+    'ASSERT_TEARDOWN_BEFORE_SENTINEL samples=1 PASS' 'exited probe detail: unexpected clear word'; do
+  if ! /usr/bin/grep -Fxq "$line" "$fixture/diag.stderr"; then
+    echo "DIAGNOSTIC_ASSERT_FAIL missing from gate stderr: $line" >&2
+    contract_failures=$((contract_failures + 1))
+  fi
+done
+if /usr/bin/grep -Fq 'healthy other VM output' "$fixture/diag.stderr"; then exit 1; fi
 mv "$fixture/saved-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 [[ $contract_failures -eq 0 ]]
+echo "DIAGNOSTIC_ASSERT_PASS gate_rc=$diag_rc parallel_pass=32 markers_and_phase_detail=visible"

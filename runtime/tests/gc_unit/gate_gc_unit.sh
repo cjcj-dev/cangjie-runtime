@@ -599,22 +599,52 @@ timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$OUT" 2>&1
 suite_rc=$?
 CPP_RUNNER_RC=$suite_rc
 set -e
-if [[ $suite_rc -eq 124 ]]; then
-  CPP_SUITE_STATE=FAIL
-  CPP_SUITE_SOURCE=FRESH
-  STATUS_REASON=CPP_SUITE_TIMEOUT
-  echo "GC_UNIT_GATE_FAIL: suite did not finish within ${GC_UNIT_TIMEOUT}s -- a test is hung, not slow" >&2
-  echo "  last lines of $OUT:" >&2
-  tail -5 "$OUT" >&2
-  exit 6
-fi
 tail -20 "$OUT"
+
+# A successful parallel runner can bury an earlier failure in gate_run.log.
+# Use only this invocation's artifacts; a records rejection can invalidate
+# any phase even if its own process returned the expected status.
+report_suite_diagnostics() {
+  local log rc_file expected teardown_ok=0
+  /usr/bin/grep -E '^(GC_UNIT_OTHER_VM_(EXIT|TEARDOWN)_RC=|TEARDOWN_CONSTRUCT|TEARDOWN_RECORDS_REJECT|ASSERT_TEARDOWN_)' "$OUT" || true
+  if /usr/bin/grep -Fxq 'GC_UNIT_OTHER_VM_TEARDOWN_RC=0' "$OUT" &&
+      [[ -f "$GC_UNIT_OUT/teardown-aggregate.rc" && $(<"$GC_UNIT_OUT/teardown-aggregate.rc") == 0 ]]; then
+    teardown_ok=1
+  fi
+  log="$GC_UNIT_OUT/other_vm_exit.log"
+  if [[ -f "$log" ]] && ! /usr/bin/grep -Fxq 'GC_UNIT_OTHER_VM_EXIT_RC=0' "$OUT"; then
+    echo "  last lines of $log:"
+    tail -20 "$log" || true
+  fi
+  for log in "$GC_UNIT_OUT"/teardown*.log; do
+    [[ -f "$log" ]] || continue
+    rc_file="${log%.log}.rc"
+    expected=0
+    case "${log##*/}" in
+      teardown-live.log) expected=1 ;;  # Intentional rejection of the live sample.
+      teardown-records.log) rc_file="$GC_UNIT_OUT/teardown-aggregate.rc" ;;
+    esac
+    if [[ $teardown_ok == 1 && -f "$rc_file" && $(<"$rc_file") == "$expected" ]]; then
+      continue
+    fi
+    echo "  last lines of $log:"
+    tail -20 "$log" || true
+  done
+}
 
 # Like HotSpot gtestMain.cpp after RUN_ALL_TESTS(), preserve process failure:
 # a tally cannot prove that the runner's other required work completed.
 if [[ $suite_rc -ne 0 ]]; then
   CPP_SUITE_STATE=FAIL
   CPP_SUITE_SOURCE=FRESH
+  report_suite_diagnostics >&2
+  if [[ $suite_rc -eq 124 ]]; then
+    STATUS_REASON=CPP_SUITE_TIMEOUT
+    echo "GC_UNIT_GATE_FAIL: suite did not finish within ${GC_UNIT_TIMEOUT}s -- a test is hung, not slow" >&2
+    echo "  last lines of $OUT:" >&2
+    tail -5 "$OUT" >&2
+    exit 6
+  fi
   STATUS_REASON=CPP_SUITE_EXIT_FAILURE
   echo "GC_UNIT_GATE_FAIL: suite exited unsuccessfully (rc=$suite_rc)" >&2
   exit 1

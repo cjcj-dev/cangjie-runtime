@@ -1,4 +1,7 @@
 """Replay Linux wait statuses against the teardown probe's ownership checks."""
+import contextlib
+import io
+import json
 import os
 import signal
 import threading
@@ -100,6 +103,33 @@ class CloneStops(unittest.TestCase):
                              [call(self.child, probe.WALL), call(self.child, probe.WALL), call(-1, probe.WALL)])
         self.assertEqual(self.tracees.reaped, {self.pid, self.child})
         self.assertEqual(self.tracees.owned, {self.pid})
+
+
+class HeldWorkerJoin(unittest.TestCase):
+    worker = 73
+
+    def match(self, val, actual, addr=0x5000):
+        return probe.match_held_worker_join(
+            [addr, 265, val, 0, 0, 0xffffffff], {self.worker: addr},
+            lambda _: probe.HELD_WORKER, lambda _: actual)
+
+    def test_joinable_to_exiting_retries_before_matching(self):
+        trace = io.StringIO()
+        with contextlib.redirect_stdout(trace):
+            self.assertIsNone(self.match(2, 1))
+            self.assertEqual(self.match(1, 1), self.worker)
+        kind, payload = trace.getvalue().split(' ', 1)
+        self.assertEqual(kind, 'JOIN_EAGAIN_RETRY')
+        self.assertEqual(json.loads(payload), dict(tid=self.worker, uaddr=0x5000, value=2, actual=1))
+
+    def test_other_transitions_fail_closed(self):
+        for val, actual in [(1, 2), (2, 0), (1, 0), (2, 3), (3, 1), (3, 3), (0, 0)]:
+            with self.subTest(val=val, actual=actual), self.assertRaises(RuntimeError):
+                self.match(val, actual)
+
+    def test_unaligned_address_fails_even_on_retry(self):
+        with self.assertRaises(RuntimeError):
+            self.match(2, 1, addr=0x5001)
 
 
 if __name__ == '__main__':

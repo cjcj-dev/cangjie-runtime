@@ -258,9 +258,16 @@ def match_held_worker_join(params, clear_by_tid, comm_of, word_at):
     worker = owners[0]
     if comm_of(worker) != HELD_WORKER:
         return None
+    if uaddr % 4:
+        raise RuntimeError(f'unaligned join futex {uaddr:#x}')
     actual = word_at(uaddr)
-    if uaddr % 4 or actual != val:
-        raise RuntimeError('join futex value mismatch')
+    if val == 2 and actual == 1:
+        # The worker started exiting after glibc loaded JOINABLE. Let the
+        # kernel reject this wait with EAGAIN; inspect glibc's next entry.
+        emit('JOIN_EAGAIN_RETRY', tid=worker, uaddr=uaddr, value=val, actual=actual)
+        return None
+    if actual != val:
+        raise RuntimeError(f'join futex value mismatch: expected={val} actual={actual}')
     if val != worker and val not in JOIN_STATE_VALUES:
         raise RuntimeError(f'unknown clear-word join value {val}')
     return worker
