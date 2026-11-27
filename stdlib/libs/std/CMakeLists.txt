@@ -45,9 +45,9 @@ add_subdirectory(unittest/mock)
 add_subdirectory(console)
 add_subdirectory(crypto)
 add_subdirectory(ast)
-# No need to cross-compile ast and testmacro because they are always used on host platforms.
-if(NOT CMAKE_CROSSCOMPILING OR OHOS)
+# A macOS cross build also produces a host SDK for the target architecture.
+if(NOT CMAKE_CROSSCOMPILING OR MACOS OR OHOS)
     add_subdirectory(unittest/testmacro)
-endif() # not cross-compiling
+endif()
 #No need if verify-only
 add_subdirectory(database)

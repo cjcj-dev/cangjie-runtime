@@ -8,6 +8,10 @@
 get_filename_component(CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
 include("${CMAKE_DIR}/darwin_toolchain.cmake")
 set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "" FORCE)
+if(CANGJIE_TARGET_SYSROOT)
+    set(CMAKE_OSX_SYSROOT "${CANGJIE_TARGET_SYSROOT}")
+endif()
 
 set(TRIPLE x86_64-apple-darwin)
 set(MACOS ON)

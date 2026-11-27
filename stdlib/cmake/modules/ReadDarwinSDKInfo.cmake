@@ -7,8 +7,12 @@
 
 # Use `xcrun` to get MacOS SDK path and version. They are used for compiling Cangjie standard libraries.
 
+set(macos_sdk macosx)
+if(CANGJIE_TARGET_SYSROOT)
+    set(macos_sdk "${CANGJIE_TARGET_SYSROOT}")
+endif()
 execute_process(
-    COMMAND xcrun --sdk macosx --show-sdk-path
+    COMMAND xcrun --sdk "${macos_sdk}" --show-sdk-path
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     RESULT_VARIABLE CANGJIE_MACOSX_SDK_PATH_AVAILABLE
     OUTPUT_VARIABLE CANGJIE_MACOSX_SDK_PATH
@@ -21,13 +25,13 @@ else()
 endif()
 
 execute_process(
-    COMMAND xcrun --sdk macosx --show-sdk-version
+    COMMAND xcrun --sdk "${macos_sdk}" --show-sdk-version
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     RESULT_VARIABLE CANGJIE_MACOSX_SDK_VERSION_AVAILABLE
     OUTPUT_VARIABLE CANGJIE_MACOSX_SDK_VERSION
     ERROR_QUIET
     OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(${CANGJIE_MACOSX_SDK_PATH_AVAILABLE} EQUAL 0)
+if(${CANGJIE_MACOSX_SDK_VERSION_AVAILABLE} EQUAL 0)
     message(STATUS "CANGJIE_MACOSX_SDK_VERSION: ${CANGJIE_MACOSX_SDK_VERSION}")
 else()
     message(STATUS "CANGJIE_MACOSX_SDK_VERSION: Not Available")
