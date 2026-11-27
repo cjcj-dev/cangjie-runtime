@@ -1417,17 +1417,3 @@ add_cangjie_library(
     MODULE_NAME "std"
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/std/deriving
     DEPENDS ${STD_DERIVING_DEPENDENCIES})
-
-# A cross-built macOS host SDK also exposes the macro-library spelling beside
-# its CJO. Keep the actual image in runtime/lib for cjc's std macro loader.
-if(MACOS AND CMAKE_CROSSCOMPILING AND NOT CANGJIE_SANITIZER_SUPPORT_ENABLED)
-    set(macro_tuple "${output_triple_name}_${CJNATIVE_BACKEND}")
-    set(macro_alias_dir "${CMAKE_CURRENT_BINARY_DIR}/macro-aliases")
-    file(MAKE_DIRECTORY "${macro_alias_dir}")
-    foreach(pkg unittest.testmacro unittest.mock.mockmacro deriving)
-        set(alias "${macro_alias_dir}/lib-macro_std.${pkg}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-        file(CREATE_LINK "../../../runtime/lib/${macro_tuple}/libcangjie-std-${pkg}${CMAKE_SHARED_LIBRARY_SUFFIX}"
-            "${alias}" SYMBOLIC)
-        install(FILES "${alias}" DESTINATION "modules/${macro_tuple}/std")
-    endforeach()
-endif()

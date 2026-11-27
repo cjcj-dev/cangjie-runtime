@@ -23,6 +23,18 @@ def write(path, contents=""):
     path.write_text(contents)
 
 
+def write_xcrun(tools):
+    path = tools / "xcrun"
+    write(path, """#!/bin/sh
+case "$*" in
+    "--sdk macosx --show-sdk-path") echo "$FIXTURE_SDK";;
+    "--sdk macosx --show-sdk-version") echo "$FIXTURE_VERSION"; exit "${FIXTURE_VERSION_RC:-0}";;
+    *) echo "unsupported xcrun arguments: $*" >&2; exit 2;;
+esac
+""")
+    path.chmod(0o755)
+
+
 def run(*args, **kwargs):
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
     if result.returncode:
@@ -106,16 +118,17 @@ install(FILES pcre2.h DESTINATION include)
                     "third_party/flatbuffers/include/flatbuffers/flatbuffers.h"):
             write(sdk / rel)
         tools = root / "tools"
-        write(tools / "xcrun", '#!/bin/sh\ncase "$*" in\n'
-              '  "--sdk $FIXTURE_SDK --show-sdk-path") echo "$FIXTURE_SDK";;\n'
-              '  "--sdk $FIXTURE_SDK --show-sdk-version") echo 15.0;;\n  *) exit 1;;\nesac\n')
-        (tools / "xcrun").chmod(0o755)
+        write_xcrun(tools)
+        default_sdk = root / "XcodeDefault.sdk"
+        default_sdk.mkdir()
         cls.archiver = shutil.which("ar")
         cls.builds = {}
         for name, toolchain, sdk_name in (("mac", "darwin_x86_64", "MacOSX.sdk"),
                                          ("ios", "ios_simulator_x86_64", "iPhoneSimulator.sdk")):
             sysroot = root / sdk_name
             sysroot.mkdir()
+            if name == "mac":
+                write(sysroot / "SDKSettings.json", json.dumps({"Version": "15.2"}))
             wrapper = root / (name + ".cmake")
             # Skip compiler identification and ABI probes; CMake still emits
             # real AppleClang compile, cjc, archiver, link and install rules.
@@ -138,7 +151,8 @@ include("{STDLIB}/cmake/{toolchain}_toolchain.cmake")
                          f"-DCMAKE_TOOLCHAIN_FILE={wrapper}", f"-DCANGJIE_TARGET_TOOLCHAIN={tools}",
                          f"-DCANGJIE_TARGET_SYSROOT={sysroot}", "-DCANGJIE_SKIP_FIND_OPENSSL=ON",
                          "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_BUILD_TYPE=Release",
-                         env={**os.environ, "CANGJIE_HOME": str(sdk), "FIXTURE_SDK": str(sysroot),
+                         env={**os.environ, "CANGJIE_HOME": str(sdk), "FIXTURE_SDK": str(default_sdk),
+                              "FIXTURE_VERSION": "15.0", "FIXTURE_VERSION_RC": "0",
                               "PATH": str(tools) + os.pathsep + os.environ["PATH"]})
             cls.builds[name] = build, output
         cls.mac, cls.configure = cls.builds["mac"]
@@ -181,7 +195,7 @@ include("{STDLIB}/cmake/{toolchain}_toolchain.cmake")
                 self.assertTrue(any(f"--target={TRIPLE}" in line and f"/{source}.a " in line for line in steps))
                 self.assertTrue(any("-arch x86_64" in line and line.endswith("/" + dylib) for line in steps))
 
-    def test_installed_macro_names_resolve_after_relocation(self):
+    def test_installed_macro_layout_after_relocation(self):
         # Run the generated file-install rules for the three packages only.
         # Payloads are markers; they test installation, not Mach-O contents.
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,11 +207,11 @@ include("{STDLIB}/cmake/{toolchain}_toolchain.cmake")
                 cjo = f"std.{pkg}.cjo"
                 write(self.mac / "lib" / TUPLE / dylib, pkg)
                 write(self.mac / "modules" / TUPLE / "std" / cjo, cjo)
-                for filename in (dylib, cjo, f"lib-macro_std.{pkg}.dylib"):
-                    matches = [line for line in self.install.splitlines()
-                               if "file(INSTALL " in line and line.endswith(f'/{filename}")')]
-                    self.assertEqual(len(matches), 1, filename)
-                    rules.extend(matches)
+                rules.extend(line for line in self.install.splitlines() if "file(INSTALL " in line
+                             and line.endswith((f'/{dylib}")', f'/{cjo}")')))
+            # Include any alias install rule so a reintroduced (even broken) link is visible.
+            rules.extend(line for line in self.install.splitlines() if "file(INSTALL " in line
+                         and "/lib-macro_std." in line)
             script = root / "install.cmake"
             write(script, "\n".join(rules))
             run("cmake", f"-DCMAKE_INSTALL_PREFIX={prefix}", "-P", script, env={**os.environ, "DESTDIR": ""})
@@ -207,12 +221,9 @@ include("{STDLIB}/cmake/{toolchain}_toolchain.cmake")
             for pkg in MACROS:
                 cjo = f"std.{pkg}.cjo"
                 self.assertEqual((modules / cjo).read_text(), cjo)
-                alias = modules / f"lib-macro_std.{pkg}.dylib"
-                self.assertTrue(alias.is_symlink())
                 canonical = relocated / "runtime/lib" / TUPLE / f"libcangjie-std-{pkg}.dylib"
-                self.assertTrue(alias.is_file(), alias)
-                self.assertTrue(alias.samefile(canonical))
-                self.assertEqual(alias.read_text(), pkg)
+                self.assertEqual(canonical.read_text(), pkg)
+            self.assertEqual(sorted(p.name for p in modules.glob("lib-macro_std.*.dylib")), [])
 
     def test_ios_keeps_native_only_macro_links_disabled(self):
         build, _ = self.builds["ios"]
@@ -238,9 +249,73 @@ include("{STDLIB}/cmake/{toolchain}_toolchain.cmake")
 
     def test_direct_darwin_linker(self):
         link, = (line for line in self.commands("std-core") if "/ld64.lld " in line)
-        self.assertIn(f"-syslibroot {self.sysroot} -platform_version macos 12.0.0 15.0", link)
+        self.assertIn("-arch x86_64", link)
         self.assertNotIn(" -B", link)
         self.assertNotIn(" --sysroot", link)
+
+    def test_explicit_sdk_settings_reach_linker(self):
+        link, = (line for line in self.commands("std-core") if "/ld64.lld " in line)
+        self.assertIn(f"-syslibroot {self.sysroot} -platform_version macos 12.0.0 15.2 ", link)
+        self.assertIn(f"CANGJIE_MACOSX_SDK_PATH: {self.sysroot}\n", self.configure)
+        self.assertIn("CANGJIE_MACOSX_SDK_VERSION: 15.2\n", self.configure)
+
+
+class SDKDiscovery(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.sdk = self.root / "MacOSX.sdk"
+        self.sdk.mkdir()
+        write_xcrun(self.root)
+        write(self.root / "CMakeLists.txt", f"""cmake_minimum_required(VERSION 3.16.5)
+project(sdk_fixture NONE)
+include("{STDLIB}/cmake/modules/ReadDarwinSDKInfo.cmake")
+file(WRITE "${{CMAKE_BINARY_DIR}}/sdk.txt" "${{CANGJIE_MACOSX_SDK_PATH}}\n${{CANGJIE_MACOSX_SDK_VERSION}}")
+""")
+
+    def configure(self, *definitions, **env):
+        return subprocess.run(
+            ["cmake", "-S", self.root, "-B", self.root / "build", *definitions],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env={**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                 "FIXTURE_SDK": str(self.sdk), "FIXTURE_VERSION": "15.0", "FIXTURE_VERSION_RC": "0", **env})
+
+    def test_default_sdk_uses_named_xcrun(self):
+        write(self.sdk / "SDKSettings.json", '{"Version":"15.2"}')
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.root / "build/sdk.txt").read_text().splitlines(), [str(self.sdk), "15.0"])
+
+    def test_cmake_sysroot_falls_back_to_named_version(self):
+        for settings in (None, '{}'):
+            with self.subTest(settings=settings):
+                if settings is not None:
+                    write(self.sdk / "SDKSettings.json", settings)
+                result = self.configure(f"-DCMAKE_SYSROOT={self.sdk}", FIXTURE_SDK="unused")
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual((self.root / "build/sdk.txt").read_text().splitlines(), [str(self.sdk), "15.0"])
+
+    def test_missing_sdk_stops_configuration(self):
+        missing = str(self.root / "absent.sdk")
+        for definitions, path, diagnostic in (
+                ([], "", "--show-sdk-path failed"),
+                ([], missing, "macOS SDK directory does not exist"),
+                ([f"-DCANGJIE_TARGET_SYSROOT={missing}"], str(self.sdk), "macOS SDK directory does not exist")):
+            with self.subTest(definitions=definitions, path=path):
+                result = self.configure(*definitions, FIXTURE_SDK=path)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(diagnostic, result.stdout)
+
+    def test_unresolved_version_stops_configuration(self):
+        for version, rc, diagnostic in (("", "0", "--show-sdk-version failed"),
+                                        ("15.0", "1", "--show-sdk-version failed"),
+                                        ("unknown", "0", "Invalid macOS SDK version")):
+            with self.subTest(version=version, rc=rc):
+                result = self.configure(f"-DCANGJIE_TARGET_SYSROOT={self.sdk}",
+                                        FIXTURE_VERSION=version, FIXTURE_VERSION_RC=rc)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(diagnostic, result.stdout)
 
 
 if __name__ == "__main__":
