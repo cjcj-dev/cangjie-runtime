@@ -385,12 +385,21 @@ func newBlock<E>(tailBlock: Block<E>, tail: AtomicReference<Block<E>>): Unit {
             if (let Some(_) <- tailBlock.next.load()) {
                 return
             }
+            // A failed allocation releases the claim without publishing next.
+            if (tailBlock.isExtended.compareAndSwap(false, true)) {
+                break
+            }
         }
     }
 
-    let newBlock = Block<E>(tailBlock.version + 1)
-    tailBlock.next.store(newBlock)
-    tail.store(newBlock)
+    try {
+        let newBlock = Block<E>(tailBlock.version + 1)
+        tailBlock.next.store(newBlock)
+        tail.store(newBlock)
+    } catch (e: Error) {
+        tailBlock.isExtended.store(false)
+        throw e
+    }
 }
 
 /**
