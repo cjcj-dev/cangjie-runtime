@@ -13,13 +13,6 @@ package std.unittest
 
 import std.collection.*
 import std.math.*
-import std.math
-import std.random.Random
-import std.sort.SortExtension
-import std.sync.*
-import std.unittest.common.DataStrategy
-import std.unittest.diff.AssertPrintable
-import std.unittest.prop_test.ShrinkHelpers
 
 /**
  * kde calculation method is adaptive, so it has different values of parameters (bandwidth, next grid step, etc) in different points of the grid

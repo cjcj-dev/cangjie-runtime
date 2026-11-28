@@ -68,7 +68,7 @@ set(CMAKE_CXX_FLAGS
     -Woverloaded-virtual \
     -Wnon-virtual-dtor \
     -Wdelete-non-virtual-dtor \
-    -std=gnu++14 \
+    -std=gnu++17 \
     -fno-common \
     -fno-strict-aliasing \
     -fno-builtin \

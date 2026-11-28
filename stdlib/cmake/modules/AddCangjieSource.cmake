@@ -20,6 +20,9 @@ if(CANGJIE_ENABLE_LOCAL_MODE_API AND NOT CANGJIE_ENABLE_LOCAL_MODE)
     message(FATAL_ERROR "CANGJIE_ENABLE_LOCAL_MODE_API=ON requires CANGJIE_ENABLE_LOCAL_MODE=ON")
 endif()
 
+option(CANGJIE_STDLIB_DEBUG_INFO "Emit debug info (-g) when building stdlib" ON)
+option(CANGJIE_STDLIB_BUILD_LTO_BC "Build LTO bitcode (.bc) alongside native archives" ON)
+
 # Resolve a list of CMake target names / plain file paths to the actual output
 # files those targets produce, so that add_custom_command(OUTPUT) DEPENDS can
 # track them via file timestamps.
@@ -132,25 +135,16 @@ function(add_cangjie_library target_name)
     endif()
 
     set(cangjie_compile_flags)
-    if(CMAKE_BUILD_TYPE MATCHES Debug)
+    if(NOT CANGJIELIB_IS_STDLIB OR CANGJIE_STDLIB_DEBUG_INFO)
+        # Final libraries carry DWARF in every build type.
         list(APPEND cangjie_compile_flags "-g")
-    elseif(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo)
-        list(APPEND cangjie_compile_flags "-g")
-        if(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
-            # -g will enable aggressive-parallel-compile, so we need limit --apc to 1 to disable it forcibly.
-            list(APPEND cangjie_compile_flags "--apc=1")
-        endif()
-    else()
-        # Standard libraries carry DWARF in every build type; a final binary keeps it only when its
-        # own link is invoked with -g. Release/MinSizeRel keep their trimmed source paths.
-        list(APPEND cangjie_compile_flags "-g")
-        if(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
-            list(APPEND cangjie_compile_flags "--apc=1")
-        endif()
-       if(NOT CANGJIE_BUILD_STDLIB_WITH_COVERAGE)
-            list(APPEND cangjie_compile_flags "--trimpath")
-            list(APPEND cangjie_compile_flags "${CMAKE_SOURCE_DIR}/libs/")
-        endif()
+    endif()
+    if(NOT CMAKE_BUILD_TYPE MATCHES Debug AND CANGJIE_CODEGEN_CJNATIVE_BACKEND)
+        # Keep compile parallelism unchanged when omitting debug info.
+        list(APPEND cangjie_compile_flags "--apc=1")
+    endif()
+    if(NOT CMAKE_BUILD_TYPE MATCHES "Debug|RelWithDebInfo" AND NOT CANGJIE_BUILD_STDLIB_WITH_COVERAGE)
+        list(APPEND cangjie_compile_flags "--trimpath" "${CMAKE_SOURCE_DIR}/libs/")
     endif()
 
     # Conditional compilation filters local APIs after parsing their syntax.
@@ -282,15 +276,16 @@ function(add_cangjie_library target_name)
         ${output_lto_bc_full_name})
     set(COMPILE_CMD ${COMPILE_CMD} ${output_argument} ${output_full_name})
 
-    if(NOT ("${CANGJIELIB_MODULE_NAME}" STREQUAL ""))
-        set(temp_files_dir "${CMAKE_BINARY_DIR}/${output_dir}/${CANGJIELIB_MODULE_NAME}.${CANGJIELIB_PACKAGE_NAME}-temp-files")
-    else()
-        set(temp_files_dir "${CMAKE_BINARY_DIR}/${output_dir}/${CANGJIELIB_PACKAGE_NAME}-temp-files")
+    list(APPEND COMPILE_CMD "-j1")
+    if(NOT CANGJIELIB_IS_STDLIB OR CANGJIE_STDLIB_BUILD_LTO_BC)
+        if(NOT ("${CANGJIELIB_MODULE_NAME}" STREQUAL ""))
+            set(temp_files_dir "${CMAKE_BINARY_DIR}/${output_dir}/${CANGJIELIB_MODULE_NAME}.${CANGJIELIB_PACKAGE_NAME}-temp-files")
+        else()
+            set(temp_files_dir "${CMAKE_BINARY_DIR}/${output_dir}/${CANGJIELIB_PACKAGE_NAME}-temp-files")
+        endif()
+        list(APPEND COMPILE_CMD "--save-temps=${temp_files_dir}")
+        set(MKDIR_TEMP_FILES_CMD COMMAND ${CMAKE_COMMAND} -E make_directory ${temp_files_dir})
     endif()
-    
-    set(COMPILE_CMD ${COMPILE_CMD} "-j1")
-    set(COMPILE_CMD ${COMPILE_CMD} "--save-temps=${temp_files_dir}")
-    set(MKDIR_TEMP_FILES_CMD COMMAND ${CMAKE_COMMAND} -E make_directory ${temp_files_dir})
 
     if(CANGJIE_BUILD_STDLIB_WITH_COVERAGE)
         list(APPEND COMPILE_CMD "--coverage")
@@ -329,7 +324,8 @@ function(add_cangjie_library target_name)
     set_target_properties(${target_name} PROPERTIES CJ_OUTPUT_FILE ${output_full_name})
 
     set(generate_lto_bc OFF)
-    if(CANGJIE_CODEGEN_CJNATIVE_BACKEND
+    if((NOT CANGJIELIB_IS_STDLIB OR CANGJIE_STDLIB_BUILD_LTO_BC)
+       AND CANGJIE_CODEGEN_CJNATIVE_BACKEND
        AND NOT WIN32
        AND (NOT DARWIN OR IOS)
        AND NOT CANGJIE_SANITIZER_SUPPORT_ENABLED)

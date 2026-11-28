@@ -234,7 +234,7 @@ void CleanThreadLocalData::RemoveFromList()
     next.store(nullptr, std::memory_order_relaxed);
 }
 
-CleanThreadLocalData::CleanThreadLocalData()
+CleanThreadLocalData::CleanThreadLocalData() noexcept
 {
     BarrierSet* barrier_set = BarrierSet::barrier_set();
     if (barrier_set != nullptr) {

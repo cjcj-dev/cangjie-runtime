@@ -7,7 +7,6 @@
  */
 package std.unittest
 
-import std.time.*
 import std.env.*
 import std.collection.*
 import std.runtime.*

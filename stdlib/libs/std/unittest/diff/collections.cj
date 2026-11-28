@@ -169,7 +169,7 @@ interface AssertPrintableMap<C, K, V> where C <: Map<K, V>, K <: Equatable<K> & 
             }
         }
 
-        for ((k, v) in right.iterator()) {
+        for ((k, _) in right.iterator()) {
             if (left.get(k) == Option<V>.None) {
                 righties.add(k)
             }

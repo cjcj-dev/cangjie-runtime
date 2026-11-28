@@ -12,7 +12,6 @@ import std.unittest.common.*
 import std.fs.*
 
 private let OP_SHOW_ALL_OUTPUT_NAME = camelCaseToKebabCase(KeyShowAllOutput().name)
-private let OP_SHOW_ALL_OUTPUT = "--${OP_SHOW_ALL_OUTPUT_NAME}"
 let SHOW_ALL_OUTPUT_KEY = kebabCaseToCamelCase(OP_SHOW_ALL_OUTPUT_NAME)
 private let OP_NO_CAPTURE_OUTPUT_NAME = camelCaseToKebabCase(KeyNoCaptureOutput().name)
 private let OP_NO_CAPTURE_OUTPUT = "--${OP_NO_CAPTURE_OUTPUT_NAME}"
@@ -504,10 +503,6 @@ class TextReports {
 
         appendDashLine(pp)
 
-        func prefix() {
-            pp.append("TP: ").appendName(packageResult.groupName).append(", ")
-        }
-
         let textReport = PackageTextReport(pp, outputReporter, config, detailed: true)
         textReport.printPackage(packageResult)
     }
@@ -624,7 +619,7 @@ extend CheckResult <: PrettyPrintable {
                 pp.append(cr.mockFrameworkMessage).newLine()
             case cr: CrashedCheckResult => pp.append("Crashed with exit code ${cr.exitCode}.").newLine()
             case cr: TimeoutCheckResult => pp.append(cr.msg).newLine()
-            case cr: NoParametersProvidedResult => pp.append("Test case body was never executed. Provided strategy has zero elements.").newLine()
+            case _: NoParametersProvidedResult => pp.append("Test case body was never executed. Provided strategy has zero elements.").newLine()
             case cr: UnattachedCheckResult =>
                 pp.append("Found assert that was not attached to a specific test case:")
                     .newLine()

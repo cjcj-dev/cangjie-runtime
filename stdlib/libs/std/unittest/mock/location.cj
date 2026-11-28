@@ -7,6 +7,7 @@
  */
 package std.unittest.mock
 
+@When[env == "ohos"]
 import std.collection.enumerate
 import std.fs.Path
 

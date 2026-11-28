@@ -219,7 +219,6 @@ extend TestGroupResult {
     }
 }
 
-private const RENDER_OPTIONS_BASELINE_KEY = "baseline"
 type ConvTable = HListOfTuples<Float64, HListOfTuples<String, End>>
 
 

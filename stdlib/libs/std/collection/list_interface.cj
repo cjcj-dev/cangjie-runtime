@@ -23,18 +23,22 @@ public interface ReadOnlyList<T> <: Collection<T> {
     // Keep new receiver-mode members after existing members to preserve dispatch slots.
     @When[local_mode_api == "on"]
     func get(this @local!, index: Int64): ?T @local! {
+        let _ = index
         throw UnimplementedException("Current Type does not implement 'get' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func get(this @local?, index: Int64): ?T @local? {
+        let _ = index
         throw UnimplementedException("Current Type does not implement 'get' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
     operator func [](this @local!, index: Int64): T @local! {
+        let _ = index
         throw UnimplementedException("Current Type does not implement '[]' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     operator func [](this @local?, index: Int64): T @local? {
+        let _ = index
         throw UnimplementedException("Current Type does not implement '[]' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
@@ -75,30 +79,39 @@ public interface List<T> <: ReadOnlyList<T> {
     operator func [](index: Int64, value!: T): Unit
     @When[local_mode_api == "on"]
     func add(this @local!, element: T @local!): Unit {
+        match (element) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func add(this @local!, all!: Collection<T> @local!): Unit {
+        match (all) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func add(this @local!, element: T @local!, at!: Int64): Unit {
+        match (element) { case _ => () }
+        let _ = at
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func add(this @local!, all!: Collection<T> @local!, at!: Int64): Unit {
+        match (all) { case _ => () }
+        let _ = at
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func remove(this @local!, at!: Int64): T @local! {
+        let _ = at
         throw UnimplementedException("Current Type does not implement 'remove' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func remove(this @local!, range: Range<Int64>): Unit {
+        let _ = range
         throw UnimplementedException("Current Type does not implement 'remove' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func removeIf(this @local!, predicate: ((T @local!) -> Bool) @local?): Unit {
+        match (predicate) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'removeIf' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
@@ -107,6 +120,8 @@ public interface List<T> <: ReadOnlyList<T> {
     }
     @When[local_mode_api == "on"]
     operator func [](this @local!, index: Int64, value!: T @local!): Unit {
+        match (index) { case _ => () }
+        match (value) { case _ => () }
         throw UnimplementedException("Current Type does not implement '[]' method for its @local! instance")
     }
 }

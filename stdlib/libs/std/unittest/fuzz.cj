@@ -535,7 +535,7 @@ class GaussianGenerator {
             return cached
         }
         var u1: Float64 = random.nextFloat64()
-        let u2 = random.nextFloat64()
+        let _ = random.nextFloat64()
 
         let mag = sigma * sqrt(-2.0 * log(u1))
         let z0 = mag * cos(2.0 * Float64.GetPI()) + mean

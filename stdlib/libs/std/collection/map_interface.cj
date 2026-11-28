@@ -30,6 +30,7 @@ public interface MapEntryView<K, V> {
             throw UnimplementedException("Current Type does not implement 'value' property for its @local! instance")
         }
         set(v) {
+            match (v) { case _ => () }
             throw UnimplementedException("Current Type does not implement 'value' property for its @local! instance")
         }
     }
@@ -46,26 +47,32 @@ public interface ReadOnlyMap<K, V> <: Collection<(K, V)> {
 
     @When[local_mode_api == "on"]
     func get(this @local!, key: K @local?): ?V @local! {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'get' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func get(this @local?, key: K @local?): ?V @local? {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'get' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
     operator func [](this @local!, key: K @local?): V @local! {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement '[]' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     operator func [](this @local?, key: K @local?): V @local? {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement '[]' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
     func contains(this @local?, key: K @local?): Bool {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'contains' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
     func contains(this @local?, all!: Collection<K> @local?): Bool {
+        match (all) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'contains' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
@@ -212,22 +219,28 @@ public interface Map<K, V> <: ReadOnlyMap<K, V> {
     // Keep new receiver-mode members after existing members to preserve dispatch slots.
     @When[local_mode_api == "on"]
     func add(this @local!, key: K @local!, value: V @local!): ?V @local! {
+        match (key) { case _ => () }
+        match (value) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func add(this @local!, all!: Collection<(K, V)> @local!): Unit {
+        match (all) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'add' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func remove(this @local!, key: K @local?): Option<V> @local! {
+        match (key) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'remove' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func remove(this @local!, all!: Collection<K> @local?): Unit {
+        match (all) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'remove' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func removeIf(this @local!, predicate: ((K @local?, V @local?) -> Bool) @local?): Unit {
+        match (predicate) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'removeIf' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
@@ -236,24 +249,32 @@ public interface Map<K, V> <: ReadOnlyMap<K, V> {
     }
     @When[local_mode_api == "on"]
     operator func [](this @local!, key: K @local!, value!: V @local!): Unit {
+        match (key) { case _ => () }
+        match (value) { case _ => () }
         throw UnimplementedException("Current Type does not implement '[]' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func entryView(this @local!, k: K @local!): MapEntryView<K, V> @local! {
+        match (k) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'entryView' method for its @local! instance")
     }
     @When[local_mode_api == "on"]
     func entryView(this @local?, k: K @local!): MapEntryView<K, V> @local? {
+        match (k) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'entryView' method for its @local? instance")
     }
     @Frozen
     @When[local_mode_api == "on"]
     func addIfAbsent(this @local!, key: K @local!, value: V @local!): ?V @local! {
+        match (key) { case _ => () }
+        match (value) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'addIfAbsent' method for its @local! instance")
     }
     @Frozen
     @When[local_mode_api == "on"]
     func replace(this @local!, key: K @local!, value: V @local!): ?V @local! {
+        match (key) { case _ => () }
+        match (value) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'replace' method for its @local! instance")
     }
 }
@@ -286,10 +307,12 @@ public interface EquatableCollection<T> <: Collection<T> {
 
     @When[local_mode_api == "on"]
     func contains(this @local?, element: T @local?): Bool {
+        match (element) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'contains' method for its @local? instance")
     }
     @When[local_mode_api == "on"]
     func contains(this @local?, all!: Collection<T> @local?): Bool {
+        match (all) { case _ => () }
         throw UnimplementedException("Current Type does not implement 'contains' method for its @local? instance")
     }
 }

@@ -7,7 +7,6 @@
  */
 package std.unittest.prop_test
 
-import std.random.Random
 
 /**
  * Generator: similar to an iterator, but next() is non-optional, so the values are produced infinitely

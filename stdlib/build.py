@@ -231,6 +231,8 @@ def generate_cmake_defs(args):
         "-DCANGJIE_TARGET_SYSROOT=" + (args.target_sysroot if args.target_sysroot else ""),
         "-DCANGJIE_BUILD_ARGS=" + (";".join(args.build_args) if args.build_args else ""),
         "-DCANGJIE_INCLUDE=" + (";".join(args.include) if args.include else ""),
+        "-DCANGJIE_STDLIB_DEBUG_INFO=" + args.stdlib_debug_info.upper(),
+        "-DCANGJIE_STDLIB_BUILD_LTO_BC=" + args.stdlib_build_lto_bc.upper(),
         "-DCANGJIE_BUILD_STDLIB_WITH_COVERAGE=" + bool_to_opt(args.stdlib_coverage),
         "-DCANGJIE_ENABLE_ASAN_COV=" + bool_to_opt(args.asancov),
         # Always pass the chosen value so it takes precedence over the CMake cache.
@@ -541,6 +543,14 @@ def main():
     )
     parser_build.add_argument(
         "--gcc-toolchain", dest="gcc_toolchain", help="Specify GCC toolchain for Clang to use"
+    )
+    parser_build.add_argument(
+        "--stdlib-debug-info", choices=("on", "off"), default="on",
+        help="emit Cangjie debug info in stdlib (default: on)"
+    )
+    parser_build.add_argument(
+        "--stdlib-build-lto-bc", choices=("on", "off"), default="on",
+        help="build stdlib LTO bitcode and save compiler intermediates (default: on)"
     )
     local_mode_api = parser_build.add_mutually_exclusive_group()
     local_mode_api.add_argument(

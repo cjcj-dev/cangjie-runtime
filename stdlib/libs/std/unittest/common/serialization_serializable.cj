@@ -536,7 +536,7 @@ extend<T> Option<T> <: Serializable<Option<T>> where T <: Serializable<T> {
      */
     public static func deserialize(dm: DataModel): Option<T> {
         return match (dm) {
-            case dmn: DataModelNull => Option<T>.None
+            case _: DataModelNull => Option<T>.None
             case _ => Option<T>.Some(T.deserialize(dm))
         }
     }

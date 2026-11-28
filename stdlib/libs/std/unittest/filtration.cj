@@ -337,7 +337,6 @@ class TagsTestFilter <: UserTestFilter {
         // Tags on test case can only increase in count relative from TestSuite.
         // If class with it's tags already got filtered out there's no chance for inner test cases to pass
 
-        let suiteId = filterKey.suiteId
         let tags = filterKey.tags
         for (filterOp in excludeTagFilters) {
             // This works only because @Tag macro makes it for each tag to occur only once in given array
@@ -351,7 +350,6 @@ class TagsTestFilter <: UserTestFilter {
     }
 
     public override func shouldSkipTestCase(filterKey: CaseFilterKey) {
-        let caseId = filterKey.caseId
         let tags = filterKey.tags
         for (filterOp in excludeTagFilters) {
             if (containsCount(filterOp.tags, tags)) {

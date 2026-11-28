@@ -11,11 +11,7 @@ import std.collection.*
 import std.time.DateTime
 import std.random.Random
 import std.math.*
-import std.core
 import std.runtime.*
-import std.runtime
-import std.convert.Formattable
-import std.sort.*
 import std.sync.*
 
 // upper limit on number of saved measurements to keep reasonable statistics calculation time and memory cost
@@ -76,7 +72,7 @@ struct WarmupInfo {
         // there is an overhead to call our benchmark loop lambda
         let benchmark = benchmark
         let overhead = measureInternal(Runtime(AllocatedMemory)) {
-            for (i in 0..20) {
+            for (_ in 0..20) {
                 benchmark.measureLoopOnce(0, 0, 1)
             }
         }
@@ -358,7 +354,7 @@ Warning: Too many objects survive GC which causes unexpectedly long GC times.
         }
 
         // add some overhead calculations to collect at least some overhead statistics if not enough normal batches
-        for (i in min(batchCount, 10 - this.batchSize.start * 10 / maxBatch)..10) {
+        for (_ in min(batchCount, 10 - this.batchSize.start * 10 / maxBatch)..10) {
             runMultipleAndMeasure(0, maxBatch)
         }
 
@@ -375,7 +371,7 @@ Warning: Too many objects survive GC which causes unexpectedly long GC times.
 
         // run couple of times on max to ensure that runtime requested all required memory from OS.
         // Otherwise some allocations can cause page faults if new memory is requested from OS
-        for (i in 0..2) {
+        for (_ in 0..2) {
             explicitGC.invoke()
             runMultipleAndMeasure(maxBatch, maxBatch)
         }

@@ -493,9 +493,9 @@ abstract class ExecutionResultPart <: Serializable<ExecutionResultPart> {
                     .add(field<UInt64>("tests", thiz.casesCount))
                     .add(field<Int64>("workerId", thiz.workerId))
                     .add(field<String>("package", thiz.packageName))
-            case thiz: ExecutionPermitPart =>
+            case _: ExecutionPermitPart =>
                 DataModelStruct().add(field<Int8>("tag", 4))
-            case thiz: TestCasesRegistrationFailed =>
+            case _: TestCasesRegistrationFailed =>
                 DataModelStruct().add(field<Int8>("tag", 5))
             case _ => throw Exception("Unreachable.")
         }

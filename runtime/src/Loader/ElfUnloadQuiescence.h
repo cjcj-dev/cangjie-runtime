@@ -70,7 +70,7 @@ public:
         GC_STACK_ENTRY,
     };
 
-    class ReadScope final {
+    class [[maybe_unused]] ReadScope final {
     public:
 #if defined(__APPLE__) || defined(_WIN64) || defined(__ANDROID__) || defined(__OHOS__) || (defined(__linux__) && defined(__GLIBC__))
         // Trivial even in Debug/O0: an empty user-provided inline constructor

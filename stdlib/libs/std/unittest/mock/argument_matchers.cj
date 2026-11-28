@@ -181,7 +181,7 @@ public class Matchers {
      */
     public static func ofType<T>(): TypedMatcher<T> {
         return argThat<T> {
-            arg: T => true
+            _: T => true
         }
     }
 
@@ -203,7 +203,7 @@ public class Matchers {
      */
     public static func capture<T>(listener: ValueListener<T>): TypedMatcher<T> {
         if (let Some(listener) <- (listener as ListenerInternal)) {
-            return PredicateMatcher<T>({any: T => true}, listener: listener)
+            return PredicateMatcher<T>({_: T => true}, listener: listener)
         } else {
             illegalInput("Invalid value listener instance")
         }

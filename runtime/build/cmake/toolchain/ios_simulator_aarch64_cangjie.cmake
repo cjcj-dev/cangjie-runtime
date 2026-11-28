@@ -73,7 +73,7 @@ set(CMAKE_CXX_FLAGS
     -Wnon-virtual-dtor \
     -Wdelete-non-virtual-dtor \
     -m64 \
-    -std=c++14 \
+    -std=c++17 \
     -fno-strict-aliasing \
     -fno-omit-frame-pointer \
     -fsigned-char \

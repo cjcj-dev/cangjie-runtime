@@ -526,11 +526,9 @@ class HashMapLocalEntryView<K, V> <: MapEntryView<K, V> where K <: Hashable & Eq
                 }
                 match (v) {
                     case Some(x) =>
-                        let old: ?V @local? = map.add(_key, x)
-                        let _ = old
+                        let _: ?V @local? = map.add(_key, x)
                     case None =>
-                        let old: ?V @local? = map.remove(_key)
-                        let _ = old
+                        let _: ?V @local? = map.remove(_key)
                 }
 
                 // This view's own modification keeps it usable.
@@ -711,6 +709,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     @Frozen
     @When[local_mode_api == "on"]
     public exclave init(this @local?, elements: Array<(K, V)> @local?) {
+        match (elements) { case _ => () }
         // The @local? source elements are (K, V) @local? and cannot be written into a local hash table (Array's
         // `[]=(this @local?, ...)` is in the Copyable extension, K/V have no such constraint); explicitly rejected.
         throw IllegalArgumentException("Unsupported element source for @local? HashMap init: use the @local! overload.")
@@ -802,6 +801,8 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     @Frozen
     @When[local_mode_api == "on"]
     public exclave init(this @local?, size: Int64, initElement: (Int64) -> (K, V) @local?) {
+        match (size) { case _ => () }
+        match (initElement) { case _ => () }
         // The closure produces (K, V) @local? pairs, which cannot be written into a local hash table (Array's
         // @local? writer is in the Copyable extension, K/V have no such constraint); explicitly rejected.
         throw IllegalArgumentException("Unsupported element source for @local? HashMap init: use the @local! overload.")
@@ -1123,6 +1124,7 @@ public class HashMap<K, V> <: Map<K, V> where K <: Hashable & Equatable<K> {
     @Frozen
     @When[local_mode_api == "on"]
     public exclave func entryView(this @local?, key: K @local!): MapEntryView<K, V> @local? {
+        match (key) { case _ => () }
         // A shared (`@local?`) receiver cannot be promoted to an owned (`@local!`)
         // reference, and the view constructor needs an owned map reference to store
         // in its plain field. Raising the locality of an existing local object is not

@@ -9,7 +9,6 @@ package std.unittest.prop_test
 
 import std.collection.*
 import std.math.*
-import std.random.Random
 
 /**
  * Shrink interface: reduce values of type T to a number of "smaller" values

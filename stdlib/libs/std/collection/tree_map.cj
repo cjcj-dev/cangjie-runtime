@@ -1246,6 +1246,7 @@ struct TreeMapEntryView<K, V> <: MapEntryView<K, V> where K <: Comparable<K> {
             throw UnimplementedException("TreeMapEntryView does not support local mode")
         }
         set(v) {
+            match (v) { case _ => () }
             throw UnimplementedException("TreeMapEntryView does not support local mode")
         }
     }

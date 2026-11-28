@@ -803,7 +803,7 @@ extend TestGroupResult {
 
     func collectClassObjects(passedFQNames: Iterable<TestCaseId>): ArrayList<JsonObject> {
         let failedCases = HashSet<TestCaseId>()
-        this.visitFailedSteps { step, result => failedCases.add(result.caseId) }
+        this.visitFailedSteps { _, result => failedCases.add(result.caseId) }
         passedFQNames
             .iterator()
             .concat(failedCases.iterator())
@@ -1140,7 +1140,6 @@ extend BenchmarkResult {
 
         let dataFile = writeDataToFile(into.parent, upperBound)
 
-        let name = bootstrapped.separateGc
         var lines = "    x*${result}+${overhead} with lines lc rgb \"red\" title \"median(${bootstrapped.separateGc})\",\n"
         lines += "    x*${bootstrapped.meanStats.mean}+${bootstrapped.meanOverheadStats.mean} with lines lc rgb \"green\" title \"OLS(${bootstrapped.separateGc})\" "
 

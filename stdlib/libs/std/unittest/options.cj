@@ -7,8 +7,6 @@
  */
 package std.unittest
 
-import std.random.Random
-import std.unittest.prop_test.RandomSource
 
 public struct KeyHelp <: KeyFor<Bool> {
     public static prop help: KeyHelp {

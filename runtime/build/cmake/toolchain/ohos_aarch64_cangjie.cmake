@@ -72,7 +72,7 @@ set(CMAKE_C_FLAGS
 set(CMAKE_CXX_FLAGS
     "-Wdeprecated-copy -fno-strict-aliasing --param=ssp-buffer-size=4  -flto -fvisibility=default -fsanitize=cfi -fno-sanitize=cfi-nvcall,cfi-icall \
      -mbranch-protection=pac-ret+b-key \
-     -std=gnu++14 \
+     -std=gnu++17 \
      -Wdate-time -Wformat=2 -Wswitch-default -Wunused \
      -Wcast-qual -Woverloaded-virtual -Wnon-virtual-dtor -Wdelete-non-virtual-dtor \
      -Wno-builtin-macro-redefined -D__DATE__= -D__TIME__= -D__TIMESTAMP__= -funwind-tables -fcolor-diagnostics \

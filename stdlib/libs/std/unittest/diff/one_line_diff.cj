@@ -67,7 +67,7 @@ class OneLineDiffBuilder {
         let ia = left.size
         let ib = right.size
         let result: ArrayList<Edit<Rune>> = ArrayList()
-        let cost = Array<Array<Float64>>(ia + 1) { ix => Array<Float64>(ib + 1) { ix => 0.0 } }
+        let cost = Array<Array<Float64>>(ia + 1) { _ => Array<Float64>(ib + 1) { _ => 0.0 } }
 
         cost[0][0] = 0.0
         for (i in 1..ia + 1) {
@@ -244,7 +244,7 @@ class OneLineDiffBuilder {
         let bSuffixPrefixlen = sampledRight.addPrefixAndSuffix(bout)
         let textualDiff = ArrayList<Rune>()
 
-        for (i in 0..aSuffixPrefixlen[0]) {
+        for (_ in 0..aSuffixPrefixlen[0]) {
             textualDiff.add(r' ')
         }
 
@@ -401,7 +401,7 @@ extend ArrayList<Edit<Rune>> {
     func filterKeep(): ArrayList<Edit<Rune>> {
         return this |> filter<Edit<Rune>> { e =>
             match (e) {
-                case Keep(c) => true
+                case Keep(_) => true
                 case _ => false
             }
         } |> collectArrayList

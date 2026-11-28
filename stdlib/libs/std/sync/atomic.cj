@@ -19,38 +19,48 @@ public enum MemoryOrder {
 @Deprecated
 public let DefaultMemoryOrder: MemoryOrder = MemoryOrder.SeqCst
 
-@Intrinsic
-func load<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, memoryOrder: MemoryOrder): TYPE
+// The compiler lowers these intrinsics to SeqCst for both primitives and references.
+private const atomicSeqCst: Int32 = 5
+
+@Deprecated
+private func legacyAtomicOrder(order: MemoryOrder): Int32 {
+    match (order) {
+        case MemoryOrder.SeqCst => atomicSeqCst
+    }
+}
 
 @Intrinsic
-func store<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): Unit
+func load<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
-func swap<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func store<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): Unit
+
+@Intrinsic
+func swap<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
 func compareAndSwap<ATOMIC_TYPE, TYPE>(
     atomicType: ATOMIC_TYPE,
     oldValue: TYPE,
     newValue: TYPE,
-    successOrder: MemoryOrder,
-    failureOrder: MemoryOrder
+    successOrder: Int32,
+    failureOrder: Int32
 ): Bool
 
 @Intrinsic
-func fetchAdd<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func fetchAdd<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
-func fetchSub<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func fetchSub<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
-func fetchAnd<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func fetchAnd<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
-func fetchOr<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func fetchOr<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 @Intrinsic
-func fetchXor<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: MemoryOrder): TYPE
+func fetchXor<ATOMIC_TYPE, TYPE>(atomicType: ATOMIC_TYPE, value: TYPE, memoryOrder: Int32): TYPE
 
 // NOTE:
 // The APIs of atomic types should have a naming parameter with a default argument,
@@ -67,106 +77,106 @@ public class AtomicInt8 {
 
     public init(val: Int8) {
         value = val
-        store<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        store<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): Int8 {
-        load<AtomicInt8, Int8>(this, DefaultMemoryOrder)
+        load<AtomicInt8, Int8>(this, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func load(): Int8` instead."]
     @Frozen
     public func load(memoryOrder!: MemoryOrder): Int8 {
-        load<AtomicInt8, Int8>(this, memoryOrder)
+        load<AtomicInt8, Int8>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: Int8): Unit {
-        store<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        store<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: Int8): Unit` instead."]
     public func store(val: Int8, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicInt8, Int8>(this, val, memoryOrder)
+        store<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: Int8): Int8 {
-        swap<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        swap<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: Int8): Int8` instead."]
     public func swap(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        swap<AtomicInt8, Int8>(this, val, memoryOrder)
+        swap<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: Int8, new: Int8): Bool {
-        return compareAndSwap<AtomicInt8, Int8>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicInt8, Int8>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: Int8, new: Int8): Bool` instead."]
     public func compareAndSwap(old: Int8, new: Int8, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicInt8, Int8>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicInt8, Int8>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: Int8): Int8 {
-        fetchAdd<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: Int8): Int8` instead."]
     public func fetchAdd(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        fetchAdd<AtomicInt8, Int8>(this, val, memoryOrder)
+        fetchAdd<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: Int8): Int8 {
-        fetchSub<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: Int8): Int8` instead."]
     public func fetchSub(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        fetchSub<AtomicInt8, Int8>(this, val, memoryOrder)
+        fetchSub<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: Int8): Int8 {
-        fetchAnd<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: Int8): Int8` instead."]
     public func fetchAnd(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        fetchAnd<AtomicInt8, Int8>(this, val, memoryOrder)
+        fetchAnd<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: Int8): Int8 {
-        fetchOr<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: Int8): Int8` instead."]
     public func fetchOr(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        fetchOr<AtomicInt8, Int8>(this, val, memoryOrder)
+        fetchOr<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: Int8): Int8 {
-        fetchXor<AtomicInt8, Int8>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicInt8, Int8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: Int8): Int8` instead."]
     public func fetchXor(val: Int8, memoryOrder!: MemoryOrder): Int8 {
-        fetchXor<AtomicInt8, Int8>(this, val, memoryOrder)
+        fetchXor<AtomicInt8, Int8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -175,106 +185,106 @@ public class AtomicInt16 {
 
     public init(val: Int16) {
         value = val
-        store<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        store<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): Int16 {
-        load<AtomicInt16, Int16>(this, DefaultMemoryOrder)
+        load<AtomicInt16, Int16>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): Int16` instead."]
     public func load(memoryOrder!: MemoryOrder): Int16 {
-        load<AtomicInt16, Int16>(this, memoryOrder)
+        load<AtomicInt16, Int16>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: Int16): Unit {
-        store<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        store<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: Int16): Unit` instead."]
     public func store(val: Int16, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicInt16, Int16>(this, val, memoryOrder)
+        store<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: Int16): Int16 {
-        swap<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        swap<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: Int16): Int16` instead."]
     public func swap(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        swap<AtomicInt16, Int16>(this, val, memoryOrder)
+        swap<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: Int16, new: Int16): Bool {
-        return compareAndSwap<AtomicInt16, Int16>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicInt16, Int16>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: Int16, new: Int16): Bool` instead."]
     public func compareAndSwap(old: Int16, new: Int16, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicInt16, Int16>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicInt16, Int16>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: Int16): Int16 {
-        fetchAdd<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: Int16): Int16` instead."]
     public func fetchAdd(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        fetchAdd<AtomicInt16, Int16>(this, val, memoryOrder)
+        fetchAdd<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: Int16): Int16 {
-        fetchSub<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: Int16): Int16` instead."]
     public func fetchSub(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        fetchSub<AtomicInt16, Int16>(this, val, memoryOrder)
+        fetchSub<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: Int16): Int16 {
-        fetchAnd<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: Int16): Int16` instead."]
     public func fetchAnd(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        fetchAnd<AtomicInt16, Int16>(this, val, memoryOrder)
+        fetchAnd<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: Int16): Int16 {
-        fetchOr<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: Int16): Int16` instead."]
     public func fetchOr(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        fetchOr<AtomicInt16, Int16>(this, val, memoryOrder)
+        fetchOr<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: Int16): Int16 {
-        fetchXor<AtomicInt16, Int16>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicInt16, Int16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: Int16): Int16` instead."]
     public func fetchXor(val: Int16, memoryOrder!: MemoryOrder): Int16 {
-        fetchXor<AtomicInt16, Int16>(this, val, memoryOrder)
+        fetchXor<AtomicInt16, Int16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -283,106 +293,106 @@ public class AtomicInt32 {
 
     public init(val: Int32) {
         value = val
-        store<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        store<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): Int32 {
-        load<AtomicInt32, Int32>(this, DefaultMemoryOrder)
+        load<AtomicInt32, Int32>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): Int32` instead."]
     public func load(memoryOrder!: MemoryOrder): Int32 {
-        load<AtomicInt32, Int32>(this, memoryOrder)
+        load<AtomicInt32, Int32>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: Int32): Unit {
-        store<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        store<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: Int32): Unit` instead."]
     public func store(val: Int32, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicInt32, Int32>(this, val, memoryOrder)
+        store<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: Int32): Int32 {
-        swap<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        swap<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: Int32): Int32` instead."]
     public func swap(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        swap<AtomicInt32, Int32>(this, val, memoryOrder)
+        swap<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: Int32, new: Int32): Bool {
-        return compareAndSwap<AtomicInt32, Int32>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicInt32, Int32>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: Int32, new: Int32): Bool` instead."]
     public func compareAndSwap(old: Int32, new: Int32, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicInt32, Int32>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicInt32, Int32>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: Int32): Int32 {
-        fetchAdd<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: Int32): Int32` instead."]
     public func fetchAdd(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        fetchAdd<AtomicInt32, Int32>(this, val, memoryOrder)
+        fetchAdd<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: Int32): Int32 {
-        fetchSub<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: Int32): Int32` instead."]
     public func fetchSub(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        fetchSub<AtomicInt32, Int32>(this, val, memoryOrder)
+        fetchSub<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: Int32): Int32 {
-        fetchAnd<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: Int32): Int32` instead."]
     public func fetchAnd(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        fetchAnd<AtomicInt32, Int32>(this, val, memoryOrder)
+        fetchAnd<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: Int32): Int32 {
-        fetchOr<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: Int32): Int32` instead."]
     public func fetchOr(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        fetchOr<AtomicInt32, Int32>(this, val, memoryOrder)
+        fetchOr<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: Int32): Int32 {
-        fetchXor<AtomicInt32, Int32>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicInt32, Int32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: Int32): Int32` instead."]
     public func fetchXor(val: Int32, memoryOrder!: MemoryOrder): Int32 {
-        fetchXor<AtomicInt32, Int32>(this, val, memoryOrder)
+        fetchXor<AtomicInt32, Int32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -391,106 +401,106 @@ public class AtomicInt64 {
 
     public init(val: Int64) {
         value = val
-        store<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        store<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): Int64 {
-        load<AtomicInt64, Int64>(this, DefaultMemoryOrder)
+        load<AtomicInt64, Int64>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): Int64` instead."]
     public func load(memoryOrder!: MemoryOrder): Int64 {
-        load<AtomicInt64, Int64>(this, memoryOrder)
+        load<AtomicInt64, Int64>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: Int64): Unit {
-        store<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        store<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: Int64): Unit` instead."]
     public func store(val: Int64, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicInt64, Int64>(this, val, memoryOrder)
+        store<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: Int64): Int64 {
-        swap<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        swap<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: Int64): Int64` instead."]
     public func swap(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        swap<AtomicInt64, Int64>(this, val, memoryOrder)
+        swap<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: Int64, new: Int64): Bool {
-        return compareAndSwap<AtomicInt64, Int64>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicInt64, Int64>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: Int64, new: Int64): Bool` instead."]
     public func compareAndSwap(old: Int64, new: Int64, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicInt64, Int64>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicInt64, Int64>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: Int64): Int64 {
-        fetchAdd<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: Int64): Int64` instead."]
     public func fetchAdd(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        fetchAdd<AtomicInt64, Int64>(this, val, memoryOrder)
+        fetchAdd<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: Int64): Int64 {
-        fetchSub<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: Int64): Int64` instead."]
     public func fetchSub(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        fetchSub<AtomicInt64, Int64>(this, val, memoryOrder)
+        fetchSub<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: Int64): Int64 {
-        fetchAnd<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: Int64): Int64` instead."]
     public func fetchAnd(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        fetchAnd<AtomicInt64, Int64>(this, val, memoryOrder)
+        fetchAnd<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: Int64): Int64 {
-        fetchOr<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: Int64): Int64` instead."]
     public func fetchOr(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        fetchOr<AtomicInt64, Int64>(this, val, memoryOrder)
+        fetchOr<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: Int64): Int64 {
-        fetchXor<AtomicInt64, Int64>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicInt64, Int64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: Int64): Int64` instead."]
     public func fetchXor(val: Int64, memoryOrder!: MemoryOrder): Int64 {
-        fetchXor<AtomicInt64, Int64>(this, val, memoryOrder)
+        fetchXor<AtomicInt64, Int64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -499,106 +509,106 @@ public class AtomicUInt8 {
 
     public init(val: UInt8) {
         value = val
-        store<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): UInt8 {
-        load<AtomicUInt8, UInt8>(this, DefaultMemoryOrder)
+        load<AtomicUInt8, UInt8>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): UInt8` instead."]
     public func load(memoryOrder!: MemoryOrder): UInt8 {
-        load<AtomicUInt8, UInt8>(this, memoryOrder)
+        load<AtomicUInt8, UInt8>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: UInt8): Unit {
-        store<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: UInt8): Unit` instead."]
     public func store(val: UInt8, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        store<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: UInt8): UInt8 {
-        swap<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        swap<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: UInt8): UInt8` instead."]
     public func swap(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        swap<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        swap<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: UInt8, new: UInt8): Bool {
-        return compareAndSwap<AtomicUInt8, UInt8>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicUInt8, UInt8>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: UInt8, new: UInt8): Bool` instead."]
     public func compareAndSwap(old: UInt8, new: UInt8, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicUInt8, UInt8>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicUInt8, UInt8>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: UInt8): UInt8 {
-        fetchAdd<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: UInt8): UInt8` instead."]
     public func fetchAdd(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        fetchAdd<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        fetchAdd<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: UInt8): UInt8 {
-        fetchSub<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: UInt8): UInt8` instead."]
     public func fetchSub(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        fetchSub<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        fetchSub<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: UInt8): UInt8 {
-        fetchAnd<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: UInt8): UInt8` instead."]
     public func fetchAnd(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        fetchAnd<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        fetchAnd<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: UInt8): UInt8 {
-        fetchOr<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: UInt8): UInt8` instead."]
     public func fetchOr(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        fetchOr<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        fetchOr<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: UInt8): UInt8 {
-        fetchXor<AtomicUInt8, UInt8>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicUInt8, UInt8>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: UInt8): UInt8` instead."]
     public func fetchXor(val: UInt8, memoryOrder!: MemoryOrder): UInt8 {
-        fetchXor<AtomicUInt8, UInt8>(this, val, memoryOrder)
+        fetchXor<AtomicUInt8, UInt8>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -607,106 +617,106 @@ public class AtomicUInt16 {
 
     public init(val: UInt16) {
         value = val
-        store<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): UInt16 {
-        load<AtomicUInt16, UInt16>(this, DefaultMemoryOrder)
+        load<AtomicUInt16, UInt16>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): UInt16` instead."]
     public func load(memoryOrder!: MemoryOrder): UInt16 {
-        load<AtomicUInt16, UInt16>(this, memoryOrder)
+        load<AtomicUInt16, UInt16>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: UInt16): Unit {
-        store<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: UInt16): Unit` instead."]
     public func store(val: UInt16, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        store<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: UInt16): UInt16 {
-        swap<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        swap<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: UInt16): UInt16` instead."]
     public func swap(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        swap<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        swap<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: UInt16, new: UInt16): Bool {
-        return compareAndSwap<AtomicUInt16, UInt16>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicUInt16, UInt16>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: UInt16, new: UInt16): Bool` instead."]
     public func compareAndSwap(old: UInt16, new: UInt16, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicUInt16, UInt16>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicUInt16, UInt16>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: UInt16): UInt16 {
-        fetchAdd<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAdd(val: UInt16): UInt16` instead."]
     public func fetchAdd(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        fetchAdd<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        fetchAdd<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: UInt16): UInt16 {
-        fetchSub<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchSub(val: UInt16): UInt16` instead."]
     public func fetchSub(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        fetchSub<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        fetchSub<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: UInt16): UInt16 {
-        fetchAnd<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchAnd(val: UInt16): UInt16` instead."]
     public func fetchAnd(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        fetchAnd<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        fetchAnd<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: UInt16): UInt16 {
-        fetchOr<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchOr(val: UInt16): UInt16` instead."]
     public func fetchOr(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        fetchOr<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        fetchOr<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: UInt16): UInt16 {
-        fetchXor<AtomicUInt16, UInt16>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicUInt16, UInt16>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func fetchXor(val: UInt16): UInt16` instead."]
     public func fetchXor(val: UInt16, memoryOrder!: MemoryOrder): UInt16 {
-        fetchXor<AtomicUInt16, UInt16>(this, val, memoryOrder)
+        fetchXor<AtomicUInt16, UInt16>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -715,106 +725,106 @@ public class AtomicUInt32 {
 
     public init(val: UInt32) {
         value = val
-        store<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): UInt32 {
-        load<AtomicUInt32, UInt32>(this, DefaultMemoryOrder)
+        load<AtomicUInt32, UInt32>(this, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func load(): UInt32` instead."]
     @Frozen
     public func load(memoryOrder!: MemoryOrder): UInt32 {
-        load<AtomicUInt32, UInt32>(this, memoryOrder)
+        load<AtomicUInt32, UInt32>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: UInt32): Unit {
-        store<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func store(val: UInt32): Unit` instead."]
     @Frozen
     public func store(val: UInt32, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        store<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: UInt32): UInt32 {
-        swap<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        swap<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func swap(val: UInt32): UInt32` instead."]
     @Frozen
     public func swap(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        swap<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        swap<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: UInt32, new: UInt32): Bool {
-        return compareAndSwap<AtomicUInt32, UInt32>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicUInt32, UInt32>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func compareAndSwap(old: UInt32, new: UInt32): Bool` instead."]
     @Frozen
     public func compareAndSwap(old: UInt32, new: UInt32, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicUInt32, UInt32>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicUInt32, UInt32>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: UInt32): UInt32 {
-        fetchAdd<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchAdd(val: UInt32): UInt32` instead."]
     @Frozen
     public func fetchAdd(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        fetchAdd<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        fetchAdd<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: UInt32): UInt32 {
-        fetchSub<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchSub(val: UInt32): UInt32` instead."]
     @Frozen
     public func fetchSub(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        fetchSub<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        fetchSub<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: UInt32): UInt32 {
-        fetchAnd<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchAnd(val: UInt32): UInt32` instead."]
     @Frozen
     public func fetchAnd(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        fetchAnd<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        fetchAnd<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: UInt32): UInt32 {
-        fetchOr<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchOr(val: UInt32): UInt32` instead."]
     @Frozen
     public func fetchOr(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        fetchOr<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        fetchOr<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: UInt32): UInt32 {
-        fetchXor<AtomicUInt32, UInt32>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicUInt32, UInt32>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchXor(val: UInt32): UInt32` instead."]
     @Frozen
     public func fetchXor(val: UInt32, memoryOrder!: MemoryOrder): UInt32 {
-        fetchXor<AtomicUInt32, UInt32>(this, val, memoryOrder)
+        fetchXor<AtomicUInt32, UInt32>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -823,106 +833,106 @@ public class AtomicUInt64 {
 
     public init(val: UInt64) {
         value = val
-        store<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): UInt64 {
-        load<AtomicUInt64, UInt64>(this, DefaultMemoryOrder)
+        load<AtomicUInt64, UInt64>(this, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func load(): UInt64` instead."]
     @Frozen
     public func load(memoryOrder!: MemoryOrder): UInt64 {
-        load<AtomicUInt64, UInt64>(this, memoryOrder)
+        load<AtomicUInt64, UInt64>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: UInt64): Unit {
-        store<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        store<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func store(val: UInt64): Unit` instead."]
     @Frozen
     public func store(val: UInt64, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        store<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: UInt64): UInt64 {
-        swap<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        swap<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func swap(val: UInt64): UInt64` instead."]
     @Frozen
     public func swap(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        swap<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        swap<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: UInt64, new: UInt64): Bool {
-        return compareAndSwap<AtomicUInt64, UInt64>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicUInt64, UInt64>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func compareAndSwap(old: UInt64, new: UInt64): Bool` instead."]
     @Frozen
     public func compareAndSwap(old: UInt64, new: UInt64, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicUInt64, UInt64>(this, old, new, successOrder, failureOrder)
+        return compareAndSwap<AtomicUInt64, UInt64>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     @Frozen
     public func fetchAdd(val: UInt64): UInt64 {
-        fetchAdd<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        fetchAdd<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchAdd(val: UInt64): UInt64` instead."]
     @Frozen
     public func fetchAdd(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        fetchAdd<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        fetchAdd<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchSub(val: UInt64): UInt64 {
-        fetchSub<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        fetchSub<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchSub(val: UInt64): UInt64` instead."]
     @Frozen
     public func fetchSub(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        fetchSub<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        fetchSub<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchAnd(val: UInt64): UInt64 {
-        fetchAnd<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        fetchAnd<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchAnd(val: UInt64): UInt64` instead."]
     @Frozen
     public func fetchAnd(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        fetchAnd<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        fetchAnd<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchOr(val: UInt64): UInt64 {
-        fetchOr<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        fetchOr<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchOr(val: UInt64): UInt64` instead."]
     @Frozen
     public func fetchOr(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        fetchOr<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        fetchOr<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func fetchXor(val: UInt64): UInt64 {
-        fetchXor<AtomicUInt64, UInt64>(this, val, DefaultMemoryOrder)
+        fetchXor<AtomicUInt64, UInt64>(this, val, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func fetchXor(val: UInt64): UInt64` instead."]
     @Frozen
     public func fetchXor(val: UInt64, memoryOrder!: MemoryOrder): UInt64 {
-        fetchXor<AtomicUInt64, UInt64>(this, val, memoryOrder)
+        fetchXor<AtomicUInt64, UInt64>(this, val, legacyAtomicOrder(memoryOrder))
     }
 }
 
@@ -930,39 +940,39 @@ public class AtomicBool {
     private var value: Int8 = 0
     public init(val: Bool) {
         var valInt8 = transBoolToInt8(val)
-        store<AtomicBool, Int8>(this, valInt8, DefaultMemoryOrder)
+        store<AtomicBool, Int8>(this, valInt8, atomicSeqCst)
     }
 
     @Frozen
     public func load(): Bool {
-        var v = load<AtomicBool, Int8>(this, DefaultMemoryOrder)
+        var v = load<AtomicBool, Int8>(this, atomicSeqCst)
         return transInt8ToBool(v)
     }
 
     @Deprecated[message: "Use `public func load(): Bool` instead."]
     @Frozen
     public func load(memoryOrder!: MemoryOrder): Bool {
-        var v = load<AtomicBool, Int8>(this, memoryOrder)
+        var v = load<AtomicBool, Int8>(this, legacyAtomicOrder(memoryOrder))
         return transInt8ToBool(v)
     }
 
     @Frozen
     public func store(val: Bool): Unit {
         var valInt8 = transBoolToInt8(val)
-        store<AtomicBool, Int8>(this, valInt8, DefaultMemoryOrder)
+        store<AtomicBool, Int8>(this, valInt8, atomicSeqCst)
     }
 
     @Deprecated[message: "Use `public func store(val: Bool): Unit` instead."]
     @Frozen
     public func store(val: Bool, memoryOrder!: MemoryOrder): Unit {
         var valInt8 = transBoolToInt8(val)
-        store<AtomicBool, Int8>(this, valInt8, memoryOrder)
+        store<AtomicBool, Int8>(this, valInt8, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: Bool): Bool {
         var valInt8 = transBoolToInt8(val)
-        var ret: Int8 = swap<AtomicBool, Int8>(this, valInt8, DefaultMemoryOrder)
+        var ret: Int8 = swap<AtomicBool, Int8>(this, valInt8, atomicSeqCst)
         return transInt8ToBool(ret)
     }
 
@@ -970,7 +980,7 @@ public class AtomicBool {
     @Frozen
     public func swap(val: Bool, memoryOrder!: MemoryOrder): Bool {
         var valInt8 = transBoolToInt8(val)
-        var ret: Int8 = swap<AtomicBool, Int8>(this, valInt8, memoryOrder)
+        var ret: Int8 = swap<AtomicBool, Int8>(this, valInt8, legacyAtomicOrder(memoryOrder))
         return transInt8ToBool(ret)
     }
 
@@ -978,7 +988,7 @@ public class AtomicBool {
     public func compareAndSwap(old: Bool, new: Bool): Bool {
         var oldInt8 = transBoolToInt8(old)
         var newInt8 = transBoolToInt8(new)
-        return compareAndSwap<AtomicBool, Int8>(this, oldInt8, newInt8, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicBool, Int8>(this, oldInt8, newInt8, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
@@ -986,7 +996,7 @@ public class AtomicBool {
     public func compareAndSwap(old: Bool, new: Bool, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
         var oldInt8 = transBoolToInt8(old)
         var newInt8 = transBoolToInt8(new)
-        return compareAndSwap<AtomicBool, Int8>(this, oldInt8, newInt8, successOrder, failureOrder)
+        return compareAndSwap<AtomicBool, Int8>(this, oldInt8, newInt8, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 
     private func transBoolToInt8(v: Bool): Int8 {
@@ -1006,51 +1016,51 @@ public class AtomicReference<T> where T <: Object {
 
     public init(val: T) {
         value4cjnative = val
-        store<AtomicReference<T>, T>(this, val, DefaultMemoryOrder)
+        store<AtomicReference<T>, T>(this, val, atomicSeqCst)
     }
 
     @Frozen
     public func load(): T {
-        load<AtomicReference<T>, T>(this, DefaultMemoryOrder)
+        load<AtomicReference<T>, T>(this, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func load(): T` instead."]
     public func load(memoryOrder!: MemoryOrder): T {
-        load<AtomicReference<T>, T>(this, DefaultMemoryOrder)
+        load<AtomicReference<T>, T>(this, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func store(val: T): Unit {
-        store<AtomicReference<T>, T>(this, val, DefaultMemoryOrder)
+        store<AtomicReference<T>, T>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func store(val: T): Unit` instead."]
     public func store(val: T, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicReference<T>, T>(this, val, DefaultMemoryOrder)
+        store<AtomicReference<T>, T>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func swap(val: T): T {
-        swap<AtomicReference<T>, T>(this, val, DefaultMemoryOrder)
+        swap<AtomicReference<T>, T>(this, val, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func swap(val: T): T` instead."]
     public func swap(val: T, memoryOrder!: MemoryOrder): T {
-        swap<AtomicReference<T>, T>(this, val, DefaultMemoryOrder)
+        swap<AtomicReference<T>, T>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     @Frozen
     public func compareAndSwap(old: T, new: T): Bool {
-        return compareAndSwap<AtomicReference<T>, T>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicReference<T>, T>(this, old, new, atomicSeqCst, atomicSeqCst)
     }
 
     @Frozen
     @Deprecated[message: "Use `public func compareAndSwap(old: T, new: T): Bool` instead."]
     public func compareAndSwap(old: T, new: T, successOrder!: MemoryOrder, failureOrder!: MemoryOrder): Bool {
-        return compareAndSwap<AtomicReference<T>, T>(this, old, new, DefaultMemoryOrder, DefaultMemoryOrder)
+        return compareAndSwap<AtomicReference<T>, T>(this, old, new, legacyAtomicOrder(successOrder), legacyAtomicOrder(failureOrder))
     }
 }
 
@@ -1072,7 +1082,7 @@ public class AtomicOptionReference<T> where T <: Object {
     @Frozen
     public init(val: Option<T>) {
         value = val
-        store<AtomicOptionReference<T>, Option<T>>(this, val, DefaultMemoryOrder)
+        store<AtomicOptionReference<T>, Option<T>>(this, val, atomicSeqCst)
     }
 
     /**
@@ -1080,7 +1090,7 @@ public class AtomicOptionReference<T> where T <: Object {
      */
     @Frozen
     public func load(): Option<T> {
-        load<AtomicOptionReference<T>, Option<T>>(this, DefaultMemoryOrder)
+        load<AtomicOptionReference<T>, Option<T>>(this, atomicSeqCst)
     }
 
     /**
@@ -1089,7 +1099,7 @@ public class AtomicOptionReference<T> where T <: Object {
     @Frozen
     @Deprecated[message: "Use `public func load(): Option<T>` instead."]
     public func load(memoryOrder!: MemoryOrder): Option<T> {
-        load<AtomicOptionReference<T>, Option<T>>(this, DefaultMemoryOrder)
+        load<AtomicOptionReference<T>, Option<T>>(this, legacyAtomicOrder(memoryOrder))
     }
 
     /**
@@ -1097,7 +1107,7 @@ public class AtomicOptionReference<T> where T <: Object {
      */
     @Frozen
     public func store(val: Option<T>): Unit {
-        store<AtomicOptionReference<T>, Option<T>>(this, val, DefaultMemoryOrder)
+        store<AtomicOptionReference<T>, Option<T>>(this, val, atomicSeqCst)
     }
 
     /**
@@ -1106,7 +1116,7 @@ public class AtomicOptionReference<T> where T <: Object {
     @Frozen
     @Deprecated[message: "Use `public func store(val: Option<T>): Unit` instead."]
     public func store(val: Option<T>, memoryOrder!: MemoryOrder): Unit {
-        store<AtomicOptionReference<T>, Option<T>>(this, val, DefaultMemoryOrder)
+        store<AtomicOptionReference<T>, Option<T>>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     /**
@@ -1115,7 +1125,7 @@ public class AtomicOptionReference<T> where T <: Object {
      */
     @Frozen
     public func swap(val: Option<T>): Option<T> {
-        swap<AtomicOptionReference<T>, Option<T>>(this, val, DefaultMemoryOrder)
+        swap<AtomicOptionReference<T>, Option<T>>(this, val, atomicSeqCst)
     }
 
     /**
@@ -1125,7 +1135,7 @@ public class AtomicOptionReference<T> where T <: Object {
     @Frozen
     @Deprecated[message: "Use `public func swap(val: Option<T>): Option<T>` instead."]
     public func swap(val: Option<T>, memoryOrder!: MemoryOrder): Option<T> {
-        swap<AtomicOptionReference<T>, Option<T>>(this, val, DefaultMemoryOrder)
+        swap<AtomicOptionReference<T>, Option<T>>(this, val, legacyAtomicOrder(memoryOrder))
     }
 
     /**
@@ -1145,8 +1155,8 @@ public class AtomicOptionReference<T> where T <: Object {
                 case Some(v) => Option<Object>.Some(v)
                 case _ => Option<Object>.None
             },
-            DefaultMemoryOrder,
-            DefaultMemoryOrder
+            atomicSeqCst,
+            atomicSeqCst
         )
     }
 
@@ -1173,8 +1183,8 @@ public class AtomicOptionReference<T> where T <: Object {
                 case Some(v) => Option<Object>.Some(v)
                 case _ => Option<Object>.None
             },
-            DefaultMemoryOrder,
-            DefaultMemoryOrder
+            legacyAtomicOrder(successOrder),
+            legacyAtomicOrder(failureOrder)
         )
     }
 }

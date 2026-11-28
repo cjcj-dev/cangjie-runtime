@@ -11,7 +11,6 @@ import std.collection.*
 import std.convert.Parsable
 
 private let HEXTABLE = unsafe { "0123456789abcdef".rawData() }
-private let MIN_INT_LIT = unsafe { "-9223372036854775808".rawData() }
 
 func stringEscapeCharNumGet(input: String): Int64 {
     var i = 0

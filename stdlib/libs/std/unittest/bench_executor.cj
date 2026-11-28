@@ -12,7 +12,6 @@ import std.convert.Formattable
 import std.math.abs
 import std.math.sqrt
 import std.random.Random
-import std.runtime.ProcessorInfo
 import std.runtime.getProcessorCount
 import std.unittest.common.PrettyText
 
@@ -49,7 +48,7 @@ class BenchExecutor<T> <: Executor {
                     if (let Bench(benchmarkResult) <- result.info) {
                         benchmarkResult.printSummary(progress, measurementInfo)
                     }
-                case Failure(input, failure) =>
+                case Failure(_, failure) =>
                     tcase.add(failure)
                     break
                 case NoItems => break
@@ -234,7 +233,7 @@ protected enum SeparateGc <: ToString {
 
     protected func toFilter(): (BenchRawMeasurement) -> Bool {
         match (this) {
-            case AllPoints => { x => true }
+            case AllPoints => { _ => true }
             case GCOnly => { x => x[2] >= 1.0 }
             case WithoutGCOnly => { x => x[2] == 0.0 }
         }
@@ -296,7 +295,6 @@ protected class BenchmarkResult {
         let workers = min(getProcessorCount(), BOOTSTRAP_PARALLEL)
 
         let gcBatches = data.iterator().filter{ x => x[2] >= 1.0}.count()
-        let badBatches = Float64(data.iterator().filter{ x => x[2] > 1.99}.count())
         let gcRatio = Float64(gcBatches) / Float64(data.size)
         let separateGcPollution = if (data.size <= 20 || measurement.name.startsWith("Runtime")) {
             // not much points to separate. And benchmark likely big enough for that to not matter.
@@ -491,12 +489,8 @@ protected class BootstrapResult {
 
         let mean = meanStats.sample
 
-        let N1 = overhead.mean()
-        let N2 = mean.mean()
-
         let stddev1 = overhead.stddev()
         let stddev2 = medianStats.sample.stddev()
-        let gcRatio = rawData.iterator().map{ x => x[2] }.sum() / Float64(rawData.size)
 
         let random = Random()
         for (_ in 0..BOOTSTRAP_ITERATIONS) {

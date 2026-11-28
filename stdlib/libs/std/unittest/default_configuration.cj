@@ -11,7 +11,6 @@ import std.sync.AtomicOptionReference
 import std.process.Process
 import std.unicode.*
 import std.unittest.common.*
-import std.random.Random
 import std.unittest.prop_test.*
 import std.unittest.common.KeyTags
 
@@ -221,7 +220,7 @@ extend Configuration {
 func typeValidator<T>(name: String): (Any) -> OptionValidity {
     { x: Any =>
         match (x) {
-            case t: T => return OptionValidity.ValidOption(ConfigurationKey.create<T>(name))
+            case _: T => return OptionValidity.ValidOption(ConfigurationKey.create<T>(name))
             case _ => return OptionValidity.UnknownOptionType
         }
     }

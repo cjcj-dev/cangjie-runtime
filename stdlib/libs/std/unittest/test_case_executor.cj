@@ -144,7 +144,6 @@ class TestCaseExecutor<T> <: Executor {
         let progress = ProgressOutput(configuration)
         unsafe { CJ_MICROFUZZ_RESET_ALL_COVERAGE_INFO() }
         progress.verboseLine("Starting guided execution....")
-        let generationSteps = configuration.generationSteps
         let localConfiguration = configuration.clone()
 
         let random = match (localConfiguration.random) {
@@ -225,7 +224,7 @@ class TestCaseExecutor<T> <: Executor {
                     (input, stepResult)
             }
 
-            let (input, failure) = match (strategy.shrink(configuration, executeBody)) {
+            let (_, failure) = match (strategy.shrink(configuration, executeBody)) {
                 case None => initialFailure
                 case Some(Failure(input, shrunk)) => (input, shrunk)
                 case Some(StrategyError(e)) =>
@@ -307,7 +306,7 @@ extend Exception {
                     )
                 }
             // error will be reported by a watchdog thread
-            case e: UnittestTimeoutException => None
+            case _: UnittestTimeoutException => None
             // should have been already reported when thrown originally
             case _: BenchmarkStoppedError => None
             case anyOther: Exception => ExceptionThrownCheckResult(

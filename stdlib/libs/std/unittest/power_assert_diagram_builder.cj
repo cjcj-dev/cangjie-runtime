@@ -325,14 +325,6 @@ class PowerAssertDiagram <: ToString & Serializable<PowerAssertDiagram> & Pretty
     }
 
     /**
-     * Note: [Range.step] shoud not be considered here due to expressions ranges are always with step 1.
-     */
-    private func isPosInRange(position: Int64, range: Range<Int64>) {
-        if (position < range.start) { return false }
-        return position <= lastPos(range)
-    }
-
-    /**
      * Returns last element in the range inclusive.
      * Note: it's considering that [range] always has step 1 and it's not empty.
      */
@@ -464,14 +456,6 @@ public class PowerAssertDiagramBuilder {
             case _ => exception
         }
         throw AssertIntermediateException(originalException, expression, message, diagram)
-    }
-
-    private func getExceptionRepresentation(exception: Exception) {
-        if (wasExceptionThrown) {
-            "[not computed]"
-        } else {
-            "[" + exception.toString().split(":")[0] + "]"
-        }
     }
 
     private func recordValue<T>(value: T, exprAsText: String, position: Int64, shieldBackslash!: Bool = true): T where T <: ToString {

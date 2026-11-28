@@ -76,7 +76,7 @@ extend PrettyPrinter {
         match (left) {
             case l: AssertPrintable<T> =>
                 match (right) {
-                    case r: AssertPrintable<T> => l.pprintForAssertion(this, right, leftPrefix, rightPrefix, level)
+                    case _: AssertPrintable<T> => l.pprintForAssertion(this, right, leftPrefix, rightPrefix, level)
                     case _ => pprintLeftRight(left, right, leftPrefix, rightPrefix)
                 }
             case _ => pprintLeftRight(left, right, leftPrefix, rightPrefix)
